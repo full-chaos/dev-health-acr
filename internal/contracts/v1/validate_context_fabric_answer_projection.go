@@ -91,7 +91,7 @@ func (p ContextFabricAnswerProjection) validate(bounds contextFabricBounds) erro
 	// Project drops it, which is what
 	// TestEveryHistoricalResultProjectsItsTemporalLabel proves it does not.
 	if p.Temporal != nil {
-		if err := p.Temporal.validate(bounds); err != nil {
+		if err := p.Temporal.Validate(); err != nil {
 			return fmt.Errorf("temporal: %w", err)
 		}
 	}
@@ -110,7 +110,7 @@ func (p ContextFabricAnswerProjection) validate(bounds contextFabricBounds) erro
 	if err := p.Versions.Validate(); err != nil {
 		return fmt.Errorf("versions: %w", err)
 	}
-	if err := p.ProjectionBudget.validate(bounds); err != nil {
+	if err := p.ProjectionBudget.Validate(); err != nil {
 		return err
 	}
 	// CHAOS-3900 W2 / CHAOS-3972 P3: mirrors
@@ -126,7 +126,7 @@ func (p ContextFabricAnswerProjection) validate(bounds contextFabricBounds) erro
 		}
 	}
 	if p.WindowClarification != nil {
-		if err := p.WindowClarification.validate(bounds); err != nil {
+		if err := p.WindowClarification.Validate(); err != nil {
 			return fmt.Errorf("window_clarification: %w", err)
 		}
 	}
@@ -529,6 +529,11 @@ func (p ContextFabricAnswerProjection) validateCompleteness(bounds contextFabric
 	if c.ClaimedFactsCount < 0 || c.RowsCount < 0 {
 		return fmt.Errorf("completeness counts must not be negative")
 	}
+	// Empty is a result stored before the state existed; any other value is
+	// from the frozen vocabulary.
+	if c.State != "" && !ValidContextFabricAnswerCompletenessState(c.State) {
+		return fmt.Errorf("completeness state %q is not a vocabulary member", c.State)
+	}
 	return nil
 }
 
@@ -563,10 +568,6 @@ func (p ContextFabricAnswerProjection) validateReceipts() error {
 // answers; one that dropped content without saying so is the silent
 // truncation this contract exists to prevent.
 func (b ContextFabricProjectionBudget) Validate() error {
-	return b.validate(contextFabricWriteBounds)
-}
-
-func (b ContextFabricProjectionBudget) validate(bounds contextFabricBounds) error {
 	// CohortGroupsOmitted belongs here like every other counter: the
 	// invariant this function enforces is "Truncated iff ANY omitted count is
 	// non-zero", and a counter absent from this list is outside the invariant
@@ -601,7 +602,7 @@ func (b ContextFabricProjectionBudget) validate(bounds contextFabricBounds) erro
 	// smaller than the cohort, so a basis without a member drop is
 	// unreachable from the producer and can only be a hand-built payload.
 	if b.CohortMemberSelectionBasis != "" {
-		if !bounds.additiveOK(ValidContextFabricCohortMemberSelectionBasis(b.CohortMemberSelectionBasis), string(b.CohortMemberSelectionBasis)) {
+		if !ValidContextFabricCohortMemberSelectionBasis(b.CohortMemberSelectionBasis) {
 			return fmt.Errorf("answer projection budget cohort member selection basis %q is not one of the two orders the group-aware clamp can select by", b.CohortMemberSelectionBasis)
 		}
 		if b.CohortMembersOmitted == 0 {

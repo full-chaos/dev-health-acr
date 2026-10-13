@@ -78,6 +78,7 @@ func TestServedPayloadsValidateAgainstTheirOwnOutputSchemas(t *testing.T) {
 
 	h := newDTHosted(t)
 	dt := h.boot(t, append([]string{toolGraphQLQuery}, dtAllTools...)...)
+	// The catalog schema is closed (additionalProperties false); that is a separate forward-compat gap from open vocabularies.
 	catalogBody := mutatedExample(t, []byte(dtCatalogBody), func(doc map[string]any) { delete(doc, "future_member") })
 	h.catalog = func(w http.ResponseWriter, r *http.Request) { dtRaw(w, http.StatusOK, string(catalogBody)) }
 	ledger.check(toolDataCatalog, dataCatalogResponseSchemaFile, "catalog", dtCall(t, dt, toolDataCatalog, `{"sections":["operations","limits"]}`))

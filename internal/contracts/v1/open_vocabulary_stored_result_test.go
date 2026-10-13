@@ -85,6 +85,9 @@ type storedVocabularyRow struct {
 	// vocabularies (finding kinds, coverage details), so a malformed value
 	// is not refused there either.
 	neverChecked bool
+	// frozen marks a vocabulary the registry keeps closed; the stored read
+	// must refuse an added value there.
+	frozen bool
 }
 
 func (row storedVocabularyRow) build(t *testing.T, value string) ContextFabricInvestigationResult {
@@ -111,7 +114,7 @@ func storedAdditiveRows() []storedVocabularyRow {
 			r.Interpretation.RequestedJudgmentKind = ContextFabricRequestedJudgmentKind(v)
 		}},
 		{name: "subject_resolution.candidates.state", fixture: resultV1, paths: []string{"subject_resolution.candidates.0.state"}},
-		{name: "subject_resolution.candidates.match_mechanisms", fixture: resultV1, paths: []string{"subject_resolution.candidates.0.match_mechanisms.0"}},
+		{name: "subject_resolution.candidates.match_mechanisms", frozen: true, fixture: resultV1, paths: []string{"subject_resolution.candidates.0.match_mechanisms.0"}},
 		{name: "subject_resolution.candidates.subject.kind", fixture: resultV1, paths: []string{"subject_resolution.candidates.0.subject.kind"}},
 		{name: "subject_resolution.committed.kind", fixture: resultV1, paths: []string{"subject_resolution.committed.0.kind", "subject_resolution.commit_decision_digests.0.subject.kind"}},
 		{name: "commit_decision_digests.commit_gate", fixture: resultV1, paths: []string{"subject_resolution.commit_decision_digests.0.commit_gate"}},
@@ -137,38 +140,38 @@ func storedAdditiveRows() []storedVocabularyRow {
 		{name: "coverage.details.fact_kind", fixture: resultOriginState, paths: []string{"coverage.details.0.fact_kind"}, neverChecked: true},
 		{name: "coverage.details.source_state", fixture: resultOriginState, paths: []string{"coverage.details.0.source_state"}, neverChecked: true},
 		{name: "coverage.details.origin_kind", fixture: resultOriginState, paths: []string{"coverage.details.0.origin_kind"}, neverChecked: true},
-		{name: "confirmed_structure.member", fixture: resultV1, paths: []string{"confirmed_structure.0.member"}},
+		{name: "confirmed_structure.member", frozen: true, fixture: resultV1, paths: []string{"confirmed_structure.0.member"}},
 		{name: "confirmed_structure.source", fixture: resultV1, paths: []string{"confirmed_structure.0.source"}},
 		{name: "confirmed_structure.provenance", fixture: resultV1, paths: []string{"confirmed_structure.0.provenance"}},
 		{name: "confirmed_structure.disposition", fixture: resultV1, paths: []string{"confirmed_structure.0.disposition"}},
-		{name: "structure_offer_snapshot.member", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "structure_offer_snapshot.member", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.StructureOfferSnapshot = []ContextFabricStructureOfferSnapshotEntry{{Member: ContextFabricStructureNeedKind(v), OfferID: "offer_1", OfferSource: ContextFabricStructureOfferEngine}}
 		}},
 		{name: "structure_offer_snapshot.offer_source", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.StructureOfferSnapshot = []ContextFabricStructureOfferSnapshotEntry{{Member: ContextFabricStructureNeedWindow, OfferID: "offer_1", OfferSource: ContextFabricStructureOfferSource(v)}}
 		}},
-		{name: "structure_needs.missing", fixture: resultV2, paths: []string{"structure_needs.missing.0"}},
-		{name: "structure_needs.anchor_options.kind", fixture: resultV2, paths: []string{"structure_needs.anchor_options.0.kind"}},
+		{name: "structure_needs.missing", frozen: true, fixture: resultV2, paths: []string{"structure_needs.missing.0"}},
+		{name: "structure_needs.anchor_options.kind", frozen: true, fixture: resultV2, paths: []string{"structure_needs.anchor_options.0.kind"}},
 		{name: "structure_needs.anchor_options.offer_source", fixture: resultV2, paths: []string{"structure_needs.anchor_options.0.offer_source"}},
-		{name: "structure_needs.window_options.relative_id", fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "structure_needs.window_options.relative_id", frozen: true, fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.StructureNeeds.WindowOptions = []ContextFabricWindowOption{{ReceiptID: "winr_added_0001", OptionID: "opt_added_window", Label: "added", RelativeID: ContextFabricRelativeWindowID(v)}}
 		}},
 		{name: "structure_needs.window_expand_options.window_class", fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			withWindowExpand(r, func(o *ContextFabricWindowExpandOption) { o.WindowClass = ContextFabricWindowClass(v) })
 		}},
-		{name: "structure_needs.window_expand_options.candidate_kind", fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "structure_needs.window_expand_options.candidate_kind", frozen: true, fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			withWindowExpand(r, func(o *ContextFabricWindowExpandOption) { o.CandidateKind = ContextFabricSubjectKind(v) })
 		}},
-		{name: "window_clarification.options.relative_id", fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "window_clarification.options.relative_id", frozen: true, fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.WindowClarification = &ContextFabricWindowClarification{Options: []ContextFabricWindowOption{{ReceiptID: "winr_added_0002", OptionID: "opt_added_window2", Label: "added", RelativeID: ContextFabricRelativeWindowID(v)}}}
 		}},
-		{name: "semantic_reading.status", fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "semantic_reading.status", frozen: true, fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.SemanticReading = &ContextFabricSemanticReading{Status: ContextFabricSemanticReadingStatus(v), Reason: ContextFabricSemanticReadingStateAbsent}
 		}},
 		{name: "semantic_reading.reason", fixture: resultV2, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.SemanticReading = &ContextFabricSemanticReading{Status: ContextFabricSemanticReadingUnavailable, Reason: ContextFabricSemanticReadingReason(v)}
 		}},
-		{name: "effective_evidence_window.relative_id", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "effective_evidence_window.relative_id", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.EffectiveEvidenceWindow = &ContextFabricEffectiveEvidenceWindow{RelativeID: ContextFabricRelativeWindowID(v), Provenance: ContextFabricWindowInferredDefault}
 		}},
 		{name: "effective_evidence_window.provenance", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
@@ -185,10 +188,10 @@ func storedAdditiveRows() []storedVocabularyRow {
 			r.RefusalBasis = ContextFabricRefusalBasis(v)
 			r.Completeness.RefusalBasis = ContextFabricRefusalBasis(v)
 		}},
-		{name: "completeness.outcomes.stage", fixture: resultStatusCorrect, paths: []string{"completeness.outcomes.0.stage"}},
-		{name: "completeness.outcomes.impact", fixture: resultStatusCorrect, paths: []string{"completeness.outcomes.0.impact"}},
+		{name: "completeness.outcomes.stage", frozen: true, fixture: resultStatusCorrect, paths: []string{"completeness.outcomes.0.stage"}},
+		{name: "completeness.outcomes.impact", frozen: true, fixture: resultStatusCorrect, paths: []string{"completeness.outcomes.0.impact"}},
 		{name: "completeness.outcomes.cause_coverage", fixture: resultStatusCorrect, paths: []string{"completeness.outcomes.0.cause_coverage"}},
-		{name: "completeness.outcomes.outcome", fixture: resultStatusCorrect, paths: []string{
+		{name: "completeness.outcomes.outcome", frozen: true, fixture: resultStatusCorrect, paths: []string{
 			"completeness.outcomes.0.outcome", "completeness.status_correction.deciding_outcome", "status_correction.deciding_outcome",
 		}},
 		{name: "completeness.outcomes.obligation", fixture: resultStatusCorrect, mutate: func(r *ContextFabricInvestigationResult, v string) {
@@ -198,8 +201,8 @@ func storedAdditiveRows() []storedVocabularyRow {
 			r.StatusCorrection.DecidingRequirement = requirement
 			r.Completeness.StatusCorrection.DecidingRequirement = requirement
 		}},
-		{name: "status_correction.direction", fixture: resultStatusCorrect, paths: []string{"completeness.status_correction.direction", "status_correction.direction"}},
-		{name: "status_correction.replaced_status", fixture: resultStatusCorrect, paths: []string{"completeness.status_correction.replaced_status", "status_correction.replaced_status"}},
+		{name: "status_correction.direction", frozen: true, fixture: resultStatusCorrect, paths: []string{"completeness.status_correction.direction", "status_correction.direction"}},
+		{name: "status_correction.replaced_status", frozen: true, fixture: resultStatusCorrect, paths: []string{"completeness.status_correction.replaced_status", "status_correction.replaced_status"}},
 		{name: "fact_scope_census.requirement_kind", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.FactScopeCensus = []ContextFabricFactScopeCensusRecord{{RequirementKind: v}}
 		}},
@@ -216,7 +219,7 @@ func storedAdditiveRows() []storedVocabularyRow {
 			plan.FamilySource = ContextFabricQuestionFamilySource(v)
 			r.AnswerPlan = &plan
 		}},
-		{name: "answer_plan.member_kind", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "answer_plan.member_kind", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			plan := addedVocabularyPlan()
 			plan.MemberKind = ContextFabricSubjectKind(v)
 			r.AnswerPlan = &plan
@@ -226,22 +229,22 @@ func storedAdditiveRows() []storedVocabularyRow {
 			plan.FactKinds = []ContextFabricFactKind{ContextFabricFactKind(v)}
 			r.AnswerPlan = &plan
 		}},
-		{name: "answer_plan.axes", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "answer_plan.axes", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			plan := addedVocabularyPlan()
 			plan.Axes = []ContextFabricStructureNeedKind{ContextFabricStructureNeedKind(v)}
 			r.AnswerPlan = &plan
 		}},
-		{name: "answer_plan.narrowing.stage", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "answer_plan.narrowing.stage", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			plan := addedVocabularyPlan()
 			plan.Narrowing[0].Stage = ContextFabricPlanNarrowingStage(v)
 			r.AnswerPlan = &plan
 		}},
-		{name: "answer_plan.narrowing.basis", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "answer_plan.narrowing.basis", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			plan := addedVocabularyPlan()
 			plan.Narrowing[0].Basis = ContextFabricNarrowingBasis(v)
 			r.AnswerPlan = &plan
 		}},
-		{name: "answer_plan.narrowing.overrun", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "answer_plan.narrowing.overrun", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			plan := addedVocabularyPlan()
 			plan.Narrowing[0].Overrun = ContextFabricBudgetOverrun(v)
 			r.AnswerPlan = &plan
@@ -274,6 +277,9 @@ func withWindowExpand(r *ContextFabricInvestigationResult, set func(*ContextFabr
 
 func TestStoredResultAcceptsAddedVocabularyValues(t *testing.T) {
 	for _, row := range storedAdditiveRows() {
+		if row.frozen {
+			continue
+		}
 		t.Run(row.name, func(t *testing.T) {
 			if err := ValidateStoredResult(row.build(t, addedVocabularyValue)); err != nil {
 				t.Fatalf("a stored result read by a client rejects an added value: %v", err)
@@ -289,7 +295,7 @@ func TestStoredResultAcceptsAddedVocabularyValues(t *testing.T) {
 }
 
 func TestStoredResultKeepsFrozenVocabulariesClosed(t *testing.T) {
-	for _, row := range []storedVocabularyRow{
+	rows := []storedVocabularyRow{
 		{name: "status", fixture: resultV1, paths: []string{"status", "completeness.terminal_status"}},
 		{name: "completeness.state", fixture: resultStatusCorrect, paths: []string{"completeness.state"}},
 		{name: "cohort.members.outcome", fixture: resultV1, paths: []string{"cohort.members.0.outcome"}},
@@ -299,7 +305,13 @@ func TestStoredResultKeepsFrozenVocabulariesClosed(t *testing.T) {
 			r.Versions.SynthesisSource = ContextFabricSynthesisSource(v)
 		}},
 		{name: "interpretation.time_context.axis", fixture: resultV1, paths: []string{"interpretation.time_context.axis"}},
-	} {
+	}
+	for _, row := range storedAdditiveRows() {
+		if row.frozen {
+			rows = append(rows, row)
+		}
+	}
+	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			if err := ValidateStoredResult(row.build(t, addedVocabularyValue)); err == nil {
 				t.Fatal("a frozen vocabulary accepts an unknown value on the stored read")
@@ -385,10 +397,6 @@ func TestPlanRequirementReadAcceptsAddedVocabularyValues(t *testing.T) {
 	}{
 		{"obligation", func(r *ContextFabricPlanRequirement, v string) { r.Obligation = v; coordinate(r) }},
 		{"role", func(r *ContextFabricPlanRequirement, v string) { r.Role = v; coordinate(r) }},
-		{"subject", func(r *ContextFabricPlanRequirement, v string) {
-			r.Subject = ContextFabricSubjectKind(v)
-			coordinate(r)
-		}},
 		{"kind", func(r *ContextFabricPlanRequirement, v string) { r.Kind = v }},
 		{"step", func(r *ContextFabricPlanRequirement, v string) { r.Step = v }},
 		{"step_execution", func(r *ContextFabricPlanRequirement, v string) { r.StepExecution = v }},
@@ -419,5 +427,13 @@ func TestPlanRequirementReadAcceptsAddedVocabularyValues(t *testing.T) {
 				t.Fatal("the write path accepts an added value")
 			}
 		})
+	}
+}
+
+func TestPlanRequirementReadKeepsTheSubjectKindClosed(t *testing.T) {
+	kinds := ContextFabricFactKindVocabulary()
+	row := maximalPlanRequirementAt("evidence", "subject", ContextFabricSubjectKind(addedVocabularyValue), []ContextFabricFactKind{kinds[0]})
+	if err := validatePlanRequirements([]ContextFabricPlanRequirement{row}, contextFabricLegacyBounds); err == nil {
+		t.Fatal("a read accepts an unknown plan requirement subject kind, a frozen request-reachable vocabulary")
 	}
 }

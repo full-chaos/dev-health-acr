@@ -72,7 +72,7 @@ func (s ContextFabricSemanticReading) validate(bounds contextFabricBounds) error
 			validStatus = true
 		}
 	}
-	if !bounds.additiveOK(validStatus, string(s.Status)) {
+	if !validStatus {
 		return fmt.Errorf("semantic_reading status %q is not a vocabulary member", s.Status)
 	}
 	for _, member := range ContextFabricSemanticReadingReasons() {

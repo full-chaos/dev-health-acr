@@ -202,8 +202,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "description": "Open vocabulary; documented values: unavailable. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "enum": [
             "unavailable"
           ]
         },
@@ -1196,9 +1195,9 @@
           "minimum": 0
         },
         "cohort_member_selection_basis": {
-          "description": "The order the group-aware clamp took cohort members in when it chose which of them survived the member budget (CHAOS-4809). ABSENT whenever the clamp ran no group-aware selection at all -- every flat cohort, and every grouped cohort that fitted its budget -- so it never names an order that did not execute. Only the two orders the group-aware selection can actually run are admitted: the exact overlap-aware cover within the group-count guard, and the round-robin fallback beyond it. The other two narrowing bases are deliberately NOT accepted here -- canonical_id_lexical is the flat narrowing's order, which runs only where there is no group axis, and attention_rank exists only after the fact read -- so a document cannot claim a grouped clamp selected by an order that has no code path. The counters beside it say HOW MUCH was dropped; this says by WHAT ORDER the survivors were chosen. The selection's before is cohort.total, its after is the length of cohort.members, and the kept member ids are those members' own canonical ids. Open vocabulary; documented values: largest_group_round_robin, overlap_aware_set_cover. A client must tolerate values it does not know.",
+          "description": "The order the group-aware clamp took cohort members in when it chose which of them survived the member budget (CHAOS-4809). ABSENT whenever the clamp ran no group-aware selection at all -- every flat cohort, and every grouped cohort that fitted its budget -- so it never names an order that did not execute. Only the two orders the group-aware selection can actually run are admitted: the exact overlap-aware cover within the group-count guard, and the round-robin fallback beyond it. The other two narrowing bases are deliberately NOT accepted here -- canonical_id_lexical is the flat narrowing's order, which runs only where there is no group axis, and attention_rank exists only after the fact read -- so a document cannot claim a grouped clamp selected by an order that has no code path. The counters beside it say HOW MUCH was dropped; this says by WHAT ORDER the survivors were chosen. The selection's before is cohort.total, its after is the length of cohort.members, and the kept member ids are those members' own canonical ids.",
           "type": "string",
-          "x-documented-values": [
+          "enum": [
             "largest_group_round_robin",
             "overlap_aware_set_cover"
           ]
@@ -1338,9 +1337,9 @@
       }
     },
     "RelativeWindowID": {
-      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1). Open vocabulary; documented values: trailing_30d, trailing_90d, trailing_365d, all_time. A client must tolerate values it does not know.",
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
       "type": "string",
-      "x-documented-values": [
+      "enum": [
         "trailing_30d",
         "trailing_90d",
         "trailing_365d",
@@ -1348,9 +1347,9 @@
       ]
     },
     "SubjectKind": {
-      "description": "CHAOS-3900 P1: the closed ContextFabricSubjectKind vocabulary, given its own $def so KindOption/AnchorOption/HandleOption/AcceptedGrammar can $ref it directly rather than each re-duplicating the enum inline the way SubjectRef/SubjectCandidate/etc. still do at their own call sites. Open vocabulary; documented values: organization, team, project, repository, work_item, pull_request, deployment, incident, document, decision, episode, metric, pull_request_review, ci_pipeline_run, work_item_ref. A client must tolerate values it does not know.",
+      "description": "CHAOS-3900 P1: the closed ContextFabricSubjectKind vocabulary, given its own $def so KindOption/AnchorOption/HandleOption/AcceptedGrammar can $ref it directly rather than each re-duplicating the enum inline the way SubjectRef/SubjectCandidate/etc. still do at their own call sites.",
       "type": "string",
-      "x-documented-values": [
+      "enum": [
         "organization",
         "team",
         "project",
@@ -1679,9 +1678,9 @@
       ]
     },
     "StructureNeedKind": {
-      "description": "CHAOS-3900 P1: the closed enum for which intent-frame member is missing or ambiguous (pivot-intent design brief section 2.1). Open vocabulary; documented values: expected_kind, subject_anchor, subject_handle, window, subject_candidate. A client must tolerate values it does not know.",
+      "description": "CHAOS-3900 P1: the closed enum for which intent-frame member is missing or ambiguous (pivot-intent design brief section 2.1).",
       "type": "string",
-      "x-documented-values": [
+      "enum": [
         "expected_kind",
         "subject_anchor",
         "subject_handle",
@@ -2511,8 +2510,8 @@
           "properties": {
             "replaced_status": {
               "type": "string",
-              "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation. Open vocabulary; documented values: complete, partial, degraded. A client must tolerate values it does not know.",
-              "x-documented-values": [
+              "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation.",
+              "enum": [
                 "complete",
                 "partial",
                 "degraded"
@@ -2520,8 +2519,8 @@
             },
             "direction": {
               "type": "string",
-              "description": "model_status paired with the served status. Open vocabulary; documented values: complete_to_partial, complete_to_degraded, partial_to_degraded, degraded_to_partial. A client must tolerate values it does not know.",
-              "x-documented-values": [
+              "description": "model_status paired with the served status.",
+              "enum": [
                 "complete_to_partial",
                 "complete_to_degraded",
                 "partial_to_degraded",
@@ -2534,8 +2533,8 @@
             },
             "deciding_outcome": {
               "type": "string",
-              "description": "That row's outcome. Open vocabulary; documented values: satisfied, narrowed, unavailable, not_applicable, not_attempted. A client must tolerate values it does not know.",
-              "x-documented-values": [
+              "description": "That row's outcome.",
+              "enum": [
                 "satisfied",
                 "narrowed",
                 "unavailable",
@@ -2949,8 +2948,8 @@
       "properties": {
         "stage": {
           "type": "string",
-          "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from. Open vocabulary; documented values: planning, assembled_result, projection, reuse. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from.",
+          "enum": [
             "planning",
             "assembled_result",
             "projection",
@@ -2969,8 +2968,7 @@
         },
         "outcome": {
           "type": "string",
-          "description": "Open vocabulary; documented values: satisfied, narrowed, unavailable, not_applicable, not_attempted. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "enum": [
             "satisfied",
             "narrowed",
             "unavailable",
@@ -2980,8 +2978,8 @@
         },
         "impact": {
           "type": "string",
-          "description": "What the reader loses. none exactly when the outcome is satisfied or not_applicable; any other outcome carries a real impact. Open vocabulary; documented values: none, scope, depth, dimension. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "What the reader loses. none exactly when the outcome is satisfied or not_applicable; any other outcome carries a real impact.",
+          "enum": [
             "none",
             "scope",
             "depth",
@@ -2990,8 +2988,8 @@
         },
         "cause_overrun": {
           "type": "string",
-          "description": "The declared ceiling that forced the reduction, when a ceiling did. Open vocabulary; documented values: fits, items, bytes. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "The declared ceiling that forced the reduction, when a ceiling did.",
+          "enum": [
             "fits",
             "items",
             "bytes"
@@ -3042,8 +3040,8 @@
       "properties": {
         "stage": {
           "type": "string",
-          "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade. Open vocabulary; documented values: planning, assembled_result, projection, reuse. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade.",
+          "enum": [
             "planning",
             "assembled_result",
             "projection",
@@ -3052,8 +3050,8 @@
         },
         "basis": {
           "type": "string",
-          "description": "The declared selection order that chose the survivors, when a selection ran. Absent when a ceiling forced the reduction and no order was consulted. Open vocabulary; documented values: canonical_id_lexical, largest_group_round_robin, attention_rank, overlap_aware_set_cover, link_strength_then_id. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "The declared selection order that chose the survivors, when a selection ran. Absent when a ceiling forced the reduction and no order was consulted.",
+          "enum": [
             "canonical_id_lexical",
             "largest_group_round_robin",
             "attention_rank",
@@ -3063,8 +3061,8 @@
         },
         "overrun": {
           "type": "string",
-          "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace. Open vocabulary; documented values: fits, items, bytes. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace.",
+          "enum": [
             "fits",
             "items",
             "bytes"

@@ -242,8 +242,8 @@
       "properties": {
         "replaced_status": {
           "type": "string",
-          "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation. Open vocabulary; documented values: complete, partial, degraded. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "The status the server replaced: the model's authored status unless an earlier server step (claim-depth trim, served-status floors) had already lowered it, which that step discloses through its own limitation.",
+          "enum": [
             "complete",
             "partial",
             "degraded"
@@ -251,8 +251,8 @@
         },
         "direction": {
           "type": "string",
-          "description": "model_status paired with the served status. Open vocabulary; documented values: complete_to_partial, complete_to_degraded, partial_to_degraded, degraded_to_partial. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "model_status paired with the served status.",
+          "enum": [
             "complete_to_partial",
             "complete_to_degraded",
             "partial_to_degraded",
@@ -265,8 +265,8 @@
         },
         "deciding_outcome": {
           "type": "string",
-          "description": "That row's outcome. Open vocabulary; documented values: satisfied, narrowed, unavailable, not_applicable, not_attempted. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "description": "That row's outcome.",
+          "enum": [
             "satisfied",
             "narrowed",
             "unavailable",
@@ -286,8 +286,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "description": "Open vocabulary; documented values: unavailable. A client must tolerate values it does not know.",
-          "x-documented-values": [
+          "enum": [
             "unavailable"
           ]
         },

@@ -13,12 +13,11 @@ import (
 
 // clientValidators are the Go Validate symbols a registry entry may name.
 var clientValidators = map[string]bool{
-	"contractsv1.ContextPacket.Validate":                  true,
-	"contractsv1.EvidenceRef.Validate":                    true,
-	"contractsv1.ExpandedEvidence.Validate":               true,
+	"contractsv1.ContextPacket.ValidateRead":              true,
+	"contractsv1.EvidenceRef.ValidateRead":                true,
+	"contractsv1.ExpandedEvidence.ValidateRead":           true,
 	"contractsv1.ValidateStoredResult":                    true,
 	"contractsv1.MCPInvestigateQuestionResponse.Validate": true,
-	"contractsv1.MCPRecordEpisodeResponse.Validate":       true,
 }
 
 func TestOutputVocabularyAdditiveNamesItsClientValidate(t *testing.T) {
@@ -256,10 +255,6 @@ func TestOutputVocabularyClientValidateAcceptsAddedValues(t *testing.T) {
 				}
 				driven[name]++
 			case vocabFrozen:
-				if reason, ok := frozenUncheckedOnClient[response.tool+":"+name]; ok {
-					t.Logf("NOT pinned: %s %s accepts an unknown value (%s)", response.example, name, reason)
-					continue
-				}
 				if err == nil {
 					t.Errorf("%s %s (%d leaves): a frozen vocabulary accepts an unknown value", response.example, name, len(byVocab[name]))
 				}
@@ -302,12 +297,6 @@ func withUntrustedFields(t *testing.T, raw []byte, fields []string) []byte {
 		t.Fatal(err)
 	}
 	return out
-}
-
-// frozenUncheckedOnClient lists frozen fields a client Validate does not check
-// at all; a gap found by this test, not a vocabulary rule.
-var frozenUncheckedOnClient = map[string]string{
-	"investigate_question:AnswerCompleteness.state": "the answer projection validator never reads completeness.state",
 }
 
 func leafValue(doc any, path []any) string {

@@ -242,10 +242,6 @@ func representableInstant(value time.Time) bool {
 func RepresentableInstant(value time.Time) bool { return representableInstant(value) }
 
 func (t ContextFabricTimeContext) Validate() error {
-	return t.validate(contextFabricWriteBounds)
-}
-
-func (t ContextFabricTimeContext) validate(bounds contextFabricBounds) error {
 	// Every bound this axis requires must survive the epoch-nanosecond
 	// representation. An out-of-range instant is refused as a malformed
 	// request rather than clamped: clamping would answer a DIFFERENT
@@ -284,7 +280,7 @@ func (t ContextFabricTimeContext) validate(bounds contextFabricBounds) error {
 		if t.Axis != ContextFabricTemporalCurrent {
 			return fmt.Errorf("%w: axis %q", ErrEvidenceWindowAxisInvalid, t.Axis)
 		}
-		if err := t.EvidenceWindow.validateWithin(bounds); err != nil {
+		if err := t.EvidenceWindow.validate(); err != nil {
 			return fmt.Errorf("evidence_window: %w", err)
 		}
 	}

@@ -44,28 +44,31 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "status_correction.replaced_status",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"AnswerCompleteness.status_correction.replaced_status", "context_fabric_investigation_result.v1.status_correction.replaced_status"},
+			name: "status_correction.replaced_status",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_status_correction.go:34 typed as the frozen ContextFabricInvestigationStatus
+			sites: []string{"AnswerCompleteness.status_correction.replaced_status", "context_fabric_investigation_result.v1.status_correction.replaced_status"},
 			// schema: "complete", "partial", "degraded"
 			goSet:      []string{string(contractsv1.ContextFabricCohortDataComplete), string(contractsv1.ContextFabricCohortDataPartial), string(contractsv1.ContextFabricCohortDataDegraded)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "status_correction.direction",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"AnswerCompleteness.status_correction.direction", "context_fabric_investigation_result.v1.status_correction.direction"},
+			name: "status_correction.direction",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_status_correction.go:5 "The vocabulary is exactly the pairs the authority is ever allowed to serve"
+			sites: []string{"AnswerCompleteness.status_correction.direction", "context_fabric_investigation_result.v1.status_correction.direction"},
 			// schema: "complete_to_partial", "complete_to_degraded", "partial_to_degraded", "degraded_to_partial"
 			goSet:      []string{string(contractsv1.ContextFabricStatusCorrectionCompleteToPartial), string(contractsv1.ContextFabricStatusCorrectionCompleteToDegraded), string(contractsv1.ContextFabricStatusCorrectionPartialToDegraded), string(contractsv1.ContextFabricStatusCorrectionDegradedToPartial)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "status_correction.deciding_outcome",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"AnswerCompleteness.status_correction.deciding_outcome", "PlanRequirementOutcomeRow.outcome", "context_fabric_investigation_result.v1.status_correction.deciding_outcome"},
+			name: "status_correction.deciding_outcome",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_requirement_outcome.go:36 "CLOSED, five members."
+			sites: []string{"AnswerCompleteness.status_correction.deciding_outcome", "PlanRequirementOutcomeRow.outcome", "context_fabric_investigation_result.v1.status_correction.deciding_outcome"},
 			// schema: "satisfied", "narrowed", "unavailable", "not_applicable", "not_attempted"
 			goSet:      []string{string(contractsv1.ContextFabricRequirementSatisfied), string(contractsv1.ContextFabricRequirementNarrowed), string(contractsv1.ContextFabricRequirementUnavailable), string(contractsv1.ContextFabricRequirementNotApplicable), string(contractsv1.ContextFabricRequirementNotAttempted)},
 			exhaustive: true,
@@ -83,7 +86,17 @@ func init() {
 			name:           "Cohort.kind",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"Cohort.kind", "CoverageDetail.kind", "ProjectedCohort.kind", "SubjectHint.kind", "SubjectKind", "SubjectRef.kind"},
+			sites:          []string{"Cohort.kind", "CoverageDetail.kind", "ProjectedCohort.kind", "SubjectRef.kind"},
+			// schema: "organization", "team", "project", "repository", "work_item", "pull_request", "deployment", "incident", "document", "decision", "episode", "metric", "pull_request_review", "ci_pipeline_run", "work_item_ref"
+			goSet:      []string{string(contractsv1.ContextFabricSubjectOrganization), string(contractsv1.ContextFabricSubjectTeam), string(contractsv1.ContextFabricSubjectProject), string(contractsv1.ContextFabricSubjectRepository), string(contractsv1.ContextFabricSubjectWorkItem), string(contractsv1.ContextFabricSubjectPullRequest), string(contractsv1.ContextFabricSubjectDeployment), string(contractsv1.ContextFabricSubjectIncident), string(contractsv1.ContextFabricSubjectDocument), string(contractsv1.ContextFabricSubjectDecision), string(contractsv1.ContextFabricSubjectEpisode), string(contractsv1.ContextFabricSubjectMetric), string(contractsv1.ContextFabricSubjectPullRequestReview), string(contractsv1.ContextFabricSubjectCIRun), string(contractsv1.ContextFabricSubjectWorkItemRef)},
+			exhaustive: true,
+		},
+		outputVocabulary{
+			name: "SubjectKind",
+			kind: vocabFrozen,
+			why:  "request-echo",
+			// Go: the $defs entry and SubjectHint.kind are reachable from canonical requests, whose Go validation is closed
+			sites: []string{"SubjectHint.kind", "SubjectKind"},
 			// schema: "organization", "team", "project", "repository", "work_item", "pull_request", "deployment", "incident", "document", "decision", "episode", "metric", "pull_request_review", "ci_pipeline_run", "work_item_ref"
 			goSet:      []string{string(contractsv1.ContextFabricSubjectOrganization), string(contractsv1.ContextFabricSubjectTeam), string(contractsv1.ContextFabricSubjectProject), string(contractsv1.ContextFabricSubjectRepository), string(contractsv1.ContextFabricSubjectWorkItem), string(contractsv1.ContextFabricSubjectPullRequest), string(contractsv1.ContextFabricSubjectDeployment), string(contractsv1.ContextFabricSubjectIncident), string(contractsv1.ContextFabricSubjectDocument), string(contractsv1.ContextFabricSubjectDecision), string(contractsv1.ContextFabricSubjectEpisode), string(contractsv1.ContextFabricSubjectMetric), string(contractsv1.ContextFabricSubjectPullRequestReview), string(contractsv1.ContextFabricSubjectCIRun), string(contractsv1.ContextFabricSubjectWorkItemRef)},
 			exhaustive: true,
@@ -242,19 +255,21 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "ProjectionBudget.cohort_member_selection_basis",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.MCPInvestigateQuestionResponse.Validate",
-			sites:          []string{"ProjectionBudget.cohort_member_selection_basis"},
+			name: "ProjectionBudget.cohort_member_selection_basis",
+			kind: vocabFrozen,
+			why:  "protocol",
+			// Go: context_fabric_answer_plan.go:178 "the CLOSED vocabulary of orders a narrowing step may take"
+			sites: []string{"ProjectionBudget.cohort_member_selection_basis"},
 			// schema: "largest_group_round_robin", "overlap_aware_set_cover"
 			goSet:      []string{string(contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin), string(contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover)},
 			exhaustive: false,
 		},
 		outputVocabulary{
-			name:           "RelativeWindowID",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"RelativeWindowID"},
+			name: "RelativeWindowID",
+			kind: vocabFrozen,
+			why:  "request-echo",
+			// Go: context_fabric_window_types.go:18 "A caller may NAME one of these identifiers on a request"
+			sites: []string{"RelativeWindowID"},
 			// schema: "trailing_30d", "trailing_90d", "trailing_365d", "all_time"
 			goSet:      []string{string(contractsv1.ContextFabricRelativeWindowTrailing30D), string(contractsv1.ContextFabricRelativeWindowTrailing90D), string(contractsv1.ContextFabricRelativeWindowTrailing365D), string(contractsv1.ContextFabricRelativeWindowAllTime)},
 			exhaustive: true,
@@ -314,10 +329,11 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "StructureNeedKind",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"StructureNeedKind"},
+			name: "StructureNeedKind",
+			kind: vocabFrozen,
+			why:  "protocol",
+			// Go: context_fabric_structure_types.go:285 "a NEW closed-enum value is unrecoverable for any v1-pinned consumer"
+			sites: []string{"StructureNeedKind"},
 			// schema: "expected_kind", "subject_anchor", "subject_handle", "window", "subject_candidate"
 			goSet:      []string{string(contractsv1.ContextFabricStructureNeedExpectedKind), string(contractsv1.ContextFabricStructureNeedSubjectAnchor), string(contractsv1.ContextFabricStructureNeedSubjectHandle), string(contractsv1.ContextFabricStructureNeedWindow), string(contractsv1.ContextFabricStructureNeedSubjectCandidate)},
 			exhaustive: true,
@@ -395,46 +411,51 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "PlanRequirementOutcomeRow.stage",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"PlanRequirementOutcomeRow.stage", "RequirementRefinement.stage"},
+			name: "PlanRequirementOutcomeRow.stage",
+			kind: vocabFrozen,
+			why:  "protocol",
+			// Go: context_fabric_requirement_outcome.go:117 "Widening the shipped vocabulary instead was refused"
+			sites: []string{"PlanRequirementOutcomeRow.stage", "RequirementRefinement.stage"},
 			// schema: "planning", "assembled_result", "projection", "reuse"
 			goSet:      []string{string(contractsv1.ContextFabricOutcomeStagePlanning), string(contractsv1.ContextFabricOutcomeStageAssembledResult), string(contractsv1.ContextFabricOutcomeStageProjection), string(contractsv1.ContextFabricOutcomeStageReuse)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "PlanRequirementOutcomeRow.impact",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"PlanRequirementOutcomeRow.impact"},
+			name: "PlanRequirementOutcomeRow.impact",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_requirement_outcome.go:188 "CLOSED, four members."
+			sites: []string{"PlanRequirementOutcomeRow.impact"},
 			// schema: "none", "scope", "depth", "dimension"
 			goSet:      []string{string(contractsv1.ContextFabricAnswerImpactNone), string(contractsv1.ContextFabricAnswerImpactScope), string(contractsv1.ContextFabricAnswerImpactDepth), string(contractsv1.ContextFabricAnswerImpactDimension)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "BudgetOverrun",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"BudgetOverrun", "PlanRequirementOutcomeRow.cause_overrun", "RequirementRefinement.overrun"},
+			name: "BudgetOverrun",
+			kind: vocabFrozen,
+			why:  "protocol",
+			// Go: context_fabric_response_budget.go:152 "the CLOSED vocabulary for which axis a result exceeded"
+			sites: []string{"BudgetOverrun", "PlanRequirementOutcomeRow.cause_overrun", "RequirementRefinement.overrun"},
 			// schema: "fits", "items", "bytes"
 			goSet:      []string{string(contractsv1.ContextFabricBudgetFits), string(contractsv1.ContextFabricBudgetOverrunItems), string(contractsv1.ContextFabricBudgetOverrunBytes)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "NarrowingBasis",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"NarrowingBasis", "RequirementRefinement.basis"},
+			name: "NarrowingBasis",
+			kind: vocabFrozen,
+			why:  "protocol",
+			// Go: context_fabric_answer_plan.go:178 "the CLOSED vocabulary of orders a narrowing step may take"
+			sites: []string{"NarrowingBasis", "RequirementRefinement.basis"},
 			// schema: "canonical_id_lexical", "largest_group_round_robin", "attention_rank", "overlap_aware_set_cover", "link_strength_then_id"
 			goSet:      []string{string(contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical), string(contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin), string(contractsv1.ContextFabricNarrowingBasisAttentionRank), string(contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover), string(contractsv1.ContextFabricNarrowingBasisLinkStrengthThenID)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "semantic_reading.status",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"context_fabric_answer_projection.v1.semantic_reading.status", "context_fabric_investigation_result.v1.semantic_reading.status"},
+			name: "semantic_reading.status",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_semantic_reading.go:22 "One member: a present field only ever says the reading was unavailable."
+			sites: []string{"context_fabric_answer_projection.v1.semantic_reading.status", "context_fabric_investigation_result.v1.semantic_reading.status"},
 			// schema: "unavailable"
 			goSet:      []string{string(contractsv1.ContextFabricSemanticReadingUnavailable)},
 			exhaustive: true,
@@ -637,10 +658,11 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "PlanNarrowingStage",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"PlanNarrowingStage"},
+			name: "PlanNarrowingStage",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_answer_plan.go:125 "the CLOSED vocabulary of the three moments a plan may narrow"
+			sites: []string{"PlanNarrowingStage"},
 			// schema: "cardinality", "synthesis_input", "assembled_result"
 			goSet:      []string{string(contractsv1.ContextFabricPlanNarrowingCardinality), string(contractsv1.ContextFabricPlanNarrowingSynthesisInput), string(contractsv1.ContextFabricPlanNarrowingAssembledResult)},
 			exhaustive: true,
@@ -673,19 +695,21 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "match_mechanisms.items",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"SubjectCandidate.match_mechanisms.items"},
+			name: "match_mechanisms.items",
+			kind: vocabFrozen,
+			why:  "scoring",
+			// Go: context_fabric_types.go:196 "This is a CLOSED enum -- adding a member is a contract change"
+			sites: []string{"SubjectCandidate.match_mechanisms.items"},
 			// schema: "exact", "alias", "provider_key", "lexical", "vector", "traversal_parent"
 			goSet:      []string{string(contractsv1.ContextFabricMatchExact), string(contractsv1.ContextFabricMatchAlias), string(contractsv1.ContextFabricMatchProviderKey), string(contractsv1.ContextFabricMatchLexical), string(contractsv1.ContextFabricMatchVector), string(contractsv1.ContextFabricMatchTraversalParent)},
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "WindowConfirmationMode",
-			kind:           vocabAdditive,
-			clientValidate: "none: a request option; no response validator reads it",
-			sites:          []string{"WindowConfirmationMode"},
+			name: "WindowConfirmationMode",
+			kind: vocabFrozen,
+			why:  "request-echo",
+			// Go: context_fabric_window_types.go:210 a request option (InvestigationOptions.window_confirmation_mode)
+			sites: []string{"WindowConfirmationMode"},
 			// schema: "", "headless", "nudge"
 			goSet:      []string{"", string(contractsv1.ContextFabricWindowConfirmationHeadless), string(contractsv1.ContextFabricWindowConfirmationNudge)},
 			exhaustive: true,

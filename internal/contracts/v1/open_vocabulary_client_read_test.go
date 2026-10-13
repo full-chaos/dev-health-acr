@@ -20,7 +20,7 @@ func TestOpenVocabularyTokenShape(t *testing.T) {
 	}
 }
 
-func TestPacketAndEvidenceValidateAcceptAddedVocabularyValues(t *testing.T) {
+func TestPacketAndEvidenceValidateReadAcceptsAddedVocabularyValues(t *testing.T) {
 	cases := []struct {
 		name     string
 		validate func(value string) error
@@ -28,57 +28,52 @@ func TestPacketAndEvidenceValidateAcceptAddedVocabularyValues(t *testing.T) {
 		{"evidence_ref.provenance", func(v string) error {
 			e := loadFixture[EvidenceRef](t, "evidence_ref.v1.json")
 			e.Provenance = v
-			return e.Validate()
+			return e.ValidateRead()
 		}},
 		{"evidence_ref.availability", func(v string) error {
 			e := loadFixture[EvidenceRef](t, "evidence_ref.v1.json")
 			e.Availability = EvidenceAvailability(v)
-			return e.Validate()
+			return e.ValidateRead()
 		}},
 		{"expanded_evidence.availability", func(v string) error {
 			e := loadFixture[ExpandedEvidence](t, "expanded_evidence.v1.json")
 			e.Availability = EvidenceAvailability(v)
-			return e.Validate()
+			return e.ValidateRead()
 		}},
 		{"expanded_evidence.evidence.provenance", func(v string) error {
 			e := loadFixture[ExpandedEvidence](t, "expanded_evidence.v1.json")
 			e.Evidence.Provenance = v
-			return e.Validate()
+			return e.ValidateRead()
 		}},
 		{"context_packet.resolved_scope.resolution", func(v string) error {
 			p := loadFixture[ContextPacket](t, "context_packet.v1.json")
 			p.ResolvedScope.Resolution = ScopeResolution(v)
-			return p.Validate()
+			return p.ValidateRead()
 		}},
 		{"context_packet.freshness.watermarks.status", func(v string) error {
 			p := loadFixture[ContextPacket](t, "context_packet.v1.json")
 			p.Freshness.Watermarks[0].Status = v
-			return p.Validate()
+			return p.ValidateRead()
 		}},
 		{"context_packet.items.category", func(v string) error {
 			p := loadFixture[ContextPacket](t, "context_packet.v1.json")
 			p.Items[0].Category = PacketCategory(v)
-			return p.Validate()
+			return p.ValidateRead()
 		}},
 		{"context_packet_item.claim_kind", func(v string) error {
 			i := loadFixture[ContextPacketItem](t, "context_packet_item.v1.json")
 			i.ClaimKind = ClaimKind(v)
-			return i.Validate()
+			return i.ValidateRead()
 		}},
 		{"context_packet_item.severity", func(v string) error {
 			i := loadFixture[ContextPacketItem](t, "context_packet_item.v1.json")
 			i.Severity = Severity(v)
-			return i.Validate()
+			return i.ValidateRead()
 		}},
 		{"agent_episode.redaction_state", func(v string) error {
 			e := loadFixture[AgentEpisode](t, "agent_episode.v1.json")
 			e.RedactionState = v
-			return e.Validate()
-		}},
-		{"record_episode.redaction_state", func(v string) error {
-			r := loadFixture[MCPRecordEpisodeResponse](t, "mcp_record_episode_response.v1.json")
-			r.RedactionState = v
-			return r.Validate()
+			return e.ValidateRead()
 		}},
 	}
 	for _, tc := range cases {
@@ -103,12 +98,12 @@ func TestValidateKeepsFrozenAndLocallyMintedVocabulariesClosed(t *testing.T) {
 		{"context_packet.status", func() error {
 			p := loadFixture[ContextPacket](t, "context_packet.v1.json")
 			p.Status = PacketStatus(addedVocabularyValue)
-			return p.Validate()
+			return p.ValidateRead()
 		}},
 		{"agent_episode.outcome", func() error {
 			e := loadFixture[AgentEpisode](t, "agent_episode.v1.json")
 			e.Outcome = addedVocabularyValue
-			return e.Validate()
+			return e.ValidateRead()
 		}},
 		{"record_episode.transcript_disposition", func() error {
 			r := loadFixture[MCPRecordEpisodeResponse](t, "mcp_record_episode_response.v1.json")
@@ -118,7 +113,7 @@ func TestValidateKeepsFrozenAndLocallyMintedVocabulariesClosed(t *testing.T) {
 		{"agent_episode.transcript.mode", func() error {
 			e := loadFixture[AgentEpisode](t, "agent_episode.v1.json")
 			e.Transcript.Mode = addedVocabularyValue
-			return e.Validate()
+			return e.ValidateRead()
 		}},
 	}
 	for _, tc := range cases {

@@ -260,7 +260,7 @@ func init() {
 		outputVocabulary{
 			name:           "redaction_state",
 			kind:           vocabAdditive,
-			clientValidate: "contractsv1.MCPRecordEpisodeResponse.Validate",
+			clientValidate: "contractsv1.MCPRecordEpisodeResponse.ValidateRead",
 			sites:          []string{"record_episode:redaction_state"},
 			// schema: "active", "redacted", "purged_tombstone"
 			schemaOnly: "active/redacted/purged_tombstone are string literals in contracts/v1/validate.go",

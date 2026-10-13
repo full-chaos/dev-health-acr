@@ -6,6 +6,16 @@ import (
 )
 
 func (i ContextPacketItem) Validate() error {
+	return i.validate(false)
+}
+
+// ValidateRead is Validate for a client reading a served item: an added
+// category, claim_kind or severity token passes. Producers call Validate.
+func (i ContextPacketItem) ValidateRead() error {
+	return i.validate(true)
+}
+
+func (i ContextPacketItem) validate(open bool) error {
 	if i.SchemaVersion != ContextPacketItemSchema {
 		return fmt.Errorf("schema_version must be %q", ContextPacketItemSchema)
 	}
@@ -15,7 +25,7 @@ func (i ContextPacketItem) Validate() error {
 	if math.IsNaN(i.Confidence) || math.IsInf(i.Confidence, 0) || i.Confidence < 0 || i.Confidence > 1 || i.Rank < 0 {
 		return fmt.Errorf("context packet item number violates v1 bounds")
 	}
-	if !validItemEnums(i) || !validScope(i.ValidityScope) || !validRelatedEntities(i.RelatedEntities) || !validEvidenceIDs(i.EvidenceRefIDs) {
+	if !validItemEnums(i, open) || !validScope(i.ValidityScope) || !validRelatedEntities(i.RelatedEntities) || !validEvidenceIDs(i.EvidenceRefIDs) {
 		return fmt.Errorf("context packet item violates v1 bounds")
 	}
 	if i.ClaimKind == ClaimObserved && len(i.EvidenceRefIDs) == 0 {
@@ -24,21 +34,19 @@ func (i ContextPacketItem) Validate() error {
 	return nil
 }
 
-// validItemEnums admits an added token in each of the three item
-// vocabularies: all three are open, so a client keeps reading a packet whose
-// server added a member.
-func validItemEnums(item ContextPacketItem) bool {
+func validItemEnums(item ContextPacketItem, open bool) bool {
+	added := func(v string) bool { return open && openVocabularyToken(v) }
 	switch item.Category {
 	case CategoryState, CategoryPressure, CategoryCause, CategoryEvidence, CategoryAction:
 	default:
-		if !openVocabularyToken(string(item.Category)) {
+		if !added(string(item.Category)) {
 			return false
 		}
 	}
 	switch item.ClaimKind {
 	case ClaimObserved, ClaimInferred, ClaimRecommendation:
 	default:
-		if !openVocabularyToken(string(item.ClaimKind)) {
+		if !added(string(item.ClaimKind)) {
 			return false
 		}
 	}
@@ -46,7 +54,7 @@ func validItemEnums(item ContextPacketItem) bool {
 	case SeverityInfo, SeverityWarning, SeverityHigh, SeverityCritical:
 		return true
 	default:
-		return openVocabularyToken(string(item.Severity))
+		return added(string(item.Severity))
 	}
 }
 

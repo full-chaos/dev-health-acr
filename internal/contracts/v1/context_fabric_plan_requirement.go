@@ -371,7 +371,7 @@ func (r ContextFabricPlanRequirement) validate(bounds contextFabricBounds) error
 	if !bounds.additiveOK(ValidContextFabricSubjectRole(r.Role), r.Role) {
 		return fmt.Errorf("plan requirement role %q is not a vocabulary member", r.Role)
 	}
-	if !bounds.additiveOK(validContextFabricSubjectKind(r.Subject), string(r.Subject)) {
+	if !validContextFabricSubjectKind(r.Subject) {
 		return fmt.Errorf("plan requirement subject kind %q is not a vocabulary member", r.Subject)
 	}
 	if !bounds.additiveOK(ValidContextFabricAnswerObligationKind(r.Kind), r.Kind) {

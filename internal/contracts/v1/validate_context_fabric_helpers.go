@@ -912,13 +912,13 @@ func ValidContextFabricSubjectMatchMechanism(value ContextFabricSubjectMatchMech
 // enum member (six), every entry a recognized member, and no duplicates. An
 // EMPTY set is valid -- see ContextFabricSubjectCandidate.MatchMechanisms for
 // why absence must stay legal in v1.
-func validMatchMechanisms(values []ContextFabricSubjectMatchMechanism, bounds contextFabricBounds) bool {
+func validMatchMechanisms(values []ContextFabricSubjectMatchMechanism) bool {
 	if len(values) > 6 {
 		return false
 	}
 	seen := make(map[ContextFabricSubjectMatchMechanism]struct{}, len(values))
 	for _, value := range values {
-		if !bounds.additiveOK(ValidContextFabricSubjectMatchMechanism(value), string(value)) {
+		if !ValidContextFabricSubjectMatchMechanism(value) {
 			return false
 		}
 		if _, exists := seen[value]; exists {

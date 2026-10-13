@@ -492,13 +492,13 @@ func (r ContextFabricRequirementRefinement) Validate() error {
 }
 
 func (r ContextFabricRequirementRefinement) validate(bounds contextFabricBounds) error {
-	if !bounds.additiveOK(ValidContextFabricOutcomeStage(r.Stage), string(r.Stage)) {
+	if !ValidContextFabricOutcomeStage(r.Stage) {
 		return fmt.Errorf("refinement stage %q is not a vocabulary member", r.Stage)
 	}
-	if r.Basis != "" && !bounds.additiveOK(ValidContextFabricNarrowingBasis(r.Basis), string(r.Basis)) {
+	if r.Basis != "" && !ValidContextFabricNarrowingBasis(r.Basis) {
 		return fmt.Errorf("refinement basis %q is not a vocabulary member", r.Basis)
 	}
-	if r.Overrun != "" && !bounds.additiveOK(ValidContextFabricBudgetOverrun(r.Overrun), string(r.Overrun)) {
+	if r.Overrun != "" && !ValidContextFabricBudgetOverrun(r.Overrun) {
 		return fmt.Errorf("refinement overrun %q is not a vocabulary member", r.Overrun)
 	}
 	if r.Coverage != "" && !bounds.additiveOK(validCoverageDetailCode(r.Coverage), string(r.Coverage)) {
@@ -701,29 +701,22 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	return validatePlanRequirementOutcomeRow(row, contextFabricWriteBounds)
 }
 
-// validatePlanRequirementOutcomeRow, on a read, admits added tokens in the
-// row's vocabularies. A row carrying one skips the rules keyed to specific
-// members (outcome/impact pairing, cause naming, the census and truncation
-// exceptions) and keeps the structural ones: the coordinate, the counts and
-// the refinement chain.
+// validatePlanRequirementOutcomeRow, on a read, admits an added obligation
+// or cause_coverage token. Only a rule whose own operands include that token
+// is skipped: cause naming and the census and truncation exceptions read the
+// coverage code, and the census exception reads the obligation.
 func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRow, bounds contextFabricBounds) error {
-	if !bounds.additiveOK(ValidContextFabricOutcomeStage(row.Stage), string(row.Stage)) {
+	if !ValidContextFabricOutcomeStage(row.Stage) {
 		return fmt.Errorf("outcome row stage %q is not a vocabulary member", row.Stage)
 	}
-	if !bounds.additiveOK(ValidContextFabricPlanRequirementOutcome(row.Outcome), string(row.Outcome)) {
+	if !ValidContextFabricPlanRequirementOutcome(row.Outcome) {
 		return fmt.Errorf("outcome %q is not a vocabulary member", row.Outcome)
 	}
-	if !bounds.additiveOK(ValidContextFabricAnswerImpactKind(row.Impact), string(row.Impact)) {
+	if !ValidContextFabricAnswerImpactKind(row.Impact) {
 		return fmt.Errorf("impact %q is not a vocabulary member", row.Impact)
 	}
-	outcomeAdded := bounds.additiveUnknown(ValidContextFabricPlanRequirementOutcome(row.Outcome), string(row.Outcome))
-	added := outcomeAdded ||
-		bounds.additiveUnknown(ValidContextFabricOutcomeStage(row.Stage), string(row.Stage)) ||
-		bounds.additiveUnknown(ValidContextFabricAnswerImpactKind(row.Impact), string(row.Impact)) ||
-		(row.Obligation != "" && bounds.additiveUnknown(ValidContextFabricAnswerObligation(row.Obligation), row.Obligation)) ||
-		(row.CauseOverrun != "" && bounds.additiveUnknown(ValidContextFabricBudgetOverrun(row.CauseOverrun), string(row.CauseOverrun))) ||
-		(row.CauseCoverage != "" && bounds.additiveUnknown(validCoverageDetailCode(row.CauseCoverage), string(row.CauseCoverage))) ||
-		(row.CauseNarrowing != "" && bounds.additiveUnknown(ValidContextFabricNarrowingBasis(row.CauseNarrowing), string(row.CauseNarrowing)))
+	obligationAdded := row.Obligation != "" && bounds.additiveUnknown(ValidContextFabricAnswerObligation(row.Obligation), row.Obligation)
+	coverageAdded := row.CauseCoverage != "" && bounds.additiveUnknown(validCoverageDetailCode(row.CauseCoverage), string(row.CauseCoverage))
 	if !stringLengthBetween(row.Requirement, 0, ContextFabricRequirementIdentityMaxLength) ||
 		!stringLengthBetween(row.Obligation, 0, ContextFabricRequirementObligationMaxLength) {
 		return fmt.Errorf("outcome row requirement or obligation violates v1 bounds")
@@ -761,24 +754,6 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 			}
 		}
 	}
-	if added {
-		for _, cause := range []struct {
-			name, value string
-			known       bool
-		}{
-			{"cause_overrun", string(row.CauseOverrun), ValidContextFabricBudgetOverrun(row.CauseOverrun)},
-			{"cause_coverage", string(row.CauseCoverage), validCoverageDetailCode(row.CauseCoverage)},
-			{"cause_narrowing", string(row.CauseNarrowing), ValidContextFabricNarrowingBasis(row.CauseNarrowing)},
-		} {
-			if cause.value != "" && !bounds.additiveOK(cause.known, cause.value) {
-				return fmt.Errorf("outcome row %s %q is not a vocabulary member", cause.name, cause.value)
-			}
-		}
-		if row.Served < 0 || row.Declared < 0 || row.Served > row.Declared {
-			return fmt.Errorf("outcome row served/declared %d/%d violates v1 bounds", row.Served, row.Declared)
-		}
-		return validateContextFabricRequirementRefinements(row, bounds, outcomeAdded)
-	}
 	// THE PAIRING RULE. `none` means nothing was lost, so it is legal
 	// exactly where nothing was: a row whose outcome is `narrowed` and
 	// whose impact is `none` is a validation failure, not a tidy default.
@@ -789,7 +764,7 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 	if row.CauseOverrun != "" && !ValidContextFabricBudgetOverrun(row.CauseOverrun) {
 		return fmt.Errorf("outcome row cause_overrun %q is not a vocabulary member", row.CauseOverrun)
 	}
-	if row.CauseCoverage != "" && !validCoverageDetailCode(row.CauseCoverage) {
+	if row.CauseCoverage != "" && !validCoverageDetailCode(row.CauseCoverage) && !coverageAdded {
 		return fmt.Errorf("outcome row cause_coverage %q is not a vocabulary member", row.CauseCoverage)
 	}
 	if row.CauseNarrowing != "" && !ValidContextFabricNarrowingBasis(row.CauseNarrowing) {
@@ -807,7 +782,7 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 	// A loss with no named cause is the generic truncation bit this layer
 	// exists to replace, and a cause named on a row that lost nothing
 	// states that a mechanism fired when none did. Both directions.
-	if lossless == named && !notApplicableWhy {
+	if lossless == named && !notApplicableWhy && !(lossless && coverageAdded) {
 		if lossless {
 			return fmt.Errorf("outcome %q lost nothing and must name no cause", row.Outcome)
 		}
@@ -817,7 +792,7 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 	// describes a cause, so it is meaningless -- and misleading -- on a
 	// row that names none, and a not_applicable reason is always a reported
 	// one (the derivation said why), never a default.
-	if lossless && row.CauseObserved != notApplicableWhy {
+	if lossless && !coverageAdded && row.CauseObserved != notApplicableWhy {
 		if notApplicableWhy {
 			return fmt.Errorf("outcome %q names a cause and must claim it observed", row.Outcome)
 		}
@@ -919,7 +894,8 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 		row.CauseNarrowing == "" &&
 		row.CauseOverrun == "" &&
 		coverageDetailCodeQualifiesSourceTruncation(row.CauseCoverage)
-	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified {
+	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified &&
+		!coverageAdded && !obligationAdded {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
 	// THE OTHER DIRECTION IS NOT REFUSED, AND THAT IS DELIBERATE.
@@ -941,7 +917,7 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 	// kind it can PROVE retained a fact, so a zero it emits for that shape
 	// is never a claim about facts nobody received, and this validator has
 	// no further test to make on it.
-	return validateContextFabricRequirementRefinements(row, bounds, false)
+	return validateContextFabricRequirementRefinements(row, bounds)
 }
 
 // censusQualifyingObligation says which obligations may take the census
@@ -1020,7 +996,7 @@ func censusQualifyingRole(requirement string) bool {
 // list into an audit -- every item removed between Declared and Served is
 // attributed to a named stage on a named basis, and a stage that shrank the
 // document without recording it leaves a gap this names.
-func validateContextFabricRequirementRefinements(row ContextFabricPlanRequirementOutcomeRow, bounds contextFabricBounds, outcomeAdded bool) error {
+func validateContextFabricRequirementRefinements(row ContextFabricPlanRequirementOutcomeRow, bounds contextFabricBounds) error {
 	if len(row.Refinements) == 0 {
 		return nil
 	}
@@ -1044,7 +1020,7 @@ func validateContextFabricRequirementRefinements(row ContextFabricPlanRequiremen
 	// describing a population neither of them ever had. A deny-list is also
 	// wrong by construction for a CLOSED vocabulary: the sixth outcome added
 	// would be permitted by default, and permitted silently.
-	if row.Outcome != ContextFabricRequirementNarrowed && !outcomeAdded {
+	if row.Outcome != ContextFabricRequirementNarrowed {
 		return fmt.Errorf("outcome %q records a refinement; only %q describes a population that was reduced and still served",
 			row.Outcome, ContextFabricRequirementNarrowed)
 	}

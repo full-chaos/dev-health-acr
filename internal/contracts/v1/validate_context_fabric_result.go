@@ -44,7 +44,7 @@ func (c ContextFabricSubjectCandidate) validate(bounds contextFabricBounds) erro
 	if utf8.RuneCountInString(c.Provider) > ContextFabricProviderMaxLength {
 		return fmt.Errorf("subject candidate provider violates v1 bounds")
 	}
-	if !validMatchMechanisms(c.MatchMechanisms, bounds) {
+	if !validMatchMechanisms(c.MatchMechanisms) {
 		return fmt.Errorf("subject candidate match mechanisms violate v1 bounds")
 	}
 	if !optionalEvidenceRefs(c.EvidenceRefIDs, bounds.candidateEvidenceRefs) {
@@ -148,7 +148,8 @@ func (d ContextFabricCommitDecisionDigest) Validate() error {
 }
 
 // validate skips the gate-to-identity and lookup-to-alias pairings for an
-// added gate or lookup token: those pairings are defined per known member.
+// added gate or lookup token, since those pairings are defined per known
+// member; any recorded lookup still needs a commit gate.
 func (d ContextFabricCommitDecisionDigest) validate(bounds contextFabricBounds) error {
 	if err := d.Subject.validate(bounds); err != nil {
 		return fmt.Errorf("subject: %w", err)
@@ -172,6 +173,9 @@ func (d ContextFabricCommitDecisionDigest) validate(bounds contextFabricBounds) 
 	default:
 		if !bounds.additiveOK(false, d.IdentityLookup) {
 			return fmt.Errorf("identity lookup is not a recognized value")
+		}
+		if d.CommitGate == "" {
+			return fmt.Errorf("identity lookup is recorded without a commit gate")
 		}
 	}
 	return nil
@@ -1241,7 +1245,7 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if c.RefusalBasis != r.RefusalBasis {
 		return fmt.Errorf("completeness refusal_basis %q must equal the result's refusal_basis %q", c.RefusalBasis, r.RefusalBasis)
 	}
-	if err := r.validateStatusCorrection(bounds); err != nil {
+	if err := r.validateStatusCorrection(); err != nil {
 		return err
 	}
 	// Membership is checked on the NON-EMPTY value only: empty is the
@@ -1315,13 +1319,9 @@ func validateAnswerOutcomes(c ContextFabricAnswerCompleteness, bounds contextFab
 	if len(c.Outcomes) > ContextFabricPlanRequirementOutcomeMaxCount {
 		return fmt.Errorf("outcomes exceeds v1 bounds")
 	}
-	addedOutcome := false
 	for index, row := range c.Outcomes {
 		if err := validatePlanRequirementOutcomeRow(row, bounds); err != nil {
 			return fmt.Errorf("outcomes[%d]: %w", index, err)
-		}
-		if bounds.additiveUnknown(ValidContextFabricPlanRequirementOutcome(row.Outcome), string(row.Outcome)) {
-			addedOutcome = true
 		}
 	}
 	if !bounds.completenessRequired && c.State == "" && len(c.Outcomes) == 0 {
@@ -1334,11 +1334,6 @@ func validateAnswerOutcomes(c ContextFabricAnswerCompleteness, bounds contextFab
 	// re-running that function here and requiring equality is what stops a
 	// producer from stamping a state and then changing the document, or
 	// from copying a state across a surface that narrowed again.
-	// The state is a function of known outcomes only; with an added outcome
-	// in the rows it cannot be re-derived here, so the stated one stands.
-	if addedOutcome {
-		return nil
-	}
 	want := DeriveContextFabricAnswerCompletenessState(c.Outcomes)
 	if c.State == want {
 		return nil
@@ -1434,7 +1429,7 @@ func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) e
 	if !bounds.additiveOK(validInvestigationShape(q.Shape), string(q.Shape)) || !boundedText(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, bounds) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
-	if err := q.TimeContext.validate(bounds); err != nil {
+	if err := q.TimeContext.Validate(); err != nil {
 		return fmt.Errorf("time_context: %w", err)
 	}
 	seen := make(map[ContextFabricFactKind]struct{}, len(q.FactRequirements))
@@ -1765,7 +1760,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		return fmt.Errorf("versions: %w", err)
 	}
 	if r.Temporal != nil {
-		if err := r.Temporal.validate(bounds); err != nil {
+		if err := r.Temporal.Validate(); err != nil {
 			return fmt.Errorf("temporal: %w", err)
 		}
 		// The label must describe the SAME question the interpretation
@@ -1795,7 +1790,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		}
 	}
 	if r.WindowClarification != nil {
-		if err := r.WindowClarification.validate(bounds); err != nil {
+		if err := r.WindowClarification.Validate(); err != nil {
 			return fmt.Errorf("window_clarification: %w", err)
 		}
 	}
@@ -1903,14 +1898,10 @@ func validateRenderShapesAgainstPlan(shapes []ContextFabricRenderShape, plan *Co
 // ever appears on a historical axis, and Effective never widens beyond
 // Requested.
 func (l ContextFabricTemporalLabel) Validate() error {
-	return l.validate(contextFabricWriteBounds)
-}
-
-func (l ContextFabricTemporalLabel) validate(bounds contextFabricBounds) error {
-	if err := l.Requested.validate(bounds); err != nil {
+	if err := l.Requested.Validate(); err != nil {
 		return fmt.Errorf("requested: %w", err)
 	}
-	if err := l.Effective.validate(bounds); err != nil {
+	if err := l.Effective.Validate(); err != nil {
 		return fmt.Errorf("effective: %w", err)
 	}
 	if l.Requested.Axis == ContextFabricTemporalCurrent {
@@ -2200,9 +2191,7 @@ func validateInactiveHints(hints []ContextFabricInactiveHint, bounds contextFabr
 // authority is allowed to have served (never complete), a direction that
 // starts from the stated model status, and, when it names a deciding row,
 // one the completeness block carries.
-// An added direction or replaced_status token skips the direction mapping,
-// which is defined per known direction.
-func (r ContextFabricInvestigationResult) validateStatusCorrection(bounds contextFabricBounds) error {
+func (r ContextFabricInvestigationResult) validateStatusCorrection() error {
 	source, mirror := r.StatusCorrection, r.Completeness.StatusCorrection
 	if (source == nil) != (mirror == nil) || (source != nil && *source != *mirror) {
 		return fmt.Errorf("completeness status_correction must equal the result's status_correction")
@@ -2214,19 +2203,16 @@ func (r ContextFabricInvestigationResult) validateStatusCorrection(bounds contex
 		return fmt.Errorf("status_correction cannot accompany status %q", r.Status)
 	}
 	from, ok := ContextFabricStatusCorrectionModelStatus(source.Direction)
-	if !bounds.additiveOK(ok, string(source.Direction)) {
+	if !ok {
 		return fmt.Errorf("status_correction direction %q is not a vocabulary member", source.Direction)
 	}
-	replacedAdded := bounds.additiveUnknown(validInvestigationStatus(source.ReplacedStatus), string(source.ReplacedStatus))
-	if ok && !replacedAdded {
-		if source.ReplacedStatus != from {
-			return fmt.Errorf("status_correction replaced_status %q does not match direction %q", source.ReplacedStatus, source.Direction)
-		}
-		if to, _ := ContextFabricStatusCorrectionServedStatus(source.Direction); to != r.Status {
-			return fmt.Errorf("status_correction direction %q does not end at the served status %q", source.Direction, r.Status)
-		}
+	if source.ReplacedStatus != from {
+		return fmt.Errorf("status_correction replaced_status %q does not match direction %q", source.ReplacedStatus, source.Direction)
 	}
-	if source.DecidingOutcome != "" && !bounds.additiveOK(ValidContextFabricPlanRequirementOutcome(source.DecidingOutcome), string(source.DecidingOutcome)) {
+	if to, _ := ContextFabricStatusCorrectionServedStatus(source.Direction); to != r.Status {
+		return fmt.Errorf("status_correction direction %q does not end at the served status %q", source.Direction, r.Status)
+	}
+	if source.DecidingOutcome != "" && !ValidContextFabricPlanRequirementOutcome(source.DecidingOutcome) {
 		return fmt.Errorf("status_correction deciding_outcome %q is not a vocabulary member", source.DecidingOutcome)
 	}
 	if (source.DecidingRequirement == "") != (source.DecidingOutcome == "") {
