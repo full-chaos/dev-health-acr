@@ -518,6 +518,9 @@ func TestBlockerStatementsSelectEverySpellingAndNeverDoubleCount(t *testing.T) {
 	if !strings.Contains(blockers, dependencyrelation.KeySQL("r.relationship_type")+" AS rk") || !strings.Contains(blockers, "x.rk IN ('"+dependencyrelation.Key("blocks")+"', '"+dependencyrelation.Key("blocked_by")+"')") || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
 		t.Fatalf("blockers statement does not select by the shared spelling map:\n%s", blockers)
 	}
+	if strings.Contains(blockers, "FINAL AS ") || !strings.Contains(blockers, "work_item_dependencies AS r FINAL") {
+		t.Fatalf("blockers statement puts an alias after FINAL (a ClickHouse syntax error):\n%s", blockers)
+	}
 	if !strings.Contains(children, "NOT ("+pred+")") {
 		t.Fatalf("required children statement does not exclude every blocker spelling:\n%s", children)
 	}

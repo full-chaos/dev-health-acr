@@ -421,7 +421,7 @@ const blockerPairSeparator = "\x1f"
 // edges. The team blocker statements read work items, their link rows and
 // their authorization for these ids only, so a statement's cost follows the
 // blocker edges, not the size of the organization's work item table.
-var blockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM ` + blockerRowsSQL("be", "work_item_dependencies FINAL") + `)`
+var blockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM ` + blockerRowsSQL("be", "work_item_dependencies AS r FINAL") + `)`
 
 // blockerWorkItemsSQL is the work_items rows of the blocker edge endpoints
 // under alias, with the columns the team blocker statements read.
@@ -433,7 +433,7 @@ func blockerWorkItemsSQL(alias string) string {
 // sync time. The subselect reads the first-seen rows of the blocker edge
 // endpoints only, so its cost follows the blocker edges.
 var blockerStartJoinSQL = ` LEFT JOIN (SELECT f.blocker_id AS blocker_id, f.blocked_id AS blocked_id, min(f.first_seen_at) AS first_seen, 1 AS seen
-    FROM ` + blockerRowsSQL("f", "work_item_dependency_first_seen", "first_seen_at") + ` WHERE f.source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND f.target_work_item_id IN ` + blockerEndpointIDsSQL + `
+    FROM ` + blockerRowsSQL("f", "work_item_dependency_first_seen AS r", "first_seen_at") + ` WHERE f.source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND f.target_work_item_id IN ` + blockerEndpointIDsSQL + `
     GROUP BY blocker_id, blocked_id) AS fs
     ON fs.blocker_id = d.blocker_id AND fs.blocked_id = d.blocked_id`
 
@@ -816,7 +816,8 @@ func blockerRelationPredicateSQL(keyColumn string) string {
 // normalised: blocker_id blocks blocked_id, for every stored spelling and
 // direction (an inverse spelling states the blocked item as the source). It
 // also carries the stored source, target and relationship type, the relation
-// key rk, and the extra columns named. from is a table name; alias names the
+// key rk, and the extra columns named. from is the table with its alias r
+// (and FINAL, which must follow the alias); alias names the
 // result. The spelling map is evaluated once, in the innermost select.
 func blockerRowsSQL(alias, from string, extraColumns ...string) string {
 	extra := ""
@@ -824,7 +825,7 @@ func blockerRowsSQL(alias, from string, extraColumns ...string) string {
 		extra += ", r." + column
 	}
 	inner := "SELECT r.org_id, r.source_work_item_id, r.target_work_item_id, r.relationship_type" + extra + ", " + dependencyrelation.KeySQL("r.relationship_type") + " AS " + blockerRelationKeyColumn +
-		" FROM " + from + " AS r WHERE r.org_id = {org_id:String}"
+		" FROM " + from + " WHERE r.org_id = {org_id:String}"
 	return "(SELECT x.org_id AS org_id, x.source_work_item_id AS source_work_item_id, x.target_work_item_id AS target_work_item_id, x.relationship_type AS relationship_type, x." + blockerRelationKeyColumn + " AS " + blockerRelationKeyColumn + extraSelect(extraColumns) +
 		", if(x." + blockerRelationKeyColumn + " = '" + blockerInverseKey + "', x.target_work_item_id, x.source_work_item_id) AS blocker_id" +
 		", if(x." + blockerRelationKeyColumn + " = '" + blockerInverseKey + "', x.source_work_item_id, x.target_work_item_id) AS blocked_id" +
@@ -841,5 +842,5 @@ func extraSelect(columns []string) string {
 
 // blockerDependenciesSQL is blockerRowsSQL over work_item_dependencies.
 func blockerDependenciesSQL(alias string) string {
-	return blockerRowsSQL(alias, "work_item_dependencies FINAL", "relation_started_at")
+	return blockerRowsSQL(alias, "work_item_dependencies AS r FINAL", "relation_started_at")
 }
