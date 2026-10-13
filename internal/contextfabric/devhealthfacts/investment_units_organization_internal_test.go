@@ -18,7 +18,7 @@ func TestOrganizationUnitsStatementKeepsUnattributedRowsAndNoRepositoryFilter(t 
 	if !strings.Contains(organization, "unit:") {
 		t.Error("the organization statement gives a unit with no reference and no repository no unattributed row")
 	}
-	if strings.Contains(repository, "unit:") || !strings.Contains(repository, "ARRAY JOIN "+requestedRepositories+" AS repo_uuid") {
+	if strings.Contains(repository, "unit:") || !strings.Contains(repository, requestedRepositories) {
 		t.Error("the repository and team listing changed: it must keep selecting only resolved repositories of its set")
 	}
 	if strings.Count(organization, "x -> x != concat('unit:', work_unit_id)") != 2 {

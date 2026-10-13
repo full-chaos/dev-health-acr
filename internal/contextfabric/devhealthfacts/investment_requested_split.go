@@ -21,10 +21,12 @@ import (
 // repository in {ids} by the rule repoLookupJoin applies: a direct repository
 // id, or a (provider, name) lookup equal to a requested repository's own
 // lookup row.
-// requestedRepositories are the rows requestedSplitRows expands: the
-// resolved repositories of a unit's references that are in {ids}. Bound arrays
-// stay outside every lambda: a constant a lambda reads is copied per element.
-const requestedRepositories = "arrayFilter(x -> x != '', arrayIntersect(arrayDistinct(arrayMap(p -> p.1, pairs)), {ids:Array(String)}))"
+// requestedRepositories expands each folded unit into its resolved
+// repositories that are in {ids}. The set test is an IN over the bound array
+// (one hash set); the bound array itself in arrayIntersect or has() is copied
+// per row.
+const requestedRepositories = `ARRAY JOIN arrayFilter(x -> x != '' AND x IN {ids:Array(String)}, arrayDistinct(arrayMap(p -> p.1, pairs))) AS repo_uuid
+ARRAY JOIN wins AS win`
 
 // requestedRepositoryLookups are the (provider, name) lookup rows of the
 // repositories in {ids}.
@@ -56,7 +58,7 @@ const referenceKeys = `arrayMap(r -> (substring(r, 1, 36), substring(r, 40)),
 // row, or, for a row with no reference, its own repository.
 const requestedRepositoryReach = `(hasAny(arrayMap(x -> x.1, direct_refs), {ids:Array(String)})
 								OR hasAny(arrayMap(x -> (x.1, x.2), lookup_refs), ` + requestedRepositoryLookups + `)
-								OR (empty(direct_refs) AND empty(lookup_refs) AND repo_id IS NOT NULL AND has({ids:Array(String)}, toString(repo_id))))`
+								OR (empty(direct_refs) AND empty(lookup_refs) AND repo_id IS NOT NULL AND toString(repo_id) IN {ids:Array(String)}))`
 
 // requestedSplitRows returns, per window, kept work unit and requested
 // repository: win, work_unit_id, repo_uuid, c, n, effort_value,
@@ -108,13 +110,15 @@ func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipSc
 	rowCols, unitAgg := "", ""
 	head := `SELECT win, work_unit_id, repo_uuid,
 	countEqual(arrayMap(p -> p.1, pairs), repo_uuid) AS c, length(pairs) AS n,`
-	expand := "ARRAY JOIN " + requestedRepositories + " AS repo_uuid"
+	expand := requestedRepositories
 	if linked != "" {
 		head = `SELECT win, work_unit_id, rp.1 AS repo_uuid, rp.2 AS pr_number,
 	countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,`
 		unitAgg = `
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
-		expand = "ARRAY JOIN arrayFilter(x -> x.1 != '', arrayIntersect(repo_prs, arrayMap(l -> (l.1, l.2), " + linked + "))) AS rp"
+		expand = `ARRAY JOIN repo_prs AS rp
+ARRAY JOIN wins AS win
+WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(` + linked + `) AS l))`
 	}
 	if unitColumns {
 		rowCols = `,
@@ -172,6 +176,5 @@ FROM (
 	GROUP BY work_unit_id
 )
 ` + expand + `
-ARRAY JOIN wins AS win
 `
 }
