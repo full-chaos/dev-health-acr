@@ -239,6 +239,48 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
+	// The bound arrays must not be folded into the plan as literals repeated at
+	// every step: count how often one ended key's source id appears in the plan.
+	var endedSources, endedTargets, endedTypes []string
+	probeRows, err := direct.Query(ctx, devhealthfacts.RelationCurrentProbeForTest(blockerProdShapeOrg))
+	if err != nil {
+		t.Fatalf("ended links probe: %v", err)
+	}
+	for probeRows.Next() {
+		var source, target string
+		var current, unresolved uint8
+		if err := probeRows.Scan(&source, &target, &current, &unresolved); err != nil {
+			t.Fatal(err)
+		}
+		if current == 0 {
+			endedSources, endedTargets, endedTypes = append(endedSources, source), append(endedTargets, target), append(endedTypes, "blocks")
+		}
+	}
+	probeRows.Close()
+	if len(endedSources) == 0 {
+		t.Fatal("the production shape holds no ended links: the plan check is vacuous")
+	}
+	sourceName, targetName, typeName := devhealthfacts.BlockerEndedLinkBindingNamesForTest()
+	planRows, err := direct.Query(ctx, devhealthfacts.BlockerEndedLinksPlanProbeForTest(blockerProdShapeOrg),
+		clickhouse.Named(sourceName, endedSources), clickhouse.Named(targetName, endedTargets), clickhouse.Named(typeName, endedTypes))
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	var plan strings.Builder
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line + "\n")
+	}
+	planRows.Close()
+	occurrences := strings.Count(plan.String(), endedSources[0])
+	t.Logf("PRODSHAPE plan: %d ended links, plan text %d bytes, first ended source id appears %d times", len(endedSources), plan.Len(), occurrences)
+	if occurrences > 3 {
+		t.Errorf("the ended-link arrays are repeated %d times in the plan (a literal folded into every step); want at most 3", occurrences)
+	}
+
 	fragmentMark := serverNowMicros(t, ctx, direct)
 	repoKeys := make([]string, 0, 11)
 	for repo := 0; repo < 11; repo++ {
