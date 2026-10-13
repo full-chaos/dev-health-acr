@@ -196,8 +196,8 @@ func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
     INNER JOIN ` + projectJoinKeysSQL + ` AS k ON k.provider = w.provider AND k.join_key = w.project_id
     WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + blockerEndpointIDsSQL + `
   ) AS t ON t.work_item_id = d.blocked_id
-  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.blocker_id
-  WHERE d.org_id = {org_id:String}
+  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = {org_id:String} AND s.work_item_id = d.blocker_id
+  WHERE true
     AND d.blocked_id IN ` + authorized + ` AND d.blocker_id IN ` + authorized + `
   GROUP BY project_key, tgt, src, is_open`
 }
