@@ -3,7 +3,11 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -53,22 +57,67 @@ SELECT ?, 'linear', concat('team-', toString((number % 88) % 36)), concat('proj-
   toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 88))
 FROM numbers(67496)`, org)
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
-SELECT concat('wi-', toString(number)), `+repoUUIDExpr("number % 11")+`, ?, 'title', 'issue', if(number % 5 = 0, 'done', 'open'), '', ?, ?, '', 'linear', concat('proj-', toString(number % 33)), NULL, ? FROM numbers(17000)`, org, at, at, at)
+SELECT concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number), 12, '0')), `+repoUUIDExpr("number % 11")+`, ?, 'title', 'issue', if(number % 5 = 0, 'done', 'open'), '', ?, ?, '', 'linear', concat('proj-', toString(number % 33)), NULL, ? FROM numbers(17000)`, org, at, at, at)
 	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
 SELECT `+repoUUIDExpr("number % 11")+`, ?, toUInt32(intDiv(number, 11) + 1), 'pr', 'open', ?, ?, NULL, NULL, 'feature', '' FROM numbers(7755)`, org, at, at)
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
-SELECT `+repoUUIDExpr("(number * 7) % 11")+`, concat('wi-', toString(number % 14017)), toUInt32((number * 31) % 705 + 1), 1, multiIf(number % 3 = 0, 'native', number % 3 = 1, 'explicit_text', 'heuristic'), '', ?, ? FROM numbers(23905)`, at, org)
+SELECT `+repoUUIDExpr("(number * 7) % 11")+`, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 14017), 12, '0')), toUInt32((number * 31) % 705 + 1), 1, multiIf(number % 3 = 0, 'native', number % 3 = 1, 'explicit_text', 'heuristic'), '', ?, ? FROM numbers(23905)`, at, org)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, concat('wi-', toString(number % 1602)), concat('wi-', toString((number * 37 + 5 + intDiv(number, 1602)) % 1602)), 'blocks', 'blocks', ?, ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', ?, ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, concat('wi-', toString(number % 17000)), concat('wi-', toString((number * 11 + 3) % 17000)), 'relates_to', 'relates', ?, NULL FROM numbers(21142)`, org, at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 11 + 3) % 17000), 12, '0')), 'relates_to', 'relates', ?, NULL FROM numbers(21142)`, org, at)
+	exec(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at)
+SELECT ?, `+repoUUIDExpr("number % 11")+`, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), concat('team-', toString(number % 39)), NULL, 'project_ownership', 1, 'medium', ? + toIntervalMinute(intDiv(number, 17000)) FROM numbers(67872)`, org, at)
+	exec(`INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id)
+SELECT ?, NULL, `+repoUUIDExpr("number % 11")+`, 'work_item', concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), 'linear', concat('proj-', toString(number % 33)), concat('proj-', toString((number + 1) % 33)), '', '', '', ? + toIntervalMinute(number), ? + toIntervalMinute(number), concat('event-', toString(number)) FROM numbers(9075)`, org, at, at)
 	exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at)
-SELECT ?, concat('wi-', toString(number % 1602)), concat('wi-', toString((number * 37 + 5 + intDiv(number, 1602)) % 1602)), 'blocks', ? - toIntervalDay(number % 120) FROM numbers(2103)`, org, at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', ? - toIntervalDay(number % 120) FROM numbers(2103)`, org, at)
 }
 
-// Logs every statement the team blocker read runs against the production
-// shape, with its peak memory and its head, so a reduction is judged on the
-// data that makes the production statements peak.
+// The production statements peaked at 61.4 MiB (the age statement) and 53.7 MiB
+// of the 64 MiB cap, while this shape reads 86% and 80% of that. The budget for
+// the statement CI measures is therefore 48 MiB, the production target, scaled
+// by the 0.86 calibration ratio.
+const blockerProdShapeCeiling = uint64(41 << 20)
+
+type blockerProdShapeStatement struct {
+	hash, peak, readRows uint64
+	head                 string
+}
+
+func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
+	if err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	defer rows.Close()
+	var out []blockerProdShapeStatement
+	for rows.Next() {
+		var st blockerProdShapeStatement
+		if err := rows.Scan(&st.hash, &st.peak, &st.readRows, &st.head); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, st)
+		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
+	}
+	if len(out) < 4 {
+		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
+	}
+	for _, st := range out {
+		if st.peak >= blockerProdShapeCeiling {
+			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the calibration ratio): %s", label, st.hash, st.peak, blockerProdShapeCeiling, st.head)
+		}
+	}
+	return out
+}
+
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -86,13 +135,15 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	seedProdShapedBlockerOrganization(t, ctx, direct)
 
 	subjects := make([]contextfabric.SubjectRef, 0, 39)
+	teamIDs := make([]string, 0, 39)
 	for team := 0; team < 39; team++ {
 		subjects = append(subjects, teamSubject(fmt.Sprintf("team-%d", team)))
+		teamIDs = append(teamIDs, fmt.Sprintf("team-%d", team))
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
-	read := func() contextfabric.FactProviderResult {
+	read := func(principal storage.Principal) contextfabric.FactProviderResult {
 		t.Helper()
-		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+		result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
 			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: subjects,
 		})
 		if err != nil {
@@ -100,43 +151,62 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 		return result
 	}
-	read()
+	orgWide := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}
+	restricted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"acme/repo-0", "acme/repo-1", "acme/repo-2", "acme/repo-3", "acme/repo-4", "acme/repo-5"}}
+
+	read(orgWide)
 	mark := serverNowMicros(t, ctx, direct)
-	result := read()
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-		t.Fatalf("flush logs: %v", err)
-	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
-GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
-	if err != nil {
-		t.Fatalf("read query_log: %v", err)
-	}
-	defer rows.Close()
-	measured := 0
-	for rows.Next() {
-		var hash, peak, readRows uint64
-		var head string
-		if err := rows.Scan(&hash, &peak, &readRows, &head); err != nil {
-			t.Fatal(err)
+	orgWideResult := read(orgWide)
+	blockerProdShapeStatements(t, ctx, direct, "org-wide", mark)
+
+	read(restricted)
+	mark = serverNowMicros(t, ctx, direct)
+	restrictedResult := read(restricted)
+	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
+
+	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+	inStatement := read(restricted)
+	restore()
+	for _, pair := range []struct {
+		label     string
+		got, want contextfabric.FactProviderResult
+	}{{"restricted, authorization read once vs inside each statement", restrictedResult, inStatement}} {
+		if len(pair.got.Facts) != len(pair.want.Facts) {
+			t.Fatalf("%s: %d facts vs %d", pair.label, len(pair.got.Facts), len(pair.want.Facts))
 		}
-		measured++
-		t.Logf("PRODSHAPE statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", hash, peak, float64(peak)/(1<<20), readRows, head)
+		for index := range pair.got.Facts {
+			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current"} {
+				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
+				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
+					t.Errorf("%s: team fact %d field %s differs: %+v vs %+v", pair.label, index, name, a, b)
+				}
+			}
+		}
 	}
-	if measured < 4 {
-		t.Fatalf("measured %d statements, want the team blocker statements: the measurement did not happen", measured)
+	served := func(result contextfabric.FactProviderResult) (teams int, blocked int64) {
+		for _, fact := range result.Facts {
+			if fact.Subject.Kind == contextfabric.SubjectTeam {
+				teams++
+				if v := fact.Fields["blocked_work_items_current"]; v.Integer != nil {
+					blocked += *v.Integer
+				}
+			}
+		}
+		return teams, blocked
 	}
+	orgTeams, orgBlocked := served(orgWideResult)
+	resTeams, resBlocked := served(restrictedResult)
+	t.Logf("PRODSHAPE org-wide: %d of 39 teams served, %d blocked items; restricted: %d teams, %d blocked items", orgTeams, orgBlocked, resTeams, resBlocked)
+	if orgTeams == 0 || orgBlocked == 0 {
+		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
+	}
+
 	fragmentMark := serverNowMicros(t, ctx, direct)
 	repoKeys := make([]string, 0, 11)
 	for repo := 0; repo < 11; repo++ {
 		repoKeys = append(repoKeys, fmt.Sprintf("00000000-0000-4000-8000-0000000000%02d", repo))
 	}
-	teamIDs := make([]string, 0, 39)
-	for team := 0; team < 39; team++ {
-		teamIDs = append(teamIDs, fmt.Sprintf("team-%d", team))
-	}
-	if err := devhealthfacts.RunBlockerFragmentsForTest(ctx, query, storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}, blockerProdShapeOrg, repoKeys, teamIDs); err != nil {
+	if err := devhealthfacts.RunBlockerFragmentsForTest(ctx, query, orgWide, blockerProdShapeOrg, repoKeys, teamIDs); err != nil {
 		t.Fatalf("fragments: %v", err)
 	}
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
@@ -149,11 +219,69 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 		}
 		t.Logf("PRODSHAPE fragment %-18s peak %d bytes (%.1f MiB) read_rows %d", name, peak, float64(peak)/(1<<20), readRows)
 	}
-	teamsServed := 0
-	for _, fact := range result.Facts {
-		if fact.Subject.Kind == contextfabric.SubjectTeam {
-			teamsServed++
+}
+
+// The organization-wide fast path authorizes exactly the work items the
+// library relation authorizes for the same scope, repository-less and orphan
+// items and ids stored under two repositories included.
+func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	_, direct := newCHAOS3780IntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL(
+		"repos", "teams", "team_repo_ownership", "work_items", "work_graph_issue_pr", "git_pull_requests", "projects", "team_project_ownership",
+	) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-	t.Logf("PRODSHAPE teams with a served blockers fact: %d of 39", teamsServed)
+	seedProdShapedBlockerOrganization(t, ctx, direct)
+	at := ts(2026, 9, 29, 0, 0, 0)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	zero := "00000000-0000-0000-0000-000000000000"
+	for _, item := range []struct{ id, repo, project string }{
+		{"orphan", zero, ""}, {"in-owned-project", zero, "proj-1"}, {"in-unowned-project", zero, "proj-never"},
+		{"linked-repo-less", zero, ""}, {"two-repos", "00000000-0000-4000-8000-000000000001", ""}, {"two-repos", "00000000-0000-4000-8000-000000000002", ""},
+	} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced) VALUES (?, ?, ?, 't', 'issue', 'open', '', ?, ?, '', 'linear', ?, NULL, ?)`,
+			item.id, item.repo, blockerProdShapeOrg, at, at, item.project, at)
+	}
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, 'linked-repo-less', 1, 1, 'native', '', ?, ?)`,
+		"00000000-0000-4000-8000-000000000001", at, blockerProdShapeOrg)
+
+	ids := func(library bool) []string {
+		sql, bindings := devhealthfacts.AuthorizedIDsForTest(storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}, library)
+		sql = strings.ReplaceAll(sql, "{org_id:String}", "'"+blockerProdShapeOrg+"'")
+		args := make([]any, 0, len(bindings))
+		for _, binding := range bindings {
+			args = append(args, clickhouse.Named(binding.Name, binding.Value))
+		}
+		rows, err := direct.Query(ctx, "SELECT work_item_id FROM "+sql+" ORDER BY work_item_id", args...)
+		if err != nil {
+			t.Fatalf("authorized ids (library=%v): %v", library, err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, id)
+		}
+		return out
+	}
+	fast, library := ids(false), ids(true)
+	if len(fast) < 17000 || len(library) != len(fast) {
+		t.Fatalf("fast path authorizes %d work items, library relation %d", len(fast), len(library))
+	}
+	for index := range fast {
+		if fast[index] != library[index] {
+			t.Fatalf("authorized sets differ at %d: %q vs %q", index, fast[index], library[index])
+		}
+	}
 }

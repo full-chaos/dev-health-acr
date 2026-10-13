@@ -55,3 +55,22 @@ func RunBlockerFragmentsForTest(ctx context.Context, client contextpacket.ClickH
 	}
 	return nil
 }
+
+// AuthorizedIDsForTest renders the authorized-ids set of principal's scope over
+// every work item of the organization: the fast path when the scope is
+// organization-wide, or the library relation when library is set.
+func AuthorizedIDsForTest(principal storage.Principal, library bool) (string, []readers.Binding) {
+	scope := workItemRepositoryAuthorization(principal, nil)
+	if library {
+		return workItemAuthorizedIDsLibrarySQL(scope, "")
+	}
+	return workItemAuthorizedIDsAmongSQL(scope, "")
+}
+
+// SetBlockerAuthorizedIDsBoundForTest moves the bound above which the blocker
+// statements carry the authorization relation themselves.
+func SetBlockerAuthorizedIDsBoundForTest(bound int) (restore func()) {
+	previous := blockerAuthorizedIDsBound
+	blockerAuthorizedIDsBound = bound
+	return func() { blockerAuthorizedIDsBound = previous }
+}
