@@ -94,7 +94,7 @@ WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 
 		return statements, peak
 	}
 	setCount, setPeak := peakOf("AS ended_links")
-	pageCount, pagePeak := peakOf("{ended_links:Array(String)}")
+	pageCount, pagePeak := peakOf("toInt64(p[4])")
 	t.Logf("PEAK at %d links over %d pages: %d set statements, peak %d bytes; %d page statements, peak %d bytes; cap %d bytes", links, pages, setCount, setPeak, pageCount, pagePeak, cap)
 	if setCount == 0 || pageCount == 0 {
 		t.Fatalf("the measurement did not happen: %d set statements and %d page statements were logged", setCount, pageCount)
