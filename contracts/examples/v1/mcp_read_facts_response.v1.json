@@ -126,7 +126,17 @@
       },
       "outcome": "fact_served",
       "kind_state": "truncated",
-      "reason": "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server (it covers projects, teams, repositories; the request named a project)"
+      "reason": "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server (it covers projects, teams, repositories; the request named a project)",
+      "expansion": {
+        "outcome": "policy_unavailable",
+        "policy": "unavailable"
+      }
+    }
+  ],
+  "request_notes": [
+    {
+      "kind": "operational_deficiencies",
+      "note": "1 of 2 requested teams own no repository in synced ownership, so no rollup applies to them; this is not a measured zero"
     }
   ],
   "versions": {

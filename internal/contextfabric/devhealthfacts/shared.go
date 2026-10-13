@@ -1072,10 +1072,15 @@ import (
 // answer in its last digits (another summation order), and on two versions of
 // one unit with equal computed_at the version kept can differ.
 //
-// v212 -> v213: a project subject serves the commitment kind (target date,
+// v212 -> v213: a team or project landscape fact reads one copy of each
+// identity's stats instead of the three per-map copies Ops writes, and its
+// rows no longer carry map_name. An answer saved under v212 holds every
+// churn, delivery and identity count three times.
+//
+// v213 -> v214: a project subject serves the commitment kind (target date,
 // issue due dates, sprint ends and the raw counts beside them). An answer
-// saved under v212 has no commitment fact.
-const QueryVersion = "devhealthfacts.clickhouse.v213"
+// saved under v213 has no commitment fact.
+const QueryVersion = "devhealthfacts.clickhouse.v214"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
