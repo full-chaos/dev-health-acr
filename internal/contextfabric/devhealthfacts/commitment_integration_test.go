@@ -97,7 +97,8 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	s.item("github", "H1", "issue", "todo", "gh-p", nil, "ghms:acme/x:3", newer)
 	s.sprint(commitmentOrg, "github", "ghms:acme/x:3", commitmentDay(2026, 11, 15))
 
-	s.item("gitlab", "N1", "issue", "todo", "gl-none", nil, "", newer)
+	s.item("gitlab", "N1", "issue", "todo", "gl-none", nil, "gitlab:acme/x:milestone:99", newer)
+	s.exec(`INSERT INTO sprints (provider, sprint_id, ended_at, last_synced, org_id) VALUES (?, ?, NULL, ?, ?)`, "gitlab", "gitlab:acme/x:milestone:99", s.at, commitmentOrg)
 
 	linear, jira, gitlab, github := projectSubject("linear", "lin-p"), projectSubject("jira", "10001"), projectSubject("gitlab", "gl-p"), projectSubject("github", "gh-p")
 	none, empty := projectSubject("gitlab", "gl-none"), projectSubject("github", "gh-empty")
@@ -105,7 +106,7 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 
 	fact := servedCommitment(t, response, linear)
 	wantServed(t, fact, map[string]any{
-		"as_of": "2026-10-13T12:00:00Z", "commitment_status": "stated",
+		"as_of_day": "2026-10-13", "commitment_status": "stated",
 		"target_date": "2026-11-01", "target_date_provider": "linear", "days_to_target": "19",
 		"project_state": "started", "state_source": "linear.project.state",
 		"items_total": "8", "items_open": "3", "items_closed": "3", "unknown_status_count": "2",

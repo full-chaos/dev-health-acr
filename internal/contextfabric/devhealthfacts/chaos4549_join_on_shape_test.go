@@ -105,6 +105,7 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 		contextfabric.FactSourceHealth:            organizationSubject(orgID),
 		contextfabric.FactFlow:                    teamSubject("CHAOS"),
 		contextfabric.FactLandscape:               teamSubject("CHAOS"),
+		contextfabric.FactCommitment:              projectSubject("github", "proj-4549"),
 	}
 
 	// The project-rollup producers' SECOND dispatch path -- a project

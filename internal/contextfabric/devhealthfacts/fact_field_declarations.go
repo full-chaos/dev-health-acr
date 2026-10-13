@@ -631,7 +631,7 @@ func readinessDailyColumns() []columnDecl {
 
 func commitmentFieldDecls() []fieldDecl {
 	return declOn(declProjectOnly,
-		fStr("as_of"),
+		fStr("as_of_day"),
 		declCallerScoped(fStr("commitment_status")),
 		fStr("target_date"),
 		fStr("target_date_provider"),

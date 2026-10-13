@@ -40,7 +40,7 @@ func commitmentItemRow(provider, id string, c commitmentCounts) []any {
 	if all == 0 {
 		all = c.total
 	}
-	return []any{provider + ":" + id, all, c.total, c.open, c.closed, c.unknown, c.withDueAt, c.pastDueOpen, c.sprints, c.nextSprints, c.nextEnd, c.latestEnd}
+	return []any{provider + ":" + id, all, c.total, c.open, c.closed, c.unknown, c.withDueAt, c.pastDueOpen, c.sprints, c.nextSprints, c.nextEnd.UnixMilli(), c.latestEnd.UnixMilli()}
 }
 
 func commitmentClient(projects, items [][]any) *fakeClient {
@@ -121,7 +121,7 @@ func TestCommitmentServesTheStatedDatesOfAProjectAtTheReadFactsBoundary(t *testi
 	)
 	fact := servedCommitment(t, readCommitmentFacts(t, client, project), project)
 	wantServed(t, fact, map[string]any{
-		"as_of":                  "2026-10-13T12:00:00Z",
+		"as_of_day":              "2026-10-13",
 		"commitment_status":      "stated",
 		"target_date":            "2026-11-01",
 		"target_date_provider":   "linear",
@@ -255,6 +255,11 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 	}
 	assertQueryScopedToOrgAndSubjects(t, projects.statement)
 	assertQueryScopedToOrgAndSubjects(t, items.statement)
+	for _, statement := range []string{projects.statement, items.statement} {
+		if fields := strings.Fields(statement); len(fields) == 0 || fields[0] != "SELECT" {
+			t.Errorf("statement does not start with SELECT, the read-only client refuses it:\n%s", statement)
+		}
+	}
 	for _, fragment := range []string{
 		"FROM work_items AS w FINAL",
 		"k.join_key = w.project_id",
@@ -265,7 +270,8 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 		"countIf(status NOT IN ('backlog', 'todo', 'in_progress', 'in_review', 'blocked') AND status NOT IN ('done', 'canceled')) AS items_unknown_status",
 		"countIf(status IN ('backlog', 'todo', 'in_progress', 'in_review', 'blocked') AND due_at IS NOT NULL AND due_at < {as_of:DateTime64(3, 'UTC')}) AS items_past_due_open",
 		"FROM sprints FINAL",
-		"s.provider = pi.provider AND s.sprint_id = pi.sprint_id",
+		"sp.provider = pi.provider AND sp.sprint_id = pi.sprint_id",
+		"WHERE org_id = {org_id:String} AND isNotNull(ended_at)",
 	} {
 		if !strings.Contains(items.statement, fragment) {
 			t.Errorf("item statement lacks %q:\n%s", fragment, items.statement)
@@ -278,11 +284,11 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 	for _, binding := range items.bindings {
 		if binding.Name == "as_of" {
 			at, ok := binding.Value.(time.Time)
-			bound = ok && at.Equal(commitmentAsOf)
+			bound = ok && at.Equal(time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC))
 		}
 	}
 	if !bound {
-		t.Errorf("as_of binding = %+v, want the request clock %s", items.bindings, commitmentAsOf)
+		t.Errorf("as_of binding = %+v, want the start of the request day", items.bindings)
 	}
 }
 

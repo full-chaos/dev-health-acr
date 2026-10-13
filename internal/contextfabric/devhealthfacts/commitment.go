@@ -62,7 +62,8 @@ var commitmentOpenStatusSQL = func() string {
 }()
 
 func commitmentItemRowsSQL(authorized string) string {
-	return `WITH project_rows AS (
+	return `SELECT * FROM (
+WITH project_rows AS (
   SELECT k.project_key AS project_key, w.provider AS provider, w.work_item_id AS work_item_id,
     argMax(tuple(lower(w.status), w.due_at, w.sprint_id), w.last_synced) AS latest
   FROM work_items AS w FINAL
@@ -78,7 +79,7 @@ project_items AS (
 SELECT a.project_key, a.items_all,
   toInt64(ifNull(i.items_total, 0)), toInt64(ifNull(i.items_open, 0)), toInt64(ifNull(i.items_closed, 0)), toInt64(ifNull(i.items_unknown_status, 0)),
   toInt64(ifNull(i.items_with_due_at, 0)), toInt64(ifNull(i.items_past_due_open, 0)),
-  toInt64(ifNull(s.sprint_count, 0)), toInt64(ifNull(s.next_count, 0)), ifNull(s.next_end, toDateTime64(0, 3, 'UTC')), ifNull(s.latest_end, toDateTime64(0, 3, 'UTC'))
+  toInt64(ifNull(s.sprint_count, 0)), toInt64(ifNull(s.next_count, 0)), toInt64(ifNull(s.next_end_ms, 0)), toInt64(ifNull(s.latest_end_ms, 0))
 FROM (
   SELECT project_key, toInt64(count()) AS items_all
   FROM project_rows
@@ -97,20 +98,21 @@ LEFT JOIN (
 ) AS i ON i.project_key = a.project_key
 LEFT JOIN (
   SELECT pi.project_key AS project_key,
-    uniqExact(s.sprint_id) AS sprint_count,
-    countIf(s.ended_at >= {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')}) AS next_count,
-    minIf(s.ended_at, s.ended_at >= {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')}) AS next_end,
-    max(s.ended_at) AS latest_end
+    uniqExact(sp.sprint_id) AS sprint_count,
+    countIf(sp.sprint_end >= {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')}) AS next_count,
+    toUnixTimestamp64Milli(minIf(sp.sprint_end, sp.sprint_end >= {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')})) AS next_end_ms,
+    toUnixTimestamp64Milli(max(sp.sprint_end)) AS latest_end_ms
   FROM project_items AS pi
   INNER JOIN (
-    SELECT provider, sprint_id, assumeNotNull(ended_at) AS ended_at
+    SELECT provider, sprint_id, assumeNotNull(ended_at) AS sprint_end
     FROM sprints FINAL
-    WHERE org_id = {org_id:String} AND ended_at IS NOT NULL
-  ) AS s ON s.provider = pi.provider AND s.sprint_id = pi.sprint_id
+    WHERE org_id = {org_id:String} AND isNotNull(ended_at)
+  ) AS sp ON sp.provider = pi.provider AND sp.sprint_id = pi.sprint_id
   WHERE pi.sprint_id != ''
   GROUP BY project_key
 ) AS s ON s.project_key = a.project_key
-ORDER BY a.project_key`
+ORDER BY a.project_key
+)`
 }
 
 type commitmentProjectRow struct {
@@ -121,7 +123,7 @@ type commitmentProjectRow struct {
 type commitmentItemRow struct {
 	all, total, open, closed, unknownStatus, withDueAt, pastDueOpen int64
 	sprintCount, nextCount                                          int64
-	nextEnd, latestEnd                                              time.Time
+	nextEndMs, latestEndMs                                          int64
 }
 
 type CommitmentProvider struct{ facts clickhouseFacts }
@@ -152,7 +154,8 @@ func (p *CommitmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		state, reason := currentAxisReadState(0)
 		return contextfabric.FactProviderResult{State: state, Reason: reason, Version: QueryVersion}, nil
 	}
-	asOf := clock().UTC()
+	now := clock().UTC()
+	asOf := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	projects, err := p.readProjectRows(ctx, orgID, ids)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query project commitments", err)
@@ -177,7 +180,7 @@ func (p *CommitmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind:           contextfabric.FactCommitment,
 			Subject:        bySubject[key],
-			Fields:         commitmentFields(project, counts, asOf),
+			Fields:         p.commitmentFields(project, counts, asOf),
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, project.provider+":"+id)},
 		})
 	}
@@ -211,7 +214,7 @@ func (p *CommitmentProvider) readItemRows(ctx context.Context, principal storage
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectCommitmentItems", readers.WithSettings(commitmentItemRowsSQL(authorized), settings), orgID, ids, func(row readers.RowScanner) error {
 		var key string
 		var r commitmentItemRow
-		if err := row.Scan(&key, &r.all, &r.total, &r.open, &r.closed, &r.unknownStatus, &r.withDueAt, &r.pastDueOpen, &r.sprintCount, &r.nextCount, &r.nextEnd, &r.latestEnd); err != nil {
+		if err := row.Scan(&key, &r.all, &r.total, &r.open, &r.closed, &r.unknownStatus, &r.withDueAt, &r.pastDueOpen, &r.sprintCount, &r.nextCount, &r.nextEndMs, &r.latestEndMs); err != nil {
 			return err
 		}
 		rows[key] = r
@@ -220,9 +223,9 @@ func (p *CommitmentProvider) readItemRows(ctx context.Context, principal storage
 	return rows, err
 }
 
-func commitmentFields(project commitmentProjectRow, items *commitmentItemRow, asOf time.Time) map[string]contextfabric.FactValue {
+func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, items *commitmentItemRow, asOf time.Time) map[string]contextfabric.FactValue {
 	fields := map[string]contextfabric.FactValue{
-		"as_of":         contextfabric.StringFactValue(asOf.Format(time.RFC3339)),
+		"as_of_day":     contextfabric.StringFactValue(asOf.Format(time.DateOnly)),
 		"project_state": stringOrNull(project.state),
 		"state_source":  stringOrNull(project.stateSource),
 	}
@@ -256,9 +259,9 @@ func commitmentFields(project commitmentProjectRow, items *commitmentItemRow, as
 	if kind, ok := commitmentSprintKind(project.provider); ok && items.sprintCount > 0 {
 		stated = true
 		fields["sprint_kind"] = contextfabric.StringFactValue(kind)
-		fields["latest_sprint_end"] = contextfabric.StringFactValue(items.latestEnd.UTC().Format(time.RFC3339))
+		fields["latest_sprint_end"] = contextfabric.StringFactValue(time.UnixMilli(items.latestEndMs).UTC().Format(time.RFC3339))
 		if items.nextCount > 0 {
-			fields["next_sprint_end"] = contextfabric.StringFactValue(items.nextEnd.UTC().Format(time.RFC3339))
+			fields["next_sprint_end"] = contextfabric.StringFactValue(time.UnixMilli(items.nextEndMs).UTC().Format(time.RFC3339))
 		}
 	}
 	unreadable := max(items.all-items.total, 0)
@@ -286,7 +289,6 @@ func commitmentTargetDate(value string) (time.Time, bool) {
 	return parsed, true
 }
 
-func commitmentDaysBetween(asOf, target time.Time) int64 {
-	day := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
-	return int64(target.Sub(day).Hours() / 24)
+func commitmentDaysBetween(asOfDay, target time.Time) int64 {
+	return int64(target.Sub(asOfDay).Hours() / 24)
 }
