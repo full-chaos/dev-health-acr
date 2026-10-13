@@ -1028,10 +1028,14 @@ import (
 // organization or parent now applies its stated status. An answer saved under
 // v202 listed the unfiltered set.
 //
-// v203 -> v204: a client synthesis driver whose source_state the service
+// v203 -> v204: the scope expander names every requested origin that reached a
+// target, so a multi-root answer derives each shared target from every root.
+// An answer saved under v203 attributed it to one root only.
+//
+// v204 -> v205: a client synthesis driver whose source_state the service
 // corrected carries source_state_note and summary_corrected beside its
-// untouched summary. An answer saved under v203 has neither.
-const QueryVersion = "devhealthfacts.clickhouse.v204"
+// untouched summary. An answer saved under v204 has neither.
+const QueryVersion = "devhealthfacts.clickhouse.v205"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
