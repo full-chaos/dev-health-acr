@@ -73,18 +73,18 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 		mode := map[bool]string{false: "unmerged", true: "merged"}[merged]
 		t.Run("organization links outside the owned projects "+mode, func(t *testing.T) {
 			measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg+"-"+mode, merged, linkFiller("outside", "", "repo-filler"),
-				"organization links outside the owned projects "+mode, prodLinkedIssues, 90_000, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
+				"organization links outside the owned projects "+mode, prodLinkedIssues, 90_000, orgLinksMemoryCeilingLinks, axisGuard{smallMax: 40 << 20, largeMax: 100 << 20})
 		})
 		t.Run("prod shape one quarter inside the owned projects "+mode, func(t *testing.T) {
 			inside, outside := linkFiller("owned", "proj-owner", "repo-reached"), linkFiller("outside", "", "repo-filler")
 			measureTeamReachAxis(t, ctx, query, direct, prodShapeMemoryOrg+"-"+mode, merged, func(exec func(string, ...any), org string, from, count int) {
 				inside(exec, org, from/4, count/4)
 				outside(exec, org, from-from/4, count-count/4)
-			}, "prod shape (6k inside, 18k outside; 4x) "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{reportOnly: true})
+			}, "prod shape (6k inside, 18k outside; 4x) "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: prodEstimatePeakBytes, largeMax: 120 << 20})
 		})
 		t.Run("links inside the owned projects "+mode, func(t *testing.T) {
 			measureTeamReachAxis(t, ctx, query, direct, ownedLinksMemoryOrg+"-"+mode, merged, linkFiller("owned", "proj-owner", "repo-reached"),
-				"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, orgLinksMemoryCeilingLinks, axisGuard{reportOnly: true})
+				"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: 170 << 20})
 		})
 	}
 	t.Run("project ownership history", func(t *testing.T) {
@@ -178,9 +178,9 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 	}
 	growTo(smallSize)
 	read("warm-up")
-	small := read("smaller")
+	small := minPeaks(read("smaller"), read("smaller again"), read("smaller third"))
 	growTo(largeSize)
-	large := read("larger")
+	large := minPeaks(read("larger"), read("larger again"), read("larger third"))
 	for i := range filters {
 		for hash, peak := range small[i] {
 			t.Logf("SLOPE %s: statement %d (%s) peak memory %d bytes at %d, %d at %d", axis, hash, filters[i].Table, peak, smallSize, large[i][hash], largeSize)
@@ -221,24 +221,19 @@ FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('ExceptionBeforeS
 	return out.String()
 }
 
-// axisGuard is the slope rule of one axis. A flat axis allows slope plus a
-// floor of memory; a linear axis (growth inside the owned projects) is
-// allowed to grow and instead holds the smaller size under smallPeakMax.
+// axisGuard is the rule of one axis. A flat axis (floor set) allows the slope
+// plus a floor of memory. A growing axis (links) instead holds each statement
+// under smallMax at the smaller size and under largeMax at the larger one: the
+// bounds sit between the form that streams linked ids through owned projects
+// and the form that held every organization link in one set.
 type axisGuard struct {
-	reportOnly   bool
-	floor        uint64
-	linear       bool
-	smallPeakMax uint64
+	floor    uint64
+	smallMax uint64
+	largeMax uint64
 }
 
 func (g axisGuard) assert(t *testing.T, label string, small, large statementMemory) {
 	t.Helper()
-	if g.reportOnly {
-		for hash, smallPeak := range small {
-			t.Errorf("MEASURED %s: statement %d peak %d bytes at the smaller size, %d at the larger", label, hash, smallPeak, large[hash])
-		}
-		return
-	}
 	if len(small) < 1 || len(large) != len(small) {
 		t.Fatalf("%s: measurement did not happen: %d and %d distinct statements logged", label, len(small), len(large))
 	}
@@ -247,7 +242,7 @@ func (g axisGuard) assert(t *testing.T, label string, small, large statementMemo
 		if !ok {
 			t.Fatalf("%s: statement %d ran at the smaller size only", label, hash)
 		}
-		if !g.linear {
+		if g.smallMax == 0 {
 			if float64(largePeak) > statementMemorySlope*float64(smallPeak)+float64(g.floor) {
 				t.Errorf("%s: statement %d grew: peak %d bytes at the larger size, %d at the smaller, over the %.2fx slope plus %d", label, hash, largePeak, smallPeak, statementMemorySlope, g.floor)
 			}
@@ -256,9 +251,30 @@ func (g axisGuard) assert(t *testing.T, label string, small, large statementMemo
 					t.Errorf("%s: statement %d peaked at %d bytes, want under %d", label, hash, peak, statementMemoryCeiling)
 				}
 			}
+			continue
 		}
-		if g.smallPeakMax > 0 && smallPeak > g.smallPeakMax {
-			t.Errorf("%s: statement %d peaked at %d bytes at the prod-sized organization, want at most %d", label, hash, smallPeak, g.smallPeakMax)
+		if smallPeak > g.smallMax {
+			t.Errorf("%s: statement %d peaked at %d bytes at the smaller size, want at most %d", label, hash, smallPeak, g.smallMax)
+		}
+		if largePeak > g.largeMax {
+			t.Errorf("%s: statement %d peaked at %d bytes at the larger size, want at most %d", label, hash, largePeak, g.largeMax)
 		}
 	}
+}
+
+// minPeaks is, per statement, the smallest peak of the warm reads: one slow
+// read on a shared runner is noise, a peak every read shows is the statement.
+func minPeaks(runs ...[]statementMemory) []statementMemory {
+	out := make([]statementMemory, len(runs[0]))
+	for i := range out {
+		out[i] = statementMemory{}
+		for _, run := range runs {
+			for hash, peak := range run[i] {
+				if best, ok := out[i][hash]; !ok || peak < best {
+					out[i][hash] = peak
+				}
+			}
+		}
+	}
+	return out
 }
