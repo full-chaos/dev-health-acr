@@ -342,13 +342,19 @@ type FactQuery struct {
 }
 
 type FactProviderResult struct {
-	Facts      []CanonicalFact
-	State      SourceState
-	ObservedAt *time.Time
-	Watermark  string
-	Reason     string
-	Version    string
-	Truncated  bool
+	// RequestNote is a sentence true of the request as a whole (a count of
+	// requested subjects in some state). It joins the kind's coverage reason
+	// and is never copied onto a subject's own coverage row.
+	RequestNote string
+	// SubjectReasons are reasons true of one subject, keyed by FactSubjectKey.
+	SubjectReasons map[string]string
+	Facts          []CanonicalFact
+	State          SourceState
+	ObservedAt     *time.Time
+	Watermark      string
+	Reason         string
+	Version        string
+	Truncated      bool
 	// Grain is the temporal precision THIS provider answered at
 	// (CHAOS-3781 round-1 F1). It exists because the providers are not
 	// uniform: a daily rollup can only speak for a day, while a provider
@@ -1642,7 +1648,15 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	if result.Watermark != "" {
 		bundle.Watermarks[capability.Kind] = result.Watermark
 	}
-	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, result.Reason, detailSpec)
+	// The kind's coverage source carries the request-level note; a subject's
+	// own coverage row carries only the reason true of every subject of the
+	// kind. The two are kept apart here, never recovered by editing the joined
+	// text.
+	if bundle.kindReasons == nil {
+		bundle.kindReasons = map[FactKind]string{}
+	}
+	bundle.kindReasons[capability.Kind] = clampCoverageText(factCoverageReason(result.State, result.Reason), maxCoverageReasonLength)
+	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, CombineRequestNote(result.Reason, result.RequestNote), detailSpec)
 	// F1: only a provider that actually CONTRIBUTED counts toward the
 	// composed grain. A degraded or empty provider reporting a grain
 	// would let a source that answered nothing coarsen the whole answer.
@@ -1746,11 +1760,17 @@ func factDetailSpecForRead(planned factPlanEntry, capability FactCapability, fai
 	return spec
 }
 
-func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string, spec coverageDetailSpec) {
+// factCoverageReason is the reason a kind's coverage observation carries: the
+// provider's own, or the state sentence when a non-available result gave none.
+func factCoverageReason(state SourceState, reason string) string {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
-		reason = "canonical fact capability returned " + string(state)
+		return "canonical fact capability returned " + string(state)
 	}
-	reason = withoutProviderPackageLabel(reason)
+	return withoutProviderPackageLabel(reason)
+}
+
+func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string, spec coverageDetailSpec) {
+	reason = factCoverageReason(state, reason)
 	clampedReason := clampCoverageText(reason, maxCoverageReasonLength)
 	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
 		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark,
@@ -2231,4 +2251,18 @@ func factKindPrefix(kind FactKind) string {
 // anything a reader can use, and a served reason is a plain sentence.
 func withoutProviderPackageLabel(reason string) string {
 	return strings.ReplaceAll(reason, "devhealthfacts: ", "")
+
+}
+
+// CombineRequestNote joins a request-level note to a kind reason, note first.
+func CombineRequestNote(reason, note string) string {
+	switch {
+	case strings.TrimSpace(note) == "":
+		return reason
+	case strings.TrimSpace(reason) == "":
+		return note
+	case strings.Contains(reason, note):
+		return reason
+	}
+	return note + "; " + reason
 }

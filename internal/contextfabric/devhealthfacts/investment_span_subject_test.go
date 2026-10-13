@@ -43,18 +43,24 @@ func TestInvestmentSpanIsPerSubject(t *testing.T) {
 		return result
 	}
 	repos := read(repoSubject("repo-A"), repoSubject("repo-B"))
-	if !strings.Contains(repos.Reason, "repository:repo-B: the window starts") || !strings.Contains(repos.Reason, spanB.Format(time.RFC3339)) {
-		t.Errorf("repo B (history starts after the window start) reason = %q", repos.Reason)
+	own := func(result contextfabric.FactProviderResult, subject contextfabric.SubjectRef) string {
+		return result.SubjectReasons[contextfabric.FactSubjectKey(subject)]
 	}
-	if strings.Contains(repos.Reason, "repository:repo-A") {
-		t.Errorf("repo A (history starts before the window start) carries a span reason: %q", repos.Reason)
+	if got := own(repos, repoSubject("repo-B")); !strings.Contains(got, "repository:repo-B: the window starts") || !strings.Contains(got, spanB.Format(time.RFC3339)) {
+		t.Errorf("repo B (history starts after the window start) reason = %q", got)
+	}
+	if got := own(repos, repoSubject("repo-A")); got != "" {
+		t.Errorf("repo A (history starts before the window start) carries a span reason: %q", got)
+	}
+	if strings.Contains(repos.Reason, "repository:repo-B") {
+		t.Errorf("repo B's span reason reached the kind reason every subject inherits: %q", repos.Reason)
 	}
 	teams := read(teamSubject("T"), teamSubject("U"))
-	if strings.Contains(teams.Reason, "team:T") {
-		t.Errorf("team T owns repo A, whose history starts before the window: %q", teams.Reason)
+	if got := own(teams, teamSubject("T")); strings.Contains(got, "team:T: the window starts") {
+		t.Errorf("team T owns repo A, whose history starts before the window: %q", got)
 	}
-	if !strings.Contains(teams.Reason, "team:U: the window starts") || !strings.Contains(teams.Reason, spanB.Format(time.RFC3339)) {
-		t.Errorf("team U (owns only repo B) reason = %q", teams.Reason)
+	if got := own(teams, teamSubject("U")); !strings.Contains(got, "team:U: the window starts") || !strings.Contains(got, spanB.Format(time.RFC3339)) {
+		t.Errorf("team U (owns only repo B) reason = %q", got)
 	}
 }
 
