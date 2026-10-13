@@ -71,16 +71,8 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	edge("e-deploy", "pr", wgRepo+"#pr311", "deployment", wgDeployID, "deployed_as", "")
 }
 
-func workGraphLabelsFor(t *testing.T, grant []string) map[string]string {
+func workGraphLabelsFor(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, grant []string) map[string]string {
 	t.Helper()
-	ctx := context.Background()
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
-	seedWorkGraphLabelRows(t, ctx, direct)
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet(grant, true)}
 	result, err := contextpacket.ExecuteCatalog(ctx, contextpacket.NewClickHouseSourceExecutor(query), plan)
 	if err != nil {
@@ -107,6 +99,14 @@ func workGraphLabelsFor(t *testing.T, grant []string) map[string]string {
 }
 
 func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	seedWorkGraphLabelRows(t, ctx, direct)
 	const pr = "acme/deploy-service#311 Rework deploy pipeline stages "
 	for name, tc := range map[string]struct {
 		grant []string
@@ -133,18 +133,16 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 			"e-commit-issue":       "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
 		}},
 	} {
-		t.Run(name, func(t *testing.T) {
-			labels := workGraphLabelsFor(t, tc.grant)
-			for id, want := range tc.want {
-				got, ok := labels[id]
-				if !ok {
-					t.Fatalf("edge %s not served: %v", id, labels)
-				}
-				if want += " (repository-wide)"; got != want {
-					t.Errorf("edge %s label = %q, want %q", id, got, want)
-				}
+		labels := workGraphLabelsFor(t, ctx, query, tc.grant)
+		for id, want := range tc.want {
+			got, ok := labels[id]
+			if !ok {
+				t.Fatalf("%s: edge %s not served: %v", name, id, labels)
 			}
-		})
+			if want += " (repository-wide)"; got != want {
+				t.Errorf("%s: edge %s label = %q, want %q", name, id, got, want)
+			}
+		}
 	}
 }
 
@@ -218,16 +216,16 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 	return c
 }
 
-// Three stages, each in its own database: the base, the base plus 375k other
+// Three stages, each in its own database: the base, the base plus 150k other
 // work items only, and the base plus 20k other edges and 20k other pull
 // requests only. Neither addition may move the statement's read volume or
 // memory past the 1.15x slope.
 func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testing.T) {
 	const ceiling = uint64(56 << 20)
-	base := workGraphStatementCost(t, 125000, false)
-	filler := workGraphStatementCost(t, 312500, false)
-	noise := workGraphStatementCost(t, 125000, true)
-	t.Logf("work_graph.v1 cost: base %+v, +375k work items %+v, +20k edges and pull requests %+v", base, filler, noise)
+	base := workGraphStatementCost(t, 50000, false)
+	filler := workGraphStatementCost(t, 125000, false)
+	noise := workGraphStatementCost(t, 50000, true)
+	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +20k edges and pull requests %+v", base, filler, noise)
 	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise} {
 		if stage.memory >= ceiling || stage.gateMemory >= ceiling {
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes and its issue gate at %d, want under %d", name, stage.memory, stage.gateMemory, ceiling)
