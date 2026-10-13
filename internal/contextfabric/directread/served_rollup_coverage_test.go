@@ -9,7 +9,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-var internalTokenPattern = regexp.MustCompile(`^[a-z]+:|\b[a-z0-9]+(?:_[a-z0-9]+)+\b`)
+var internalTokenPattern = regexp.MustCompile(`^[a-z]+:|\b[a-z0-9]+(?:_[a-z0-9]+)+\b|\bdevhealth[a-z]*:`)
 
 func internalToken(reason string) string { return internalTokenPattern.FindString(reason) }
 

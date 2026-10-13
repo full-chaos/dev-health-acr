@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-var gapReasonTokenPattern = regexp.MustCompile(`^[a-z]+:|\b[a-z0-9]+(?:_[a-z0-9]+)+\b`)
+var gapReasonTokenPattern = regexp.MustCompile(`^[a-z]+:|\b[a-z0-9]+(?:_[a-z0-9]+)+\b|\bdevhealth[a-z]*:`)
 
 func TestServedRollupGapReasonCarriesNoInternalTokenOnEveryCoverageSurface(t *testing.T) {
 	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
@@ -94,5 +95,62 @@ func TestPrunedAndNarrowedReasonsCarryNoInternalToken(t *testing.T) {
 		if token := gapReasonTokenPattern.FindString(entry.Reason); token != "" {
 			t.Errorf("%s reason carries the internal token %q: %q", name, token, entry.Reason)
 		}
+	}
+}
+
+func TestFailedReadAndProviderReasonsAreServedAsPlainSentences(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider *factProviderStub
+		want     string
+	}{
+		{"failed read", &factProviderStub{
+			capability: planCapability(FactStatus, "status", SubjectWorkItem),
+			err: &FactReadFailure{State: SourceUnavailable, Reason: "devhealthfacts: query work item status failed",
+				Cause: errors.New("clickhouse: code 241 memory limit exceeded for statement select secret_column")},
+		}, "The status read failed; the facts for it are not shown."},
+		{"budget refusal", &factProviderStub{
+			capability: planCapability(FactStatus, "status", SubjectWorkItem),
+			err:        &FactReadFailure{State: SourceUnavailable, Reason: "devhealthfacts: query work item status exceeded the read budget (code 3); narrow the window or the subject"},
+		}, "The status read failed; the facts for it are not shown."},
+		{"timeout", &factProviderStub{
+			capability: planCapability(FactStatus, "status", SubjectWorkItem),
+			err:        context.DeadlineExceeded,
+		}, "The status read timed out; the facts for it are not shown."},
+		{"provider sentence", &factProviderStub{
+			capability: planCapability(FactStatus, "status", SubjectWorkItem),
+			result:     FactProviderResult{State: SourceNoData, Reason: "devhealthfacts: no rows were retained at or before the requested time"},
+		}, "no rows were retained at or before the requested time"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := NewFactCapabilityRegistry([]FactProvider{tc.provider}, FactRegistryOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+				scopeRequest([]SubjectRef{subject(SubjectWorkItem, "work_item:linear:T-1")}, []FactRequirement{{Kind: FactStatus}}, TemporalCurrent))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reason string
+			for _, source := range bundle.Coverage.Sources {
+				if source.Source == "canonical_fact:status" {
+					reason = source.Reason
+				}
+			}
+			if !strings.Contains(reason, tc.want) {
+				t.Errorf("reason %q, want it to carry %q", reason, tc.want)
+			}
+			texts := append([]string{reason}, bundle.Coverage.DegradedReasons...)
+			for _, detail := range bundle.Coverage.Details {
+				texts = append(texts, detail.Raw, detail.Label)
+			}
+			for _, text := range texts {
+				if token := gapReasonTokenPattern.FindString(text); token != "" || strings.Contains(text, "secret_column") || strings.Contains(text, "clickhouse") {
+					t.Errorf("served text carries the internal token %q or provider detail: %q", token, text)
+				}
+			}
+		})
 	}
 }
