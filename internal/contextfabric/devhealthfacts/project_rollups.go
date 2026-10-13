@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -178,7 +179,7 @@ func splitProjectKey(key string) (provider, id string) {
 // pass the work-item authorization rule.
 func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
+	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
@@ -187,7 +188,7 @@ func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
     WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + blockerEndpointIDsSQL + `
   ) AS t ON t.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + relationCurrentSQL("d") + `
+  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + relationcurrent.CurrentSQL("d") + `
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY project_key, tgt, src, is_open`
 }

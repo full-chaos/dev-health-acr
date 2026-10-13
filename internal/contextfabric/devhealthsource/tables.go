@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"sort"
 	"strings"
 	"time"
@@ -940,21 +941,24 @@ func dependencyRowKey(repoID, sourceID, targetID, relationshipType string) strin
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	seenNodeTombstones := make(map[string]struct{})
 	rowKey := dependencyRowKeySQL
+	isEnded := dependencyEndedSQL("d")
+	position := dependencyCursorExpr()
 	statement := `SELECT d.source_work_item_id, d.target_work_item_id, ` + dependencyRelationshipTypeExpr + `, toString(w.repo_id), ifNull(r.repo, ''), d.last_synced,
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
-       ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `, toString(t.repo_id)
+       ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `, toString(t.repo_id),
+       toUInt8(` + isEnded + `), ` + position + `, ` + position + `
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
 LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id` + relationcurrent.CurrentJoinsSQL("d") + `
+WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + orderBy(position, rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoID, repoSlug, targetRepoID string
-		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt time.Time
-		var sourceHasEnded, targetHasCreated, targetHasEnded uint8
+		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt, endedAt time.Time
+		var sourceHasEnded, targetHasCreated, targetHasEnded, linkEnded uint8
 		if err := r.Scan(&sourceID, &targetID, &relationshipType, &repoID, &repoSlug, &observedAt,
 			&sourceCreatedAt, &sourceHasEnded, &sourceEndedAt,
-			&targetHasCreated, &targetCreatedAt, &targetHasEnded, &targetEndedAt, &targetRepoID); err != nil {
+			&targetHasCreated, &targetCreatedAt, &targetHasEnded, &targetEndedAt, &targetRepoID, &linkEnded, &endedAt); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -971,6 +975,9 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		}
 		sourceValidFrom, sourceValidTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
 		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID}
+		if linkEnded != 0 {
+			return endedDependencyCandidates(relationshipType, sourceSubject, targetID, targetHasCreated != 0, targetRepoID, endedAt.UTC(), observedAt, rowSortKey, seenNodeTombstones)
+		}
 		// CHAOS-7252 (and CHAOS-7238): the ref names the canonical RELATION
 		// (source, target, dependencyrelation.Key) with every component
 		// escaped, the same string the fact providers mint for it -- never
@@ -1438,4 +1445,56 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
 		}, nil
 	})
+}
+
+// dependencyCursorExpr is queryWorkItemDependencies' keyset position: the
+// row's ingest stamp, or for a row the provider no longer reports the time
+// the link ended.
+func dependencyCursorExpr() string {
+	return "if(" + dependencyEndedSQL("d") + ", " + relationcurrent.EndedAtSQL("d") + ", d.last_synced)"
+}
+
+// dependencyEndedSQL is true for a work_item_dependencies row d that the
+// provider no longer reports: the shared relation-current rule, for the one
+// relationship type it covers.
+func dependencyEndedSQL(d string) string {
+	return "(lower(ifNull(" + d + ".relationship_type, '')) = '" + relationcurrent.RelationshipType + "' AND " + relationcurrent.EndedSQL(d) + ")"
+}
+
+// endedDependencyCandidates retracts the edge of a link the provider removed.
+// The row is insert-only and keeps its old last_synced, so the producer's
+// cursor position for it is the time the link ended (dependencyEndedSQL): the
+// row is read again then, and what the graph holds for it is deleted by the
+// same ids the asserting branch derives. Both spellings of the target are
+// retracted, because the edge was projected as the form the target had then.
+// Each tombstone is idempotent against an id that was never written.
+func endedDependencyCandidates(relationshipType string, sourceSubject contractsv1.ContextFabricSubjectRef, targetID string, targetResolved bool, targetRepoID string, endedAt, observedAt time.Time, rowSortKey string, seenNodeTombstones map[string]struct{}) ([]candidate, error) {
+	_, swap, spelling := dependencyRelationshipType(relationshipType)
+	const reason = "work_item_dependency ended: the provider no longer reports the link"
+	var out []candidate
+	tombstone := func(kind, id string) candidate {
+		t := contractsv1.ContextFabricProjectionTombstone{Kind: kind, CanonicalID: id, Reason: reason, EffectiveAt: endedAt, SourceVersion: ClickHouseSourceVersion}
+		return candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &t}
+	}
+	edgeID := func(target contractsv1.ContextFabricSubjectRef) string {
+		from, to := orientDependencyEndpoints(sourceSubject, target, swap)
+		return identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, from.CanonicalID, to.CanonicalID, spelling)
+	}
+	if targetResolved {
+		canonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{targetRepoID, targetID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !omitted {
+			out = append(out, tombstone("relationship", edgeID(contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID})))
+		}
+	}
+	if refID, omitted := identity.DeriveWorkItemRef(targetID, nil); !omitted {
+		out = append(out, tombstone("relationship", edgeID(contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID})))
+		if _, seen := seenNodeTombstones[refID]; !seen {
+			seenNodeTombstones[refID] = struct{}{}
+			out = append(out, tombstone("work_item_ref", refID))
+		}
+	}
+	return out, nil
 }

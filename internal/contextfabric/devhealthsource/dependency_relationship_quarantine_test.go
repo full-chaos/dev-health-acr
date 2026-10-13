@@ -57,7 +57,7 @@ var beyondGoInstantRange = time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC)
 // order queryWorkItemDependencies scans.
 func dependencyRow(sourceID, targetID, relationshipType string, at, created time.Time) []any {
 	return []any{sourceID, targetID, relationshipType, "repo-1", "example-org/widget-service", at,
-		created, uint8(0), zeroTime, uint8(1), created, uint8(0), zeroTime, "repo-1"}
+		created, uint8(0), zeroTime, uint8(1), created, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, zeroTime}
 }
 
 // unresolvedDependencyRow is dependencyRow with targetHasCreated = 0: the
@@ -66,7 +66,7 @@ func dependencyRow(sourceID, targetID, relationshipType string, at, created time
 // edge. Every external issue key has this shape by construction.
 func unresolvedDependencyRow(sourceID, targetID, relationshipType string, at, created time.Time) []any {
 	return []any{sourceID, targetID, relationshipType, "repo-1", "example-org/widget-service", at,
-		created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, ""}
+		created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, zeroTime}
 }
 
 // projectWithQuarantineLog projects one batch with a captured logger and
@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV10ForTheReviewEvidenceRebuild pins the constant,
+// TestClickHouseSourceVersionIsV11ForTheRemovedBlockerLinkRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -377,6 +377,10 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // retired "<repo>:<review_id>" ref, which named one ref for a review id on two
 // pull requests of one repository; the rebuild re-mints them as review.v2.
 //
+// v11 (removed blocks links) is the latest: an already-projected organization
+// holds the edge of every blocks link the provider removed before the producer
+// ended such rows; the rebuild drops them.
+//
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
 // cursor replays under any binary -- UNLESS the stored SourceVersion differs
@@ -387,11 +391,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV10ForTheReviewEvidenceRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV11ForTheRemovedBlockerLinkRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v10" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v11" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v10")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v11")
 	}
 }
 
@@ -517,7 +521,7 @@ func TestQuarantiningAnEdgeAlsoDropsTheStubThatOnlyExistedToBeItsEndpoint(t *tes
 	// resolve to a work item, which is what an external issue key always is.
 	unresolved := func(sourceID, targetID, relType string, observedAt time.Time) []any {
 		return []any{sourceID, targetID, relType, "repo-1", "example-org/widget-service", observedAt,
-			created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, ""}
+			created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, zeroTime}
 	}
 
 	t.Run("unknown type drops the edge AND its stub", func(t *testing.T) {

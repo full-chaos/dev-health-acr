@@ -1,0 +1,105 @@
+package relationcurrent
+
+// A relation the provider removed leaves its work_item_dependencies row behind
+// (the table is insert-only). A sync of an item writes again only the relations
+// that item still has, so a relation is gone when an item that WRITES it has a
+// later sync that did not write it. This file is that rule in SQL, the same
+// rule as workitemmetrics.RelationIsCurrent and RelationWriters in the ops Go
+// module (internal/jobs/metrics/workitemmetrics/blocked.go), with one named
+// difference: where the writer cannot be derived (a text-reading provider's
+// row with no stored writer and an unrecognized raw value) ops takes both
+// items as writers, which ends a live relation early; here the relation ends
+// only when BOTH items have a later sync, so a live relation is never dropped.
+// The oracle test pins the match and names the difference.
+
+// RelationshipType is the relationship_type value the rule applies to; ops
+// RelationIsCurrent covers this type only.
+const RelationshipType = "blocks"
+
+// EndpointIDsSQL is the ids of both ends of every RelationshipType row of the
+// organization, so a statement's read of work items follows the relations, not
+// the size of the work item table.
+const EndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND lower(ifNull(be.relationship_type, '')) = '` + RelationshipType + `')`
+
+const (
+	WriterSource    = 1
+	WriterTarget    = 2
+	WriterBoth      = 3
+	WriterUndecided = 4
+)
+
+// textProviderSQL is workitemmetrics.textRelationProvider over an id
+// expression: the provider whose normalizer reads relations from text, else ”.
+func textProviderSQL(idExpr string) string {
+	prefix := "splitByChar(':', " + idExpr + ")[1]"
+	return "multiIf(" + prefix + " IN ('gh', 'ghpr'), 'github', " + prefix + " = 'gitlab', 'gitlab', '')"
+}
+
+// phraseSQL is the row's raw value lower-cased with every run of
+// Unicode white space (unicode.IsSpace) collapsed to one space and trimmed.
+func phraseSQL(d string) string {
+	return `trim(BOTH ' ' FROM replaceRegexpAll(lowerUTF8(` + d + `.relationship_type_raw), '[\\t\\n\\x0B\\f\\r \\x{85}\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}]+', ' '))`
+}
+
+// WriterCodeSQL is which of the row's two items write it: the stored
+// relation_writer when it is source, target or both, else derived from the row.
+func WriterCodeSQL(d string) string {
+	src, tgt := d+".source_work_item_id", d+".target_work_item_id"
+	srcProvider, tgtProvider := textProviderSQL(src), textProviderSQL(tgt)
+	phrase, raw := phraseSQL(d), d+".relationship_type_raw"
+	return `multiIf(ifNull(` + d + `.relation_writer, '') = 'source', 1, ifNull(` + d + `.relation_writer, '') = 'target', 2, ifNull(` + d + `.relation_writer, '') = 'both', 3,
+    startsWith(` + tgt + `, 'extkey:'), 1,
+    ` + srcProvider + ` != ` + tgtProvider + `, 3,
+    ` + srcProvider + ` = '', 3,
+    ` + srcProvider + ` = 'github' AND (startsWith(` + phrase + `, 'blocked by') OR startsWith(` + phrase + `, 'depends on')), 2,
+    ` + srcProvider + ` = 'github' AND startsWith(` + phrase + `, 'blocks'), 1,
+    ` + srcProvider + ` = 'gitlab' AND ` + raw + ` = 'blocked by', 2,
+    ` + srcProvider + ` = 'gitlab' AND ` + raw + ` = 'blocking', 1,
+    4)`
+}
+
+// EndedSQL is true when the provider no longer reports the row. It
+// needs the two joins of CurrentJoinsSQL.
+func EndedSQL(d string) string {
+	a := "(rws.present = 1 AND " + d + ".last_synced < rws.synced)"
+	b := "(rwt.present = 1 AND " + d + ".last_synced < rwt.synced)"
+	return `multiIf(` + WriterCodeSQL(d) + ` = 1, ` + a + `, ` + WriterCodeSQL(d) + ` = 2, ` + b + `, ` + WriterCodeSQL(d) + ` = 3, ` + a + ` OR ` + b + `, ` + a + ` AND ` + b + `)`
+}
+
+// itemReadSQL is, per blocker edge endpoint, the time its relations
+// were last read: max(relations_read_at) when a pass that reads relations
+// wrote it, else its latest work_items sync. present is 1 for an item with a
+// work_items row (a left join gives a default, not NULL, for a missing one).
+func itemReadSQL(alias string) string {
+	return `(SELECT w.work_item_id AS work_item_id, if(r.seen = 1, r.read_at, w.synced) AS synced, 1 AS present
+    FROM (SELECT work_item_id, max(last_synced) AS synced FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + EndpointIDsSQL + ` GROUP BY work_item_id) AS w
+    LEFT JOIN (SELECT work_item_id, max(relations_read_at) AS read_at, 1 AS seen FROM work_item_relations_read WHERE org_id = {org_id:String} AND work_item_id IN ` + EndpointIDsSQL + ` GROUP BY work_item_id) AS r ON r.work_item_id = w.work_item_id) AS ` + alias
+}
+
+// CurrentJoinsSQL joins a blocker edge row d to the read time of its
+// source (rws) and target (rwt) item.
+func CurrentJoinsSQL(d string) string {
+	return `
+  LEFT JOIN ` + itemReadSQL("rws") + ` ON rws.work_item_id = ` + d + `.source_work_item_id
+  LEFT JOIN ` + itemReadSQL("rwt") + ` ON rwt.work_item_id = ` + d + `.target_work_item_id`
+}
+
+// EndedKeysSQL is the keys of the blocker rows the provider no longer
+// reports. Every reader tests membership in this one subquery, so the two item
+// read-time tables are built once per statement, however many arms read edges.
+func EndedKeysSQL() string {
+	return `(SELECT de.source_work_item_id, de.target_work_item_id, de.relationship_type
+    FROM work_item_dependencies AS de FINAL` + CurrentJoinsSQL("de") + `
+    WHERE de.org_id = {org_id:String} AND lower(ifNull(de.relationship_type, '')) = '` + RelationshipType + `' AND ` + EndedSQL("de") + `)`
+}
+
+// CurrentSQL keeps the rows the provider still reports.
+func CurrentSQL(d string) string {
+	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + EndedKeysSQL()
+}
+
+// EndedAtSQL is the time the provider stopped reporting the row d: the first
+// moment the condition of EndedSQL held. Defined only where EndedSQL is true.
+func EndedAtSQL(d string) string {
+	return `multiIf(` + WriterCodeSQL(d) + ` = 1, rws.synced, ` + WriterCodeSQL(d) + ` = 2, rwt.synced, ` + WriterCodeSQL(d) + ` = 3, least(if(rws.present = 1 AND ` + d + `.last_synced < rws.synced, rws.synced, rwt.synced), if(rwt.present = 1 AND ` + d + `.last_synced < rwt.synced, rwt.synced, rws.synced)), greatest(rws.synced, rwt.synced))`
+}
