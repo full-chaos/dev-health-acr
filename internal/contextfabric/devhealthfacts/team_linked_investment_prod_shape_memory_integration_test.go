@@ -87,6 +87,12 @@ const (
 	// both merge states. The repository-scoped split reads it sits beside are
 	// held under 64 MiB (repoScopedSplitMemoryCeiling).
 	linkedShapeBoundMiB = 64.0
+	// The unit that names one pull request three times, and its effort: large
+	// enough that a team's feature_delivery effort shows whether it was
+	// counted once (a third of it), not at all, or twice.
+	linkedShapeRepeatedUnit   = "wu-repeated-key"
+	linkedShapeRepeatedEffort = 9e8
+	linkedShapeRepeatedTeam   = "T-1"
 )
 
 func seedLinkedProdShape(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, s linkedProdShape) []string {
@@ -187,7 +193,24 @@ FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
 SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?) WHERE number % 100 < ?`,
 		orgID, at.Add(time.Hour), uint64(s.units), uint64(s.scopePct))
-	var ids []string
+	// One unit names the same pull request three times: by repository id and
+	// twice through the same GitHub lookup, beside two tracker keys. Its
+	// distinct references are 3, so a third of its effort goes to the pull
+	// request, which is linked to an issue of a project the other teams own.
+	item := s.teamLinkedItems
+	for item%(s.projects-s.teamProjects) != 0 {
+		item++
+	}
+	pr := (item * 7) % s.pullRequests
+	repoLabel := fmt.Sprintf("shape-r-%d", pr%s.ownedRepos)
+	number := 1 + pr/s.ownedRepos
+	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,NULL,?,?,?,?,?,?)`,
+		linkedShapeRepeatedUnit, at, at, linkedShapeRepeatedEffort, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
+		fmt.Sprintf(`{"issues":["ghpr:acme/%s#%d","ghpr:acme/%s#%d","linear:DUP-1","linear:DUP-2"],"prs":["%s#pr%d"]}`, repoLabel, number, repoLabel, number, repoUUID(repoLabel), number),
+		at, orgID)
+	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?, 'issue', 'n-repeated', ?, 'theme', 'feature_delivery', ?, 'run-1')`,
+		orgID, linkedShapeRepeatedUnit, at.Add(time.Hour))
+	ids := []string{linkedShapeRepeatedUnit}
 	for i := 0; i < s.units; i++ {
 		if i%100 < s.scopePct {
 			ids = append(ids, fmt.Sprintf("wu-%d", i))
@@ -393,25 +416,35 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 		teams[i] = fmt.Sprintf("T-%d", i)
 	}
 	current := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement"))
-	candidate := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement_n_uniq_in_fold"))
-	t.Logf("differential over %d teams: current statement served %d team rows, candidate %d", len(teams), len(current), len(candidate))
 	if len(current) == 0 {
 		t.Errorf("differential did not happen: the current statement returned no team row")
 	}
-	if len(candidate) != len(current) {
-		t.Errorf("candidate returned %d team rows, the current statement %d", len(candidate), len(current))
-	}
-	for team, want := range current {
-		got, ok := candidate[team]
-		if !ok || got.repos != want.repos || !closeEnough(got.bugfix, want.bugfix) || len(got.theme) != len(want.theme) {
-			t.Errorf("team %s: candidate %+v, current %+v", team, got, want)
-			continue
+	for _, name := range []string{"legacy_statement", "statement_n_length_in_fold", "statement_n_uniq_in_fold", "statement_n_uniq_filtered_first"} {
+		other := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, name))
+		t.Logf("differential over %d teams: current statement served %d team rows, %s %d", len(teams), len(current), name, len(other))
+		if len(other) != len(current) {
+			t.Errorf("%s returned %d team rows, the current statement %d", name, len(other), len(current))
 		}
-		for theme, v := range want.theme {
-			if !closeEnough(got.theme[theme], v) {
-				t.Errorf("team %s theme %s: candidate %v, current %v", team, theme, got.theme[theme], v)
+		for team, want := range current {
+			got, ok := other[team]
+			if !ok || got.repos != want.repos || !closeEnough(got.bugfix, want.bugfix) || len(got.theme) != len(want.theme) {
+				t.Errorf("team %s: %s %+v, current %+v", team, name, got, want)
+				continue
+			}
+			for theme, v := range want.theme {
+				if !closeEnough(got.theme[theme], v) {
+					t.Errorf("team %s theme %s: %s %v, current %v", team, theme, name, got.theme[theme], v)
+				}
 			}
 		}
+		// The repeated-key unit is counted once: a third of its effort.
+		share := other[linkedShapeRepeatedTeam].theme["feature_delivery"]
+		if third := linkedShapeRepeatedEffort / 3; share < third || share > third+1e6 {
+			t.Errorf("%s: team %s feature_delivery effort %v, want the repeated-key unit's third (%v) plus the small units", name, linkedShapeRepeatedTeam, share, third)
+		}
+	}
+	if share, third := current[linkedShapeRepeatedTeam].theme["feature_delivery"], linkedShapeRepeatedEffort/3; share < third || share > third+1e6 {
+		t.Errorf("current statement: team %s feature_delivery effort %v, want the repeated-key unit's third (%v) plus the small units", linkedShapeRepeatedTeam, share, third)
 	}
 	for stage, peak := range map[string]float64{"unmerged": servedUnmerged, "optimized": servedOptimized} {
 		if peak > linkedShapeBoundMiB {
