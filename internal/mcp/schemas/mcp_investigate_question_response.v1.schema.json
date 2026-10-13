@@ -1533,6 +1533,21 @@
               "maxLength": 2000,
               "type": "string"
             },
+            "source_state": {
+              "enum": [
+                "available",
+                "stale",
+                "unavailable",
+                "unconfigured",
+                "unauthorized",
+                "no_data",
+                "truncated",
+                "conflicted",
+                "not_applicable",
+                "pruned"
+              ],
+              "type": "string"
+            },
             "standing": {
               "enum": [
                 "principal",
@@ -6371,6 +6386,21 @@
             },
             "qualification": {
               "maxLength": 2000,
+              "type": "string"
+            },
+            "source_state": {
+              "enum": [
+                "available",
+                "stale",
+                "unavailable",
+                "unconfigured",
+                "unauthorized",
+                "no_data",
+                "truncated",
+                "conflicted",
+                "not_applicable",
+                "pruned"
+              ],
               "type": "string"
             },
             "standing": {
