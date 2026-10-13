@@ -221,9 +221,52 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	}
 }
 
-// The organization-wide fast path authorizes exactly the work items the
-// library relation authorizes for the same scope, repository-less and orphan
-// items and ids stored under two repositories included.
+// The organization-wide shape is decided from the live principal on every
+// call, and only an organization-wide grant with no requested restriction takes
+// it.
+func TestOrganizationWideAuthorizationIsDecidedFromTheLivePrincipal(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name      string
+		scopes    []string
+		requested []string
+		want      bool
+	}{
+		{"organization-wide wildcard", []string{"*"}, nil, true},
+		{"organization-wide by the empty-grant convention", nil, nil, true},
+		{"wildcard beside a narrower entry", []string{"acme/repo-1", "*"}, nil, true},
+		{"empty requested restriction", []string{"*"}, []string{}, true},
+		{"one repository grant", []string{"acme/repo-1"}, nil, false},
+		{"owner grant", []string{"acme/*"}, nil, false},
+		{"project-reaching grant (a repository grant that reaches repo-less items through ownership)", []string{"acme/repo-1", "acme/repo-2"}, nil, false},
+		{"wildcard with a requested selector", []string{"*"}, []string{"acme/repo-1"}, false},
+		{"grant revoked to one repository", []string{"acme/repo-3"}, nil, false},
+	} {
+		got := devhealthfacts.OrganizationWideAuthorizationForTest(storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: c.scopes}, c.requested)
+		if got != c.want {
+			t.Errorf("%s: organization-wide shape = %v, want %v", c.name, got, c.want)
+		}
+		sql, _ := devhealthfacts.AuthorizedIDsForTest(storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: c.scopes}, c.requested, "production")
+		if carriesLibraryRelation := strings.Contains(sql, "wia_"); carriesLibraryRelation == c.want {
+			t.Errorf("%s: the served set carries the library relation = %v with the organization-wide shape = %v", c.name, carriesLibraryRelation, c.want)
+		}
+	}
+	// The same call, with a live principal whose grant changed, must follow it.
+	granted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}
+	if !devhealthfacts.OrganizationWideAuthorizationForTest(granted, nil) {
+		t.Fatal("the organization-wide principal did not take the organization-wide shape")
+	}
+	granted.RepositoryScopes = []string{"acme/repo-1"}
+	if devhealthfacts.OrganizationWideAuthorizationForTest(granted, nil) {
+		t.Fatal("a revoked grant still took the organization-wide shape")
+	}
+}
+
+// The organization-wide shape authorizes exactly the work items the library
+// relation authorizes for an organization-wide scope, and the production set
+// of every other scope is the library relation itself. The differential has
+// teeth: forced on a restricted scope, the same shape authorizes more than the
+// library does.
 func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	_, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -253,8 +296,8 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, 'linked-repo-less', 1, 1, 'native', '', ?, ?)`,
 		"00000000-0000-4000-8000-000000000001", at, blockerProdShapeOrg)
 
-	ids := func(library bool) []string {
-		sql, bindings := devhealthfacts.AuthorizedIDsForTest(storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}, library)
+	ids := func(principal storage.Principal, requested []string, mode string) []string {
+		sql, bindings := devhealthfacts.AuthorizedIDsForTest(principal, requested, mode)
 		sql = strings.ReplaceAll(sql, "{org_id:String}", "'"+blockerProdShapeOrg+"'")
 		args := make([]any, 0, len(bindings))
 		for _, binding := range bindings {
@@ -262,7 +305,7 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 		}
 		rows, err := direct.Query(ctx, "SELECT work_item_id FROM "+sql+" ORDER BY work_item_id", args...)
 		if err != nil {
-			t.Fatalf("authorized ids (library=%v): %v", library, err)
+			t.Fatalf("authorized ids (%s): %v", mode, err)
 		}
 		defer rows.Close()
 		var out []string
@@ -275,13 +318,40 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 		}
 		return out
 	}
-	fast, library := ids(false), ids(true)
-	if len(fast) < 17000 || len(library) != len(fast) {
-		t.Fatalf("fast path authorizes %d work items, library relation %d", len(fast), len(library))
-	}
-	for index := range fast {
-		if fast[index] != library[index] {
-			t.Fatalf("authorized sets differ at %d: %q vs %q", index, fast[index], library[index])
+	equal := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
 		}
+		for index := range a {
+			if a[index] != b[index] {
+				return false
+			}
+		}
+		return true
+	}
+	for _, c := range []struct {
+		name      string
+		scopes    []string
+		requested []string
+	}{
+		{"organization-wide", []string{"*"}, nil},
+		{"organization-wide by convention", nil, nil},
+		{"one repository grant", []string{"acme/repo-1"}, nil},
+		{"owner grant", []string{"acme/*"}, nil},
+		{"two repository grants (repo-less items through ownership and links)", []string{"acme/repo-1", "acme/repo-2"}, nil},
+		{"wildcard with a requested selector", []string{"*"}, []string{"acme/repo-1"}},
+	} {
+		principal := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: c.scopes}
+		production, library := ids(principal, c.requested, "production"), ids(principal, c.requested, "library")
+		if !equal(production, library) {
+			t.Errorf("%s: production authorizes %d work items, the library relation %d", c.name, len(production), len(library))
+		}
+		if devhealthfacts.OrganizationWideAuthorizationForTest(principal, c.requested) && len(production) < 17000 {
+			t.Errorf("%s: organization-wide shape authorizes only %d work items", c.name, len(production))
+		}
+	}
+	restricted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"acme/repo-1"}}
+	if equal(ids(restricted, nil, "fast"), ids(restricted, nil, "library")) {
+		t.Fatal("the organization-wide shape forced on a restricted scope authorizes the same work items as the library: the differential cannot tell a wrongly fired fast path")
 	}
 }

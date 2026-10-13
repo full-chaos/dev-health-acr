@@ -57,14 +57,24 @@ func RunBlockerFragmentsForTest(ctx context.Context, client contextpacket.ClickH
 }
 
 // AuthorizedIDsForTest renders the authorized-ids set of principal's scope over
-// every work item of the organization: the fast path when the scope is
-// organization-wide, or the library relation when library is set.
-func AuthorizedIDsForTest(principal storage.Principal, library bool) (string, []readers.Binding) {
-	scope := workItemRepositoryAuthorization(principal, nil)
-	if library {
+// every work item of the organization. mode "production" is what the readers
+// use; "library" is the library relation for the same scope; "fast" forces the
+// organization-wide shape whatever the scope (a planted defect for the test).
+func AuthorizedIDsForTest(principal storage.Principal, requested []string, mode string) (string, []readers.Binding) {
+	scope := workItemRepositoryAuthorization(principal, requested)
+	switch mode {
+	case "library":
 		return workItemAuthorizedIDsLibrarySQL(scope, "")
+	case "fast":
+		return `(SELECT w.work_item_id FROM work_items AS w WHERE w.org_id = {org_id:String} GROUP BY w.work_item_id)`, nil
 	}
 	return workItemAuthorizedIDsAmongSQL(scope, "")
+}
+
+// OrganizationWideAuthorizationForTest reports whether the blocker statements
+// take the organization-wide shape for this live principal and request.
+func OrganizationWideAuthorizationForTest(principal storage.Principal, requested []string) bool {
+	return organizationWideAuthorization(workItemRepositoryAuthorization(principal, requested))
 }
 
 // SetBlockerAuthorizedIDsBoundForTest moves the bound above which the blocker
