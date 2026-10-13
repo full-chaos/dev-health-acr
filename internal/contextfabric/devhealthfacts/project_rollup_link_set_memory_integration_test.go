@@ -11,19 +11,13 @@ import (
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-const (
-	projectRollupLinkSetSmallLinks = 100_000
-	projectRollupLinkSetMoreLinks  = 200_000
-	projectRollupLinkSetSlope      = 1.15
-	projectRollupLinkSetFloor      = uint64(2 << 20)
-	projectRollupLinkSetWarmRuns   = 3
-)
+const projectRollupLinkSetWarmRuns = 3
 
-// The project pull request rollup reads the links of the requested project's
-// issues only. Links of issues outside the project, in any number, leave the
-// statement's peak memory flat: the rule fails a growth over 1.15x that is
-// also over 2 MiB, taken on the smallest of three warm runs per size.
-func TestProjectPullRequestRollupMemoryIgnoresLinksOutsideTheProjectOnRealClickHouse(t *testing.T) {
+// The project pull request rollup builds the organization's link-id set, so
+// its peak memory is linear in the organization's links and flat in the
+// project. This row measures the peak at three link counts, in both part
+// states, as the smallest of three warm runs.
+func TestProjectPullRequestRollupMemoryAgainstOrganizationLinksOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
@@ -70,13 +64,19 @@ SELECT ?, concat(?, repeat('x', 96), '-', toString(number)), toUInt32(number + 1
 		}
 		return smallest
 	}
-	outsideLinks("outside-", projectRollupLinkSetSmallLinks)
 	peak()
-	small := peak()
-	outsideLinks("outside-more-", projectRollupLinkSetMoreLinks)
-	large := peak()
-	t.Logf("project pull request rollup peak memory: %d bytes at %d outside links, %d at %d", small, projectRollupLinkSetSmallLinks, large, projectRollupLinkSetSmallLinks+projectRollupLinkSetMoreLinks)
-	if float64(large) > projectRollupLinkSetSlope*float64(small) && large > small+projectRollupLinkSetFloor {
-		t.Errorf("project pull request rollup grew with links outside the project: peak %d bytes at the larger size, %d at the smaller", large, small)
+	links := 0
+	for _, step := range []struct {
+		prefix string
+		add    int
+	}{{"a-", 100_000}, {"b-", 100_000}, {"c-", 100_000}} {
+		outsideLinks(step.prefix, step.add)
+		links += step.add
+		unmerged := peak()
+		if err := direct.Exec(ctx, `OPTIMIZE TABLE work_graph_issue_pr FINAL`); err != nil {
+			t.Fatalf("optimize: %v", err)
+		}
+		merged := peak()
+		t.Errorf("MEASURE links=%d unmerged_peak=%d merged_peak=%d", links, unmerged, merged)
 	}
 }
