@@ -64,7 +64,7 @@ func t4TeamRollupCases() []t4Case {
 		}},
 		{name: "blockers/team", kind: contextfabric.FactBlockers, subjects: team, tables: []fakeTable{
 			ownership(),
-			{match: "SELECT toInt64(uniqExact(d.target_work_item_id))", rows: [][]any{{int64(0)}}},
+			{match: "SELECT toInt64(uniqExact(d.blocked_id))", rows: [][]any{{int64(0)}}},
 			{match: "is_open AND start_unix IS NOT NULL", rows: [][]any{{"CHAOS", int64(210), int64(210), int64(210), int64(1760000000000)}}},
 			{match: "arrayJoin({team_repo_pairs", rows: [][]any{{"CHAOS", int64(140), int64(210), int64(70), int64(0), int64(0)}}},
 			{match: "FROM work_item_dependencies", rows: perRepo(func(_ int, key string) []any {
@@ -73,7 +73,7 @@ func t4TeamRollupCases() []t4Case {
 		}},
 		{name: "blockers/team_without_relation_start", kind: contextfabric.FactBlockers, subjects: team, tables: []fakeTable{
 			ownership(),
-			{match: "SELECT toInt64(uniqExact(d.target_work_item_id))", rows: [][]any{{int64(0)}}},
+			{match: "SELECT toInt64(uniqExact(d.blocked_id))", rows: [][]any{{int64(0)}}},
 			{match: "is_open AND start_unix IS NOT NULL", rows: [][]any{{"CHAOS", int64(210), int64(0), int64(0), int64(0)}}},
 			{match: "arrayJoin({team_repo_pairs", rows: [][]any{{"CHAOS", int64(140), int64(210), int64(70), int64(0), int64(0)}}},
 			{match: "FROM work_item_dependencies", rows: perRepo(func(_ int, key string) []any {
