@@ -408,3 +408,34 @@ func MembershipStatementForTest(orgID string, since time.Time, after string, lim
 	cursor := cursorState{Since: since, After: after}
 	return membershipStatement(cursor, ingest, pruned), rowLimitBindings(orgID, cursor, limit)
 }
+
+// ProjectTeamsFragment is one named, self-contained piece of the project-team
+// ownership statement that a memory test runs on its own.
+type ProjectTeamsFragment struct {
+	Name, SQL string
+	Paged     bool
+}
+
+// ProjectTeamsFragmentsForTest lists the statement's building blocks, then the
+// whole group statement and the paged statement the projector sends.
+func ProjectTeamsFragmentsForTest(ingest bool) []ProjectTeamsFragment {
+	arms := projectTeamsArmsFor(ingest)
+	rows := projectTeamsOwnershipRowsSQL(ingest)
+	return []ProjectTeamsFragment{
+		{Name: "ownership_final_x1", SQL: "SELECT * FROM " + rows},
+		{Name: "ownership_final_x4", SQL: "SELECT * FROM (SELECT * FROM " + rows + " UNION ALL SELECT * FROM " + rows + " UNION ALL SELECT * FROM " + rows + " UNION ALL SELECT * FROM " + rows + ")"},
+		{Name: "projects_identity_x1", SQL: "SELECT * FROM " + projectIdentityWithWatermarkSQL(ingest)},
+		{Name: "projects_ambiguous_x1", SQL: "SELECT * FROM " + ambiguousProjectIdentitySQL(ingest)},
+		{Name: "asserting_arm", SQL: arms[0]},
+		{Name: "retraction_arm", SQL: arms[1]},
+		{Name: "both_arms_union", SQL: arms[0] + "\nUNION ALL\n" + arms[1]},
+		{Name: "group_statement", SQL: projectTeamsGroupSQL(ingest)},
+		{Name: "paged_statement", SQL: projectTeamsStatementFor(cursorState{}, ingest), Paged: true},
+	}
+}
+
+// ProjectTeamsPagedBindingsForTest are the bindings the projector sends for the
+// first page.
+func ProjectTeamsPagedBindingsForTest(orgID string, limit int) []contextpacket.ClickHouseBinding {
+	return rowLimitBindings(orgID, cursorState{}, limit)
+}
