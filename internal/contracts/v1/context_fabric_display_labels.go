@@ -263,7 +263,7 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 	case ContextFabricCoverageDetailFactTableShapeUndeclared:
 		label = "The source for " + kind + " facts does not declare the shape this needs"
 	case ContextFabricCoverageDetailFactScopeUnexpanded:
-		label = kindClause(kind) + " facts were not reachable from this question's subject"
+		label = kindClause(kind) + " facts reachable only through scope expansion were not reached"
 	case ContextFabricCoverageDetailFactReadFailed:
 		label = kindClause(kind) + " facts could not be read"
 	case ContextFabricCoverageDetailFactProviderReported:
