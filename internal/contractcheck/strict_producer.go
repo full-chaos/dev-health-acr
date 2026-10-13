@@ -28,47 +28,111 @@ type branch struct {
 	schema map[string]any
 }
 
-func (r *schemaRegistry) flatten(schemaName string, schema map[string]any, depth int, out *[]branch) {
+// resolve splits the schemas that apply to one instance into the branches
+// that always apply (the schema itself, its $ref targets, allOf members and
+// if/then/else) and the anyOf/oneOf groups, of which the instance must match
+// one alternative each.
+func (r *schemaRegistry) resolve(branches []branch, depth int) (bases []branch, groups [][]branch) {
 	if depth > 64 {
-		return
+		return nil, nil
 	}
-	*out = append(*out, branch{schemaName, schema})
-	if ref, ok := schema["$ref"].(string); ok {
-		name, fragment := splitSchemaRef(schemaName, ref)
-		if target, ok := r.byName[name]; ok {
-			var resolved any = target
-			if fragment != "" {
-				var err error
-				if resolved, err = resolveJSONPointer(target, fragment); err != nil {
-					return
+	for _, b := range branches {
+		bases = append(bases, b)
+		if ref, ok := b.schema["$ref"].(string); ok {
+			name, fragment := splitSchemaRef(b.name, ref)
+			if target, ok := r.byName[name]; ok {
+				var resolved any = target
+				if fragment != "" {
+					var err error
+					if resolved, err = resolveJSONPointer(target, fragment); err != nil {
+						continue
+					}
+				}
+				if m, ok := resolved.(map[string]any); ok {
+					sub, subGroups := r.resolve([]branch{{name, m}}, depth+1)
+					bases = append(bases, sub...)
+					groups = append(groups, subGroups...)
 				}
 			}
-			if m, ok := resolved.(map[string]any); ok {
-				r.flatten(name, m, depth+1, out)
-			}
 		}
-	}
-	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
-		if list, ok := schema[key].([]any); ok {
+		if list, ok := b.schema["allOf"].([]any); ok {
 			for _, raw := range list {
 				if m, ok := raw.(map[string]any); ok {
-					r.flatten(schemaName, m, depth+1, out)
+					sub, subGroups := r.resolve([]branch{{b.name, m}}, depth+1)
+					bases = append(bases, sub...)
+					groups = append(groups, subGroups...)
+				}
+			}
+		}
+		for _, key := range []string{"if", "then", "else"} {
+			if m, ok := b.schema[key].(map[string]any); ok {
+				sub, subGroups := r.resolve([]branch{{b.name, m}}, depth+1)
+				bases = append(bases, sub...)
+				groups = append(groups, subGroups...)
+			}
+		}
+		for _, key := range []string{"anyOf", "oneOf"} {
+			if list, ok := b.schema[key].([]any); ok {
+				var group []branch
+				for _, raw := range list {
+					if m, ok := raw.(map[string]any); ok {
+						group = append(group, branch{b.name, m})
+					}
+				}
+				if len(group) > 0 {
+					groups = append(groups, group)
 				}
 			}
 		}
 	}
-	for _, key := range []string{"if", "then", "else"} {
-		if m, ok := schema[key].(map[string]any); ok {
-			r.flatten(schemaName, m, depth+1, out)
-		}
-	}
+	return bases, groups
 }
 
 func (r *schemaRegistry) undeclaredAt(schemaName string, schemas []map[string]any, instance any, path string, depth int) error {
-	var branches []branch
+	var start []branch
 	for _, s := range schemas {
-		r.flatten(schemaName, s, depth, &branches)
+		start = append(start, branch{schemaName, s})
 	}
+	bases, groups := r.resolve(start, depth)
+	return r.chooseAlternatives(bases, groups, instance, path, depth)
+}
+
+// chooseAlternatives settles each anyOf/oneOf group by picking an alternative
+// under which the instance passes the strict check: a key that only another
+// alternative declares does not rescue an object that matches this one. An
+// alternative the instance does not validate against is tried only when none
+// does.
+func (r *schemaRegistry) chooseAlternatives(bases []branch, groups [][]branch, instance any, path string, depth int) error {
+	if len(groups) == 0 {
+		return r.checkResolved(bases, instance, path, depth)
+	}
+	group, rest := groups[0], groups[1:]
+	var matching []branch
+	for _, alt := range group {
+		if r.validateAt(alt.name, alt.schema, instance, path, map[string]bool{}) == nil {
+			matching = append(matching, alt)
+		}
+	}
+	if len(matching) == 0 {
+		matching = group
+	}
+	var first error
+	for _, alt := range matching {
+		altBases, altGroups := r.resolve([]branch{alt}, depth+1)
+		nextBases := append(append([]branch(nil), bases...), altBases...)
+		nextGroups := append(append([][]branch(nil), rest...), altGroups...)
+		err := r.chooseAlternatives(nextBases, nextGroups, instance, path, depth)
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (r *schemaRegistry) checkResolved(branches []branch, instance any, path string, depth int) error {
 	switch value := instance.(type) {
 	case map[string]any:
 		declared := map[string]bool{}
@@ -97,13 +161,13 @@ func (r *schemaRegistry) undeclaredAt(schemaName string, schemas []map[string]an
 			}
 		}
 	case []any:
-		for i, item := range value {
-			var items []branch
-			for _, b := range branches {
-				if m, ok := b.schema["items"].(map[string]any); ok {
-					items = append(items, branch{b.name, m})
-				}
+		var items []branch
+		for _, b := range branches {
+			if m, ok := b.schema["items"].(map[string]any); ok {
+				items = append(items, branch{b.name, m})
 			}
+		}
+		for i, item := range value {
 			if err := r.descendBranches(items, item, fmt.Sprintf("%s[%d]", path, i), depth); err != nil {
 				return err
 			}
@@ -115,31 +179,26 @@ func (r *schemaRegistry) undeclaredAt(schemaName string, schemas []map[string]an
 func (r *schemaRegistry) descend(branches []branch, key string, value any, path string, depth int) error {
 	var children []branch
 	for _, b := range branches {
-		if props, ok := b.schema["properties"].(map[string]any); ok {
-			if m, ok := props[key].(map[string]any); ok {
-				children = append(children, branch{b.name, m})
-				continue
-			}
+		props, _ := b.schema["properties"].(map[string]any)
+		if m, ok := props[key].(map[string]any); ok {
+			children = append(children, branch{b.name, m})
+			continue
 		}
-		if m, ok := b.schema["additionalProperties"].(map[string]any); ok {
-			if props, _ := b.schema["properties"].(map[string]any); props[key] == nil {
-				children = append(children, branch{b.name, m})
-			}
+		if m, ok := b.schema["additionalProperties"].(map[string]any); ok && props[key] == nil {
+			children = append(children, branch{b.name, m})
 		}
 	}
 	return r.descendBranches(children, value, path, depth)
 }
 
+// descendBranches checks the value against every schema that applies to it as
+// one set: the property schemas of different branches all hold together.
 func (r *schemaRegistry) descendBranches(children []branch, value any, path string, depth int) error {
-	if depth > 64 {
+	if depth > 64 || len(children) == 0 {
 		return nil
 	}
-	for _, c := range children {
-		if err := r.undeclaredAt(c.name, []map[string]any{c.schema}, value, path, depth+1); err != nil {
-			return err
-		}
-	}
-	return nil
+	bases, groups := r.resolve(children, depth+1)
+	return r.chooseAlternatives(bases, groups, value, path, depth+1)
 }
 
 // openOutputObjects returns a deep copy of schema without any
