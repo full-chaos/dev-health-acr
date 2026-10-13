@@ -1,23 +1,37 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP source_evidence Request v1",
-  "description": "Input for the source_evidence tool. evidence_ref_id is required. result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it. A pull-request or work-item reference names one row and needs no result_id.",
+  "description": "Input for the source_evidence tool. Pass exactly one of (the schema stays free of a top-level oneOf/anyOf/conditional because some model APIs refuse them; the tool refuses neither, both, or an empty list with a validation error) evidence_ref_id (one reference) or evidence_ref_ids (up to 10 references of the same answer, expanded in one call). result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it; in a batch it applies to every reference. A pull-request or work-item reference names one row and needs no result_id. Each reference is authorized on its own: a refused or unknown reference is its own refused entry in the response, never a failed call.",
   "examples": [
     {
       "evidence_ref_id": "ev_2f9c81ab"
+    },
+    {
+      "evidence_ref_ids": [
+        "ev_2f9c81ab",
+        "ev_7d41c0de"
+      ]
     }
   ],
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "evidence_ref_id"
-  ],
   "properties": {
     "evidence_ref_id": {
       "type": "string",
       "description": "An evidence reference exactly as a previous context_for_task or investigate_question response returned it (its evidence_ref_ids, or an evidence reference on a context item). Opaque: pass it back unchanged; never build or parse one yourself.",
       "minLength": 1,
       "maxLength": 256
+    },
+    "evidence_ref_ids": {
+      "type": "array",
+      "description": "Up to 10 evidence references exactly as previous tool responses returned them, all from the same answer (one result_id). The response carries one entry per reference, in this order. Opaque: pass them back unchanged. Use instead of evidence_ref_id.",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
     },
     "result_id": {
       "type": "string",
