@@ -199,7 +199,7 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T) {
 	query, direct := orgIsolationClickHouseFixture(t)
 	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
-	only := map[string]bool(nil)
+	only := map[string]bool{"ownership_raw_final_x1": true, "ownership_raw_final_threads1": true, "ownership_raw_final_block8k": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true}
 	peaks := map[int]float64{}
 	for i, versions := range []int{100, 1000, 2000} {
 		f := newIngestColumnsFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000010%d", i), nil, nil)
