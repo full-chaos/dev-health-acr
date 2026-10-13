@@ -58,6 +58,9 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	rejectedCount := 0
+	defer func() {
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedRepositories, timeBound, err)
+	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {

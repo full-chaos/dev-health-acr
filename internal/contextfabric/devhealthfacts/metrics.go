@@ -182,6 +182,9 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	teamsRequested := 0
 	var projectReachedTeams []projectReachedTeam
 	var revertCoverage revertRateCoverage
+	defer func() {
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedRepositories, timeBound, err)
+	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {

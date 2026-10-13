@@ -2,7 +2,9 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -593,4 +595,56 @@ func addRequestNote(result *contextfabric.FactProviderResult, note string) {
 		return
 	}
 	result.RequestNote += "; " + note
+}
+
+// teamOwnershipReader is the ownership read a kind's success path uses to
+// decide which requested teams own no repository.
+type teamOwnershipReader func(context.Context, contextpacket.ClickHouseQueryClient, string, []string, factTimeBound) (map[string][]teamOwnedRepo, error)
+
+// attachOwnershipNoteToFailure gives a failed read the request-level note its
+// success path would have served: which requested teams own no repository is
+// a fact of ownership, not of the failed read. It runs only on a failure, and
+// when the ownership read cannot be made either the failure stays as it is.
+func attachOwnershipNoteToFailure(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, subjects []contextfabric.SubjectRef, read teamOwnershipReader, bound factTimeBound, err error) {
+	var failure *contextfabric.FactReadFailure
+	if err == nil || !errors.As(err, &failure) {
+		return
+	}
+	teamIDs, bySubject, _ := subjectIndex(subjectsOfKind(subjects, contextfabric.SubjectTeam), teamPrefix)
+	if len(teamIDs) == 0 {
+		return
+	}
+	readCtx, cancel := ownershipNoteContext(ctx)
+	defer cancel()
+	owned, readErr := read(readCtx, client, orgID, teamIDs, bound)
+	if readErr != nil {
+		slog.Warn("devhealthfacts.ownership_note_omitted", "reason", "ownership_read_failed", "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", readErr)))
+		return
+	}
+	without := teamsOwningNothingWithoutData(teamIDs, bySubject, owned, nil, nil)
+	if len(without) == 0 {
+		return
+	}
+	note := teamsOwningNoRepositoriesReason(len(without), len(teamIDs))
+	if failure.RequestNote == "" {
+		failure.RequestNote = note
+	}
+}
+
+const ownershipNoteReadBudget = 2 * time.Second
+
+// ownershipNoteContext bounds the extra ownership read to a quarter of the time
+// the provider has left, so it cannot run the deadline out and turn the
+// original failure into a timeout.
+func ownershipNoteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	budget := ownershipNoteReadBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		if quarter := deadline.Sub(clock()) / 4; quarter < budget {
+			budget = quarter
+		}
+	}
+	if budget <= 0 {
+		budget = time.Nanosecond
+	}
+	return context.WithTimeout(ctx, budget)
 }

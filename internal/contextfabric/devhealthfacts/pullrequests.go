@@ -55,6 +55,9 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := pullRequestSubjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectPullRequest))
+	defer func() {
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedOrReachedRepositories, timeBound, err)
+	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
