@@ -90,6 +90,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(fmt.Errorf("open clickhouse: %w", err), runtime.Close())
 	}
 	runtime.closers = append(runtime.closers, clickhouseClient.Close)
+	cappedClickhouse := contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage)
 
 	// CHAOS-3898 S2a-2 (design brief §3.1/§3.5): the build-aside-and-swap
 	// conversion's master switch -- see pglifecycle.EnvConfig's own doc
@@ -184,7 +185,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(err, runtime.Close())
 	}
 
-	clickhouseSource, teamsProjectsSource, err := clickhouseBackedSources(clickhouseClient, cfg, logger)
+	clickhouseSource, teamsProjectsSource, err := clickhouseBackedSources(cappedClickhouse, cfg, logger)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -201,7 +202,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	// credential, or configuration surface of its own.
 	var orgSource projectionrun.OrgSource
 	if cfg.OrgDiscoveryEnabled {
-		clickhouseOrgs, err := devhealthsource.NewClickHouseOrgSourceWithWindow(clickhouseClient, cfg.OrgActivityWindow)
+		clickhouseOrgs, err := devhealthsource.NewClickHouseOrgSourceWithWindow(cappedClickhouse, cfg.OrgActivityWindow)
 		if err != nil {
 			return nil, errors.Join(err, runtime.Close())
 		}
@@ -377,6 +378,11 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 // Health's ClickHouse, each with the operator's overlap window
 // (ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP, CHAOS-7263). A separate function so
 // a test can pin that the setting reaches both.
+// projectorStatementMaxMemoryUsage is the per-statement memory cap of every
+// projector ClickHouse read. 128 MiB sits above the measured 88 MiB peak of an
+// uncapped acr_ro statement; re-measure from system.query_log after the roll.
+const projectorStatementMaxMemoryUsage uint64 = 128 << 20
+
 func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg config.ProjectorConfig, logger *slog.Logger) (*devhealthsource.ClickHouseProjectionSource, *devhealthsource.TeamsProjectsSource, error) {
 	clickhouseSource, err := devhealthsource.NewClickHouseProjectionSource(client)
 	if err != nil {

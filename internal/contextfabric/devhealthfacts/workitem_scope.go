@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -165,7 +166,7 @@ func workItemRepositorySelector(raw string) (workItemSelectorKind, string, bool)
 // 2,873,760, rounded up.
 const (
 	workItemReaderMaxRowsToRead  = uint64(3_000_000)
-	workItemReaderMaxMemoryUsage = uint64(64 << 20)
+	workItemReaderMaxMemoryUsage = contextpacket.APIStatementMaxMemoryUsage
 	workItemReaderMaxThreads     = uint64(1)
 )
 
