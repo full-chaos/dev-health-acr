@@ -62,3 +62,21 @@ func TestHTTPCallToAnUnlistedAnswerToolNamesTheListedAnswerTools(t *testing.T) {
 		t.Fatalf("text must list exactly the tools in this caller's snapshot: %q", text)
 	}
 }
+
+func TestHTTPHostedServerPromisesNoListChanged(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpoint(t, hosted)
+	plain := hosted.issue(readScopes, []string{repoPlain}, nil)
+	session := connectClient(t, e, &headerTransport{bearer: plain.token})
+
+	caps := session.InitializeResult().Capabilities
+	if caps.Tools == nil || caps.Tools.ListChanged {
+		t.Fatalf("tools.listChanged is promised: %+v", caps.Tools)
+	}
+	if caps.Prompts != nil && caps.Prompts.ListChanged {
+		t.Fatalf("prompts.listChanged is promised: %+v", caps.Prompts)
+	}
+	if caps.Resources != nil && caps.Resources.ListChanged {
+		t.Fatalf("resources.listChanged is promised: %+v", caps.Resources)
+	}
+}
