@@ -68,16 +68,16 @@ func TestProjectStatusAbsentReadinessIsMissingAndTruncatedIsPartial(t *testing.T
 	interpretation := InterpretedQuestion{FactRequirements: projectStatusRequirements}
 	absent := projectStatusFacts(project)
 	absent = append(absent[:2], absent[3:]...)
-	drivers, _, event := projectStatusDrivers(interpretation, []SubjectRef{project}, absent, nil, nil, ItemAllocation{})
+	drivers, _, event := projectStatusDrivers(interpretation, []SubjectRef{project}, absent, Coverage{}, nil, nil, ItemAllocation{})
 	if len(drivers) != 2 || len(event.Missing) != 1 || event.Missing[0] != FactReadiness || len(event.Partial) != 0 {
 		t.Errorf("absent: drivers=%d missing=%v partial=%v", len(drivers), event.Missing, event.Partial)
 	}
-	drivers, _, event = projectStatusDrivers(interpretation, []SubjectRef{project}, truncatedReadinessFacts(project), nil, nil, ItemAllocation{})
+	drivers, _, event = projectStatusDrivers(interpretation, []SubjectRef{project}, truncatedReadinessFacts(project), Coverage{}, nil, nil, ItemAllocation{})
 	if len(drivers) != 3 || len(event.Missing) != 0 || len(event.Partial) != 1 || event.Partial[0] != FactReadiness {
 		t.Errorf("truncated: drivers=%d missing=%v partial=%v", len(drivers), event.Missing, event.Partial)
 	}
 	noHealth := projectStatusFacts(project)[:3]
-	_, _, event = projectStatusDrivers(interpretation, []SubjectRef{project}, noHealth, nil, nil, ItemAllocation{})
+	_, _, event = projectStatusDrivers(interpretation, []SubjectRef{project}, noHealth, Coverage{}, nil, nil, ItemAllocation{})
 	if len(event.Missing) != 1 || event.Missing[0] != FactHealth {
 		t.Errorf("absent health: missing=%v, want [health]", event.Missing)
 	}
@@ -132,17 +132,25 @@ func TestProjectStatusStaleFactIsUsableWithAStaleLabel(t *testing.T) {
 	}
 }
 
-func TestProjectStatusUnusableFactStatesStayMissingAndNameTheState(t *testing.T) {
+func coverageForRead(kind FactKind, state SourceState) *Coverage {
+	bundle := CanonicalFactBundle{}
+	appendFactCoverage(&bundle, kind, state, nil, "", "", coverageDetailSpec{})
+	return &bundle.Coverage
+}
+
+func TestProjectStatusUnusableReadStatesStayMissingAndNameTheState(t *testing.T) {
 	wantLimitation := map[SourceState]string{
-		SourceNoData: "readiness: no data.", SourceUnavailable: "readiness: source unavailable.", SourceConflicted: "readiness: conflicting sources.",
+		SourceNoData: "readiness: no data.", SourceUnavailable: "readiness: source unavailable.", SourceConflicted: "readiness: conflicting sources.", "": "readiness: not read for this answer.",
 	}
-	for _, state := range []SourceState{SourceNoData, SourceUnavailable, SourceConflicted} {
-		t.Run(string(state), func(t *testing.T) {
+	for _, state := range []SourceState{SourceNoData, SourceUnavailable, SourceConflicted, ""} {
+		t.Run(string(state)+"_read", func(t *testing.T) {
 			rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
 				facts := projectStatusFacts(p)
-				facts[2].SourceState = state
-				return facts
+				return append(facts[:2:2], facts[3:]...)
 			})
+			if state != "" {
+				rig.coverage = coverageForRead(FactReadiness, state)
+			}
 			result, _, err := rig.investigate(serverRequest())
 			if err != nil {
 				t.Fatal(err)
@@ -160,13 +168,26 @@ func TestProjectStatusUnusableFactStatesStayMissingAndNameTheState(t *testing.T)
 				}
 			}
 			if served != 1 {
-				t.Errorf("served readiness limitations = %d (%v), want exactly one naming %s", served, result.Limitations, state)
-			}
-			event := rig.telemetry.projectStatusDrivers[0]
-			if len(event.Missing) != 1 || event.Missing[0] != FactReadiness || len(event.MissingStates) != 1 || event.MissingStates[0] != string(state) {
-				t.Errorf("missing = %v states = %v, want readiness named %s", event.Missing, event.MissingStates, state)
+				t.Errorf("served readiness limitations = %d (%v), want exactly one for %q", served, result.Limitations, state)
 			}
 		})
+	}
+}
+
+func TestProjectStatusQualifierReachesTheComposedAnswerProse(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, truncatedReadinessFacts)
+	result, _, err := rig.investigate(serverRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := "Estimate coverage: 18 of 40 items estimated " + projectStatusPartialLabel
+	for name, text := range map[string]string{"direct_judgment": result.DirectJudgment, "deterministic_answer": result.DeterministicAnswer} {
+		if !strings.Contains(text, label) {
+			t.Errorf("%s = %q, want the partial label on the estimate driver", name, text)
+		}
+	}
+	if !strings.Contains(result.CurrentState, "Not complete: readiness "+projectStatusPartialLabel) {
+		t.Errorf("current_state = %q, want the readiness qualification", result.CurrentState)
 	}
 }
 

@@ -74,6 +74,7 @@ type clientRig struct {
 	project   SubjectRef
 	graph     graphReaderStub
 	facts     []CanonicalFact
+	coverage  *Coverage
 	assembly  *ClientSynthesisAssembly
 	// synthesizer replaces the production synthesizer when set.
 	synthesizer AnswerSynthesizer
@@ -136,6 +137,9 @@ func newClientRig(t *testing.T, mutate func(*clientRig)) *clientRig {
 			rig.factReads++
 			bundle := bootstrapFactBundle(rig.project)
 			bundle.Facts = rig.facts
+			if rig.coverage != nil {
+				bundle.Coverage = *rig.coverage
+			}
 			return bundle, nil
 		}),
 		Synthesizer: synthesizer,

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -91,7 +90,7 @@ func projectStatusClaimID(subject SubjectRef, observation projectStatusObservati
 	return "claim_project_status_" + hex.EncodeToString(digest[:])[:32]
 }
 
-func projectStatusDrivers(interpretation InterpretedQuestion, committed []SubjectRef, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, *ProjectStatusDriverEvent) {
+func projectStatusDrivers(interpretation InterpretedQuestion, committed []SubjectRef, facts []CanonicalFact, coverage Coverage, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, *ProjectStatusDriverEvent) {
 	if len(committed) != 1 || committed[0].Kind != SubjectProject || !projectStatusIntent(interpretation) {
 		return nil, nil, nil
 	}
@@ -137,7 +136,7 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 		}
 		if fact == nil {
 			if named == nil {
-				missing("not_read")
+				missing(projectStatusCoverageState(coverage, observation.kind))
 			} else {
 				missing(string(named.SourceState))
 			}
@@ -205,24 +204,17 @@ func projectStatusMissingLimitations(event *ProjectStatusDriverEvent) []string {
 	}
 	sentences := make([]string, 0, len(event.Missing))
 	for index, kind := range event.Missing {
-		var reason string
-		switch state := event.MissingStates[index]; state {
-		case string(SourceNoData):
-			reason = "no data"
-		case string(SourceConflicted):
-			reason = "conflicting sources"
-		case string(SourceUnavailable):
-			reason = "source unavailable"
-		case "not_read":
-			reason = "not read for this answer"
-		case "no_value":
-			reason = "no value reported"
-		case "no_evidence":
-			reason = "no evidence reference"
-		default:
-			reason = strings.ReplaceAll(state, "_", " ")
-		}
-		sentences = append(sentences, fmt.Sprintf("%s: %s.", kind, reason))
+		sentences = append(sentences, contractsv1.ContextFabricProjectStatusMissingLimitation(string(kind), event.MissingStates[index]))
 	}
 	return sentences
+}
+
+func projectStatusCoverageState(coverage Coverage, kind FactKind) string {
+	source := "canonical_fact:" + string(kind)
+	for _, observation := range coverage.Sources {
+		if observation.Source == source && observation.State != SourceAvailable && observation.State != "" {
+			return string(observation.State)
+		}
+	}
+	return "not_read"
 }

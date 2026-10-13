@@ -2976,7 +2976,11 @@ func composeCurrentState(draft SynthesisDraft) string {
 	if len(claims) == 0 {
 		return "No canonical facts were observed to describe the current state."
 	}
-	return truncateAtSentenceBoundary("Current observed values: "+strings.Join(claims, "; ")+".", currentStateMaxLength)
+	text := "Current observed values: " + strings.Join(claims, "; ") + "."
+	if qualified := qualifiedDriverCategories(draft.Drivers); len(qualified) > 0 {
+		text += " Not complete: " + strings.Join(qualified, "; ") + "."
+	}
+	return truncateAtSentenceBoundary(text, currentStateMaxLength)
 }
 
 // composeDeterministicAnswer renders DeterministicAnswer server-side from
@@ -3102,7 +3106,7 @@ func principalDriverTitles(drivers []DriverJudgment) []string {
 	titles := make([]string, 0, len(filtered))
 	for _, driver := range filtered {
 		if title := strings.TrimSpace(driver.Title); title != "" {
-			titles = append(titles, title)
+			titles = append(titles, title+driverSourceStateQualifier(driver.SourceState))
 		}
 	}
 	return titles

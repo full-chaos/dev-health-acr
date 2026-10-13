@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -74,4 +75,25 @@ func claimSourceState(facts []CanonicalFact, claim ClaimedFact) SourceState {
 		}
 	}
 	return derived
+}
+
+func driverSourceStateQualifier(state SourceState) string {
+	switch state {
+	case SourceTruncated:
+		return " (partial: the source read was truncated)"
+	case SourceStale:
+		return " (stale: the source read is out of date)"
+	}
+	return ""
+}
+
+func qualifiedDriverCategories(drivers []DriverJudgment) []string {
+	var qualified []string
+	for _, driver := range drivers {
+		if qualifier := driverSourceStateQualifier(driver.SourceState); qualifier != "" {
+			qualified = append(qualified, driver.Category+qualifier)
+		}
+	}
+	sort.Strings(qualified)
+	return qualified
 }

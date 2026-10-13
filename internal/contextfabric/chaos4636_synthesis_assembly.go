@@ -353,7 +353,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	}
 	inputGraph := graphContext
 	if graphContext.Cohort == nil && clientSynthesisRequested(request) {
-		if candidates, _, _ := projectStatusDrivers(interpretation, params.Resolution.Committed, facts.Facts, nil, nil, synthesisAllocation); len(candidates) > 0 {
+		if candidates, _, _ := projectStatusDrivers(interpretation, params.Resolution.Committed, facts.Facts, facts.Coverage, nil, nil, synthesisAllocation); len(candidates) > 0 {
 			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), projectStatusDriverCandidates(candidates)...)
 		}
 	}
@@ -691,7 +691,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		pending.CohortNarration = &narrationEvent
 	}
 	if graphContext.Cohort == nil {
-		statusDrivers, statusClaims, statusEvent := projectStatusDrivers(interpretation, result.SubjectResolution.Committed, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation)
+		statusDrivers, statusClaims, statusEvent := projectStatusDrivers(interpretation, result.SubjectResolution.Committed, facts.Facts, facts.Coverage, result.Drivers, result.ClaimedFacts, synthesisAllocation)
 		pending.ProjectStatusDrivers = statusEvent
 		if sentences := projectStatusMissingLimitations(statusEvent); len(sentences) > 0 {
 			composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
@@ -707,7 +707,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			if !clientSynthesisWithoutDraft(request) {
 				result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
 				result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
-				result.CurrentState = composeCurrentState(SynthesisDraft{ClaimedFacts: result.ClaimedFacts})
+				result.CurrentState = composeCurrentState(SynthesisDraft{ClaimedFacts: result.ClaimedFacts, Drivers: result.Drivers})
 			}
 		}
 	}
