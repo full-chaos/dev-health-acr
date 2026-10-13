@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -51,9 +52,9 @@ func TestTeamLinkedInvestmentStatementStaysUnderTheMemoryCeilingOnRealClickHouse
 		"wu-linked", at, at, 10.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, fmt.Sprintf(`{"issues":[],"prs":["%s#pr2"]}`, repoUUID("repo-r")), at, orgID)
 	addFiller := func(prefix string, units int) {
 		t.Helper()
+		const instant = "toDateTime64('2026-09-18 00:00:00', 6, 'UTC')"
 		exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
-SELECT concat('`+prefix+`', toString(number)), ?, ?, 1.0, map('risk', 1.0), map(), concat('{"issues":[],"prs":["`+repoUUID("repo-filler")+`#pr', toString(number), '"]}'), ?, ? FROM numbers(?)`,
-			at, at, at, orgID, uint64(units))
+SELECT concat('` + prefix + `', toString(number)), ` + instant + `, ` + instant + `, 1.0, map('risk', 1.0), map(), concat('{"issues":[],"prs":["` + repoUUID("repo-filler") + `#pr', toString(number), '"]}'), ` + instant + `, '` + orgID + `' FROM numbers(` + strconv.Itoa(units) + `)`)
 	}
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
