@@ -19,6 +19,7 @@ import (
 const splitDiffOrg = "org-split-differential"
 
 type splitDiffSeed struct {
+	org    string
 	t      *testing.T
 	ctx    context.Context
 	direct clickhousedriver.Conn
@@ -36,7 +37,7 @@ func (s *splitDiffSeed) exec(statement string, args ...any) {
 
 func (s *splitDiffSeed) repo(label, name, provider string) {
 	s.t.Helper()
-	s.exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), splitDiffOrg, name, provider, s.at)
+	s.exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), s.org, name, provider, s.at)
 }
 
 func splitDiffEvidence(prs, issues []string) string {
@@ -57,7 +58,7 @@ func (s *splitDiffSeed) unit(id string, computedAt, from, to time.Time, repoLabe
 	if repoLabel != "" {
 		repo = repoUUID(repoLabel)
 	}
-	s.rows = append(s.rows, []any{id, from, to, repo, effort, themes, map[string]float64{readers.BugfixSubcategoryKey: 0.25}, splitDiffEvidence(prs, issues), computedAt, splitDiffOrg})
+	s.rows = append(s.rows, []any{id, from, to, repo, effort, themes, map[string]float64{readers.BugfixSubcategoryKey: 0.25}, splitDiffEvidence(prs, issues), computedAt, s.org})
 	if !slices.Contains(s.units, id) {
 		s.units = append(s.units, id)
 	}
@@ -99,7 +100,7 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-	s := &splitDiffSeed{t: t, ctx: ctx, direct: direct, at: ts(2026, 9, 2, 0, 0, 0)}
+	s := &splitDiffSeed{org: splitDiffOrg, t: t, ctx: ctx, direct: direct, at: ts(2026, 9, 2, 0, 0, 0)}
 	for _, r := range [][3]string{
 		{"sd-r1", "acme/r1", "github"}, {"sd-r2", "grp/r2", "gitlab"}, {"sd-r3", "acme/r3", "github"}, {"sd-r5", "acme/r5", "github"},
 		{"sd-dup1", "acme/dup", "github"}, {"sd-dup2", "acme/dup", "github"},
@@ -213,26 +214,7 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 
 	rows := func(name, statement string, ids []string, bindings []readers.Binding) []string {
 		t.Helper()
-		var out []string
-		columns := "*"
-		if strings.Contains(statement, "scope_unattributed_rows") {
-			// Array order is not served: the fact sorts both lists.
-			columns = "work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, arraySort(prs), unresolved_n, arraySort(unresolved_refs), scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows"
-		}
-		err := readers.QueryOrgScopedNamed(ctx, query, "SplitDifferential", "SELECT formatRow('TSV', "+columns+") FROM (\n"+statement+"\n)", splitDiffOrg, ids,
-			func(row readers.RowScanner) error {
-				var line string
-				if err := row.Scan(&line); err != nil {
-					return err
-				}
-				out = append(out, line)
-				return nil
-			}, bindings...)
-		if err != nil {
-			t.Fatalf("%s: %v: %s", name, err, readFailureCause(err))
-		}
-		slices.Sort(out)
-		return out
+		return splitDiffRows(t, ctx, query, splitDiffOrg, name, statement, ids, bindings)
 	}
 	columnTypes := func(name, statement string, ids []string, bindings []readers.Binding) string {
 		t.Helper()
@@ -290,6 +272,109 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 				t.Errorf("%s: the differential does not see the defect %q", p.Name, defect)
 			}
 		}
+	}
+}
+
+// splitDiffRows runs statement for org and returns its rows as sorted TSV
+// lines; the unit listing's arrays are sorted (the fact sorts both lists).
+func splitDiffRows(t *testing.T, ctx context.Context, query readers.QueryClient, org, name, statement string, ids []string, bindings []readers.Binding) []string {
+	t.Helper()
+	var out []string
+	columns := "*"
+	if strings.Contains(statement, "scope_unattributed_rows") {
+		columns = "work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, arraySort(prs), unresolved_n, arraySort(unresolved_refs), scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows"
+	}
+	err := readers.QueryOrgScopedNamed(ctx, query, "SplitDifferential", "SELECT formatRow('TSV', "+columns+") FROM (\n"+statement+"\n)", org, ids,
+		func(row readers.RowScanner) error {
+			var line string
+			if err := row.Scan(&line); err != nil {
+				return err
+			}
+			out = append(out, line)
+			return nil
+		}, bindings...)
+	if err != nil {
+		t.Fatalf("%s: %v: %s", name, err, readFailureCause(err))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Two versions of one unit with the same computed_at, one reaching a
+// requested repository (or linked pull request) and one not: the old and the
+// new statements pick the same version. Each statement keeps the first
+// version it reads at the top computed_at, so the reads run on one thread
+// over two parts written in a known order, with merges stopped; across
+// threads the pick is arbitrary in both, as on main.
+func TestInvestmentSplitStatementsPickTheSameVersionOnAComputedAtTieOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	if err := direct.Exec(ctx, `SYSTEM STOP MERGES work_unit_investments`); err != nil {
+		t.Fatalf("stop merges: %v", err)
+	}
+	const org = "org-split-tie"
+	s := &splitDiffSeed{org: org, t: t, ctx: ctx, direct: direct, at: ts(2026, 9, 2, 0, 0, 0)}
+	s.repo("sd-r1", "acme/r1", "github")
+	s.repo("sd-r3", "acme/r3", "github")
+	tie, in := ts(2026, 9, 1, 0, 0, 0), ts(2026, 8, 10, 0, 0, 0)
+	half := map[string]float64{"feature_delivery": 0.5, "maintenance": 0.5}
+	reaching := []string{pr("sd-r1", 100), pr("sd-r3", 200)}
+	other := []string{pr("sd-r3", 201)}
+	// Each version is its own part, written in this order.
+	for _, v := range []struct {
+		id  string
+		prs []string
+	}{
+		{"tie-reaching-first", reaching}, {"tie-reaching-first", other},
+		{"tie-other-first", other}, {"tie-other-first", reaching},
+	} {
+		s.rows = nil
+		s.unit(v.id, tie, in, in, "", 4, half, v.prs, nil)
+		s.batch(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)`, s.rows)
+	}
+	var parts uint64
+	if err := direct.QueryRow(ctx, `SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = 'work_unit_investments' AND active`).Scan(&parts); err != nil || parts != 4 {
+		t.Fatalf("want the 4 versions in 4 unmerged parts, got %d (%v)", parts, err)
+	}
+	s.exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		org, "github", "team-1", repoUUID("sd-r3"), "acme/r3", "exact", "native", uint8(1), uint16(100), int32(0), ts(2026, 1, 1, 0, 0, 0), nil, s.at)
+	s.exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"proj-1", org, "linear", nil, "proj-1", uint8(1), "active", "", s.at)
+	s.exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+		"team-1", "team-1", s.at, org, "linear", uint8(1))
+	s.exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		org, "linear", "team-1", "proj-1", nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, s.at)
+	s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+		"i-1", repoUUID("sd-r1"), org, "title", s.at, "proj-1")
+	s.exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoUUID("sd-r1"), "i-1", uint32(100), float32(1), "native", "", s.at, org)
+	s.exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		repoUUID("sd-r1"), org, uint32(100), "pr", "open", s.at, s.at, "feature", "")
+
+	idsFor := map[string][]string{
+		"repository mix": {repoUUID("sd-r1")}, "repository unit listing": {repoUUID("sd-r1")}, "team linked pull request mix": {"team-1"},
+	}
+	const oneThread = "\nSETTINGS max_threads = 1"
+	for _, p := range devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 900) {
+		ids, ok := idsFor[p.Name]
+		if !ok {
+			continue
+		}
+		old := splitDiffRows(t, ctx, query, org, p.Name+" (old)", p.Old+oneThread, ids, p.Bindings)
+		got := splitDiffRows(t, ctx, query, org, p.Name+" (new)", p.New+oneThread, ids, p.Bindings)
+		if len(old) == 0 {
+			t.Errorf("%s: the old statement returned no rows; the tie was not read", p.Name)
+		}
+		if !slices.Equal(old, got) {
+			t.Errorf("%s: on a computed_at tie the new statement picks another version\nold:\n%s\nnew:\n%s", p.Name, strings.Join(old, ""), strings.Join(got, ""))
+		}
+		t.Logf("%s: %d equal rows on the tie", p.Name, len(got))
 	}
 }
 
