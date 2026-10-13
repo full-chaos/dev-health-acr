@@ -262,7 +262,9 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		if !slices.Equal(old, got) {
 			t.Errorf("%s: rows differ from the old statement\nold (%d):\n%s\nnew (%d):\n%s", p.Name, len(old), strings.Join(old, ""), len(got), strings.Join(got, ""))
 		}
-		t.Logf("%s: %d equal rows", p.Name, len(got))
+		if slices.Equal(old, got) {
+			t.Logf("%s: %d equal rows", p.Name, len(got))
+		}
 		for defect, swap := range devhealthfacts.ReachDefects(p.Name) {
 			if !strings.Contains(p.New, swap[0]) {
 				t.Fatalf("%s: defect %q does not apply to the statement", p.Name, defect)
@@ -301,11 +303,13 @@ func splitDiffRows(t *testing.T, ctx context.Context, query readers.QueryClient,
 }
 
 // Two versions of one unit with the same computed_at, one reaching a
-// requested repository (or linked pull request) and one not: the old and the
-// new statements pick the same version. Each statement keeps the first
-// version it reads at the top computed_at, so the reads run on one thread
-// over two parts written in a known order, with merges stopped; across
-// threads the pick is arbitrary in both, as on main.
+// requested repository (or linked pull request) and one not: on one thread,
+// over two parts written in a known order with merges stopped, the old and the
+// new statements pick the same version (each keeps the first version it reads
+// at the top computed_at). Across threads the pick depends on the order the
+// thread states merge, in each query; old and new are then NOT guaranteed to
+// agree on such a tie. The tie only exists between unmerged parts: a merge
+// keeps the last inserted version.
 func TestInvestmentSplitStatementsPickTheSameVersionOnAComputedAtTieOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -374,7 +378,9 @@ func TestInvestmentSplitStatementsPickTheSameVersionOnAComputedAtTieOnRealClickH
 		if !slices.Equal(old, got) {
 			t.Errorf("%s: on a computed_at tie the new statement picks another version\nold:\n%s\nnew:\n%s", p.Name, strings.Join(old, ""), strings.Join(got, ""))
 		}
-		t.Logf("%s: %d equal rows on the tie", p.Name, len(got))
+		if slices.Equal(old, got) {
+			t.Logf("%s: %d equal rows on the tie", p.Name, len(got))
+		}
 	}
 }
 

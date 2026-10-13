@@ -207,3 +207,69 @@ func ReachDefects(statement string) map[string][2]string {
 }
 
 const unitsCore = ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts"
+
+// legacyOrganizationMixStatement is the organization mix as main builds it,
+// over the frozen split, with its named limit.
+func legacyOrganizationMixStatement(bound factTimeBound) string {
+	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
+	statement := `SELECT
+	sumMap(mapApply((k, v) -> (k, if(win >= 0 AND repo_uuid != '', v * effort, 0.)), theme_distribution_json)) AS theme_effort,
+	sumIf(bugfix_share * effort, win >= 0 AND repo_uuid != '') AS bugfix_effort,
+	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '') AS work_units,
+	uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories,
+	sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort,
+	sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort,
+	min(span_from) AS span_from
+FROM (
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
+	FROM (
+		SELECT win, repo_uuid, work_unit_id, c,
+			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
+			effort_value, theme_distribution_json, bugfix_share, span_from
+		FROM (
+` + orgRefs(legacySplitCore(memberships, "", "", true, subqueryMembershipScope, false)) + `		)
+	)
+)`
+	return readers.WithSettings(withRowLimit(statement), readers.Settings{MaxMemoryUsage: 512 << 20})
+}
+
+// legacyOrganizationUnitsStatement is the organization unit listing as main
+// builds it, over the frozen split, with its named limit.
+func legacyOrganizationUnitsStatement(b factTimeBound, withCursor bool, scope membershipScope) string {
+	memberships := []string{fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(0, b), 0)}
+	core := orgRefs(legacySplitCore(memberships, " from_ts, to_ts,", unitsCore, false, scope, false))
+	keyset := ""
+	if withCursor {
+		keyset = `
+WHERE share < toFloat64({` + unitCursorShareParam + `:String})
+	OR (share = toFloat64({` + unitCursorShareParam + `:String}) AND (work_unit_id > {` + unitCursorIDParam + `:String}
+		OR (work_unit_id = {` + unitCursorIDParam + `:String} AND repo_uuid > {` + unitCursorRepoParam + `:String})))`
+	}
+	realRefs := "arrayFilter(x -> x != concat('unit:', work_unit_id), ref_texts)"
+	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
+FROM (
+	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
+		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
+		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
+	FROM (
+		SELECT win, repo_uuid, work_unit_id, c,
+			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
+			sum(if(repo_uuid = '', length(` + realRefs + `), 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
+			arrayFlatten(groupArray(if(repo_uuid = '', ` + realRefs + `, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs,
+			effort_value, theme_distribution_json, from_ts, to_ts, prs
+		FROM (
+` + core + `		)
+	)
+	WHERE win >= 0
+)` + keyset + `
+ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
+LIMIT {` + unitLimitParam + `:UInt32}`
+	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: 512 << 20})
+}
+
+// orgRefs is the organization's reference list: a unit with no reference and
+// no repository keeps an unattributed placeholder row.
+func orgRefs(core string) string {
+	return strings.Replace(core, repoRefsExpression+" AS refs",
+		"if(empty("+repoRefsExpression+"), "+orgNoRefUnit+", "+repoRefsExpression+") AS refs", 1)
+}
