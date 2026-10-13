@@ -372,7 +372,7 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 
 	// The plans are read on the native connection (the query client sends
 	// SELECT statements only); a failure here is logged, not fatal.
-	for _, name := range []string{"statement", "statement_sets"} {
+	for _, name := range []string{"statement_sets"} {
 		explain := fragmentNamed(t, fragments, name)
 		parameters := clickhouse.Parameters{"org_id": orgID, "ids": "['" + linkedShapeTeam + "']"}
 		for _, binding := range explain.Bindings {
@@ -420,7 +420,7 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 		teams[i] = fmt.Sprintf("T-%d", i)
 	}
 	current := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement"))
-	candidate := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement_sets"))
+	candidate := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement_counts_in_fold"))
 	t.Logf("differential over %d teams: current statement served %d team rows, candidate %d", len(teams), len(current), len(candidate))
 	if len(current) == 0 {
 		t.Errorf("differential did not happen: the current statement returned no team row")
