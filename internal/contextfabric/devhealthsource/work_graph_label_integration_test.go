@@ -120,43 +120,55 @@ func TestWorkGraphLabelStatementMemoryFollowsItsOwnEdges(t *testing.T) {
 			t.Fatalf("work_graph.v1: %v", err)
 		}
 	}
-	peak := func(mark int64) uint64 {
+	type cost struct{ memory, readBytes uint64 }
+	measure := func(mark int64) cost {
 		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 			t.Fatalf("flush logs (measurement did not happen): %v", err)
 		}
-		var peak uint64
+		var c cost
 		var statements uint64
-		row := direct.QueryRow(ctx, `SELECT max(memory_usage), uniqExact(normalized_query_hash) FROM system.query_log WHERE event_time_microseconds > fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS ist ON') > 0`, mark)
-		if err := row.Scan(&peak, &statements); err != nil {
+		row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), uniqExact(normalized_query_hash) FROM system.query_log WHERE event_time_microseconds > fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS ist ON') > 0`, mark)
+		if err := row.Scan(&c.memory, &c.readBytes, &statements); err != nil {
 			t.Fatalf("read query_log: %v", err)
 		}
-		if statements < 1 || peak == 0 {
-			t.Fatalf("measurement did not happen: %d statements, peak %d", statements, peak)
+		if statements < 1 || c.memory == 0 || c.readBytes == 0 {
+			t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 		}
-		return peak
+		return c
 	}
-	run()
-	mark := time.Now().UnixMicro()
-	run()
-	small := peak(mark)
-
+	// Filler work items share the repository of the looked-up issues and
+	// interleave with their keys.
+	filler := func(from, count int) {
+		for _, repo := range []string{wgOther, wgRepo} {
+			if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) SELECT concat('CHAOS-', toString(%d + number)), toUUID('%s'), '%s', 'filler', 'open', '', '', 'linear', '', now64(3), now64(3) FROM numbers(%d)`, from, repo, wgOrg, count)); err != nil {
+				t.Fatalf("seed filler work items: %v", err)
+			}
+		}
+	}
+	measureAt := func() cost {
+		run()
+		mark := time.Now().UnixMicro()
+		run()
+		return measure(mark)
+	}
+	filler(1000000, 125000)
+	small := measureAt()
+	filler(2000000, 187500)
 	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(20000)`, wgOther, wgOrg)); err != nil {
 		t.Fatalf("seed noise edges: %v", err)
 	}
 	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(20000)`, wgOther, wgOrg)); err != nil {
 		t.Fatalf("seed noise pull requests: %v", err)
 	}
-	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) SELECT concat('NOISE-', toString(number)), toUUID('%s'), '%s', 'noise', 'open', '', '', 'linear', '', now64(3), now64(3) FROM numbers(20000)`, wgOther, wgOrg)); err != nil {
-		t.Fatalf("seed noise work items: %v", err)
-	}
-	mark = time.Now().UnixMicro()
-	run()
-	large := peak(mark)
+	large := measureAt()
 	const ceiling = uint64(56 << 20)
-	if large >= ceiling || small >= ceiling {
-		t.Errorf("work_graph.v1 peaked at %d / %d bytes, want under %d", small, large, ceiling)
+	if large.memory >= ceiling || small.memory >= ceiling {
+		t.Errorf("work_graph.v1 peaked at %d / %d bytes, want under %d", small.memory, large.memory, ceiling)
 	}
-	if float64(large) > 1.15*float64(small) {
-		t.Errorf("work_graph.v1 memory grew with other repositories' rows: %d bytes at the larger size, %d at the smaller, over the 1.15x slope", large, small)
+	if float64(large.memory) > 1.15*float64(small.memory) {
+		t.Errorf("work_graph.v1 memory grew with other work items: %d bytes at 625k, %d at 250k, over the 1.15x slope", large.memory, small.memory)
+	}
+	if float64(large.readBytes) > 1.15*float64(small.readBytes) {
+		t.Errorf("work_graph.v1 read volume grew with other work items: %d bytes read at 625k, %d at 250k, over the 1.15x slope", large.readBytes, small.readBytes)
 	}
 }
