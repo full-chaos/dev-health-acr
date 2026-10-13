@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -355,12 +356,34 @@ type blockerTeamAge struct {
 }
 
 const (
-	blockerAgeBasisExact      = "exact"
-	blockerAgeBasisLowerBound = "lower_bound"
-	blockerAgeNoneOpen        = "none_open"
-	blockerAgeNoRelationStart = "no_relation_start"
-	secondsPerDay             = int64(86400)
+	blockerAgeBasisExact       = "exact"
+	blockerAgeBasisLowerBound  = "lower_bound"
+	blockerAgeNoneOpen         = "none_open"
+	blockerAgeNoRelationStart  = "no_relation_start"
+	blockerAgeStartUnavailable = "start_unavailable"
+	secondsPerDay              = int64(86400)
 )
+
+// ageReadFailure decides what a failed age statement does to the read: the age
+// is an addition to the counts, so a failure other than the caller's own
+// cancellation leaves the age absent with a reason and a warning, and the
+// counts are still served.
+func ageReadFailure(ctx context.Context, subject string, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable))
+	return nil
+}
+
+// blockerOldestAgeOrUnavailable is blockerOldestAge, or the start_unavailable
+// reason when the age statement failed.
+func blockerOldestAgeOrUnavailable(a blockerTeamAge, now time.Time, unavailable bool) (days int64, basis, reason string, ok bool) {
+	if unavailable {
+		return 0, "", blockerAgeStartUnavailable, false
+	}
+	return blockerOldestAge(a, now)
+}
 
 // blockerOldestAge is the age of the oldest open blocker edge in whole days at
 // now. A known start gives a lower bound on the oldest age whatever the edges
@@ -514,6 +537,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	byRepo := map[string]blockerRollupRepo{}
 	totals := map[string]blockerTeamTotals{}
 	ages := map[string]blockerTeamAge{}
+	ageUnavailable := map[string]bool{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 || len(reached) > 0 {
 		authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
 		settings, settingsErr := workItemReaderSettings(ctx)
@@ -603,15 +627,29 @@ ORDER BY team_id`, settings)
 			if err != nil {
 				return err
 			}
-			return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
+			chunkAges := map[string]blockerTeamAge{}
+			ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
 				var teamID string
 				var a blockerTeamAge
 				if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartUnix); err != nil {
 					return err
 				}
-				ages[teamID] = a
+				chunkAges[teamID] = a
 				return nil
 			}, extra...)
+			if ageErr != nil {
+				if err := ageReadFailure(ctx, "team", ageErr); err != nil {
+					return err
+				}
+				for _, teamID := range teamChunk {
+					ageUnavailable[teamID] = true
+				}
+				return nil
+			}
+			for teamID, a := range chunkAges {
+				ages[teamID] = a
+			}
+			return nil
 		}); scanErr != nil {
 			return outcome, scanErr
 		}
@@ -717,7 +755,7 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 			fields["blocked_work_items_current"] = contextfabric.IntegerFactValue(blockedItems)
 			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
 			fields["blocker_dependencies_excluded_by_status_current"] = contextfabric.IntegerFactValue(excludedEdges)
-			if days, basis, reason, ok := blockerOldestAge(ages[teamID], clock()); ok {
+			if days, basis, reason, ok := blockerOldestAgeOrUnavailable(ages[teamID], clock(), ageUnavailable[teamID]); ok {
 				fields["oldest_blocked_age_days"] = contextfabric.IntegerFactValue(days)
 				fields["oldest_blocked_age_basis"] = contextfabric.StringFactValue(basis)
 			} else {

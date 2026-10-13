@@ -230,7 +230,8 @@ FROM (`+projectBlockerEdgeRowsSQL(authorized, true)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
 	ages := map[string]blockerTeamAge{}
-	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectBlockerOldestAge", ageStatement, orgID, ids, func(row readers.RowScanner) error {
+	ageUnavailable := false
+	ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectBlockerOldestAge", ageStatement, orgID, ids, func(row readers.RowScanner) error {
 		var key string
 		var a blockerTeamAge
 		if err := row.Scan(&key, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartUnix); err != nil {
@@ -239,8 +240,11 @@ ORDER BY project_key`, settings)
 		ages[key] = a
 		return nil
 	}, authorizationBindings...)
-	if err != nil {
-		return rejected, err
+	if ageErr != nil {
+		if err := ageReadFailure(ctx, "project", ageErr); err != nil {
+			return rejected, err
+		}
+		ageUnavailable, ages = true, map[string]blockerTeamAge{}
 	}
 	sort.Strings(ids)
 	for _, key := range ids {
@@ -256,7 +260,7 @@ ORDER BY project_key`, settings)
 			"blocker_dependencies_current":                    contextfabric.IntegerFactValue(t.edges),
 			"blocker_dependencies_excluded_by_status_current": contextfabric.IntegerFactValue(t.excluded),
 		}
-		if days, basis, reason, ok := blockerOldestAge(ages[key], clock()); ok {
+		if days, basis, reason, ok := blockerOldestAgeOrUnavailable(ages[key], clock(), ageUnavailable); ok {
 			fields["oldest_blocked_age_days"] = contextfabric.IntegerFactValue(days)
 			fields["oldest_blocked_age_basis"] = contextfabric.StringFactValue(basis)
 		} else {

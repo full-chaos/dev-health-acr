@@ -70,6 +70,13 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
 SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
 		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryFillerItems))
+	for _, blocked := range []string{"blocked-repo", "blocked-project"} {
+		exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at) VALUES (?, ?, ?, ?, ?)`,
+			blockerMemoryOrg, "blocker-open", blocked, "blocks", at)
+	}
+	exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at)
+SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), concat('filler-', repeat('x', 96), '-', toString(number + 1)), 'relates', ? FROM numbers(?)`,
+		blockerMemoryOrg, at, uint64(blockerMemoryFillerItems))
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
 	read := func() (statementMemory, contextfabric.FactProviderResult, error) {
@@ -89,6 +96,9 @@ SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'fi
 	large, largeResult, largeErr := read()
 	// The roll-up, the totals, the oldest age and the unlinked count run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 4)
+	for hash, peak := range large {
+		t.Logf("team blocker statement %d peak memory: %d bytes (%.1f MiB) against the 256 MiB API cap", hash, peak, float64(peak)/(1<<20))
+	}
 	for _, read := range []struct {
 		result contextfabric.FactProviderResult
 		err    error
