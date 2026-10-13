@@ -34,7 +34,9 @@ const (
 	//
 	// v28 -> v29: the closed fact-kind set, the glossary and the word rules
 	// name commitment.
-	PromptVersion = "context-fabric-interpretation.v29"
+	//
+	// v29 -> v30: "on track", "behind" and "at risk" also list commitment.
+	PromptVersion = "context-fabric-interpretation.v30"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v9 -> v10: the fact_requirements kind enum names commitment.

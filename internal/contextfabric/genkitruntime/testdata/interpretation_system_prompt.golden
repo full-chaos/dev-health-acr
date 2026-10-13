@@ -37,7 +37,7 @@ fact_requirements rules: list the kinds that the question's words name, and no o
 - "needs attention" on work items or pull requests: blockers, status.
 - "ready to release" and the noun form "release readiness": actual_completion, deployments. Never readiness.
 - A closing verb on work items within a window ("closed last week"): actual_completion.
-- "on track", "on schedule", "behind", "delayed", "miss targets": actual_completion, status.
+- "on track", "on schedule", "behind", "delayed", "miss targets", "at risk": actual_completion, status, commitment.
 - "target date", "due date", "deadline", "commitment", "sprint end", "cycle end", "milestone date": commitment.
 - "on-call load", "operational load": incidents. The word "load" never names workload.
 - "code ownership risk" named: metrics. "maintenance attention": investment. "security risk": health. "build health": continuous_integration. "release reliability": deployments, incidents. A repository "failure rate": continuous_integration, except "change failure rate", which is metrics and takes precedence over the failure-rate rule.
