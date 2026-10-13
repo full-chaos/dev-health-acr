@@ -176,9 +176,10 @@ func splitProjectKey(key string) (provider, id string) {
 // rows of the requested projects' issues, with whether the blocker is open.
 // Both work_items reads are narrowed to the blocker edge endpoints; both ends
 // pass the work-item authorization rule.
-func projectBlockerEdgeRowsSQL(authorized string) string {
-	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open
-  FROM work_item_dependencies AS d FINAL
+func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
+	startOutput, startJoin := blockerStartParts(withStart)
+	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open` + startOutput + `
+  FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
@@ -206,7 +207,7 @@ func (p *BlockersProvider) readProjectRollup(ctx context.Context, principal stor
 		return rejected, err
 	}
 	statement := readers.WithSettings(`SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 0))
-FROM (`+projectBlockerEdgeRowsSQL(authorized)+`)
+FROM (`+projectBlockerEdgeRowsSQL(authorized, false)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
 	type totals struct{ blocked, edges, excluded int64 }
@@ -223,6 +224,28 @@ ORDER BY project_key`, settings)
 	if err != nil {
 		return rejected, err
 	}
+	ageStatement := readers.WithSettings(`SELECT project_key, toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_exact = 1)),
+  ifNull(toInt64(minIf(start_unix, is_open = 1)), 0)
+FROM (`+projectBlockerEdgeRowsSQL(authorized, true)+`)
+GROUP BY project_key
+ORDER BY project_key`, settings)
+	ages := map[string]blockerTeamAge{}
+	ageUnavailable := false
+	ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectBlockerOldestAge", ageStatement, orgID, ids, func(row readers.RowScanner) error {
+		var key string
+		var a blockerTeamAge
+		if err := row.Scan(&key, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
+			return err
+		}
+		ages[key] = a
+		return nil
+	}, authorizationBindings...)
+	if ageErr != nil {
+		if err := ageReadFailure(ctx, "project", ageErr); err != nil {
+			return rejected, err
+		}
+		ageUnavailable, ages = true, map[string]blockerTeamAge{}
+	}
 	sort.Strings(ids)
 	for _, key := range ids {
 		t, ok := byProject[key]
@@ -230,15 +253,21 @@ ORDER BY project_key`, settings)
 			continue
 		}
 		provider, id := splitProjectKey(key)
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis":                                    contextfabric.StringFactValue(projectRollupBasis),
+			"blocker_status_basis":                            contextfabric.StringFactValue(blockerStatusBasisOpen),
+			"blocked_work_items_current":                      contextfabric.IntegerFactValue(t.blocked),
+			"blocker_dependencies_current":                    contextfabric.IntegerFactValue(t.edges),
+			"blocker_dependencies_excluded_by_status_current": contextfabric.IntegerFactValue(t.excluded),
+		}
+		if days, basis, reason, ok := blockerOldestAgeOrUnavailable(ages[key], clock(), ageUnavailable); ok {
+			fields["oldest_blocked_age_days"] = contextfabric.IntegerFactValue(days)
+			fields["oldest_blocked_age_basis"] = contextfabric.StringFactValue(basis)
+		} else {
+			fields["oldest_blocked_age_unavailable_reason"] = contextfabric.StringFactValue(reason)
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactBlockers, Subject: bySubject[key],
-			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":                                    contextfabric.StringFactValue(projectRollupBasis),
-				"blocker_status_basis":                            contextfabric.StringFactValue(blockerStatusBasisOpen),
-				"blocked_work_items_current":                      contextfabric.IntegerFactValue(t.blocked),
-				"blocker_dependencies_current":                    contextfabric.IntegerFactValue(t.edges),
-				"blocker_dependencies_excluded_by_status_current": contextfabric.IntegerFactValue(t.excluded),
-			},
+			Kind: contextfabric.FactBlockers, Subject: bySubject[key], Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, provider+":"+id)},
 		})
 	}

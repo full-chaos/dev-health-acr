@@ -442,3 +442,26 @@ func TestTeamBlockersCutNoteIsSilentWhenEveryTeamIsAlreadyCoveredAtFullCapacity(
 		t.Fatalf("covered ranks = %v, want draft-b 1 and draft-a 2", got.CoveredRanks)
 	}
 }
+
+func TestTeamCohortBlockersDriverNamesTheOldestBlockedAge(t *testing.T) {
+	a, b, c := teamsAB()
+	result := investigateTeamBlockers(t, []SubjectRef{a, b, c}, []CanonicalFact{
+		blockersFact(a, SourceAvailable, intp(30), map[string]FactValue{"oldest_blocked_age_days": IntegerFactValue(12), "oldest_blocked_age_basis": StringFactValue("exact")}),
+		blockersFact(b, SourceAvailable, intp(5), map[string]FactValue{"oldest_blocked_age_days": IntegerFactValue(1), "oldest_blocked_age_basis": StringFactValue("lower_bound")}),
+		blockersFact(c, SourceAvailable, intp(3), map[string]FactValue{"oldest_blocked_age_unavailable_reason": StringFactValue("no_relation_start")}),
+	})
+	summaries := map[string]string{}
+	for _, d := range result.Drivers {
+		summaries[d.AffectedSubjects[0].Label] = d.Summary
+	}
+	want := map[string]string{
+		"Alpha": "Blocked work items: 30. The oldest has been blocked about 12 days.",
+		"Beta":  "Blocked work items: 5. The oldest has been blocked at least 1 day.",
+		"Gamma": "Blocked work items: 3.",
+	}
+	for label, summary := range want {
+		if summaries[label] != summary {
+			t.Errorf("%s summary = %q, want %q", label, summaries[label], summary)
+		}
+	}
+}
