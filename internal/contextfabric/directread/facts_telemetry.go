@@ -33,6 +33,10 @@ func FactsReadLogArgs(principal storage.Principal, record FactsReadRecord) []any
 		"evidence_withheld", record.EvidenceWithheld,
 		"references_refused", record.ReferencesRefused,
 		"truncated_by", contextfabric.SanitizeLogAttr(record.TruncatedBy),
+		"derived_targets", record.DerivedTargets,
+		"derived_facts_served", record.DerivedFactsServed,
+		"derived_facts_withheld", record.DerivedFactsWithheld,
+		"derived_unauthorized", record.DerivedUnauthorized,
 		"bytes", record.Bytes,
 		"latency_ms", record.Latency.Milliseconds(),
 	}
