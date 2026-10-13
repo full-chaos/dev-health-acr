@@ -50,7 +50,7 @@ func purge(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runtime, err := openRuntime(ctx, cfg, logger)
+	runtime, err := openRuntime(ctx, cfg, logger, nil)
 	if err != nil {
 		return fmt.Errorf("open runtime: %w", err)
 	}
