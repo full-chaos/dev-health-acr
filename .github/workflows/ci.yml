@@ -730,8 +730,11 @@ jobs:
   # 1146s summed; the 29 tests of scripts/ci/devhealthfacts-heavy-tests.txt
   # (>= 9s each, one ClickHouse container per test) sum to 553s, the remaining
   # 634 tests to 593s. The single job ran 1260s against its 20m (1200s) cap.
-  # Each half has its own job and the same 20m cap; the rest half is
-  # `-skip` of the heavy regex, so a test absent from the list runs there.
+  # The race run needed more than two jobs: the halves took 918s and 945s on
+  # main 38353218963. It is split three ways (race-heavy, race-mid, rest); the
+  # third job takes scripts/ci/devhealthfacts-race-mid-tests.txt, each job has
+  # the same 20m cap, and the rest job is `-skip` of the heavy and mid names,
+  # so a test absent from both lists runs there. The unit legs keep two halves.
   race-devhealthfacts:
     name: race (devhealthfacts, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -759,12 +762,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
+      - name: Verify every devhealthfacts test runs in exactly one race job
+        run: scripts/ci/race-split.sh devhealthfacts race-partition
       - name: Run isolated devhealthfacts race suite (rest half)
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
-          export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts race-rest)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
           elapsed=$((SECONDS - start))
@@ -806,13 +811,55 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
-          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-heavy)"
           start=$SECONDS
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
           elapsed=$((SECONDS - start))
           printf 'devhealthfacts (heavy half) race wall time: %ss (budget 1200s)\n' "$elapsed"
           if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
             printf '::error::devhealthfacts (heavy half) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-heavy-tests.txt\n' "$elapsed"
+            exit 1
+          fi
+
+  race-devhealthfacts-mid:
+    name: race (devhealthfacts mid, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as the `race` job above -- needs mirror-preflight so it cannot
+    # start before every mirrored image is confirmed resolvable.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh devhealthfacts verify
+      - name: Run isolated devhealthfacts race suite (mid third)
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-mid)"
+          start=$SECONDS
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
+          elapsed=$((SECONDS - start))
+          printf 'devhealthfacts (mid third) race wall time: %ss (budget 1200s)\n' "$elapsed"
+          if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
+            printf '::error::devhealthfacts (mid third) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-race-mid-tests.txt\n' "$elapsed"
             exit 1
           fi
 
@@ -1450,6 +1497,7 @@ jobs:
       - race-devhealthschema
       - race-devhealthfacts
       - race-devhealthfacts-heavy
+      - race-devhealthfacts-mid
       - race-devhealthsource
       - race-devhealthsource-heavy
       - race-factoracle

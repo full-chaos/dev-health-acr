@@ -183,12 +183,12 @@ func TestDataCatalogAvailabilityAndCaller(t *testing.T) {
 	if off.Operations.Available || off.Operations.Reason != CatalogUnavailableQueryNotConfigure || len(off.Operations.Operations) != 0 {
 		t.Fatalf("not configured: %+v", off.Operations)
 	}
-	// The caller section: scopes, grant class and effective_access only.
+	// The caller section: scopes, grant class, effective_access and tool_access only.
 	cat, _ := DefaultCatalogue()
 	sections, _ := ParseCatalogSections("")
 	built := BuildDataCatalog(cat, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"data:read", "context:read", "acme/secret-repo", "data:read"}, DataRead: true, OperationsServable: true, GateComposed: true}, sections)
 	encoded, _ := json.Marshal(built.Caller)
-	if string(encoded) != `{"scopes":["context:read","data:read"],"grant_class":"restricted","effective_access":"data_read"}` {
+	if string(encoded) != `{"scopes":["context:read","data:read"],"grant_class":"restricted","effective_access":"data_read","tool_access":{"find_subjects":"not_servable","graphql_query":"not_servable","read_facts":"not_servable","read_relationships":"not_servable","run_operation":"available"}}` {
 		t.Fatalf("caller section %s", encoded)
 	}
 }
