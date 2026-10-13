@@ -16,6 +16,7 @@ func TestCatalogToolAccessStatesEachToolFromItsOwnDecision(t *testing.T) {
 		PrincipalClass: ClassUnrestricted, Scopes: []string{"context:read", "evidence:read"},
 		GateComposed: true, OperationsServable: true, GraphQL: policy, GraphQLServable: true,
 		SubjectsServable: true, RelationshipsServable: true,
+		FactsServable: true, FactCapabilities: productionCapabilities(),
 	}
 	cases := []struct {
 		name   string
@@ -23,15 +24,19 @@ func TestCatalogToolAccessStatesEachToolFromItsOwnDecision(t *testing.T) {
 		want   map[string]CatalogToolAccess
 	}{
 		{"context-only credential", func(*CatalogCaller) {}, map[string]CatalogToolAccess{
-			"run_operation": ToolAccessNoDataRead, "graphql_query": ToolAccessNoDataRead, "read_facts": ToolAccessNotServable,
+			"run_operation": ToolAccessNoDataRead, "graphql_query": ToolAccessNoDataRead, "read_facts": ToolAccessAvailable,
 			"find_subjects": ToolAccessAvailable, "read_relationships": ToolAccessAvailable,
 		}},
 		{"data:read credential", func(c *CatalogCaller) { c.DataRead = true }, map[string]CatalogToolAccess{
+			"run_operation": ToolAccessAvailable, "graphql_query": ToolAccessAvailable, "read_facts": ToolAccessAvailable,
+			"find_subjects": ToolAccessAvailable, "read_relationships": ToolAccessAvailable,
+		}},
+		{"facts reader serves no kind", func(c *CatalogCaller) { c.DataRead, c.FactCapabilities = true, nil }, map[string]CatalogToolAccess{
 			"run_operation": ToolAccessAvailable, "graphql_query": ToolAccessAvailable, "read_facts": ToolAccessNotServable,
 			"find_subjects": ToolAccessAvailable, "read_relationships": ToolAccessAvailable,
 		}},
 		{"nothing composed", func(c *CatalogCaller) {
-			c.DataRead, c.GateComposed, c.OperationsServable, c.GraphQLServable, c.SubjectsServable, c.RelationshipsServable = true, false, false, false, false, false
+			c.DataRead, c.GateComposed, c.OperationsServable, c.GraphQLServable, c.SubjectsServable, c.RelationshipsServable, c.FactsServable = true, false, false, false, false, false, false
 		}, map[string]CatalogToolAccess{
 			"run_operation": ToolAccessNotServable, "graphql_query": ToolAccessNotServable, "read_facts": ToolAccessNotServable,
 			"find_subjects": ToolAccessNotServable, "read_relationships": ToolAccessNotServable,
