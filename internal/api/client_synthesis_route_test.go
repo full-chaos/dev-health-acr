@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -137,6 +138,7 @@ func newClientRouteRigWithAssembly(t *testing.T, fixture clientRouteFixture, edi
 	synthesizer := contextfabric.RuntimeAnswerSynthesizer{
 		Runtime: model, Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "client-synthesis-route", Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
 	}
+	synthesizer.Telemetry = contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(rig.logs, nil)))
 	if !fixture.noAssembly {
 		synthesizer.ClientSynthesis = synthesisprompt.ClientAssembly()
 		if edit != nil {
@@ -800,5 +802,111 @@ func TestClientSynthesisRefusesOnlyWhereTheBodyCannotFit(t *testing.T) {
 				t.Errorf("refusal measured_bytes = %v max_serialized_bytes = %v: want measured above a maximum within the caller's %d", measured, maximum, below)
 			}
 		})
+	}
+}
+
+// The MCP tool widens max_serialized_bytes to the service ceiling and names the
+// caller's budget as answer_budget_bytes. The input cut follows that budget.
+func TestClientSynthesisInputIsCutToTheAnswerBudgetBehindAWidenedBodyBound(t *testing.T) {
+	fixture := manyFactsFixture(40, 600)
+	ceiling := 262144
+	mcpShaped := func(budget int) func(*contractsv1.ContextFabricInvestigationRequest) {
+		return func(r *contractsv1.ContextFabricInvestigationRequest) {
+			r.Options.MaxSerializedBytes = ceiling
+			if budget > 0 {
+				r.Options.AnswerBudgetBytes = budget
+			}
+		}
+	}
+	whole := decodeEnvelope(t, newClientRouteRig(t, fixture).post(t, contractsv1.ContextFabricSynthesisModeClient, mcpShaped(0))).SynthesisInput
+	if whole == nil || whole.Bounded {
+		t.Fatalf("unbudgeted input = %v, want a whole input", whole)
+	}
+	for _, budget := range []int{contractsv1.ContextFabricSerializedBytesMin, 16384, 65536, 262144} {
+		recorder := newClientRouteRig(t, fixture).post(t, contractsv1.ContextFabricSynthesisModeClient, mcpShaped(budget))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("budget %d: status = %d: %s", budget, recorder.Code, recorder.Body.String())
+		}
+		bundle := decodeEnvelope(t, recorder).SynthesisInput
+		if bundle == nil {
+			t.Fatalf("budget %d: no synthesis_input", budget)
+		}
+		cutExpected := len(whole.Input) > budget/2
+		if cutExpected {
+			if !bundle.Bounded || bundle.InputSHA256 == whole.InputSHA256 || len(bundle.Input) > budget/2 {
+				t.Errorf("budget %d: bounded=%v sha-equal=%v input=%d bytes, want a disclosed cut within %d", budget, bundle.Bounded, bundle.InputSHA256 == whole.InputSHA256, len(bundle.Input), budget/2)
+			}
+		} else if bundle.Bounded || bundle.InputSHA256 != whole.InputSHA256 {
+			t.Errorf("budget %d: bounded=%v, want the whole input", budget, bundle.Bounded)
+		}
+		viaBodyBound := decodeEnvelope(t, newClientRouteRig(t, fixture).post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) {
+			r.Options.MaxSerializedBytes = budget
+		})).SynthesisInput
+		if viaBodyBound == nil || viaBodyBound.InputSHA256 != bundle.InputSHA256 {
+			t.Errorf("budget %d: the API form (max_serialized_bytes only) cut a different input than the MCP form", budget)
+		}
+	}
+}
+
+// coreHeavyAssembly makes the synthesis input an irreducible core of the given
+// size, as a single project's subject, window and graph are in production: no
+// fact cut reaches below it.
+func coreHeavyAssembly(core int) func(*contextfabric.ClientSynthesisAssembly) {
+	return func(a *contextfabric.ClientSynthesisAssembly) {
+		a.Encode = func(_ string, _ contextfabric.SynthesisInput, max int) ([]byte, error) {
+			if max < core {
+				return nil, &contextfabric.ModelInputOverflow{Bytes: core, MaxBytes: max}
+			}
+			return []byte(`{"core":"` + strings.Repeat("c", core-12) + `"}`), nil
+		}
+	}
+}
+
+// A single subject whose smallest input is above half the caller's budget is
+// served when that input, its envelope and the answer fit the budget.
+func TestClientSynthesisServesAnUncuttableInputAboveHalfTheBudgetWhenTheBodyFits(t *testing.T) {
+	const core, budget = 34857, 60000
+	rig := newClientRouteRigWithAssembly(t, singleSubjectFixture(), coreHeavyAssembly(core))
+	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) { r.Options.MaxSerializedBytes = budget })
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > budget {
+		t.Fatalf("status = %d, %d body bytes, want 200 within %d: %.300s", recorder.Code, recorder.Body.Len(), budget, recorder.Body.String())
+	}
+	bundle := decodeEnvelope(t, recorder).SynthesisInput
+	if bundle == nil || len(bundle.Input) < core-100 || len(bundle.Input) <= budget/2 {
+		t.Fatalf("synthesis input = %v, want the whole %d byte input", bundle != nil, core)
+	}
+	if !strings.Contains(rig.logs.String(), "share_exceeded") {
+		t.Errorf("no telemetry names that the input took more than its half of the budget")
+	}
+}
+
+// Below the sum of the smallest input, its envelope and the smallest answer the
+// fit can produce, the turn is a typed 413.
+func TestClientSynthesisRefusesAnUncuttableInputWhenInputAndAnswerCannotShareTheBudget(t *testing.T) {
+	const core = 34857
+	for _, budget := range []int{core, core + 1500} {
+		rig := newClientRouteRigWithAssembly(t, singleSubjectFixture(), coreHeavyAssembly(core))
+		recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) { r.Options.MaxSerializedBytes = budget })
+		if recorder.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(recorder.Body.Bytes(), "budget_refusal") {
+			t.Fatalf("budget %d: status = %d body=%.300s, want 413 budget_refusal", budget, recorder.Code, recorder.Body.String())
+		}
+		if bytes.Contains(recorder.Body.Bytes(), []byte("synthesis_input")) {
+			t.Errorf("budget %d: the refusal carries a synthesis_input", budget)
+		}
+	}
+}
+
+// The widening admits an input on the strength of the answer floor. A served
+// one-subject answer needing more than the floor beside its input makes the
+// floor a false claim.
+func TestClientSynthesisAnswerFloorCoversTheSmallestServedAnswer(t *testing.T) {
+	rig := newClientRouteRigWithAssembly(t, singleSubjectFixture(), coreHeavyAssembly(2000))
+	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) { r.Options.MaxSerializedBytes = 60000 })
+	bundle := decodeEnvelope(t, recorder).SynthesisInput
+	if recorder.Code != http.StatusOK || bundle == nil {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if beside := recorder.Body.Len() - len(bundle.Input); beside > contextfabric.ClientSynthesisAnswerFloorBytes {
+		t.Errorf("a served answer takes %d bytes beside its input, above the floor %d", beside, contextfabric.ClientSynthesisAnswerFloorBytes)
 	}
 }

@@ -160,7 +160,7 @@ mechanically rather than by convention.
 
 ## A read that returned nothing is `no_data`, never `available` (CHAOS-4521)
 
-`pruned` and `unexpanded:<outcome>` cover the capabilities that never ran.
+`pruned` and an unexpanded scope gap cover the capabilities that never ran.
 The remaining case is the one that ran: a provider that queried ClickHouse
 and matched **no rows**.
 
@@ -271,9 +271,8 @@ violation.
 
 ### Reason codes, and why narrowing rides along
 
-Reasons carry closed code prefixes -- `pruned:subject_kind_unsupported`,
-`narrowed:subject_kind_unsupported` -- so consumers and tests match a prefix
-instead of parsing a sentence. They name only the closed subject-**kind**
+Reasons are plain sentences with no internal token in them; the cause
+(pruned, narrowed, unexpanded) is the coverage detail code. They name only the closed subject-**kind**
 vocabulary, never a canonical ID or label: coverage reasons are stored,
 replayed, and read by operators, so investigation content must not leak into
 them.

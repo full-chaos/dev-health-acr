@@ -4,46 +4,15 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// Closed reason codes for a planner decision (CHAOS-3783). A decision is
-// recorded in Coverage as a free-text Reason -- the contract has no
-// structured field for it -- so the code is a fixed prefix rather than
-// prose, and tests, operators, and downstream surfaces match on the prefix
-// instead of parsing a sentence. Never build a reason string by hand; go
-// through prunedReason/narrowedReason so the prefix cannot drift.
-const (
-	// FactPruneReasonSubjectKindUnsupported is the ONLY reason this planner
-	// prunes a whole capability today. It means no subject this
-	// investigation resolved has a kind the capability declares in
-	// SupportedSubjectKinds, so the capability could not have produced a
-	// single admissible fact -- see planFactReads for why that is a proof
-	// and not a heuristic.
-	FactPruneReasonSubjectKindUnsupported = "pruned:subject_kind_unsupported"
-	// FactNarrowReasonSubjectKindUnsupported marks the partial case: the
-	// capability DID run, but only against the subset of subjects whose
-	// kind it supports. The dropped subjects are absence too, and coverage
-	// source names must be unique (ContextFabricCoverage.Validate), so this
-	// cannot be a second Coverage entry -- it is prefixed onto the
-	// capability's own observation instead.
-	FactNarrowReasonSubjectKindUnsupported = "narrowed:subject_kind_unsupported"
-	// FactScopeReasonUnexpanded is CHAOS-4099's SEPARATE prefix for a
-	// capability that no resolved subject can answer directly AND that
-	// scope expansion did not reach.
-	//
-	// A THIRD PREFIX RATHER THAN A FOURTH SPELLING OF "pruned" (ruling
-	// invariant 7). The two prefixes above both describe a decision the
-	// planner can PROVE: the capability's declared subject kinds and the
-	// resolved subject kinds do not intersect, therefore no admissible fact
-	// existed. This prefix describes the opposite epistemic state -- the
-	// facts may well exist and be reachable, and the system did not reach
-	// them. Reusing "pruned:" for it is precisely how a structural gap came
-	// to be reported as a proof of absence for the whole life of this
-	// defect. The suffix after the colon is the closed
-	// FactScopeExpansionOutcome value, so operators and tests match on a
-	// vocabulary rather than parsing a sentence.
-	FactScopeReasonUnexpanded = "unexpanded"
-)
+// A planner decision is recorded in Coverage as a free-text Reason. The reason
+// is a plain sentence a reader can use; the machine-readable parts (outcome,
+// policy, origin, basis, supported and skipped kinds) ride on the structured
+// coverage detail, never as a token inside the sentence. Never build a reason
+// string by hand; go through prunedReason/narrowedReason/unexpandedReason.
 
 // factPlanRequirement is one requested fact family, reduced to the only two
 // things planning is allowed to consider: which family, and whether the
@@ -238,7 +207,7 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 				plan = append(plan, factPlanEntry{
 					Kind:     requirement.Kind,
 					ScopeGap: &gap,
-					Reason:   unexpandedReason(capability, gap),
+					Reason:   unexpandedReason(capability, gap, false),
 				})
 				continue
 			}
@@ -360,8 +329,8 @@ func partitionBySupportedSubjectKind(subjects []SubjectRef, supportedKinds []Sub
 
 func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 	return fmt.Sprintf(
-		"%s: no resolved subject has a kind this capability supports (resolved: %s; supported: %s)",
-		FactPruneReasonSubjectKindUnsupported, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
+		"no resolved subject has a kind this capability supports (resolved kinds: %s; supported kinds: %s)",
+		joinSubjectKindNouns(unsupported), joinSubjectKindNouns(capability.SupportedSubjectKinds),
 	)
 }
 
@@ -377,29 +346,52 @@ func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 // resolver knows it: telling a reader "3 targets existed but you cannot see
 // them" is an existence side-channel (ruling invariant 9). That count goes to
 // telemetry, and only to telemetry.
-func unexpandedReason(capability FactCapability, gap FactScopeGap) string {
-	if gap.WindowUnsupported() {
-		support := "does not support an observed-time window; ask without a window, or with an as-of or date-range window, to read it"
-		if gap.CurrentAxisOnly {
-			support = "supports the current window only; ask without a window to read it"
-		}
-		return fmt.Sprintf(
-			"%s:%s: no resolved subject holds this capability's facts directly and the scope policy %s (origin: %s; supported: %s; policy: %s; basis: %s)",
-			FactScopeReasonUnexpanded, gap.Outcome, support, gap.OriginKind,
-			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
-		)
+func unexpandedReason(capability FactCapability, gap FactScopeGap, ownFactsRead bool) string {
+	lead := "no resolved subject holds this capability's facts directly and"
+	if ownFactsRead {
+		lead = "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because"
 	}
-	if gap.ScopeExpansionUnavailable() {
-		return fmt.Sprintf(
-			"%s:%s: no resolved subject holds this capability's facts directly and no scope expander is wired on this server (origin: %s; supported: %s; policy: %s; basis: %s)",
-			FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
-			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
-		)
+	return unexpandedReasonWithLead(capability, gap, lead)
+}
+
+// unexpandedReasonForFailedRead is the gap sentence for a kind whose direct read
+// then failed: it claims nothing about what was read.
+func unexpandedReasonForFailedRead(capability FactCapability, gap FactScopeGap) string {
+	return unexpandedReasonWithLead(capability, gap, "facts reachable only through scope expansion were not added because")
+}
+
+// plannedForFailedRead swaps the planning-time "were read" gap sentence of an
+// entry whose provider read then failed for one that does not claim the read.
+func plannedForFailedRead(planned factPlanEntry, capability FactCapability) factPlanEntry {
+	if planned.ScopeGap == nil || len(planned.Subjects) == 0 {
+		return planned
+	}
+	planned.Reason = strings.Replace(planned.Reason, unexpandedReason(capability, *planned.ScopeGap, true), unexpandedReasonForFailedRead(capability, *planned.ScopeGap), 1)
+	return planned
+}
+
+func unexpandedReasonWithLead(capability FactCapability, gap FactScopeGap, lead string) string {
+	cause := "scope expansion did not reach them"
+	switch {
+	case gap.WindowUnsupported():
+		cause = "the scope policy does not support an observed-time window; ask without a window to read it"
+		if gap.CurrentAxisOnly {
+			cause = "the scope policy supports the current window only; ask without a window to read it"
+		}
+	case gap.ScopeExpansionUnavailable():
+		cause = "no scope expander is wired on this server"
+	case gap.Outcome == FactScopeExpandedPartial:
+		cause = "scope expansion reached only some of them"
+	case gap.Outcome == FactScopeFailed:
+		cause = "scope expansion failed"
+	case gap.Outcome == FactScopeTargetKindMismatch:
+		cause = "scope expansion found targets of a kind this capability cannot read"
+	case gap.Outcome == FactScopeMatchedUnauthorized:
+		cause = "scope expansion matched targets this credential may not read"
 	}
 	return fmt.Sprintf(
-		"%s:%s: no resolved subject holds this capability's facts directly and scope expansion did not reach them (origin: %s; supported: %s; policy: %s; basis: %s)",
-		FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
-		joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		"%s %s (it covers %s; the request named a %s)",
+		lead, cause, joinSubjectKindNouns(capability.SupportedSubjectKinds), subjectKindNounSingular(gap.OriginKind),
 	)
 }
 
@@ -443,8 +435,8 @@ func appendDerivedReadSubjects(roots []SubjectRef, derived []SubjectRef) []Subje
 
 func narrowedReason(capability FactCapability, unsupported []SubjectKind, dropped int) string {
 	return fmt.Sprintf(
-		"%s: %d subject(s) were not queried because this capability does not support their kind (skipped: %s; supported: %s)",
-		FactNarrowReasonSubjectKindUnsupported, dropped, joinSubjectKinds(unsupported), joinSubjectKinds(capability.SupportedSubjectKinds),
+		"%d subject(s) were not queried because this capability does not support their kind (skipped kinds: %s; supported kinds: %s)",
+		dropped, joinSubjectKindNouns(unsupported), joinSubjectKindNouns(capability.SupportedSubjectKinds),
 	)
 }
 
@@ -466,7 +458,13 @@ func withNarrowingNote(planned factPlanEntry, reason string) string {
 	if !planned.Narrowed && planned.ScopeGap == nil {
 		return reason
 	}
-	return strings.TrimSpace(planned.Reason + " " + reason)
+	if strings.TrimSpace(reason) == "" {
+		return strings.TrimSpace(planned.Reason)
+	}
+	if strings.TrimSpace(planned.Reason) == "" {
+		return strings.TrimSpace(reason)
+	}
+	return strings.TrimSpace(planned.Reason) + "; " + strings.TrimSpace(reason)
 }
 
 // withScopeGapDisclosure attaches a DEGRADING scope gap to a plan entry that
@@ -491,17 +489,33 @@ func withScopeGapDisclosure(entry factPlanEntry, scope *FactReadScope, capabilit
 		return entry
 	}
 	entry.ScopeGap = &gap
-	entry.Reason = strings.TrimSpace(entry.Reason + " " + unexpandedReason(capability, gap))
+	entry.Reason = strings.TrimSpace(entry.Reason + " " + unexpandedReason(capability, gap, true))
 	return entry
 }
 
-func joinSubjectKinds(kinds []SubjectKind) string {
+func joinSubjectKindNouns(kinds []SubjectKind) string {
 	if len(kinds) == 0 {
 		return "none"
 	}
 	values := make([]string, 0, len(kinds))
 	for _, kind := range kinds {
-		values = append(values, string(kind))
+		values = append(values, subjectKindNounPlural(kind))
 	}
-	return strings.Join(values, ",")
+	return strings.Join(values, ", ")
+}
+
+// subjectKindNounPlural names a subject kind in plain words ("pull requests"),
+// falling back to the kind itself for a value the noun table does not know.
+func subjectKindNounPlural(kind SubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 2); noun != "" {
+		return noun
+	}
+	return string(kind)
+}
+
+func subjectKindNounSingular(kind SubjectKind) string {
+	if noun := contractsv1.ContextFabricSubjectKindNoun(kind, 1); noun != "" {
+		return noun
+	}
+	return string(kind)
 }

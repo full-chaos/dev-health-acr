@@ -60,8 +60,8 @@ log line that already certifies the outcome, never on a second path.
 | `acr_answer_reuse_total` | counter | `outcome` | acr-api answer reuse outcome line |
 | `acr_requirement_outcomes_total` | counter | `outcome` | acr-api completeness authority line (one count per outcome row; an investigation without a plan adds no rows) |
 | `acr_fact_read_aborts_total` | counter | `cause` | acr-api investigation failure line, fact read abort |
-| `acr_clickhouse_statement_near_memory_cap_total` | counter | none | acr-api WARN line `clickhouse statement memory near cap` (statement hash, first words, peak and cap bytes; the acr-projector logs the same line without a counter) |
-| `acr_clickhouse_statement_peak_unobserved_total` | counter | none | acr-api WARN line `clickhouse statement sent no peak memory value` (one per statement hash per process; the counter counts every statement; acr-projector logs the line without a counter) |
+| `acr_clickhouse_statement_near_memory_cap_total` | counter | none | acr-api and `acr-projector serve` WARN line (acr-projector rebuild and rollback log only, no counter) `clickhouse statement memory near cap` (statement hash, first words, peak and cap bytes) |
+| `acr_clickhouse_statement_peak_unobserved_total` | counter | none | acr-api and `acr-projector serve` WARN line (acr-projector rebuild and rollback log only, no counter) `clickhouse statement sent no peak memory value` (one per statement hash per process; the counter counts every statement) |
 | `acr_investigation_latency_seconds` | histogram | `status` (`error` when no answer was delivered, including a 413 from a response-size gate) | acr-api investigation route |
 
 The investigation failure line of a budget refusal (the 413 above) carries what

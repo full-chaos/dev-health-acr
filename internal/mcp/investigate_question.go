@@ -121,7 +121,12 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 	// service advertised no ceiling the budget is both, as before.
 	if ceiling := caller.Capabilities().Limits.MaxSerializedBytes; ceiling > 0 {
 		hosted.Options.MaxSerializedBytes = min(ceiling, contractsv1.ContextFabricSerializedBytesMax)
-		hosted.Options.AnswerBudgetBytes = min(budget.MaxSerializedBytes, hosted.Options.MaxSerializedBytes)
+		// A client synthesis turn cuts its input to the answer budget, so only a
+		// budget the caller named is sent as one; the sidecar default is a
+		// display bound, not a cut.
+		if input.Synthesis != contractsv1.ContextFabricSynthesisModeClient || (input.Budget != nil && input.Budget.MaxSerializedBytes != 0) {
+			hosted.Options.AnswerBudgetBytes = min(budget.MaxSerializedBytes, hosted.Options.MaxSerializedBytes)
+		}
 	}
 	hosted.SuppliedInterpretation = supplied
 	hosted.SuppliedSynthesis = suppliedSynthesis

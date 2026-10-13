@@ -97,8 +97,14 @@
           "score": {
             "number": 43.5
           },
+          "subject_canonical_id": {
+            "string": "team:CHAOS"
+          },
           "subject_kind": {
             "string": "team"
+          },
+          "subject_label": {
+            "string": "CHAOS"
           },
           "team_canonical_id": {
             "string": "team:CHAOS"
@@ -122,6 +128,8 @@
       "summary": "The project cannot be treated as ready until the required real-product acceptance path succeeds.",
       "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
       "source_state": "truncated",
+      "source_state_note": "The service marks this driver as partial: the source read was truncated.",
+      "summary_corrected": true,
       "confidence": 0.96,
       "evidence_ref_ids": [
         "evidence_release_acceptance"

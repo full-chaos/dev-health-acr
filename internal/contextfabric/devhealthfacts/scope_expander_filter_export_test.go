@@ -90,3 +90,40 @@ func OrgWideScopeReadsForTest(statement string) []string {
 	}
 	return found
 }
+
+// pullRequestPrunePrefix opens the pull request read issueLinkRowsAmongSQL
+// narrows to the candidate links' pull requests.
+const pullRequestPrunePrefix = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN `
+
+// UnprunedPullRequestStatementForTest rewrites every narrowed pull request
+// read in a statement back to the whole table (`git_pull_requests AS pr
+// FINAL`), the form the link helper had before it narrowed it, and reports
+// how many it rewrote; ok is false when a narrowed read is not closed by
+// `) AS pr`.
+func UnprunedPullRequestStatementForTest(statement string) (out string, rewritten int, ok bool) {
+	out = statement
+	for {
+		start := strings.Index(out, pullRequestPrunePrefix)
+		if start < 0 {
+			return out, rewritten, true
+		}
+		depth, end := 0, -1
+		for i := start; i < len(out); i++ {
+			switch out[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+			if depth == 0 {
+				end = i
+				break
+			}
+		}
+		if end < 0 || !strings.HasPrefix(out[end+1:], " AS pr") {
+			return out, rewritten, false
+		}
+		out = out[:start] + "git_pull_requests AS pr FINAL" + out[end+1+len(" AS pr"):]
+		rewritten++
+	}
+}

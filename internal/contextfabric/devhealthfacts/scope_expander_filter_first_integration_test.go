@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -126,6 +127,12 @@ func seedMovedOwnership(t *testing.T, ctx context.Context, direct clickhousedriv
 		moved.projectRepo, f.orgID, uint32(4), "pr", "open", at, at, "feature", "")
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		moved.projectRepo, "issue-M", uint32(4), float32(1), "native", "", at, f.orgID)
+	// A blocker edge between two linked issues of the requested projects, and
+	// a pull request in their repository that no link row names.
+	exec(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		"issue-Q", "issue-P", "blocks", "Blocks", at, f.orgID)
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		f.shared, f.orgID, uint32(77), "unlinked", "open", at, at, "feature", "")
 	return moved
 }
 
@@ -350,6 +357,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	small := measure(t, smallStatements)
 	fillScopeOrganization(t, ctx, direct, fixture, "large", 200_000)
 	unmerged(t, "large")
+	t.Run("link helper callers outside the expander", func(t *testing.T) { linkHelperCallersDifferential(t, ctx, query, fixture) })
 	mergeScopeTables(t, ctx, direct)
 	largeStatements := served(t)
 	t.Run("rows at the larger size", func(t *testing.T) { differential(t, largeStatements) })
@@ -403,4 +411,65 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 		t.Fatalf("read query_log duration: %v", err)
 	}
 	return duration
+}
+
+// linkHelperCallerSites names each statement outside the scope expander that
+// reads the link rows through issueLinkRowsAmongSQL with a candidate set.
+var linkHelperCallerSites = []struct{ label, fragment string }{
+	{"blocker repository edges", "AS rid, d.target_work_item_id AS tgt"},
+	{"blocker project edges", "SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt"},
+	{"blocked items without a link", "d.target_work_item_id NOT IN (SELECT work_item_id FROM"},
+	{"project linked pull requests", "SELECT pi.project_key AS project_key, l.pr_repo_id AS pr_repo_id"},
+}
+
+// linkHelperCallersDifferential reads every fact kind for the fixture's
+// teams, projects and repository through the real providers, and compares
+// each statement that reads the narrowed pull request rows with the same
+// statement over the whole pull request table: the rows must be equal.
+func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, f everyRootFixture) {
+	recorder := &recordingQueryClient{inner: query}
+	principal := storage.Principal{OrgID: f.orgID, RepositoryScopes: []string{"*"}}
+	subjects := []contextfabric.SubjectRef{f.teamA, f.teamB, f.projectP, f.projectQ, {Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + f.shared, Label: "acme/shared"}}
+	for _, provider := range devhealthfacts.NewProviders(recorder) {
+		kind := provider.Capability().Kind
+		for _, subject := range subjects {
+			_, _ = provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: kind, Subjects: []contextfabric.SubjectRef{subject},
+			})
+		}
+	}
+	recorder.mu.Lock()
+	captured := append([]capturedStatement(nil), recorder.captured...)
+	recorder.mu.Unlock()
+	reached := map[string]int{}
+	compared := 0
+	for _, statement := range captured {
+		whole, rewritten, ok := devhealthfacts.UnprunedPullRequestStatementForTest(statement.statement)
+		if !ok {
+			t.Fatalf("a narrowed pull request read is not closed as the rewrite expects:\n%s", statement.statement)
+		}
+		if rewritten == 0 {
+			continue
+		}
+		for _, site := range linkHelperCallerSites {
+			if strings.Contains(statement.statement, site.fragment) {
+				reached[site.label]++
+			}
+		}
+		narrowed, wholeRows := scopeRows(t, ctx, query, statement), scopeRows(t, ctx, query, capturedStatement{statement: whole, bindings: statement.bindings})
+		if !slices.Equal(narrowed, wholeRows) {
+			t.Errorf("rows differ from the whole pull request table:\nnarrowed %q\nwhole    %q\n%s", narrowed, wholeRows, statement.statement)
+		}
+		compared++
+		t.Logf("DIFFERENTIAL link helper caller: %d rows equal (%d narrowed reads)", len(narrowed), rewritten)
+	}
+	for _, site := range linkHelperCallerSites {
+		if reached[site.label] == 0 {
+			t.Errorf("%s: no statement was sent, the comparison did not happen", site.label)
+		}
+		t.Logf("DIFFERENTIAL %s: %d statements compared", site.label, reached[site.label])
+	}
+	if compared == 0 {
+		t.Fatal("no statement read the narrowed pull request rows")
+	}
 }

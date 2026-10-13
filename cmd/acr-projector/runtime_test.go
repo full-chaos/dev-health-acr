@@ -17,7 +17,7 @@ func TestOpenRuntimeStaysDisabledWhenProjectionIsNotEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := openRuntime(context.Background(), cfg, discardLogger())
+	runtime, err := openRuntime(context.Background(), cfg, discardLogger(), nil)
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestOpenRuntimeStaysDisabledWhenBackingStoresAreUnconfigured(t *testing.T) 
 		t.Fatal(err)
 	}
 	cfg.ProjectionEnabled = true // Postgres/ClickHouse DSNs remain unset
-	runtime, err := openRuntime(context.Background(), cfg, discardLogger())
+	runtime, err := openRuntime(context.Background(), cfg, discardLogger(), nil)
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}

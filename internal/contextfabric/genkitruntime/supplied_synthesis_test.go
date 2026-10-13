@@ -267,3 +267,23 @@ func TestSynthesisDraftCannotStateADriverRank(t *testing.T) {
 		}
 	}
 }
+
+func TestSynthesisDraftCannotStateTheServerOwnedDriverNote(t *testing.T) {
+	t.Parallel()
+	for field, value := range map[string]any{"source_state_note": "The service marks this driver as stale: the source read is out of date.", "summary_corrected": true} {
+		document := suppliedSynthesisFixture(t)
+		document["drivers"].([]any)[0].(map[string]any)[field] = value
+		raw := marshalFixture(t, document)
+		_, err := newTestSuppliedSynthesizer(t, SuppliedSynthesizerConfig{}).Parse(raw)
+		if reason := requireClosedRejection(t, field, err); reason != contextfabric.RejectionReasonOutputSchemaMismatch {
+			t.Fatalf("%s: reason = %q, want output_schema_mismatch", field, reason)
+		}
+		if draft, err := ParseSynthesisOutput(raw); err == nil {
+			for _, driver := range draft.Drivers {
+				if driver.SourceStateNote != "" || driver.SummaryCorrected {
+					t.Fatalf("model path kept a draft %s: %+v", field, driver)
+				}
+			}
+		}
+	}
+}
