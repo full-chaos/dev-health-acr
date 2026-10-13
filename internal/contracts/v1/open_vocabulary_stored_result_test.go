@@ -128,6 +128,9 @@ func storedAdditiveRows() []storedVocabularyRow {
 		{name: "drivers.category", fixture: resultV1, paths: []string{"drivers.0.category"}},
 		{name: "drivers.standing", fixture: resultV1, paths: []string{"drivers.0.standing"}},
 		{name: "drivers.derivation", fixture: resultV1, paths: []string{"drivers.0.derivation"}},
+		{name: "drivers.source_state", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+			r.Drivers[0].SourceState = ContextFabricSourceState(v)
+		}},
 		{name: "drivers.epistemic_status", fixture: resultV1, paths: []string{"drivers.0.epistemic_status"}},
 		{name: "drivers.affected_subjects.kind", fixture: resultV1, paths: []string{"drivers.0.affected_subjects.0.kind"}},
 		{name: "remaining_work.kind", fixture: resultV1, paths: []string{"remaining_work.0.kind"}, neverChecked: true},

@@ -214,7 +214,7 @@ func init() {
 			name:           "items.state",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"Coverage.sources.items.state", "ProjectedCoverage.state", "SourceObservation.state"},
+			sites:          []string{"Coverage.sources.items.state", "DriverJudgment.source_state", "ProjectedCoverage.state", "ProjectedDriver.source_state", "SourceObservation.state"},
 			// schema: "available", "stale", "unavailable", "unconfigured", "unauthorized", "no_data", "truncated", "conflicted", "not_applicable", "pruned"
 			goSet:      []string{string(contractsv1.ContextFabricSourceAvailable), string(contractsv1.ContextFabricSourceStale), string(contractsv1.ContextFabricSourceUnavailable), string(contractsv1.ContextFabricSourceUnconfigured), string(contractsv1.ContextFabricSourceUnauthorized), string(contractsv1.ContextFabricSourceNoData), string(contractsv1.ContextFabricSourceTruncated), string(contractsv1.ContextFabricSourceConflicted), string(contractsv1.ContextFabricSourceNotApplicable), string(contractsv1.ContextFabricSourcePruned)},
 			exhaustive: true,

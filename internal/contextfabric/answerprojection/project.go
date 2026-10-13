@@ -439,6 +439,7 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			Title:         storedText(driver.Title),
 			Summary:       storedText(driver.Summary),
 			Qualification: storedText(driver.Qualification),
+			SourceState:   driver.SourceState,
 			Confidence:    driver.Confidence,
 			// EvidenceRefIDs is a REQUIRED array; copying a canonical
 			// empty slice with append(nil, ...) would yield nil and

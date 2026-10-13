@@ -801,6 +801,22 @@
           "type": "string",
           "maxLength": 2000
         },
+        "source_state": {
+          "type": "string",
+          "description": "Open vocabulary; documented values: available, stale, unavailable, unconfigured, unauthorized, no_data, truncated, conflicted, not_applicable, pruned. A client must tolerate values it does not know.",
+          "x-documented-values": [
+            "available",
+            "stale",
+            "unavailable",
+            "unconfigured",
+            "unauthorized",
+            "no_data",
+            "truncated",
+            "conflicted",
+            "not_applicable",
+            "pruned"
+          ]
+        },
         "confidence": {
           "type": "number",
           "minimum": 0,

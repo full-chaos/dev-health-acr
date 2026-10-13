@@ -3253,6 +3253,22 @@
               "maxLength": 2000,
               "type": "string"
             },
+            "source_state": {
+              "type": "string",
+              "description": "Open vocabulary; documented values: available, stale, unavailable, unconfigured, unauthorized, no_data, truncated, conflicted, not_applicable, pruned. A client must tolerate values it does not know.",
+              "x-documented-values": [
+                "available",
+                "stale",
+                "unavailable",
+                "unconfigured",
+                "unauthorized",
+                "no_data",
+                "truncated",
+                "conflicted",
+                "not_applicable",
+                "pruned"
+              ]
+            },
             "standing": {
               "type": "string",
               "description": "Open vocabulary; documented values: principal, contributing, symptom, context, withheld. A client must tolerate values it does not know.",
