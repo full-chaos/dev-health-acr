@@ -33,6 +33,7 @@ const (
 func seedProjectTeamOwnershipShape(t *testing.T, f *ingestColumnsFixture, unmergedParts int) {
 	t.Helper()
 	synced := f.old
+	// devhealthschema:not-a-production-replica these statements seed rows into and maintain tables the production DDL created; no column, type or engine is declared here.
 	mustExec(t, f.ctx, f.h.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced)
 SELECT concat('P-', toString(number)), ?, 'linear', concat('K', toString(number)), concat('project ', toString(number)), 1, 'started', '', ?, ? FROM numbers(?)`,
 		f.h.orgID, f.old, synced, uint64(memoryShapeProjects-1))
@@ -47,6 +48,7 @@ SELECT concat('P-', toString(number)), ?, 'linear', concat('K', toString(number)
 	base := f.old.Add(-800 * 24 * time.Hour)
 	lastVersion := (memoryShapeRows - 1) / memoryShapePairs
 	for s := 0; s < slices; s++ {
+		// devhealthschema:not-a-production-replica these statements seed rows into and maintain tables the production DDL created; no column, type or engine is declared here.
 		mustExec(t, f.ctx, f.h.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced)
 SELECT ?, 'linear', concat('T-', toString((n % ?) % ?)), concat('P-', toString((n % ?) % ?)), concat('K', toString((n % ?) % ?)), 'native',
   toDateTime64(?, 3, 'UTC') + toIntervalHour(intDiv(n, ?)),
@@ -135,13 +137,17 @@ func TestProjectTeamOwnershipFragmentMemoryTable(t *testing.T) {
 	f := newIngestColumnsFixture(t, "95460000-0000-4000-8000-000000000001", nil, nil)
 	seedProjectTeamOwnershipShape(t, f, memoryShapeUnmerged)
 	t.Cleanup(func() {
+		// devhealthschema:not-a-production-replica these statements seed rows into and maintain tables the production DDL created; no column, type or engine is declared here.
 		_ = direct.Exec(context.Background(), "SYSTEM START MERGES team_project_ownership")
 	})
+	// devhealthschema:not-a-production-replica these statements seed rows into and maintain tables the production DDL created; no column, type or engine is declared here.
 	mustExec(t, f.ctx, direct, "SYSTEM STOP MERGES team_project_ownership")
 	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
 	unmerged := measureProjectTeamsFragments(t, f, query, capped, "unmerged")
 	logFragmentTable(t, "unmerged", unmerged)
+	// devhealthschema:not-a-production-replica these statements seed rows into and maintain tables the production DDL created; no column, type or engine is declared here.
 	mustExec(t, f.ctx, direct, "SYSTEM START MERGES team_project_ownership")
+	// devhealthschema:not-a-production-replica these statements seed rows into and maintain tables the production DDL created; no column, type or engine is declared here.
 	for _, table := range []string{"team_project_ownership", "projects", "teams"} {
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE "+table+" FINAL")
 	}
