@@ -11,14 +11,17 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
-// Prod shape of the largest org: team_project_ownership carries about 770
-// distinct valid_from rows per (project, team) pair.
+// Prod shape of the largest org (read-only counts 2026-10-13): 67,486
+// team_project_ownership rows over 88 (team, project) pairs, 36 teams, 48
+// project ids; 47 project rows.
 const (
-	memoryShapeProjects    = 40
-	memoryShapeTeamsPerOrg = 6
-	memoryShapeVersions    = 770
-	memoryShapeUnmerged    = 12
-	memoryShapeRuns        = 3
+	memoryShapeRows     = 67486
+	memoryShapePairs    = 88
+	memoryShapeTeams    = 36
+	memoryShapeProjects = 48
+	memoryShapeOpen     = 60
+	memoryShapeUnmerged = 12
+	memoryShapeRuns     = 3
 )
 
 func seedProjectTeamOwnershipShape(t *testing.T, f *ingestColumnsFixture, unmergedParts int) {
@@ -26,23 +29,30 @@ func seedProjectTeamOwnershipShape(t *testing.T, f *ingestColumnsFixture, unmerg
 	synced := f.old
 	mustExec(t, f.ctx, f.h.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced)
 SELECT concat('P-', toString(number)), ?, 'linear', concat('K', toString(number)), concat('project ', toString(number)), 1, 'started', '', ?, ? FROM numbers(?)`,
-		f.h.orgID, f.old, synced, uint64(memoryShapeProjects))
-	for team := 0; team < memoryShapeTeamsPerOrg; team++ {
+		f.h.orgID, f.old, synced, uint64(memoryShapeProjects-1))
+	for team := 0; team < memoryShapeTeams; team++ {
 		f.team(fmt.Sprintf("T-%d", team), f.old, synced)
 	}
 	slices := unmergedParts
 	if slices < 1 {
 		slices = 1
 	}
-	per := (memoryShapeVersions + slices - 1) / slices
+	per := (memoryShapeRows + slices - 1) / slices
+	base := f.old.Add(-800 * 24 * time.Hour)
+	lastVersion := (memoryShapeRows - 1) / memoryShapePairs
 	for s := 0; s < slices; s++ {
 		mustExec(t, f.ctx, f.h.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced)
-SELECT ?, 'linear', concat('T-', toString(t.number)), concat('P-', toString(p.number)), concat('K', toString(p.number)), 'native',
-  toDateTime64(?, 3, 'UTC') + toIntervalDay(v.number), if(v.number = ? - 1, NULL, toDateTime64(?, 3, 'UTC') + toIntervalDay(v.number + 1)), ?, ?
-FROM numbers(?) AS p, numbers(?) AS t, (SELECT number FROM numbers(?) WHERE number >= ? AND number < ?) AS v
-WHERE (p.number % ?) = t.number`,
-			f.h.orgID, f.old.Add(-800*24*time.Hour), uint64(memoryShapeVersions), f.old.Add(-800*24*time.Hour), f.old.Add(time.Duration(s)*time.Second), synced,
-			uint64(memoryShapeProjects), uint64(memoryShapeTeamsPerOrg), uint64(memoryShapeVersions), uint64(s*per), uint64((s+1)*per), uint64(memoryShapeTeamsPerOrg))
+SELECT ?, 'linear', concat('T-', toString((n % ?) % ?)), concat('P-', toString((n % ?) % ?)), concat('K', toString((n % ?) % ?)), 'native',
+  toDateTime64(?, 3, 'UTC') + toIntervalHour(intDiv(n, ?)),
+  if((n % ?) < ? AND intDiv(n, ?) >= ?, NULL, toDateTime64(?, 3, 'UTC') + toIntervalHour(intDiv(n, ?)) + toIntervalMinute(30)),
+  ?, ?
+FROM (SELECT number AS n FROM numbers(?) WHERE number >= ? AND number < ?)`,
+			f.h.orgID,
+			uint64(memoryShapePairs), uint64(memoryShapeTeams), uint64(memoryShapePairs), uint64(memoryShapeProjects), uint64(memoryShapePairs), uint64(memoryShapeProjects),
+			base, uint64(memoryShapePairs),
+			uint64(memoryShapePairs), uint64(memoryShapeOpen), uint64(memoryShapePairs), uint64(lastVersion), base, uint64(memoryShapePairs),
+			f.old.Add(time.Duration(s)*time.Second), synced,
+			uint64(memoryShapeRows), uint64(s*per), uint64((s+1)*per))
 	}
 }
 
@@ -102,7 +112,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query c
 
 func logFragmentTable(t *testing.T, stage string, peaks []fragmentPeak) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "project-team ownership statement, stage=%s (min of %d warm runs; %d projects x %d versions)\n", stage, memoryShapeRuns, memoryShapeProjects, memoryShapeVersions)
+	fmt.Fprintf(&b, "project-team ownership statement, stage=%s (min of %d warm runs; %d rows, %d pairs)\n", stage, memoryShapeRuns, memoryShapeRows, memoryShapePairs)
 	for _, p := range peaks {
 		fmt.Fprintf(&b, "  %-24s peak=%7.2f MiB read_rows=%9d rows_out=%d\n", p.name, p.mib, p.readRows, p.rows)
 	}
