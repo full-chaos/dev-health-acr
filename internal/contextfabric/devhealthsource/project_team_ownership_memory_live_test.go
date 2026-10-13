@@ -22,6 +22,12 @@ const (
 	memoryShapeOpen     = 60
 	memoryShapeUnmerged = 12
 	memoryShapeRuns     = 3
+
+	// The projector's statement settings in prod: max_memory_usage 192 MiB from
+	// cmd/acr-projector/runtime.go projectorStatementMaxMemoryUsage, max_bytes_to_read
+	// 256 MiB (config.DefaultClickHouseMaxBytesToRead), driver-default max_result_rows.
+	prodMaxMemoryUsage = 192 << 20
+	prodMaxBytesToRead = 256 << 20
 )
 
 func seedProjectTeamOwnershipShape(t *testing.T, f *ingestColumnsFixture, unmergedParts int) {
@@ -63,7 +69,7 @@ type fragmentPeak struct {
 	rows     int
 }
 
-func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query contextpacket.ClickHouseQueryClient, stage string) []fragmentPeak {
+func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, projectorCapped contextpacket.ClickHouseQueryClient, stage string) []fragmentPeak {
 	t.Helper()
 	var out []fragmentPeak
 	for _, frag := range devhealthsource.ProjectTeamsFragmentsForTest(true) {
@@ -74,7 +80,11 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query c
 			if frag.Paged {
 				bindings = devhealthsource.ProjectTeamsPagedBindingsForTest(f.h.orgID, 500)
 			}
-			rows, err := query.Query(f.ctx, frag.SQL+"\nSETTINGS max_result_rows = 0, log_comment = '"+tag+"'", bindings)
+			client, settings := query, "max_result_rows = 0, max_memory_usage = 0"
+			if frag.Paged {
+				client, settings = projectorCapped, fmt.Sprintf("max_bytes_to_read = %d", prodMaxBytesToRead)
+			}
+			rows, err := client.Query(f.ctx, frag.SQL+"\nSETTINGS "+settings+", log_comment = '"+tag+"'", bindings)
 			if err != nil {
 				t.Fatalf("%s %s: %v", stage, frag.Name, err)
 			}
@@ -112,6 +122,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query c
 
 func logFragmentTable(t *testing.T, stage string, peaks []fragmentPeak) {
 	var b strings.Builder
+	b.WriteString("settings: paged_statement = prod projector settings (max_memory_usage 192 MiB, max_bytes_to_read 256 MiB, driver max_result_rows); other fragments = diagnostic, max_result_rows=0 and max_memory_usage=0\n")
 	fmt.Fprintf(&b, "project-team ownership statement, stage=%s (min of %d warm runs; %d rows, %d pairs)\n", stage, memoryShapeRuns, memoryShapeRows, memoryShapePairs)
 	for _, p := range peaks {
 		fmt.Fprintf(&b, "  %-24s peak=%7.2f MiB read_rows=%9d rows_out=%d\n", p.name, p.mib, p.readRows, p.rows)
@@ -127,12 +138,13 @@ func TestProjectTeamOwnershipFragmentMemoryTable(t *testing.T) {
 		_ = direct.Exec(context.Background(), "SYSTEM START MERGES team_project_ownership")
 	})
 	mustExec(t, f.ctx, direct, "SYSTEM STOP MERGES team_project_ownership")
-	unmerged := measureProjectTeamsFragments(t, f, query, "unmerged")
+	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
+	unmerged := measureProjectTeamsFragments(t, f, query, capped, "unmerged")
 	logFragmentTable(t, "unmerged", unmerged)
 	mustExec(t, f.ctx, direct, "SYSTEM START MERGES team_project_ownership")
 	for _, table := range []string{"team_project_ownership", "projects", "teams"} {
 		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE "+table+" FINAL")
 	}
-	merged := measureProjectTeamsFragments(t, f, query, "optimized")
+	merged := measureProjectTeamsFragments(t, f, query, capped, "optimized")
 	logFragmentTable(t, "optimized", merged)
 }
