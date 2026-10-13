@@ -2845,14 +2845,14 @@
                 "minLength": 1,
                 "type": "string"
               },
-              "maxItems": 100,
+              "maxItems": 101,
               "type": "array"
             },
             "details": {
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/CoverageDetail"
               },
-              "maxItems": 100,
+              "maxItems": 101,
               "type": "array"
             },
             "partial": {
@@ -2909,7 +2909,7 @@
                 ],
                 "type": "object"
               },
-              "maxItems": 100,
+              "maxItems": 101,
               "type": "array"
             }
           },

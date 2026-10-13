@@ -3514,7 +3514,7 @@
               "state"
             ]
           },
-          "maxItems": 100
+          "maxItems": 101
         },
         "partial": {
           "type": "boolean"
@@ -3526,14 +3526,14 @@
             "minLength": 1,
             "maxLength": 2000
           },
-          "maxItems": 100
+          "maxItems": 101
         },
         "details": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/CoverageDetail"
           },
-          "maxItems": 100
+          "maxItems": 101
         }
       },
       "required": [
