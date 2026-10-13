@@ -256,8 +256,8 @@ func TestCompletenessAuthority_ReuseHitIsCorrectedWhenEnabled(t *testing.T) {
 	// The flip changes Status, which the terminal reason is derived FROM
 	// -- the served document must stay internally consistent as a whole,
 	// not merely agree on the one field the flip wrote directly.
-	if want := contractsv1.ContextFabricTerminalReasonUndisclosed; result.Completeness.TerminalReason != want {
-		t.Fatalf("result.Completeness.TerminalReason = %q, want %q (no Coverage/Limitations/Warnings disclosure on this fixture)", result.Completeness.TerminalReason, want)
+	if want := contractsv1.ContextFabricTerminalReasonLimitationDisclosed; result.Completeness.TerminalReason != want {
+		t.Fatalf("result.Completeness.TerminalReason = %q, want %q (the degraded flip is served with the fallback limitation, so the reason is disclosed)", result.Completeness.TerminalReason, want)
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("a flipped result must still validate as a whole document: %v", err)
