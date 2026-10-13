@@ -2,6 +2,9 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -41,6 +44,8 @@ SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature',
 SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`, repoUUID("repo-f"), at, org, from, uint64(n))
 		from += uint64(n)
 	}
+	var lines []string
+	report := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
 	components := map[string]string{
 		"c1_linked_ids_set_only":           `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`,
 		"c2_issues_by_set_project":         `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String}) AND project_id = 'proj-owner'`,
@@ -57,21 +62,23 @@ SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(nu
 			mark := serverNowMicros(t, ctx, direct)
 			rows, err := direct.Query(ctx, "/* "+name+" */ "+q, clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner"}))
 			if err != nil {
-				t.Logf("DIAG %s at %d: error %v", name, size, err)
+				report("DIAG %s at %d: error %v", name, size, err)
 				continue
 			}
 			rows.Close()
 			exec(`SYSTEM FLUSH LOGS`)
 			var mem, read uint64
 			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes) FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND startsWith(query, ?)`, mark, "/* "+name+" */").Scan(&mem, &read); err != nil {
-				t.Logf("DIAG %s at %d: log %v", name, size, err)
+				report("DIAG %s at %d: log %v", name, size, err)
 				continue
 			}
-			t.Logf("DIAG %s at %d links: memory=%d read_bytes=%d", name, size, mem, read)
+			report("DIAG %s at %d links: memory=%d read_bytes=%d", name, size, mem, read)
 		}
 	}
 	grow(30_000)
 	measure(30_000)
 	grow(60_000)
 	measure(90_000)
+	sort.Strings(lines)
+	t.Errorf("diagnostic table (failing on purpose so the log shows it):\n%s", strings.Join(lines, "\n"))
 }
