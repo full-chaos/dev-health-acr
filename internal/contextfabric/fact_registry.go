@@ -1073,7 +1073,6 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// said anything, which the prefixed composite can no longer answer.
 		providerReason := result.Reason
 		result.Reason = withNarrowingNote(planned, result.Reason)
-		result.Reason = CombineRequestNote(result.Reason, result.RequestNote)
 		// CHAOS-4099, codex round 3. A read that succeeded over a subject set
 		// the resolver KNOWS is incomplete is a truncated read, and says so.
 		//
@@ -1632,7 +1631,15 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	if result.Watermark != "" {
 		bundle.Watermarks[capability.Kind] = result.Watermark
 	}
-	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, result.Reason, detailSpec)
+	// The kind's coverage source carries the request-level note; a subject's
+	// own coverage row carries only the reason true of every subject of the
+	// kind. The two are kept apart here, never recovered by editing the joined
+	// text.
+	if bundle.kindReasons == nil {
+		bundle.kindReasons = map[FactKind]string{}
+	}
+	bundle.kindReasons[capability.Kind] = clampCoverageText(result.Reason, maxCoverageReasonLength)
+	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, CombineRequestNote(result.Reason, result.RequestNote), detailSpec)
 	// F1: only a provider that actually CONTRIBUTED counts toward the
 	// composed grain. A degraded or empty provider reporting a grain
 	// would let a source that answered nothing coarsen the whole answer.
@@ -2182,18 +2189,4 @@ func CombineRequestNote(reason, note string) string {
 		return reason
 	}
 	return note + "; " + reason
-}
-
-// StripRequestNote removes a note CombineRequestNote added, leaving the part
-// of the reason that holds for every subject of the kind.
-func StripRequestNote(reason, note string) string {
-	if strings.TrimSpace(note) == "" {
-		return reason
-	}
-	for _, variant := range []string{note + "; ", "; " + note, note} {
-		if strings.Contains(reason, variant) {
-			return strings.Replace(reason, variant, "", 1)
-		}
-	}
-	return reason
 }

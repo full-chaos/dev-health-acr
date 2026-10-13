@@ -105,7 +105,9 @@ func (bundle *CanonicalFactBundle) recordOutcome(kind FactKind, branch factReadO
 		}
 	}
 	if result != nil {
-		outcome.Reason = StripRequestNote(outcome.Reason, result.RequestNote)
+		if reason, ok := bundle.kindReasons[kind]; ok {
+			outcome.Reason = reason
+		}
 		if len(result.SubjectReasons) > 0 {
 			outcome.MemberReasons = maps.Clone(result.SubjectReasons)
 		}
