@@ -34,6 +34,7 @@ func TestWorkItemTeamRowsOfOneTeamAreOneEdgeWithoutQuarantine(t *testing.T) {
 	}
 
 	edges := 0
+	winner := ""
 	cursor := ""
 	for page := 0; ; page++ {
 		if page > 50 {
@@ -50,11 +51,17 @@ func TestWorkItemTeamRowsOfOneTeamAreOneEdgeWithoutQuarantine(t *testing.T) {
 		for _, r := range b.Relationships {
 			if r.Type == contractsv1.ContextFabricRelationshipOwnedByTeam && r.From.Kind == contractsv1.ContextFabricSubjectWorkItem && r.To.Label == "T-A" {
 				edges++
+				if v := r.Properties["attribution_source"]; v.String != nil {
+					winner = *v.String
+				}
 			}
 		}
 	}
 	if edges != 1 {
 		t.Fatalf("work item -> T-A edges = %d, want 1", edges)
+	}
+	if winner != "native_team" {
+		t.Fatalf("edge attribution_source = %q, want the primary row's native_team", winner)
 	}
 	if strings.Contains(logged.String(), "duplicate_within_batch") {
 		t.Fatalf("two attribution rows of one (work item, team) reached the batch pass as duplicates:\n%s", logged.String())

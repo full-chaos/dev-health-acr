@@ -1148,6 +1148,16 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 			"reason", "an ADD touch immediately preceded by another ADD, no intervening REMOVE -- treated as a continuation of the already-open interval",
 			"duplicate_add_entity", duplicate, "duplicate_add_entity_rows", duplicateRows)
 	}
+	logWorkItemTeamCollapsed(ctx, logger, orgID, ledger)
+}
+
+// logWorkItemTeamCollapsed reports the work item team attribution rows folded
+// onto one edge per work item and team. The overlap re-walk reads through its
+// own ledger, so the line is written for that ledger too.
+func logWorkItemTeamCollapsed(ctx context.Context, logger *slog.Logger, orgID string, ledger *presenceTelemetryLedger) {
+	if logger == nil {
+		return
+	}
 	if collapsed := ledger.workItemTeamCollapsedCount(); collapsed > 0 {
 		logger.InfoContext(ctx, "devhealthsource collapsed work item team attribution rows onto one edge per work item and team",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
@@ -1273,6 +1283,8 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logRepositoryOwnershipTelemetry(ctx, s.logger, checkpoint.OrgID, repoOwnership)
+	windowPresence := &presenceTelemetryLedger{}
+	defer logWorkItemTeamCollapsed(ctx, s.logger, checkpoint.OrgID, windowPresence)
 	ingest, _ := s.ingest.availableAt(ctx, s.client, s.logger, sourcePlan{now: s.now}.clock())
 	space := cursorSpaceIngest
 	if ingest {
@@ -1284,7 +1296,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		version:         TeamsProjectsSourceVersion,
 		space:           space,
 		tables:          teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
-		windowTables:    teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
+		windowTables:    teamsProjectsTablesFor(&ambiguityLedger{}, windowPresence, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
 		logger:          s.logger,
 		now:             s.now,
 		overlap:         s.overlapDuration(),

@@ -790,9 +790,15 @@ const workItemTeamsWatermark = "max(a.computed_at)"
 // workItemTeamsCurrentOrder picks the row that represents one (work item,
 // team): the primary row before a co-owner row (the is_primary meaning
 // TeamAttributionPredicate fixes), then the latest computed_at (the table is
-// ReplacingMergeTree(computed_at)), then the source name for a stable tie.
-// It is minimised with argMin.
-const workItemTeamsCurrentOrder = "tuple(toUInt8(a.is_primary != 1), -toUnixTimestamp64Micro(a.computed_at), toString(a.source))"
+// ReplacingMergeTree(computed_at)), then source and the attribution repo_id
+// for a total order. It is minimised with ONE argMin over the winner's fields
+// (workItemTeamsWinner), so the source, confidence and evidence ref always
+// come from the same row.
+const workItemTeamsCurrentOrder = "tuple(toUInt8(a.is_primary != 1), -toUnixTimestamp64Micro(a.computed_at), toString(a.source), toString(a.repo_id))"
+
+// workItemTeamsWinner is the winning row's (source, confidence, attribution
+// repo_id).
+const workItemTeamsWinner = "argMin(tuple(toString(a.source), toString(a.confidence), toString(a.repo_id)), " + workItemTeamsCurrentOrder + ")"
 
 // workItemTeamsStatement reads one row per (work item, team). The table keys
 // on source, so a pair can hold a primary row and a co-owner row, or rows of
@@ -800,11 +806,11 @@ const workItemTeamsCurrentOrder = "tuple(toUInt8(a.is_primary != 1), -toUnixTime
 // as one id twice and the batch pass quarantines the second.
 func workItemTeamsStatement(cursor cursorState) string {
 	return `SELECT a.work_item_id, ifNull(a.team_id, '') AS owning_team_id,
-       argMin(toString(a.source), ` + workItemTeamsCurrentOrder + `) AS current_source,
-       argMin(toString(a.confidence), ` + workItemTeamsCurrentOrder + `) AS current_confidence,
+       ` + workItemTeamsWinner + `.1 AS current_source,
+       ` + workItemTeamsWinner + `.2 AS current_confidence,
        toString(w.repo_id) AS work_item_repo_id, ifNull(r.repo, '') AS work_item_repo_slug,
        ` + workItemTeamsWatermark + ` AS observed_at,
-       argMin(toString(a.repo_id), ` + workItemTeamsCurrentOrder + `) AS attribution_repo_id,
+       ` + workItemTeamsWinner + `.3 AS attribution_repo_id,
        count() AS group_rows
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
