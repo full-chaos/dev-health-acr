@@ -35,6 +35,8 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_context_for_task_response_mixed.v1.json":                  "mcp_context_for_task_response.v1.schema.json",
 	"mcp_source_evidence_request.v1.json":                          "mcp_source_evidence_request.v1.schema.json",
 	"mcp_source_evidence_response.v1.json":                         "mcp_source_evidence_response.v1.schema.json",
+	"mcp_source_evidence_request_batch.v1.json":                    "mcp_source_evidence_request.v1.schema.json",
+	"mcp_source_evidence_response_batch.v1.json":                   "mcp_source_evidence_response.v1.schema.json",
 	"mcp_record_episode_request.v1.json":                           "mcp_record_episode_request.v1.schema.json",
 	"mcp_record_episode_response.v1.json":                          "mcp_record_episode_response.v1.schema.json",
 	"mcp_investigate_question_request.v1.json":                     "mcp_investigate_question_request.v1.schema.json",
