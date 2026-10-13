@@ -17,7 +17,7 @@ const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v2"
 
 // workGraphEndpointLabelSQL renders one edge endpoint as words. Only a pull
 // request of the scoped repository carries the repository name and its title,
-// and only an issue linked to such a pull request carries its title; an
+// and only an issue of the scoped repository, linked to such a pull request, carries its title; an
 // endpoint in any other repository is named by kind and number alone, and a
 // bare identifier never reaches the label.
 func workGraphEndpointLabelSQL(id, kind, pr, issue, otherPR string) string {
@@ -29,7 +29,7 @@ func workGraphEndpointLabelSQL(id, kind, pr, issue, otherPR string) string {
 
 const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String} AND p.repo_id = {repo_id:UUID}`
 
-const workGraphIssuesSQL = `SELECT work_item_id, any(ifNull(title, '')) issue_title FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin([source_id, target_id]) FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}) GROUP BY work_item_id HAVING uniqExact(ifNull(title, '')) = 1`
+const workGraphIssuesSQL = `SELECT work_item_id, ifNull(title, '') issue_title FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id IN (SELECT arrayJoin([source_id, target_id]) FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID})`
 
 // Each run is a replacement slice, so files from an earlier run must not be merged into the latest one.
 const fileHotspotLatestSnapshotFilter = ` AND (day, computed_at) = (SELECT day, computed_at FROM file_hotspot_daily WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR toDateTime(day) <= {as_of:Nullable(DateTime64(3, 'UTC'))}) GROUP BY org_id, repo_id, day, computed_at ORDER BY day DESC, computed_at DESC LIMIT 1 SETTINGS force_optimize_projection_name='prj_acr_file_hotspot_runs')`
