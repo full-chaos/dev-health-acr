@@ -51,7 +51,7 @@ func budgetFixture() FactsResponse {
 	for root := 0; root < 4; root++ {
 		response.Coverage = append(response.Coverage, CoverageRow{Kind: "blockers", Subject: RequestSubject{Kind: "team", CanonicalID: fmt.Sprintf("team:%d", root)}, Outcome: OutcomeFactServed})
 	}
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 6; i++ {
 		root := fmt.Sprintf("team:%d", i%4)
 		response.Facts = append(response.Facts, ServedFact{
 			Kind:        "blockers",
@@ -66,7 +66,12 @@ func budgetFixture() FactsResponse {
 
 func TestApplyBudgetCutsExactlyLikeTheOneFactAtATimeCut(t *testing.T) {
 	full, _ := json.Marshal(budgetFixture())
-	for budget := 200; budget <= len(full)+10; budget += 97 {
+	empty := budgetFixture()
+	empty.Facts = nil
+	floor, _ := json.Marshal(empty)
+	// Every integer budget from below the coverage-only size (every fact
+	// cut, coverage over budget) to above the full size (nothing cut).
+	for budget := len(floor) - 20; budget <= len(full)+10; budget++ {
 		fast, slow := budgetFixture(), budgetFixture()
 		applyBudget(&fast, budget)
 		slowBudget(&slow, budget)

@@ -1086,6 +1086,9 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				share, _ := derived.derivedCoverage(kind, subject, served)
 				row.KindState = string(outcome.State)
 				row.Reason = derivedReason(share)
+				if readFailed(outcome) {
+					row.Reason = joinReason(outcome.Reason, row.Reason)
+				}
 				row.Outcome = derivedOutcome(outcome, share)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.UnreachedRoot != nil && outcome.UnreachedRoot.Kind == subject.Kind:
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.UnreachedRoot.State), outcome.UnreachedRoot.Reason
@@ -1117,8 +1120,14 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
 				if share, expanded := derived.derivedCoverage(kind, subject, served); expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
 					row.Reason = joinReason(row.Reason, derivedReason(share))
-					if (share.served > 0 || share.shared) && !servedOutcome(row.Outcome) {
+					lowerBound := share.shared || expansionCut(share.expansion.outcome)
+					switch {
+					case !servedOutcome(row.Outcome):
 						row.Outcome = derivedOutcome(outcome, share)
+					case lowerBound && (row.Outcome == OutcomeFactServed || row.Outcome == OutcomeMeasuredZero):
+						// The root's own fact stands, but what it reaches
+						// through the expansion is not complete.
+						row.Outcome = OutcomeTruncated
 					}
 				}
 			}
@@ -1126,6 +1135,15 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 		}
 	}
 	return rows
+}
+
+// readFailed reports a kind whose provider read did not complete.
+func readFailed(outcome contextfabric.FactKindOutcome) bool {
+	switch outcome.Branch {
+	case "unconfigured", "scope_gap", "failed", "rejected":
+		return true
+	}
+	return false
 }
 
 // reachedSubjects reports a root that scope expansion reached subjects from

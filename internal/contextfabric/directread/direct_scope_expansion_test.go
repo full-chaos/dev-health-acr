@@ -105,7 +105,7 @@ func TestDirectReadExpandsWithTheCallersPrincipal(t *testing.T) {
 				t.Fatalf("derived fact not served with its root: %s", mustJSON(t, response))
 			}
 			row := coverageOf(t, response, "blockers", teamT)
-			if row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "read through 1 work items reached by scope expansion, 1 with a fact") {
+			if row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "scope expansion reached 1 work items, 1 with a served fact") {
 				t.Fatalf("root row %+v", row)
 			}
 			validateAgainst(t, "mcp_read_facts_response.v1.schema.json", []byte(mustJSON(t, response)))
@@ -420,5 +420,108 @@ func TestDirectReadMarksEveryShareOfAMultiRootExpansionAsALowerBound(t *testing.
 	}
 	if len(response.Facts) != 2 || response.Status != StatusPartial {
 		t.Fatalf("facts %d status %q", len(response.Facts), response.Status)
+	}
+}
+
+// teamRollupProvider answers each work item with a fact and each team with a
+// rollup fact of its own.
+func teamRollupProvider() *stubProvider {
+	provider := perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam)
+	provider.read = func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		result := contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}
+		for _, subject := range query.Subjects {
+			result.Facts = append(result.Facts, contextfabric.CanonicalFact{Kind: contextfabric.FactBlockers, Subject: subject, Fields: map[string]contextfabric.FactValue{"n": intValue(1)}})
+		}
+		return result, nil
+	}
+	return provider
+}
+
+// A team whose own rollup is served but whose reached work item was
+// attributed to another requested team is not a complete row.
+func TestDirectReadSharedTeamWithItsOwnRollupIsNotComplete(t *testing.T) {
+	shared := labelled(workA, "WI-A")
+	expander := &scriptedExpander{expand: func(contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		return contextfabric.FactScopeExpansionResult{
+			Targets:    []contextfabric.SubjectRef{shared},
+			TargetRoot: map[string]contextfabric.SubjectRef{contextfabric.FactSubjectKey(shared): teamT},
+			Counts:     contextfabric.FactScopeExpansionCounts{CandidateCount: 1},
+		}
+	}}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, teamRollupProvider())
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{
+		{Kind: "team", CanonicalID: teamT.CanonicalID}, {Kind: "team", CanonicalID: teamU.CanonicalID},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servedOn(response, "blockers", teamU) == nil {
+		t.Fatalf("team U rollup not served: %s", mustJSON(t, response.Facts))
+	}
+	if row := coverageOf(t, response, "blockers", teamU); row.Outcome != OutcomeTruncated || !strings.Contains(row.Reason, "is counted under only one of them") {
+		t.Fatalf("team U row %+v, want truncated with the lower-bound note", row)
+	}
+	if response.Status != StatusPartial {
+		t.Fatalf("status %q, want partial", response.Status)
+	}
+}
+
+// A directly supported team whose additive expansion was cut and served no
+// fact never reads as a complete "no fact".
+func TestDirectReadCutAdditiveExpansionWithoutFactIsNotComplete(t *testing.T) {
+	expander := &scriptedExpander{expand: func(request contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
+		targets := make([]contextfabric.SubjectRef, 0, request.Limit+1)
+		for i := 0; i <= request.Limit; i++ {
+			targets = append(targets, contextfabric.SubjectRef{Kind: request.TargetKind, CanonicalID: fmt.Sprintf("work_item.v2:w%04d", i), Label: fmt.Sprintf("W%d", i)})
+		}
+		return contextfabric.FactScopeExpansionResult{Targets: targets, Counts: contextfabric.FactScopeExpansionCounts{CandidateCount: len(targets)}}
+	}}
+	empty := perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam)
+	empty.read = func(contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
+	}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, empty)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := coverageOf(t, response, "blockers", teamT); row.Outcome != OutcomeUnavailable || !strings.Contains(row.Reason, string(contextfabric.FactScopeExpandedPartial)) {
+		t.Fatalf("row %+v, want unavailable naming the cut", row)
+	}
+	if response.Status != StatusPartial {
+		t.Fatalf("status %q, want partial", response.Status)
+	}
+}
+
+type failingProvider struct{ capability contextfabric.FactCapability }
+
+func (p failingProvider) Capability() contextfabric.FactCapability { return p.capability }
+
+func (failingProvider) ReadFacts(context.Context, storage.Principal, contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	return contextfabric.FactProviderResult{}, fmt.Errorf("deployments store down")
+}
+
+// A provider failure on the reached subjects keeps its own cause in the
+// root's row, and the row does not claim the subjects were read.
+func TestDirectReadReachedRootKeepsTheProviderFailureCause(t *testing.T) {
+	expander := &scriptedExpander{expand: expandTo(labelled(repoA, "acme/a"))}
+	provider := failingProvider{capability: perSubjectProvider(contextfabric.FactDeployments, contractsv1.ContextFabricSubjectRepository).capability}
+	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, provider)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"deployments"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := coverageOf(t, response, "deployments", projectQ)
+	ledger := ""
+	if row.Outcome != OutcomeUnavailable || strings.Contains(row.Reason, "read through") || !strings.Contains(row.Reason, "scope expansion reached 1 repositories") {
+		t.Fatalf("row %+v", row)
+	}
+	for _, source := range []string{"failed", "unavailable", "error"} {
+		if strings.Contains(strings.ToLower(row.Reason), source) {
+			ledger = source
+		}
+	}
+	if ledger == "" {
+		t.Fatalf("row reason %q does not keep the provider failure cause", row.Reason)
 	}
 }
