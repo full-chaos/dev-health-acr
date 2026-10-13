@@ -73,6 +73,15 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			name:           "caller.tool_access",
+			kind:           vocabAdditive,
+			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
+			sites:          []string{"data_catalog:caller.tool_access.additionalProperties"},
+			// schema: "available", "no_data_read", "not_servable"
+			goSet:      strs(string(directread.ToolAccessAvailable), string(directread.ToolAccessNoDataRead), string(directread.ToolAccessNotServable)),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:  "status",
 			kind:  vocabFrozen,
 			why:   "state-machine",
