@@ -331,3 +331,60 @@ func TestTeamBlockersDriverIDStaysTheSameWhenItsCountRankChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestServedDriverRankIsTheServersEvenWhenASynthesizerStatesOne(t *testing.T) {
+	a, _, _ := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "kind census match", Members: []CohortMember{{Subject: a, Rank: 1, InclusionReasons: []string{"matched"}, EvidenceRefIDs: []string{"evidence_team_roster"}}}}
+	interpretation := InterpretedQuestion{
+		Shape: ShapeDiscoveredCohort, RequestedJudgment: "teams_blocked",
+		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactBlockers}},
+	}
+	graph := graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{"evidence_model_1"},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}},
+	}
+	modelDriver := DriverJudgment{
+		DriverID: "model_driver_0001", Standing: DriverContributing, Category: "relationship", Title: "A model driver", Summary: "A model driver.",
+		AffectedSubjects: []SubjectRef{a}, EvidenceRefIDs: []string{"evidence_model_1"}, Derivation: DerivationRuleInferred,
+		EpistemicStatus: EpistemicInferred, Confidence: 0.5, Current: true, Rank: 1,
+	}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return interpretation, nil
+		}),
+		Graph: graph,
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, _ CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{Facts: []CanonicalFact{blockersFact(a, SourceAvailable, intp(9), nil)},
+				Coverage: Coverage{Sources: []SourceObservation{{Source: "canonical_fact:blockers", State: SourceAvailable}}, DegradedReasons: []string{}},
+				Version:  "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, _ SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{Status: InvestigationPartial, DirectJudgment: "This investigation is partial: some canonical or graph coverage was unavailable.",
+				CurrentState: "x", DeterministicAnswer: "x", StrongestPressures: []string{}, Drivers: []DriverJudgment{modelDriver},
+				RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{},
+				EvidenceRefIDs: []string{"evidence_model_1"}, ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Warnings: []string{},
+				Versions: VersionSet{Backend: "test", ProjectionVersion: "p", QueryVersion: "q", InterpretationVersion: "i", SynthesisVersion: "s"}}, nil
+		}),
+		Results: &resultStoreStub{}, Telemetry: &recordingTelemetry{},
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(300, 0).UTC() }, NewResultID: func() string { return "result_rank0001" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_rank0001"
+	request.Question = "which teams are blocked?"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, driver := range result.Drivers {
+		switch {
+		case driver.DriverID == "model_driver_0001" && driver.Rank != 0:
+			t.Errorf("a stated rank survived on the model's driver: %+v", driver)
+		case driver.Category == "blockers" && driver.Rank != 1:
+			t.Errorf("the server's blockers driver rank = %d, want 1", driver.Rank)
+		}
+	}
+}

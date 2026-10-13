@@ -402,6 +402,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		draft := copyResultDeep(result)
 		pending.Draft = &draft
 	}
+	for index := range result.Drivers {
+		result.Drivers[index].Rank = 0
+	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
 	result.RequestID = request.RequestID
