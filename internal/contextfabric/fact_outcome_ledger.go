@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"maps"
 	"slices"
+	"strings"
 )
 
 // The fact outcome ledger (CHAOS-7073, design CHAOS-7036 section C.5).
@@ -38,6 +39,9 @@ type FactKindOutcome struct {
 	Members map[string]string
 	// MemberReasons are reasons true of one subject, keyed by FactSubjectKey.
 	MemberReasons map[string]string
+	// RequestNote is the sentence true of the request as a whole, kept apart
+	// from Reason; empty when the provider gave none.
+	RequestNote string
 	// NotApplicable are subjects the provider marked not applicable, keyed by
 	// FactSubjectKey.
 	NotApplicable map[string]struct{}
@@ -129,6 +133,9 @@ func (bundle *CanonicalFactBundle) recordOutcome(kind FactKind, branch factReadO
 	if result != nil {
 		if reason, ok := bundle.kindReasons[kind]; ok {
 			outcome.Reason = reason
+		}
+		if note := strings.TrimSpace(withoutProviderPackageLabel(result.RequestNote)); note != "" {
+			outcome.RequestNote = clampCoverageText(note, maxCoverageReasonLength)
 		}
 		if len(result.SubjectReasons) > 0 {
 			outcome.MemberReasons = maps.Clone(result.SubjectReasons)
