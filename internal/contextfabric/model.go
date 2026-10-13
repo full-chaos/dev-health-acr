@@ -984,6 +984,9 @@ type CanonicalFactBundle struct {
 	// this is engine bookkeeping about how a read was planned, never part of
 	// the evidence a bundle carries.
 	Scope *FactReadScope `json:"-"`
+	// kindReasons is each completed kind's reason without the request-level
+	// note, for the per-subject coverage rows.
+	kindReasons map[FactKind]string
 	// ReadSubjects records, per fact kind, the subjects a provider was
 	// actually queried for and answered. Coverage.Sources is one entry per
 	// kind for the whole investigation, so it cannot say WHICH subject a

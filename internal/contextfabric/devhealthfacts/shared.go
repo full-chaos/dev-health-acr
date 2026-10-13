@@ -1018,10 +1018,16 @@ import (
 // pull requests (never the whole mix of a repository it does not own). A
 // stored answer can differ.
 //
-// v201 -> v202: team and project blockers facts serve the age of the oldest
+// v201 -> v202: a coverage row carries the reason of its own subject. A
+// sentence about some of the requested teams (N of M own no repository) is
+// served once for the request and no longer on the row of a team it is false
+// for; a team that owns nothing gets its own reason. A stored answer can
+// differ.
+//
+// v202 -> v203: team and project blockers facts serve the age of the oldest
 // open blocker (oldest_blocked_age_days, with its basis or an unavailable
-// reason). An answer saved under v201 carries no age.
-const QueryVersion = "devhealthfacts.clickhouse.v202"
+// reason). An answer saved under v202 carries no age.
+const QueryVersion = "devhealthfacts.clickhouse.v203"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

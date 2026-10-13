@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -1118,6 +1119,12 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.Outcome, row.Reason = OutcomeUnavailable, "the fact registry recorded no outcome for this kind"
 			default:
 				row.KindState, row.Reason = string(outcome.State), outcome.Reason
+				if own := outcome.MemberReasons[key]; own != "" {
+					row.Reason = own
+					if outcome.Reason != "" && !strings.Contains(own, outcome.Reason) {
+						row.Reason = clampRowReason(own + "; " + outcome.Reason)
+					}
+				}
 				if state, ok := outcome.Members[key]; ok && providerMemberStates[state] {
 					row.ProviderState = state
 				}
@@ -1139,6 +1146,16 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 		}
 	}
 	return rows
+}
+
+// clampRowReason keeps a joined row reason inside the bound a kind's own
+// coverage reason has.
+func clampRowReason(reason string) string {
+	runes := []rune(reason)
+	if len(runes) <= contractsv1.ContextFabricSourceObservationReasonMaxLength {
+		return reason
+	}
+	return strings.TrimRightFunc(string(runes[:contractsv1.ContextFabricSourceObservationReasonMaxLength]), unicode.IsSpace)
 }
 
 // readFailed reports a kind whose provider read did not complete.
