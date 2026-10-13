@@ -222,6 +222,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 // memory past the 1.15x slope.
 func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testing.T) {
 	const ceiling = uint64(56 << 20)
+	const statementCeiling = uint64(12 << 20)
 	base := workGraphStatementCost(t, 50000, false)
 	filler := workGraphStatementCost(t, 125000, false)
 	noise := workGraphStatementCost(t, 50000, true)
@@ -229,6 +230,11 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise} {
 		if stage.memory >= ceiling || stage.gateMemory >= ceiling {
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes and its issue gate at %d, want under %d", name, stage.memory, stage.gateMemory, ceiling)
+		}
+		// The statement alone peaks near 2.5 MB without titles and 3.5 MB with
+		// them; a title join per endpoint held 38 MB.
+		if stage.memory >= statementCeiling {
+			t.Errorf("%s: work_graph.v1 peaked at %d bytes, want under %d", name, stage.memory, statementCeiling)
 		}
 	}
 	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise} {

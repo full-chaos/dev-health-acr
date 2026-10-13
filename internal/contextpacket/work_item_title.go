@@ -35,6 +35,14 @@ const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.tit
 	`AND (w.repo_id = {repo_id:UUID} OR w.work_item_id IN {readable_repositoryless_issue_ids:Array(String)}) ` +
 	`AND lengthUTF8(w.title) BETWEEN 1 AND 1000 GROUP BY w.work_item_id`
 
+// workGraphIssueTitlesMapSQL computes the titles once per statement as a
+// scalar map (issue key to title) that the endpoint labels look up. Joining
+// the lookup per endpoint held about 36 MB of join state; the scalar map costs
+// under 1 MB on the same rows.
+const workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) AS titles FROM (` + workGraphIssueTitlesSQL + `)) AS wit`
+
+func workGraphIssueTitleOf(id string) string { return "wit.titles[" + id + "]" }
+
 // RepositorylessIssueReader is optionally implemented by an executor that can
 // decide which repository-less issues the caller may read.
 type RepositorylessIssueReader interface {
