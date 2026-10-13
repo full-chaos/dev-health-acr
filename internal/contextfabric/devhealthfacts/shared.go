@@ -1055,7 +1055,12 @@ import (
 // severity omission, owning-teams cut) is served on the rows it describes and
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
-const QueryVersion = "devhealthfacts.clickhouse.v209"
+//
+// v209 -> v210: a team or project landscape fact reads one copy of each
+// identity's stats instead of the three per-map copies Ops writes, and its
+// rows no longer carry map_name. An answer saved under v209 holds every
+// churn, delivery and identity count three times.
+const QueryVersion = "devhealthfacts.clickhouse.v210"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -171,13 +171,17 @@ func t4Cases() []t4Case {
 
 	// ---- landscape
 	add(t4Case{name: "landscape/team", kind: contextfabric.FactLandscape, subjects: team, tables: []fakeTable{
-		{match: "FROM ic_landscape_rolling_30d", rows: t4Rows(66, func(i int, _ string) []any {
-			return landscapeTeamRow("CHAOS", fmt.Sprintf("map_%02d", i), 4, 1200, 30, 18.5, 6)
+		{match: "avg(x_raw)", rows: [][]any{{"CHAOS", "churn_throughput", "2026-02-21", 6.1, 3.4}}},
+		{match: "sum(one_churn)", rows: t4Rows(1, func(i int, _ string) []any {
+			return landscapeTeamRow("CHAOS", 4, 1200, 30, 18.5, 6)
 		})},
 	}})
 	add(t4Case{name: "landscape/project", kind: contextfabric.FactLandscape, subjects: proj, tables: []fakeTable{
-		{match: "FROM team_project_ownership", rows: t4Rows(66, func(i int, _ string) []any {
-			return landscapeProjectRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), "churn_throughput", 1, 10, 1, 5.0, 2)
+		{match: "avg(il.x_raw)", rows: t4Rows(66, func(i int, _ string) []any {
+			return []any{"linear:proj-1", fmt.Sprintf("team-%02d", i), "churn_throughput", "2026-02-21", 6.1, 3.4}
+		})},
+		{match: "sum(il.one_churn)", rows: t4Rows(66, func(i int, _ string) []any {
+			return landscapeProjectRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), 1, 10, 1, 5.0, 2)
 		})},
 	}})
 

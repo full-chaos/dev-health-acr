@@ -37,15 +37,16 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 		exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			orgID, "github", team, "proj-oc", "OC1", "native", synced, nil, synced)
 	}
-	seed := func(team, identity, mapName string, churn uint64, delivery uint32, cycle float64, wip uint32) {
-		exec(`INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, as_of_day, identity_id, team_id, map_name, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			orgID, repoUUID("repo-oc"), date(2026, 6, 28), identity, team, mapName, churn, delivery, cycle, wip, ts(2026, 6, 28, 6, 0, 0))
+	seed := func(team, identity, mapName string, x, y float64, churn uint64, delivery uint32, cycle float64, wip uint32) {
+		exec(`INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, as_of_day, identity_id, team_id, map_name, x_raw, y_raw, x_norm, y_norm, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			orgID, repoUUID("repo-oc"), date(2026, 6, 28), identity, team, mapName, x, y, 0.5, 0.5, churn, delivery, cycle, wip, ts(2026, 6, 28, 6, 0, 0))
 	}
-	for _, mapName := range []string{"churn_throughput", "cycle_throughput", "wip_throughput"} {
-		seed("team-three-maps", "alice", mapName, 100, 2, 5.0, 3)
-		seed("team-three-maps", "bob", mapName, 50, 1, 7.0, 4)
+	for index, mapName := range []string{"churn_throughput", "cycle_throughput", "wip_throughput"} {
+		base := float64(index * 10)
+		seed("team-three-maps", "alice", mapName, base+1, 1, 100, 2, 5.0, 3)
+		seed("team-three-maps", "bob", mapName, base+3, 3, 50, 1, 7.0, 4)
 	}
-	seed("team-one-map", "carol", "churn_throughput", 10, 1, 3.0, 1)
+	seed("team-one-map", "carol", "churn_throughput", 7, 8, 10, 1, 3.0, 1)
 
 	read := func(subject contextfabric.SubjectRef) contextfabric.CanonicalFact {
 		t.Helper()
@@ -86,13 +87,44 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 		t.Fatalf("team area_breakdown rows = %d, want 1", len(teamRows))
 	}
 	check("team with three maps", teamRows[0], threeMaps)
+	checkCoordinates := func(label string, rows []contextfabric.FactValueRow, want map[string][2]float64) {
+		t.Helper()
+		if len(rows) != len(want) {
+			t.Fatalf("%s: map_coordinates rows = %d, want %d", label, len(rows), len(want))
+		}
+		for _, row := range rows {
+			name := *row.Fields["map_name"].String
+			expected, ok := want[name]
+			if !ok {
+				t.Fatalf("%s: unexpected map %s", label, name)
+			}
+			if *row.Fields["x_raw_mean"].Number != expected[0] || *row.Fields["y_raw_mean"].Number != expected[1] {
+				t.Fatalf("%s: %s coordinates = (%v, %v), want %v", label, name, *row.Fields["x_raw_mean"].Number, *row.Fields["y_raw_mean"].Number, expected)
+			}
+			for _, stat := range []string{"identity_count", "churn_loc_30d", "delivery_units_30d", "cycle_p50_30d_hours_avg", "wip_max_30d"} {
+				if _, has := row.Fields[stat]; has {
+					t.Fatalf("%s: map_coordinates row repeats the shared stat %s", label, stat)
+				}
+			}
+		}
+	}
+	threeMapFact := read(teamSubject("team-three-maps"))
+	checkCoordinates("team", threeMapFact.Fields["map_coordinates"].Rows, map[string][2]float64{
+		"churn_throughput": {2, 2}, "cycle_throughput": {12, 2}, "wip_throughput": {22, 2},
+	})
+	oneMapFact := read(teamSubject("team-one-map"))
+	checkCoordinates("one-map team", oneMapFact.Fields["map_coordinates"].Rows, map[string][2]float64{"churn_throughput": {7, 8}})
 	oneMapRows := read(teamSubject("team-one-map")).Fields["area_breakdown"].Rows
 	if len(oneMapRows) != 1 {
 		t.Fatalf("one-map team area_breakdown rows = %d, want 1", len(oneMapRows))
 	}
 	check("team with one map", oneMapRows[0], oneMap)
 
-	projectRows := read(projectSubject("github", "proj-oc")).Fields["team_breakdown"].Rows
+	projectFact := read(projectSubject("github", "proj-oc"))
+	if got := len(projectFact.Fields["map_coordinates"].Rows); got != 4 {
+		t.Fatalf("project map_coordinates rows = %d, want 4 (three maps of one team, one of the other)", got)
+	}
+	projectRows := projectFact.Fields["team_breakdown"].Rows
 	if len(projectRows) != 2 {
 		t.Fatalf("project team_breakdown rows = %d, want 2 (one per owning team)", len(projectRows))
 	}
@@ -110,7 +142,7 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT max(memory_usage) FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE '%one_churn%' AND query NOT LIKE '%system.query_log%'`)
+	rows, err := direct.Query(ctx, `SELECT max(memory_usage) FROM system.query_log WHERE type = 'QueryFinish' AND (query LIKE '%one_churn%' OR query LIKE '%avg(x_raw)%' OR query LIKE '%avg(il.x_raw)%') AND query NOT LIKE '%system.query_log%'`)
 	if err != nil {
 		t.Fatalf("query_log: %v", err)
 	}
