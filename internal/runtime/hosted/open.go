@@ -163,7 +163,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Now: request.options.Now, ServiceVersion: request.options.ServiceVersion,
 		MinimumSidecarVersion: request.config.MinimumSidecarVersion, SnapshotStore: postgres.packets,
 		Observer: assemblyObserver, StoreBackend: contextpacket.StoreBackendClickHouse,
-		Tracer: observability.NewAssemblyTraceBoundary(hooks, nil),
+		Tracer:         observability.NewAssemblyTraceBoundary(hooks, nil),
+		ActionFindings: devhealthfacts.NewActionFindingsSource(clickhouse.queryClient),
 	})
 	capabilities := api.StaticCapabilitiesProvider{Value: contractsv1.Capabilities{
 		SchemaVersion: contractsv1.CapabilitiesSchema, Service: "dev-health-acr", ServiceVersion: request.options.ServiceVersion,

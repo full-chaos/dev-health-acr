@@ -3,6 +3,7 @@ package contextpacket_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *tes
 			t.Errorf("action item served without a stored source: %s", item.Title)
 		}
 	}
-	if !slices.Contains(packet.Warnings, contextpacket.ActionItemsUnavailableWarning) {
+	if !slices.Contains(packet.Warnings, "action_items_unavailable:"+contextpacket.ActionUnavailableNoSource) {
 		t.Errorf("no coverage line for absent action items: %v", packet.Warnings)
 	}
 }
@@ -106,5 +107,89 @@ func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.
 	}
 	if roles["ev-c-revert"] != contractsv1.CategoryEvidence {
 		t.Errorf("the reverting commit served as %q, want evidence", roles["ev-c-revert"])
+	}
+}
+
+type fixedActionFindings struct {
+	result contextpacket.ActionFindingsResult
+}
+
+func (f fixedActionFindings) ActionFindings(context.Context, storage.Principal, string) (contextpacket.ActionFindingsResult, error) {
+	return f.result, nil
+}
+
+func TestOnlyAnActiveBlockersDependencyIsServedAsPressure(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-wi-open", "work_item", "PAY-12", "Payment retries", "in_progress", at),
+		roleRow("ev-wi-done", "work_item", "PAY-17", "Ledger export", "done", at),
+		roleRow("ev-dep-open", "work_item_dependency", "dep-a", "PAY-12 blocks PAY-13", "BLOCKS", at),
+		roleRow("ev-dep-done", "work_item_dependency", "dep-b", "PAY-17 blocks PAY-18", "BLOCKS", at),
+		roleRow("ev-dep-inv", "work_item_dependency", "dep-c", "PAY-19 blocked_by PAY-12", "BLOCKED_BY", at),
+		roleRow("ev-dep-unk", "work_item_dependency", "dep-d", "OTHER-1 blocks PAY-13", "BLOCKS", at),
+		roleRow("ev-dep-rel", "work_item_dependency", "dep-e", "PAY-12 relates_to PAY-13", "RELATES", at),
+	}
+	roles, _ := servedRoles(t, evidence)
+	want := map[string]contractsv1.PacketCategory{
+		"ev-dep-open": contractsv1.CategoryPressure, "ev-dep-inv": contractsv1.CategoryPressure,
+		"ev-dep-done": contractsv1.CategoryEvidence, "ev-dep-unk": contractsv1.CategoryEvidence, "ev-dep-rel": contractsv1.CategoryEvidence,
+	}
+	for id, category := range want {
+		if roles[id] != category {
+			t.Errorf("%s served as %q, want %q", id, roles[id], category)
+		}
+	}
+}
+
+func TestStoredTeamFindingsAreServedAsActionAndCarryNoUnavailableWarning(t *testing.T) {
+	request := fixtureRequest("req-action", "main", "")
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{roleRow("ev-commit-1", "commit", "abcdef1", "work", "work", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))},
+	}}
+	options := fixedOptions()
+	options.ActionFindings = fixedActionFindings{result: contextpacket.ActionFindingsResult{Teams: []contextpacket.TeamActionFindings{{
+		TeamID: "CHECKOUT", EvidenceRefID: "acr:v1:team:CHECKOUT",
+		Findings: []contextpacket.ActionFinding{{RuleID: "saturation", Severity: "high", Title: "Team is saturating. Reduce active work before adding scope", SuccessCriterion: "active work drops"}},
+	}}}}
+	packet, err := contextpacket.NewAssembler(store, options).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	var action *contractsv1.ContextPacketItem
+	for index := range packet.Items {
+		if packet.Items[index].Category == contractsv1.CategoryAction {
+			action = &packet.Items[index]
+		}
+	}
+	if action == nil || !strings.Contains(action.Title, "saturating") {
+		t.Fatalf("no stored-finding action item: %#v", packet.Items)
+	}
+	for _, warning := range packet.Warnings {
+		if strings.HasPrefix(warning, "action_items_unavailable:") {
+			t.Fatalf("unexpected warning %q", warning)
+		}
+	}
+}
+
+func TestUnreadableFindingsServeNoActionAndNameTheReason(t *testing.T) {
+	request := fixtureRequest("req-action-none", "main", "")
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{roleRow("ev-commit-1", "commit", "abcdef1", "work", "work", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))},
+	}}
+	options := fixedOptions()
+	options.ActionFindings = fixedActionFindings{result: contextpacket.ActionFindingsResult{Reason: contextpacket.ActionUnavailableNoGrant}}
+	packet, err := contextpacket.NewAssembler(store, options).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	for _, item := range packet.Items {
+		if item.Category == contractsv1.CategoryAction {
+			t.Fatalf("action served without a readable finding: %s", item.Title)
+		}
+	}
+	if !slices.Contains(packet.Warnings, "action_items_unavailable:"+contextpacket.ActionUnavailableNoGrant) {
+		t.Fatalf("warnings = %v", packet.Warnings)
 	}
 }

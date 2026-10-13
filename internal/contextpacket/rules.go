@@ -51,6 +51,10 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3}
 }
 
+func pressureRule() rule {
+	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+}
+
 func causeRule() rule {
 	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2}
 }

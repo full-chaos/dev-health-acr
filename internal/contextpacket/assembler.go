@@ -29,6 +29,7 @@ type Options struct {
 	Observer                              AssemblyObserver
 	StoreBackend                          StoreBackend
 	Tracer                                AssemblyTraceBoundary
+	ActionFindings                        ActionFindingsSource
 }
 type Assembler struct {
 	store   storage.EvidenceStore
@@ -110,7 +111,12 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
-	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), append(warnings(bundle), ActionItemsUnavailableWarning)
+	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
+	actionEvidence, actionReason := a.actionEvidence(ctx, principal, scope, packet.Freshness.AsOf)
+	if actionReason != "" {
+		packet.Warnings = sortedUnique(append(packet.Warnings, "action_items_unavailable:"+actionReason))
+	}
+	bundle.Evidence = append(bundle.Evidence, actionEvidence...)
 	applyEvidenceQuarantine(&packet, validation)
 	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
@@ -237,4 +243,33 @@ func sameScope(a, b contractsv1.ResolvedScope) bool {
 func packetID(p storage.Principal, r contractsv1.ContextPacketRequest) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{p.OrgID, r.RequestID, r.Repository.Slug, r.Scope.Branch, r.Scope.CommitSHA}, "\000")))
 	return "pkt_" + hex.EncodeToString(sum[:12])
+}
+
+// actionEvidence turns the stored findings of the repository's owning team(s)
+// into recommendation evidence. Nothing is generated: with no source, no
+// owner, no grant or no fired finding it returns none and the closed reason.
+func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Principal, scope contractsv1.ResolvedScope, asOf time.Time) ([]contractsv1.EvidenceRef, string) {
+	if a.options.ActionFindings == nil {
+		return nil, ActionUnavailableNoSource
+	}
+	if scope.RepoID == "" || strings.HasPrefix(scope.RepoID, "unresolved:") {
+		return nil, ActionUnavailableNoOwner
+	}
+	result, err := a.options.ActionFindings.ActionFindings(ctx, principal, scope.RepoID)
+	if err != nil {
+		return nil, ActionUnavailableReadFailed
+	}
+	served := []contractsv1.EvidenceRef{}
+	for _, team := range result.Teams {
+		if ref, ok := actionFindingEvidence(team, asOf); ok {
+			served = append(served, ref)
+		}
+	}
+	if len(served) == 0 {
+		if result.Reason == "" {
+			return nil, ActionUnavailableNoneFired
+		}
+		return nil, result.Reason
+	}
+	return served, ""
 }

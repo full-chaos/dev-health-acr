@@ -112,7 +112,47 @@ func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 	for id := range linkedCauseRefs(evidence) {
 		resolver[id] = causeRule()
 	}
+	for id := range activeBlockerRefs(evidence) {
+		resolver[id] = pressureRule()
+	}
 	return resolver
+}
+
+var closedWorkItemStatuses = map[string]bool{"done": true, "canceled": true, "cancelled": true, "closed": true, "resolved": true}
+
+// activeBlockerRefs returns the dependency rows that state a blocker whose
+// own stored work item is in the same evidence set with a non-closed status.
+// An unknown blocker (not in the set, empty status) is never pressure.
+func activeBlockerRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
+	status := map[string]string{}
+	for _, ref := range evidence {
+		if ref.Source.EntityType == "work_item" {
+			status[ref.Source.EntityID] = strings.ToLower(strings.TrimSpace(ref.Citation))
+		}
+	}
+	active := map[string]bool{}
+	for _, ref := range evidence {
+		if ref.Source.EntityType != "work_item_dependency" {
+			continue
+		}
+		parts := strings.Fields(ref.Source.DisplayLabel)
+		if len(parts) != 3 {
+			continue
+		}
+		var blocker string
+		switch strings.ToLower(parts[1]) {
+		case "blocks":
+			blocker = parts[0]
+		case "blocked_by", "is_blocked_by":
+			blocker = parts[2]
+		default:
+			continue
+		}
+		if current, known := status[blocker]; known && current != "" && !closedWorkItemStatuses[current] {
+			active[ref.EvidenceRefID] = true
+		}
+	}
+	return active
 }
 
 func (r roleResolver) rule(ref contractsv1.EvidenceRef) rule {
@@ -120,14 +160,9 @@ func (r roleResolver) rule(ref contractsv1.EvidenceRef) rule {
 	if linked, ok := r[ref.EvidenceRefID]; ok {
 		linked.id, linked.claim = base.id, base.claim
 		if _, explicit := explicitRuleOutcome(ref.Metadata); !explicit {
-			linked.id = causeRule().id
+			linked.id = r[ref.EvidenceRefID].id
 		}
 		return linked
 	}
 	return base
 }
-
-// ActionItemsUnavailableWarning discloses that no persisted recommendation
-// source is read by context_for_task, so an empty action category means
-// "not served", never "nothing to do".
-const ActionItemsUnavailableWarning = "action_items_unavailable:no_stored_recommendation_source"
