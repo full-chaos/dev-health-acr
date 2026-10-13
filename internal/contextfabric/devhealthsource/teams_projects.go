@@ -321,7 +321,7 @@ func teamsProjectsTablesFor(omissions *ambiguityLedger, presence *presenceTeleme
 		{name: "teams", dimension: true, query: teamsQuery(teamAuth), subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}},
 		{name: "projects", dimension: true, query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
 		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence, ingest)},
-		{name: "work_item_team_attributions", query: queryWorkItemTeams},
+		{name: "work_item_team_attributions", query: workItemTeamsQuery(presence)},
 		{name: "team_project_ownership", query: projectTeamsQuery(omissions, ingest)},
 		// CHAOS-6561: repository -> team OWNED_BY_TEAM, the ownership edge
 		// team_repo_ownership carries (queryTeams reads the same table only
@@ -890,6 +890,9 @@ type presenceTelemetryLedger struct {
 	// malformed touch) -- but still counted, never silently absorbed.
 	duplicateAdd     map[string]struct{} // distinct "provider\x00project_id" with a duplicate-ADD touch
 	duplicateAddRows int                 // total ROWS collapsed for a duplicate-ADD touch
+	// workItemTeamCollapsed counts work_item_team_attributions rows folded
+	// into another row of the same (work item, team) by queryWorkItemTeams.
+	workItemTeamCollapsed int
 	// membership is the page-level record of the read
 	// (membership_read_telemetry.go).
 	membership membershipReadLedger
@@ -957,6 +960,24 @@ func (l *presenceTelemetryLedger) recordDuplicateAdd(provider, projectID string)
 	}
 	l.duplicateAdd[provider+"\x00"+projectID] = struct{}{}
 	l.duplicateAddRows++
+}
+
+func (l *presenceTelemetryLedger) recordWorkItemTeamCollapsed(rows int) {
+	if l == nil || rows <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.workItemTeamCollapsed += rows
+}
+
+func (l *presenceTelemetryLedger) workItemTeamCollapsedCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.workItemTeamCollapsed
 }
 
 // presenceReadCount reports how many rows this run read for one (source,
@@ -1126,6 +1147,11 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"reason", "an ADD touch immediately preceded by another ADD, no intervening REMOVE -- treated as a continuation of the already-open interval",
 			"duplicate_add_entity", duplicate, "duplicate_add_entity_rows", duplicateRows)
+	}
+	if collapsed := ledger.workItemTeamCollapsedCount(); collapsed > 0 {
+		logger.InfoContext(ctx, "devhealthsource collapsed work item team attribution rows onto one edge per work item and team",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
+			"work_item_team_rows_collapsed", collapsed)
 	}
 }
 
