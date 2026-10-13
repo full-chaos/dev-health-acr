@@ -221,15 +221,18 @@ func TestLiveMembershipStatementRunsPerTick(t *testing.T) {
 	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
-	var count, peak uint64
-	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
+	var count, peak, notSingleThread uint64
+	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), countIf(Settings['max_threads'] != '1') FROM system.query_log
 WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND positionCaseInsensitive(query, 'leadInFrame') > 0 AND query NOT LIKE 'INSERT%'`,
-		steadyStart.UTC().Format("2006-01-02 15:04:05.000000")).Scan(&count, &peak); err != nil {
+		steadyStart.UTC().Format("2006-01-02 15:04:05.000000")).Scan(&count, &peak, &notSingleThread); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("SLOPE steady 4 calls: statements=%d peak_memory=%d", count, peak)
 	if count == 0 {
 		t.Fatal("the query log holds no membership statement: the measure did not happen")
+	}
+	if notSingleThread != 0 {
+		t.Errorf("%d of %d caught-up membership statements ran without max_threads = 1 in the server's query log", notSingleThread, count)
 	}
 	if peak >= 32<<20 {
 		t.Fatalf("caught-up membership statement peaked at %d bytes at 4000 subjects, want under 32 MiB", peak)
