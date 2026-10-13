@@ -102,6 +102,26 @@ INNER JOIN `+lr+` AS lr
 WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+owned+`)
 GROUP BY lr.team_id
 ORDER BY lr.team_id`, linkedMixTeamChunk+1))
+	statement := linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1)
+	notInAt := strings.Index(statement, "\nWHERE (lr.team_id, m.repo_uuid) NOT IN (")
+	groupAt := strings.LastIndex(statement, "\nGROUP BY lr.team_id")
+	if notInAt < 0 || groupAt < notInAt {
+		return nil, "statement_no_not_in"
+	}
+	add("statement_no_not_in", statement[:notInAt]+statement[groupAt:])
+	add("m_aggregated_no_join", `SELECT uniqExact(repo_uuid) AS repos,
+	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
+	sum(bugfix_share * effort) AS bugfix_effort
+FROM (`+m+`)`)
+	add("m_join_lr_payload", "SELECT count(), sum(length(mapKeys(m.theme_distribution_json))), sum(m.effort), sum(m.bugfix_share) FROM ("+m+") AS m INNER JOIN "+lr+" AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num")
+	add("m_join_lr_grouped", `SELECT lr.team_id AS team_id, uniqExact(m.repo_uuid) AS repos,
+	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
+	sum(m.bugfix_share * m.effort) AS bugfix_effort
+FROM (`+m+`) AS m INNER JOIN `+lr+` AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
+GROUP BY lr.team_id`)
+	add("m_not_in_owned", "SELECT count(), sum(length(mapKeys(theme_distribution_json))), sum(effort) FROM ("+m+") AS m WHERE ({ids:Array(String)}[1], m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM "+owned+")")
+	add("lr_rows", "SELECT count() FROM "+lr)
+	fragments = append(fragments, LinkedMixFragment{Name: "statement_one_thread", SQL: statement, Bindings: bindings, Settings: "max_threads = 1"})
 	fragments = append(fragments, LinkedMixFragment{Name: "statement_no_join_swap", SQL: linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1), Bindings: bindings, Settings: "query_plan_join_swap_table = 0"})
 	add("owned_repositories", "SELECT count() FROM "+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
 	return fragments, ""
