@@ -90,8 +90,10 @@ func TestOffSetServedVocabularyIsRecordedWithItsOwnFailureClass(t *testing.T) {
 	if record.FailureClass != gatevocab.RelationshipsFailureVocabulary || response.Status != "" {
 		t.Fatalf("record class %q, response %+v", record.FailureClass, response)
 	}
-	if !slices.Contains(RelationshipsReadLogArgs(storage.Principal{}, record), any(string(gatevocab.RelationshipsFailureVocabulary))) {
-		t.Fatalf("the read line does not carry failure_class %s: %v", gatevocab.RelationshipsFailureVocabulary, RelationshipsReadLogArgs(storage.Principal{}, record))
+	args := RelationshipsReadLogArgs(storage.Principal{}, record)
+	key := slices.Index(args, any("failure_class"))
+	if key < 0 || key+1 >= len(args) || args[key+1] != any(string(gatevocab.RelationshipsFailureVocabulary)) {
+		t.Fatalf("the read line does not carry failure_class=%s as a key/value pair: %v", gatevocab.RelationshipsFailureVocabulary, args)
 	}
 	clean := RelationshipsResponse{Status: RelationshipsComplete, Effective: EffectiveRelationshipsRead{Axis: RelationshipsAxisCurrent}}
 	var cleanRecord RelationshipsReadRecord
