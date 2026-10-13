@@ -134,14 +134,19 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 	return &memoryObservedRows{ClickHouseRowScanner: rows, ctx: ctx, statement: statement, client: c, peak: &peak}, nil
 }
 
-func (c memoryCappedQueryClient) observeRefused(ctx context.Context, statement string, err error, peak uint64) {
-	if c.observer == nil {
-		return
-	}
+func isMemoryLimitExceeded(err error) bool {
 	var exception *clickhousedriver.Exception
-	if !errors.As(err, &exception) || exception.Code != memoryLimitExceededCode {
+	return errors.As(err, &exception) && exception.Code == memoryLimitExceededCode
+}
+
+func (c memoryCappedQueryClient) observeRefused(ctx context.Context, statement string, err error, peak uint64) {
+	if c.observer == nil || !isMemoryLimitExceeded(err) {
 		return
 	}
+	c.observeRefusal(ctx, statement, peak)
+}
+
+func (c memoryCappedQueryClient) observeRefusal(ctx context.Context, statement string, peak uint64) {
 	capBytes := effectiveStatementCap(statement, c.capBytes)
 	lowerBound := peak < capBytes
 	if lowerBound {
@@ -174,12 +179,30 @@ type memoryObservedRows struct {
 	client    memoryCappedQueryClient
 	peak      *atomic.Uint64
 	reported  atomic.Bool
+	refused   atomic.Bool
+}
+
+func (r *memoryObservedRows) noteRefusal(err error) {
+	if isMemoryLimitExceeded(err) {
+		r.refused.Store(true)
+	}
+}
+
+func (r *memoryObservedRows) Err() error {
+	err := r.ClickHouseRowScanner.Err()
+	r.noteRefusal(err)
+	return err
 }
 
 func (r *memoryObservedRows) Close() error {
 	err := r.ClickHouseRowScanner.Close()
+	r.noteRefusal(err)
 	if r.reported.CompareAndSwap(false, true) {
 		peak := r.peak.Load()
+		if r.refused.Load() && r.client.observer != nil {
+			r.client.observeRefusal(r.ctx, r.statement, peak)
+			return err
+		}
 		if peak == 0 && r.client.unobserved != nil {
 			r.client.unobserved(r.ctx, r.statement)
 		}
