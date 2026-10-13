@@ -23,6 +23,10 @@ const (
 	orgLinksMemoryFillerLinks  = 30_000
 	orgLinksMemoryMoreLinks    = 60_000
 	orgLinksMemoryCeilingLinks = 400_000
+	ownedLinksMemoryOrg        = "f2a96d41-3c85-4e07-a1b9-5d70c8e3b926"
+	prodLinkedIssues           = 24_000
+	prodEstimatePeakBytes      = uint64(48 << 20)
+	flatMemoryFloorBytes       = uint64(8 << 20)
 	ownershipHistorySmall      = 100
 	ownershipHistoryLarge      = 1_000
 )
@@ -61,7 +65,23 @@ SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature',
 SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
 				repoUUID("repo-filler"), at, org, from, uint64(n))
 			from += uint64(n)
-		}, "organization links", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks, orgLinksMemoryCeilingLinks)
+		}, "organization links outside the owned projects", orgLinksMemoryFillerLinks, orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks, orgLinksMemoryCeilingLinks, axisGuard{floor: flatMemoryFloorBytes})
+	})
+	t.Run("links inside the owned projects", func(t *testing.T) {
+		var from uint64
+		measureTeamReachAxis(t, ctx, query, direct, ownedLinksMemoryOrg, func(exec func(string, ...any), org string, count int) {
+			at := ts(2026, 9, 29, 0, 0, 0)
+			exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
+SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'owned', 'open', '', ?, '', 'linear', 'proj-owner', NULL FROM numbers(?, ?)`,
+				repoUUID("repo-filler"), org, at, from, uint64(count))
+			exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
+SELECT ?, ?, toUInt32(number + 1000), 'pr', 'open', ?, ?, NULL, NULL, 'feature', '' FROM numbers(?, ?)`,
+				repoUUID("repo-reached"), org, at, at, from, uint64(count))
+			exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?, ?)`,
+				repoUUID("repo-reached"), at, org, from, uint64(count))
+			from += uint64(count)
+		}, "links inside the owned projects", prodLinkedIssues, 4*prodLinkedIssues, orgLinksMemoryCeilingLinks, axisGuard{linear: true, smallPeakMax: prodEstimatePeakBytes})
 	})
 	t.Run("project ownership history", func(t *testing.T) {
 		var versions uint64
@@ -72,7 +92,7 @@ SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDat
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
 				org, versions, versions, uint64(n))
 			versions += uint64(n)
-		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0)
+		}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{})
 	})
 	t.Run("repository ownership history", func(t *testing.T) {
 		var versions uint64
@@ -83,7 +103,7 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
 				org, repoUUID("repo-filler"), versions, versions, uint64(n))
 			versions += uint64(n)
-		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0)
+		}, "repository ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{})
 	})
 }
 
@@ -92,7 +112,7 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
 // size, and applies the slope guard to every statement the team pull request
 // read runs over team_project_ownership and team_repo_ownership.
 func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string,
-	grow func(exec func(string, ...any), org string, count int), axis string, smallSize, largeSize, ceilingSize int) {
+	grow func(exec func(string, ...any), org string, count int), axis string, smallSize, largeSize, ceilingSize int, guard axisGuard) {
 	t.Helper()
 	at := ts(2026, 9, 29, 0, 0, 0)
 	exec := func(statement string, args ...any) {
@@ -149,7 +169,7 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		for hash, peak := range small[i] {
 			t.Logf("SLOPE %s: statement %d (%s) peak memory %d bytes at %d, %d at %d", axis, hash, filters[i].Table, peak, smallSize, large[i][hash], largeSize)
 		}
-		assertStatementMemoryFollowsEvidence(t, ctx, direct, axis+" / "+filters[i].Table+" statements", small[i], large[i], 1)
+		guard.assert(t, axis+" / "+filters[i].Table+" statements", small[i], large[i])
 	}
 	if ceilingSize > 0 {
 		grow(exec, org, ceilingSize-largeSize)
@@ -178,4 +198,39 @@ FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('ExceptionBeforeS
 		out.WriteString(line + "\n")
 	}
 	return out.String()
+}
+
+// axisGuard is the slope rule of one axis. A flat axis allows slope plus a
+// floor of memory; a linear axis (growth inside the owned projects) is
+// allowed to grow and instead holds the smaller size under smallPeakMax.
+type axisGuard struct {
+	floor        uint64
+	linear       bool
+	smallPeakMax uint64
+}
+
+func (g axisGuard) assert(t *testing.T, label string, small, large statementMemory) {
+	t.Helper()
+	if len(small) < 1 || len(large) != len(small) {
+		t.Fatalf("%s: measurement did not happen: %d and %d distinct statements logged", label, len(small), len(large))
+	}
+	for hash, smallPeak := range small {
+		largePeak, ok := large[hash]
+		if !ok {
+			t.Fatalf("%s: statement %d ran at the smaller size only", label, hash)
+		}
+		if !g.linear {
+			if float64(largePeak) > statementMemorySlope*float64(smallPeak)+float64(g.floor) {
+				t.Errorf("%s: statement %d grew: peak %d bytes at the larger size, %d at the smaller, over the %.2fx slope plus %d", label, hash, largePeak, smallPeak, statementMemorySlope, g.floor)
+			}
+			for _, peak := range []uint64{smallPeak, largePeak} {
+				if peak >= statementMemoryCeiling {
+					t.Errorf("%s: statement %d peaked at %d bytes, want under %d", label, hash, peak, statementMemoryCeiling)
+				}
+			}
+		}
+		if g.smallPeakMax > 0 && smallPeak > g.smallPeakMax {
+			t.Errorf("%s: statement %d peaked at %d bytes at the prod-sized organization, want at most %d", label, hash, smallPeak, g.smallPeakMax)
+		}
+	}
 }
