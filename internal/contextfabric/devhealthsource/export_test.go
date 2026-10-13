@@ -401,3 +401,10 @@ func DependencyRowKeyForTest(repoID, sourceID, targetID, relationshipType string
 
 // DependencyRowKeySQLForTest is the keyset tiebreaker expression its statement uses.
 func DependencyRowKeySQLForTest() string { return dependencyRowKeySQL }
+
+// MembershipStatementForTest renders the project membership statement at a
+// cursor, with or without the changed-subject pruning, with its bindings.
+func MembershipStatementForTest(orgID string, since time.Time, after string, limit int, ingest, pruned bool) (string, []contextpacket.ClickHouseBinding) {
+	cursor := cursorState{Since: since, After: after}
+	return membershipStatement(cursor, ingest, pruned), rowLimitBindings(orgID, cursor, limit)
+}
