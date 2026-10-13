@@ -11,7 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func TestAssembler_ranks_provenance_freshness_goal_category_confidence_then_totalTie(t *testing.T) {
+func TestAssembler_ranks_goal_provenance_freshness_category_confidence_then_totalTie(t *testing.T) {
 	// Given
 	request := fixtureRequest("req-comparator", "main", "")
 	observed := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)

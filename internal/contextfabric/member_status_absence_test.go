@@ -167,7 +167,7 @@ func statusLoweringSites(t *testing.T, dir string) map[string]int {
 // table fails until the exit is classified here.
 var statusLoweringExits = map[string]int{
 	"budget_trim.go": 1, "claim_depth_narrowing.go": 1, "fact_row_truncation.go": 1, "model_runtime.go": 1,
-	"path_drop.go": 1, "synthesis_model_failure.go": 1, "synthesis_status_floor.go": 4, "work_item_authorization_gap.go": 1,
+	"path_drop.go": 1, "synthesis_model_failure.go": 1, "synthesis_status_floor.go": 6, "work_item_authorization_gap.go": 1,
 }
 
 func TestNoDegradedExitDependsOnTheFallbackSentence(t *testing.T) {

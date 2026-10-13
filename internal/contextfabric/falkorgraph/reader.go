@@ -660,7 +660,6 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 	teamAnchors := teamAnchoredCohort(request, declaredCohortKindForRouting)
-	teamAnchoredMembers := len(teamAnchors) > 0
 	// teamMembersOfScope: the frame asks for the team members of a named
 	// anchor, the one frame ownership routing can serve.
 	teamMembersOfScope := declaredCohortKindForRouting == contextfabric.SubjectTeam && request.Frame != nil &&
@@ -695,6 +694,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// read carries it inside the read, before any member cap.
 	statusPredicate := memberStatusPredicateOf(request.Frame)
 	statusWalk := memberStatusWalk{pool: -1}
+	// The caller's organization as the anchor of a pull request status
+	// question: its members are read by the status census, as a team's are by
+	// its tree walk.
+	orgStatusAnchor := organizationStatusAnchor(request, declaredCohortKindForRouting, statusPredicate, principal)
+	anchoredMembers := teamAnchors
+	if orgStatusAnchor != nil {
+		anchoredMembers = []contextfabric.SubjectRef{*orgStatusAnchor}
+	}
+	teamAnchoredMembers := len(anchoredMembers) > 0
 	anchoredMemberTiers := map[string]string{}
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
@@ -733,6 +741,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 					Truncated: walk.truncated, Err: err,
 				})
 			}
+		} else if orgStatusAnchor != nil && subject == *orgStatusAnchor {
+			var walk treeWalk
+			walk, err = a.statusCensusMembers(ctx, key, principal.OrgID, principal, scope, subject.Kind, collectLimit, temporal, statusPredicate)
+			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
+			statusWalk.add(walk.status)
 		} else if position, ok := teamAnchorMemberPosition(teamAnchors, subject, declaredCohortKindForRouting); ok {
 			var walk treeWalk
 			walk, err = a.teamAnchorMembers(ctx, key, principal.OrgID, principal, scope, subject, position, collectLimit, temporal, statusPredicate)
@@ -765,16 +778,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// (CHAOS-5168, r1 finding 1): every walk appends into the same
 		// resolvedNodes that becomes cohortNodes, so this is an OR across
 		// subjects, never the last one's value.
-		hopWalkTruncated = hopWalkTruncated || walkTruncated
+		isTeamAnchor := false
+		for _, anchor := range anchoredMembers {
+			isTeamAnchor = isTeamAnchor || anchor == subject
+		}
+		// An anchor's own read is the member set; another subject's walk adds
+		// no member of the kind, so its cut is not a cut of this pool.
+		if !teamAnchoredMembers || isTeamAnchor {
+			hopWalkTruncated = hopWalkTruncated || walkTruncated
+		}
 		if deploymentAnchor != nil && subject == *deploymentAnchor {
 			deploymentAnchorReadCut = walkTruncated
 		}
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
-		isTeamAnchor := false
-		for _, anchor := range teamAnchors {
-			isTeamAnchor = isTeamAnchor || anchor == subject
-		}
 		if !teamAnchoredMembers || isTeamAnchor {
 			edgeFilters.mergeReachDenied(filters.ReachDenied)
 		}
@@ -1333,7 +1350,28 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	kindCensusTruncated := false
 	kindCensusMembers := 0
 	var kindCensusKinds []string
-	if kindCensusRan {
+	statusCensusCovers := false
+	if kindCensusRan && pullRequestStatusCensus(declaredCohortKind, statusPredicate) {
+		// The status is read inside the census, before its bound: the census
+		// is the pull request member set, and a pull request any other arm
+		// reached was not decided by it.
+		kindCensusKinds = []string{string(declaredCohortKind)}
+		walk, kindCensusErr := a.statusCensusMembers(ctx, key, principal.OrgID, principal, scope, "", collectLimit, temporal, statusPredicate)
+		if kindCensusErr != nil {
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordCohortKindCensus(ctx, principal.OrgID, CohortKindCensusReadFailed, declaredCohortKind, kindCensusKinds, 0, exactNameCandidateQueryLimit, false, kindCensusErr)
+			}
+			return contextfabric.GraphContext{}, graphNotProjectedError(kindCensusErr)
+		}
+		statusWalk.add(walk.status)
+		kindCensusTruncated = walk.truncated
+		kindCensusMembers = len(walk.nodes)
+		statusCensusCovers = !walk.truncated
+		cohortNodes = append(statusCensusNodesOnly(cohortNodes), walk.nodes...)
+		for _, n := range walk.nodes {
+			seenNode[graphrank.SubjectKey(mustSubject(n))] = true
+		}
+	} else if kindCensusRan {
 		kindCensusKinds = []string{string(declaredCohortKind)}
 		kindCensusNodes, truncated, kindCensusErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, kindCensusKinds, temporal)
 		if kindCensusErr != nil {
@@ -1392,7 +1430,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// one call (one requires zero committed subjects, the other requires a
 	// committed repository anchor), so the OR never blends two real runs.
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
-		kindCensusMembers > 0 ||
+		kindCensusMembers > 0 || statusCensusCovers ||
 		ownershipCensusMembers > 0
 	kindCensusTruncated = kindCensusTruncated || ownershipCensusTruncated
 	// CHAOS-5654: a cut exact-name census removes rows only of the kinds it
@@ -1478,7 +1516,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	// statusNoMatch: members of the kind were reached and none holds the
 	// status. That is an answer (zero matches), not a question with no members.
-	statusNoMatch := (statusWalk.applied && statusWalk.reached && statusWalk.kept == 0) ||
+	// A status read cut before it kept any member is an empty, cut member set,
+	// whatever it reached: the members past the cut were not checked.
+	statusNoMatch := (statusWalk.applied && (statusWalk.reached || statusWalk.poolCut) && statusWalk.kept == 0) ||
 		(pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0) ||
 		(memberFiltered.candidates > 0 && memberFiltered.kept == 0)
 	// A pool filtered after its arms were cut counted the outside set over the
@@ -1493,6 +1533,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		statusReached = statusWalk.reached
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	cohortPopulationLowerBound := cohortPoolTruncated
+	if statusWalk.applied && len(statusWalk.matched) > cohortPopulation {
+		// The member cap cut a set of decided matches: the population is the
+		// counted matches, a lower bound only when that count was cut.
+		cohortPopulation, cohortPopulationLowerBound = len(statusWalk.matched), statusWalk.matchedAtLeast
+	}
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {
 		// Every member was reached from the anchor, so the member says so
@@ -1506,7 +1552,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if cohort != nil && teamAnchoredMembers {
 		states := ownedMemberStates(cohortNodes)
 		for i := range cohort.Members {
-			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReasonFor(teamAnchors[0].Kind, declaredCohortKindForRouting)}
+			cohort.Members[i].InclusionReasons = []string{teamAnchorInclusionReasonFor(anchoredMembers[0].Kind, declaredCohortKindForRouting)}
 			if state, ok := states[graphrank.SubjectKey(cohort.Members[i].Subject)]; ok {
 				cohort.Members[i].InclusionReasons = append(cohort.Members[i].InclusionReasons, state)
 			}
@@ -1514,17 +1560,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				cohort.Members[i].InclusionReasons = append(cohort.Members[i].InclusionReasons, reason)
 			}
 		}
-		cohort.Rationale = teamAnchorCohortRationaleFor(teamAnchors[0].Kind, declaredCohortKindForRouting)
+		cohort.Rationale = teamAnchorCohortRationaleFor(anchoredMembers[0].Kind, declaredCohortKindForRouting)
 	}
 	if cohort == nil && pullRequestStatus != "" && statusNoMatch {
 		// Pull requests were reached and none holds the status: that is an
 		// answer (zero matches), not a question with no members.
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
-			Rationale: pullRequestStatusNoMatchRationale, Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
+			Rationale: statusNoMatchRationaleFor(pullRequestStatusNoMatchRationale, contextfabric.SubjectPullRequest, request.Resolution.Committed), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && memberStatus != "" && statusNoMatch {
 		cohort = &contextfabric.Cohort{Kind: memberStatusKind, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{},
-			Rationale: memberStatusNoMatchRationale(memberStatusKind), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
+			Rationale: statusNoMatchRationaleFor(memberStatusNoMatchRationale(memberStatusKind), memberStatusKind, request.Resolution.Committed), Complete: !cohortPoolTruncated, Truncated: cohortPoolTruncated}
 	}
 	if cohort == nil && ownershipZeroOwnersResolved {
 		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{}, Exclusions: []contextfabric.CohortExclusion{}, Rationale: ownershipZeroOwnersRationaleFor(ownershipExcludedOverCap), Complete: true}
@@ -1811,7 +1857,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphValidityUnbounded, false, &unboundedCount, validityReason, "context-fabric:graph-validity-windows")
 	}
 	return contextfabric.GraphContext{
-		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPoolTruncated,
+		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPopulationLowerBound,
 		CohortMemberSource:     cohortMemberSource,
 		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast, Filtered: statusFiltered, Reached: statusReached, ReachCut: statusWalk.reachCut},
 		MemberStatusPoolCut:    statusPoolCut,

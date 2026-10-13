@@ -3,8 +3,11 @@ package contextpacket
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -54,14 +57,14 @@ func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []con
 }
 
 func evidenceBefore(left, right contractsv1.EvidenceRef, goal string) bool {
+	if l, r := goalScore(left, goal), goalScore(right, goal); l != r {
+		return l > r
+	}
 	if provenanceRank(left.Provenance) != provenanceRank(right.Provenance) {
 		return provenanceRank(left.Provenance) < provenanceRank(right.Provenance)
 	}
 	if !left.ObservedAt.Equal(right.ObservedAt) {
 		return left.ObservedAt.After(right.ObservedAt)
-	}
-	if goalScore(left, goal) != goalScore(right, goal) {
-		return goalScore(left, goal) > goalScore(right, goal)
 	}
 	l, r := evidenceRule(left), evidenceRule(right)
 	if l.categoryRank != r.categoryRank {
@@ -87,11 +90,30 @@ func provenanceRank(value string) int {
 		return 4
 	}
 }
+
+var goalStopwords = map[string]bool{"the": true, "and": true, "for": true, "about": true, "what": true, "should": true, "know": true, "first": true, "change": true, "changes": true, "are": true, "with": true, "this": true, "that": true, "from": true, "into": true, "before": true, "how": true, "who": true, "when": true, "where": true, "which": true, "will": true, "can": true, "does": true, "need": true, "want": true}
+
+func goalWords(goal string) []string {
+	words := strings.FieldsFunc(strings.ToLower(goal), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	kept, seen := make([]string, 0, len(words)), map[string]bool{}
+	for _, word := range words {
+		if len(word) > 2 && !goalStopwords[word] && !seen[word] {
+			seen[word] = true
+			kept = append(kept, word)
+		}
+	}
+	return kept
+}
+
 func goalScore(ref contractsv1.EvidenceRef, goal string) int {
+	haystack := strings.FieldsFunc(strings.ToLower(ref.Citation+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	score := 0
-	for _, word := range strings.Fields(strings.ToLower(goal)) {
-		if len(word) > 2 && strings.Contains(strings.ToLower(ref.Citation+" "+ref.Source.DisplayLabel), word) {
-			score++
+	for _, word := range goalWords(goal) {
+		for _, token := range haystack {
+			if token == word || (len(word) >= 5 && strings.HasPrefix(token, word)) {
+				score++
+				break
+			}
 		}
 	}
 	return score
@@ -124,7 +146,8 @@ func canonicalEvidenceKeys(ref contractsv1.EvidenceRef) []string {
 }
 
 func evidenceTieKey(ref contractsv1.EvidenceRef) string {
-	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel}, "\000")
+	metadata, _ := json.Marshal(ref.Metadata)
+	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel, ref.Source.SafeURI, ref.Provenance, string(ref.Availability), ref.SourceVersion, ref.SnapshotHash, string(metadata)}, "\000")
 }
 
 func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems int) ([]contractsv1.EvidenceRef, bool) {
@@ -140,9 +163,19 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 		}
 	}
 	selectedIDs := map[string]bool{}
+	for _, ref := range refs {
+		if len(selected) >= (maxItems+1)/2 || goalScore(ref, goal) == 0 {
+			break
+		}
+		category := evidenceRule(ref).category
+		selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
+		if quotas[category] > 0 {
+			quotas[category]--
+		}
+	}
 	for _, category := range categories {
 		for _, ref := range refs {
-			if evidenceRule(ref).category == category && quotas[category] > 0 {
+			if evidenceRule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
 				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
 			}
 		}
@@ -163,11 +196,20 @@ func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) 
 	rule := evidenceRule(ref)
 	logExplicitRuleRejection(ref)
 	return contractsv1.ContextPacketItem{SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: itemID(ref.EvidenceRefID),
-		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: ref.Citation,
+		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
 		WhyIncluded: "Untrusted retrieved evidence matched the resolved scope.", RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
 		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence, UntrustedContent: true},
 		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: []string{ref.EvidenceRefID}}
+}
+
+var bareTokenPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+func evidenceSummary(ref contractsv1.EvidenceRef) string {
+	if ref.Source.EntityType == "work_graph_edge" && bareTokenPattern.MatchString(ref.Citation) {
+		return "linked via " + strings.ReplaceAll(ref.Citation, "_", " ")
+	}
+	return ref.Citation
 }
 
 func itemID(evidenceRefID string) string {
