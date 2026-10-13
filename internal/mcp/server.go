@@ -147,7 +147,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 	}
 	server := mcpsdk.NewServer(impl, options)
 	server.AddReceivingMiddleware(callerMiddleware(caller))
-	server.AddReceivingMiddleware(unlistedToolMiddleware(caller))
+	server.AddReceivingMiddleware(unlistedToolMiddleware(cfg, caller))
 	server.AddReceivingMiddleware(integerArgumentsMiddleware(cfg))
 
 	server.AddTool(

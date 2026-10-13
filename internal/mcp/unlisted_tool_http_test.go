@@ -38,7 +38,7 @@ func TestHTTPCallToAKnownButUnlistedToolIsAToolErrorThatNamesWhatIsListed(t *tes
 	if !strings.Contains(text, "investigate_question") || !strings.Contains(text, "not listed for this credential") {
 		t.Fatalf("text does not name the tool and the checked reason: %q", text)
 	}
-	if strings.Contains(text, "not enabled for this organization") || strings.Contains(text, "Listed for you") {
+	if strings.Contains(text, "not enabled for this organization") || !strings.Contains(text, "Listed for you: context_for_task, source_evidence") {
 		t.Fatalf("text claims a reason or tools that were not checked: %q", text)
 	}
 

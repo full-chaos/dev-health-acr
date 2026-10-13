@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,8 +16,11 @@ import (
 // and a tool the manifest marks disabled by default (off at server level for
 // every caller, so its existence is not disclosed). Every other manifest tool
 // is one this server has and this caller was not given.
-func unlistedToolMiddleware(caller *CallerContext) mcpsdk.Middleware {
+func unlistedToolMiddleware(cfg *ProcessConfig, caller *CallerContext) mcpsdk.Middleware {
 	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		if cfg.Transport() != TransportHTTP {
+			return next
+		}
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
 			if method == "tools/call" {
 				if call, ok := req.(*mcpsdk.CallToolRequest); ok && call.Params != nil {
@@ -49,8 +53,14 @@ func unlistedToolMessage(caller *CallerContext, tool string) string {
 		b.WriteString(" is not listed for this credential on this server.")
 	}
 	var listed []string
-	for _, name := range []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation, toolGraphQLQuery, toolInvestigateWithInterpretation} {
-		if hostedToolEnabled(caller, name) {
+	ordered := []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation, toolGraphQLQuery, toolInvestigateWithInterpretation}
+	for _, name := range manifestToolNames() {
+		if !slices.Contains(ordered, name) {
+			ordered = append(ordered, name)
+		}
+	}
+	for _, name := range ordered {
+		if entry, _ := lookupManifestEntry(name); !entry.DisabledByDefault && name != tool && hostedToolEnabled(caller, name) {
 			listed = append(listed, name)
 		}
 	}
