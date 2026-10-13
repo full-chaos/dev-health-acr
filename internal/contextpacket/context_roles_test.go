@@ -58,6 +58,11 @@ func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *tes
 		roleRow("ev-ci-bad", "ci_pipeline_run", "run-2", "CI run-2", "failed", at),
 	}
 	roles, packet := servedRoles(t, evidence)
+	for _, item := range packet.Items {
+		if item.EvidenceRefIDs[0] == "ev-pr-regress" && item.WhyIncluded != "The commit of a failed or incident-linked deployment is associated with pull request 42 by the provider." {
+			t.Errorf("cause text = %q, want what is stored and no more", item.WhyIncluded)
+		}
+	}
 	want := map[string]contractsv1.PacketCategory{
 		"ev-pr-feat-a": contractsv1.CategoryEvidence, "ev-pr-feat-b": contractsv1.CategoryEvidence, "ev-c-feat-a": contractsv1.CategoryEvidence,
 		"ev-pr-regress": contractsv1.CategoryCause, "ev-pr-hotfix": contractsv1.CategoryCause,

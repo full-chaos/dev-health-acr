@@ -49,7 +49,7 @@ var revertedCommitPattern = regexp.MustCompile(`(?i)\breverts? commit ([0-9a-f]{
 //
 // Time order alone never makes a cause. Providers store no deployed commit
 // sha on the deployment, so a commit is a cause only through a revert.
-func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
+func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]string {
 	incidentLinked := map[string]bool{}
 	for _, ref := range evidence {
 		if ref.Source.EntityType != "deployment_incident_edge" {
@@ -80,18 +80,18 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
 			reverted[strings.ToLower(match[1])] = true
 		}
 	}
-	causes := map[string]bool{}
+	causes := map[string]string{}
 	for _, ref := range evidence {
 		switch ref.Source.EntityType {
 		case "pull_request":
 			if carriedPullRequests[ref.Source.EntityID] {
-				causes[ref.EvidenceRefID] = true
+				causes[ref.EvidenceRefID] = "The commit of a failed or incident-linked deployment is associated with pull request " + ref.Source.EntityID + " by the provider."
 			}
 		case "commit":
 			sha := strings.ToLower(ref.Source.EntityID)
 			for prefix := range reverted {
 				if strings.HasPrefix(sha, prefix) {
-					causes[ref.EvidenceRefID] = true
+					causes[ref.EvidenceRefID] = "A later commit's message states that it reverts this commit."
 					break
 				}
 			}
@@ -117,8 +117,10 @@ const (
 
 func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 	resolver := roleResolver{}
-	for id := range linkedCauseRefs(evidence) {
-		resolver[id] = causeRule()
+	for id, why := range linkedCauseRefs(evidence) {
+		cause := causeRule()
+		cause.why = why
+		resolver[id] = cause
 	}
 	return resolver
 }
