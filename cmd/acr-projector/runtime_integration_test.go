@@ -47,7 +47,7 @@ func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAFalkorBackend(
 	cfg.PostgresDSN = dsn
 	cfg.ClickHouseDSN = "clickhouse://redacted"
 
-	runtime, err := openRuntime(ctx, cfg, discardLogger())
+	runtime, err := openRuntime(ctx, cfg, discardLogger(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
@@ -65,7 +65,7 @@ func TestOpenRuntimeSurfacesUnreachablePostgres(t *testing.T) {
 	cfg.ClickHouseDSN = "clickhouse://redacted"
 
 	cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff = 1, time.Millisecond
-	_, err = openRuntime(context.Background(), cfg, discardLogger())
+	_, err = openRuntime(context.Background(), cfg, discardLogger(), nil)
 	if err == nil {
 		t.Fatal("expected an error opening an unreachable postgres instance")
 	}
@@ -85,7 +85,7 @@ func TestChaos7184_OpenRuntimeRetriesUnreachablePostgresWithWarnAttempts(t *test
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	_, err = openRuntime(context.Background(), cfg, logger)
+	_, err = openRuntime(context.Background(), cfg, logger, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "postgres startup failed at attempt 3/3 (postgres_unavailable)")
 	out := buf.String()

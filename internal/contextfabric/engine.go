@@ -1092,8 +1092,9 @@ type EngineTelemetry interface {
 	// RecordSynthesisInputBound reports that the facts read for an answer did
 	// not fit the model input: how large the input was against the bound, how
 	// many facts and kinds were read and given, in how many passes, and
-	// whether the input fit in the end. Called only when the runtime refused
-	// an input for its size. Counts and a closed outcome only.
+	// whether the input fit in the end. Called when the runtime refused an
+	// input for its size, and when a client synthesis input above its share of
+	// the caller's budget was served whole (share_exceeded). Counts and a closed outcome only.
 	RecordSynthesisInputBound(ctx context.Context, principal storage.Principal, event SynthesisInputBoundEvent)
 	// RecordSynthesisModelFailure reports that the model call for an answer
 	// failed and the answer was served without model prose: the closed class,

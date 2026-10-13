@@ -1045,12 +1045,17 @@ import (
 // subject's failed lookup. An answer saved under v206 can mark a complete set
 // truncated.
 //
-// v207 -> v208: every blocker read (team, project, work item) keeps only the
+// v207 -> v208: a client synthesis answer asked through a tool that widens the
+// body bound names the caller's budget as the answer budget; the input is now
+// cut to that budget, or served whole when its smallest form fits beside the
+// answer. An answer saved under v207 carried the uncut input.
+//
+// v208 -> v209: every blocker read (team, project, work item) keeps only the
 // links the provider still reports; a link it removed is no longer counted or
 // named the oldest blocker. Team and project blockers facts carry
-// blocker_dependencies_writer_unresolved_current. An answer saved under v207
+// blocker_dependencies_writer_unresolved_current. An answer saved under v208
 // can count a removed link.
-const QueryVersion = "devhealthfacts.clickhouse.v208"
+const QueryVersion = "devhealthfacts.clickhouse.v209"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
