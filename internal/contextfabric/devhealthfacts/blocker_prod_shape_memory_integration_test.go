@@ -127,6 +127,29 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	return out
 }
 
+func blockerProdShapeVariantStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 70))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
+	if err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash, peak uint64
+		var head string
+		if err := rows.Scan(&hash, &peak, &head); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB): %s", label, hash, peak, float64(peak)/(1<<20), head)
+	}
+}
+
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -210,6 +233,14 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
+	for _, variant := range []string{"reads_unrestricted"} {
+		restoreVariant := devhealthfacts.SetRelationVariantForTest(variant)
+		read(restricted)
+		variantMark := serverNowMicros(t, ctx, direct)
+		read(restricted)
+		blockerProdShapeVariantStatements(t, ctx, direct, "variant "+variant, variantMark)
+		restoreVariant()
+	}
 	fragmentMark := serverNowMicros(t, ctx, direct)
 	repoKeys := make([]string, 0, 11)
 	for repo := 0; repo < 11; repo++ {

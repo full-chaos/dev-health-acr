@@ -30,7 +30,7 @@ func RelationCurrentProbeForTest(orgID string) string {
 
 // BlockerFragmentNames are the parts RunBlockerFragmentsForTest runs on their
 // own; each statement carries its name as the literal 'frag-<name>'.
-var BlockerFragmentNames = []string{"endpoints", "authorized", "admitted_links", "edge_rows_repo", "edge_rows_project", "owned_projects", "project_link_rows", "work_items_s"}
+var BlockerFragmentNames = []string{"endpoints", "authorized", "admitted_links", "edge_rows_repo", "edge_rows_project", "owned_projects", "project_link_rows", "work_items_s", "relation_ended_keys"}
 
 // RunBlockerFragmentsForTest runs each part of the team blocker statements
 // alone, under the work item reader settings, so a test can read each part's
@@ -42,14 +42,15 @@ func RunBlockerFragmentsForTest(ctx context.Context, client contextpacket.ClickH
 		return err
 	}
 	fragments := map[string]string{
-		"endpoints":         blockerEndpointIDsSQL,
-		"authorized":        authorized,
-		"admitted_links":    admittedIssueLinksAmongSQL(blockerEndpointIDsSQL),
-		"edge_rows_repo":    "(" + blockerEdgeRowsSQL(blockerOpenPredicate, authorized, true) + ")",
-		"edge_rows_project": "(" + blockerProjectEdgeRowsSQL(blockerOpenPredicate, authorized, true) + ")",
-		"owned_projects":    "(SELECT t.team_id FROM " + teamOwnedProjectsAsOfSQL(factTimeBound{}) + " AS t INNER JOIN " + resolvedProjectsSQL + " AS p ON p.provider = t.provider AND p.id = t.id WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)})",
-		"project_link_rows": teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL),
-		"work_items_s":      "(SELECT * FROM " + blockerWorkItemsSQL("s") + ")",
+		"endpoints":           blockerEndpointIDsSQL,
+		"authorized":          authorized,
+		"admitted_links":      admittedIssueLinksAmongSQL(blockerEndpointIDsSQL),
+		"edge_rows_repo":      "(" + blockerEdgeRowsSQL(blockerOpenPredicate, authorized, true) + ")",
+		"edge_rows_project":   "(" + blockerProjectEdgeRowsSQL(blockerOpenPredicate, authorized, true) + ")",
+		"owned_projects":      "(SELECT t.team_id FROM " + teamOwnedProjectsAsOfSQL(factTimeBound{}) + " AS t INNER JOIN " + resolvedProjectsSQL + " AS p ON p.provider = t.provider AND p.id = t.id WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)})",
+		"project_link_rows":   teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL),
+		"work_items_s":        "(SELECT * FROM " + blockerWorkItemsSQL("s") + ")",
+		"relation_ended_keys": relationEndedKeysSQL(),
 	}
 	for _, name := range BlockerFragmentNames {
 		statement := readers.WithSettings("SELECT 'frag-"+name+"', count() FROM "+fragments[name], settings)
@@ -98,4 +99,12 @@ func SetBlockerAuthorizedIDsBoundForTest(bound int) (restore func()) {
 // scope, for the repository-id dimensions a principal cannot express.
 func OrganizationWideAuthorizationScopeForTest(scope readers.AuthorizationScope) bool {
 	return organizationWideAuthorization(scope)
+}
+
+// SetRelationVariantForTest selects an alternative shape of the relation item
+// read for a measurement.
+func SetRelationVariantForTest(variant string) (restore func()) {
+	previous := relationVariant
+	relationVariant = variant
+	return func() { relationVariant = previous }
 }
