@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -19,9 +20,9 @@ import (
 // The tier that linked a member is named in its inclusion reason; a member
 // linked only by the heuristic tier is never presented as natively linked.
 const (
-	TreeLinkTierNative       = "native"
-	TreeLinkTierExplicitText = "explicit_text"
-	TreeLinkTierHeuristic    = "heuristic"
+	TreeLinkTierNative       = contractsv1.EvidenceProvenanceNative
+	TreeLinkTierExplicitText = contractsv1.EvidenceProvenanceExplicitText
+	TreeLinkTierHeuristic    = contractsv1.EvidenceProvenanceHeuristic
 )
 
 // TreeWorkItemMember is one walked issue and the strongest tier of the
