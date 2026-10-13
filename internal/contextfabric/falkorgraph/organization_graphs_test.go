@@ -18,3 +18,10 @@ func TestMatchOrganizationGraphKeysTakesEveryEpochAndNothingElse(t *testing.T) {
 		t.Fatalf("matchOrganizationGraphKeys() = %v, want %v", got, want)
 	}
 }
+
+func TestGraphKeysDifferByUUIDSpelling(t *testing.T) {
+	const canonical = "abcdef01-2345-4678-89ab-cdef01234567"
+	if graphKey("acr", canonical) == graphKey("acr", "ABCDEF01-2345-4678-89AB-CDEF01234567") {
+		t.Fatal("graph keys are expected to differ by spelling: that is why purge cannot derive keys from one spelling")
+	}
+}

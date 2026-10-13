@@ -2,7 +2,11 @@ package falkorgraph
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
@@ -58,4 +62,45 @@ func TestLiveDeleteOrganizationGraphsDropsEveryEpochAndNothingElse(t *testing.T)
 	again, err := adapter.DeleteOrganizationGraphs(ctx, orgA)
 	require.NoError(t, err)
 	require.Zero(t, again, "second delete is a no-op")
+}
+
+// TestLiveDeleteOrganizationGraphsFindsGraphsCreatedUnderAnotherUUIDSpelling
+// writes graphs through the adapter for the same organization spelled in
+// upper case and braced, then deletes by the canonical lower-case spelling.
+func TestLiveDeleteOrganizationGraphsFindsGraphsCreatedUnderAnotherUUIDSpelling(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	const canonical = "abcdef01-2345-4678-89ab-cdef01234567"
+	const other = "abcdef01-2345-4678-89ab-cdef01234568"
+	apply := func(org string) {
+		observed := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work-item-1", Label: "WIDGET-1"}
+		_, err := adapter.ApplyProjectionBatch(ctx, contextfabric.ProjectionBatch{
+			SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_spelling_00000001", OrgID: org, Source: "live-test",
+			SourceVersion: "v1", NextCursor: "cursor-1", GeneratedAt: observed,
+			Entities: []contextfabric.EntityProjection{{Subject: subject, Authorization: contextfabric.AuthorizationScope{RepositorySlugs: []string{"example-org/widget-service"}},
+				EvidenceRefIDs: []string{"evidence_1"}, ObservedAt: observed, SourceVersion: "v1"}},
+			Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
+			Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+		})
+		require.NoError(t, err)
+	}
+	apply(canonical)
+	apply(strings.ToUpper(canonical))
+	apply("{" + strings.ToUpper(canonical) + "}")
+	apply(other)
+
+	count, err := adapter.CountOrganizationGraphs(ctx, canonical)
+	require.NoError(t, err)
+	require.Equal(t, 3, count, "graphs created under every spelling of the organization")
+
+	deleted, err := adapter.DeleteOrganizationGraphs(ctx, canonical)
+	require.NoError(t, err)
+	require.Equal(t, 3, deleted)
+	left, err := adapter.CountOrganizationGraphs(ctx, canonical)
+	require.NoError(t, err)
+	require.Zero(t, left)
+	otherCount, err := adapter.CountOrganizationGraphs(ctx, other)
+	require.NoError(t, err)
+	require.Equal(t, 1, otherCount, "a different organization keeps its graph")
 }
