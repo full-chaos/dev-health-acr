@@ -15,7 +15,7 @@
 #   race-heavy  anchored regex of heavy-tests.txt minus race-mid-tests.txt (-run)
 #   race-mid    anchored regex of race-mid-tests.txt (-run)
 #   race-rest   anchored regex of heavy plus mid names (-skip); unlisted tests run there
-#   race-partition  lists each job's tests with `go test -list` (-run regexes; -skip is the complement) and
+#   race-partition  checks ci.yml wires each race mode once, then lists each job's tests with `go test -list` (-run regexes; -skip is the complement) and
 #          fails unless every test lands in exactly one job.
 set -euo pipefail
 
@@ -57,6 +57,11 @@ case "${2:-}" in
   race-partition)
     [ "$name" = devhealthfacts ] || { printf 'race-partition: devhealthfacts only\n' >&2; exit 2; }
     cd "$root"
+    wf="$root/.github/workflows/ci.yml"
+    for want in 'devhealthfacts race-heavy)' 'devhealthfacts race-mid)' 'devhealthfacts race-rest)'; do
+      n="$(grep -cF -- "race-split.sh $want" "$wf" || true)"
+      [ "$n" -eq 1 ] || { printf 'ci.yml must use "race-split.sh %s" exactly once, found %s\n' "$want" "$n" >&2; exit 1; }
+    done
     all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
