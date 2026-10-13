@@ -1023,7 +1023,11 @@ import (
 // served once for the request and no longer on the row of a team it is false
 // for; a team that owns nothing gets its own reason. A stored answer can
 // differ.
-const QueryVersion = "devhealthfacts.clickhouse.v202"
+//
+// v202 -> v203: a pull request, project or incident list question that names no
+// organization or parent now applies its stated status. An answer saved under
+// v202 listed the unfiltered set.
+const QueryVersion = "devhealthfacts.clickhouse.v203"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
