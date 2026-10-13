@@ -25,19 +25,34 @@ func evidenceRule(ref contractsv1.EvidenceRef) rule {
 	return base
 }
 
+// evidenceCategoryRule assigns a role from the persisted state of one row.
+// Pressure needs a persisted failure or open state; a commit is never a cause
+// by its type alone (see linkedCauseRefs).
 func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	switch strings.ToLower(ref.Source.EntityType) {
-	case "check", "check_run", "workflow_run", "build", "incident", "alert":
-		return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
-	case "commit", "change", "diff":
-		return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2}
+	case "ci_pipeline_run", "check", "check_run", "workflow_run", "build", "alert":
+		if citationShowsFailure(ref.Citation) {
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+		}
+	case "deployment":
+		if citationShowsFailure(ref.Citation) {
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+		}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0}
+	case "incident":
+		if incidentIsOpen(ref.Citation) {
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1}
+		}
 	case "recommendation", "review_action", "task":
 		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4}
-	case "state", "deployment", "release":
+	case "state", "release":
 		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0}
-	default:
-		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3}
 	}
+	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3}
+}
+
+func causeRule() rule {
+	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2}
 }
 
 type ruleOutcome struct {

@@ -159,7 +159,11 @@ func testEvidence(id, system string, observed time.Time) contractsv1.EvidenceRef
 	if system == "github_pr" {
 		entityType = "review_action"
 	}
-	return contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, Source: contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: id, DisplayLabel: id}, Provenance: "native", Confidence: 0.9, Citation: "fixture", ObservedAt: observed, Availability: contractsv1.EvidenceAvailable}
+	citation := "fixture"
+	if entityType == "check" {
+		citation = "failed"
+	}
+	return contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, Source: contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: id, DisplayLabel: id}, Provenance: "native", Confidence: 0.9, Citation: citation, ObservedAt: observed, Availability: contractsv1.EvidenceAvailable}
 }
 
 func itemEvidenceIDs(packet contractsv1.ContextPacket) []string {

@@ -18,6 +18,7 @@ const (
 )
 
 func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool) {
+	roles := newRoleResolver(evidence)
 	refs := make([]contractsv1.EvidenceRef, 0, len(evidence))
 	for _, ref := range evidence {
 		if !includeLowConfidence && ref.Confidence < minimumEvidenceConfidence {
@@ -25,13 +26,13 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 		}
 		refs = append(refs, ref)
 	}
-	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], goal) })
+	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], goal, roles) })
 	refs = deduplicateEvidence(refs)
-	refs = requestedEvidenceCategories(refs, requested)
-	refs, truncated := allocateCategories(refs, goal, maxItems)
+	refs = requestedEvidenceCategories(refs, requested, roles)
+	refs, truncated := allocateCategories(refs, goal, maxItems, roles)
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
 	for _, ref := range refs {
-		items = append(items, evidenceItem(ref, scope))
+		items = append(items, evidenceItemWithRoles(ref, scope, roles))
 	}
 	for i := range items {
 		items[i].Rank = i + 1
@@ -39,7 +40,7 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 	return items, truncated
 }
 
-func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []contractsv1.PacketCategory) []contractsv1.EvidenceRef {
+func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []contractsv1.PacketCategory, roles roleResolver) []contractsv1.EvidenceRef {
 	if len(requested) == 0 {
 		return refs
 	}
@@ -49,14 +50,14 @@ func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []con
 	}
 	filtered := make([]contractsv1.EvidenceRef, 0, len(refs))
 	for _, ref := range refs {
-		if allowed[evidenceRule(ref).category] {
+		if allowed[roles.rule(ref).category] {
 			filtered = append(filtered, ref)
 		}
 	}
 	return filtered
 }
 
-func evidenceBefore(left, right contractsv1.EvidenceRef, goal string) bool {
+func evidenceBefore(left, right contractsv1.EvidenceRef, goal string, roles roleResolver) bool {
 	if l, r := goalScore(left, goal), goalScore(right, goal); l != r {
 		return l > r
 	}
@@ -66,7 +67,7 @@ func evidenceBefore(left, right contractsv1.EvidenceRef, goal string) bool {
 	if !left.ObservedAt.Equal(right.ObservedAt) {
 		return left.ObservedAt.After(right.ObservedAt)
 	}
-	l, r := evidenceRule(left), evidenceRule(right)
+	l, r := roles.rule(left), roles.rule(right)
 	if l.categoryRank != r.categoryRank {
 		return l.categoryRank < r.categoryRank
 	}
@@ -150,7 +151,7 @@ func evidenceTieKey(ref contractsv1.EvidenceRef) string {
 	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel, ref.Source.SafeURI, ref.Provenance, string(ref.Availability), ref.SourceVersion, ref.SnapshotHash, string(metadata)}, "\000")
 }
 
-func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems int) ([]contractsv1.EvidenceRef, bool) {
+func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
 	if len(refs) <= maxItems {
 		return refs, false
 	}
@@ -167,7 +168,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 		if len(selected) >= (maxItems+1)/2 || goalScore(ref, goal) == 0 {
 			break
 		}
-		category := evidenceRule(ref).category
+		category := roles.rule(ref).category
 		selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
 		if quotas[category] > 0 {
 			quotas[category]--
@@ -175,7 +176,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 	}
 	for _, category := range categories {
 		for _, ref := range refs {
-			if evidenceRule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
+			if roles.rule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
 				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
 			}
 		}
@@ -188,12 +189,16 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 			selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
 		}
 	}
-	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], goal) })
+	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], goal, roles) })
 	return selected, true
 }
 
 func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) contractsv1.ContextPacketItem {
-	rule := evidenceRule(ref)
+	return evidenceItemWithRoles(ref, scope, nil)
+}
+
+func evidenceItemWithRoles(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, roles roleResolver) contractsv1.ContextPacketItem {
+	rule := roles.rule(ref)
 	logExplicitRuleRejection(ref)
 	return contractsv1.ContextPacketItem{SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: itemID(ref.EvidenceRefID),
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
