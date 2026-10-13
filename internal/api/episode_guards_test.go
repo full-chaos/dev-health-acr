@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -120,4 +121,23 @@ type episodeAuditStore struct{ recorded bool }
 func (s *episodeAuditStore) Record(_ context.Context, event storage.AuditEvent) error {
 	s.recorded = event.Action == "episode_recorded" && event.Metadata["request_bytes"] != nil && event.Metadata["response_bytes"] != nil
 	return nil
+}
+
+func TestUnknownOrganizationFromDevHealthIsAnUpstreamOutageNeverAnEntitlementOrADenial(t *testing.T) {
+	// Given
+	creator := &fakeEpisodeCreator{episode: storedEpisode()}
+	unknown := EntitlementFunc(func(context.Context, string, string) (bool, error) {
+		return false, entitlements.ErrOrganizationUnknown
+	})
+	app, token := hostedEpisodeTestApp(t, creator, []string{auth.ScopeEpisodeWrite}, unknown)
+
+	// When
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, authenticatedEpisodeRequest(t, token, episodeCreate(), "idempotency_01"))
+
+	// Then
+	assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+	if creator.create.ClientEpisodeID != "" {
+		t.Fatalf("episode created for an unknown organization: %#v", creator.create)
+	}
 }

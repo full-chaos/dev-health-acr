@@ -36,7 +36,9 @@ func (f *fakeSet) EffectiveOrgs() []string         { return f.members }
 
 type fakeEntitlements struct{ known map[string]bool }
 
-func (f *fakeEntitlements) AnswersFor(_ context.Context, org string) bool { return f.known[org] }
+func (f *fakeEntitlements) OrganizationUnknown(_ context.Context, org string) (bool, error) {
+	return !f.known[org], nil
+}
 
 type rig struct {
 	db      *sql.DB
@@ -110,7 +112,7 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.True(t, graphExists(t, r.adapter, orgGone))
 	require.True(t, graphExists(t, r.adapter, orgKept))
 
-	opts := orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(orgGone)}
+	opts := orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(orgGone)}
 
 	dry, err := r.run(t, orgGone, orgpurge.Options{DryRun: true})
 	require.NoError(t, err)
@@ -255,7 +257,7 @@ func TestInterruptedPurgeIsIncompleteAndTheRetryCompletes(t *testing.T) {
 	seedPostgres(t, r.db, orgBroken)
 	seedGraph(t, r.adapter, orgBroken)
 	before := rowCounts(t, r.db, orgBroken)
-	opts := orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(orgBroken)}
+	opts := orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(orgBroken)}
 
 	_, err := r.db.ExecContext(ctx, `
 CREATE FUNCTION acr.purge_test_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$;
@@ -300,7 +302,7 @@ func TestGraphOnlyPurgeIsAudited(t *testing.T) {
 	r := newRig(t)
 	const orgGraphOnly = "dddddddd-0000-4000-8000-000000000004"
 	seedGraph(t, r.adapter, orgGraphOnly)
-	report, err := r.run(t, orgGraphOnly, orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(orgGraphOnly)})
+	report, err := r.run(t, orgGraphOnly, orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(orgGraphOnly)})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Graphs)
 	require.Zero(t, report.TotalRows)
@@ -321,7 +323,7 @@ SELECT 'result-' || $1 || '-' || g, $1, '{}', now() FROM generate_series(1, 1000
 		require.NoError(t, err)
 	}
 	started := time.Now()
-	report, err := r.run(t, big, orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(big)})
+	report, err := r.run(t, big, orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(big)})
 	elapsed := time.Since(started)
 	require.NoError(t, err)
 	require.EqualValues(t, 100000, report.Rows["context_fabric_investigation_results"])
