@@ -31,7 +31,7 @@ const workGraphIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WH
 // (ReadableRepositorylessIssueIDs).
 const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.title) = 1, any(w.title), '') AS title ` +
 	`FROM work_items AS w FINAL ` +
-	`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) AND w.work_item_id IN ` + workGraphIssueEndpointIDsSQL + ` ` +
+	`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) ` +
 	`AND (w.repo_id = {repo_id:UUID} OR w.work_item_id IN {readable_repositoryless_issue_ids:Array(String)}) ` +
 	`AND lengthUTF8(w.title) BETWEEN 1 AND 1000 GROUP BY w.work_item_id`
 
