@@ -217,7 +217,7 @@ func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, 
 		if err != nil {
 			t.Fatalf("%s: %v", marker, err)
 		}
-		peak := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_graph_issue_pr", QueryContains: marker}, mark)
+		peak := statementMemorySince(t, ctx, direct, statementFilter{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"}, mark)
 		var worst uint64
 		for _, bytes := range peak {
 			if bytes > worst {
