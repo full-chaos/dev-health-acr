@@ -656,6 +656,8 @@ func commitmentFieldDecls() []fieldDecl {
 		fInt("items_unreadable_count", "count"),
 		fStr("items_unreadable_reason"),
 		fStr("iteration_basis"),
+		declCallerScoped(fInt("sprint_refs_unresolved", "count")),
+		fStr("sprint_refs_unresolved_reason"),
 		declCallerScoped(fStr("sprint_kind")),
 		declCallerScoped(fStr("next_sprint_end")),
 		declCallerScoped(fStr("latest_sprint_end")),

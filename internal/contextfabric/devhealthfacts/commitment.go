@@ -20,6 +20,7 @@ const (
 
 	commitmentItemsUnreachableReason = "project_key_ambiguous"
 	commitmentItemsUnreadableReason  = "items_not_readable_for_caller"
+	commitmentSprintUnresolvedReason = "sprint_not_found_or_without_end"
 	commitmentNotCollected           = "not_collected"
 
 	commitmentAsOfParam = "as_of"
@@ -79,7 +80,8 @@ project_items AS (
 SELECT a.project_key, a.items_all,
   toInt64(ifNull(i.items_total, 0)), toInt64(ifNull(i.items_open, 0)), toInt64(ifNull(i.items_closed, 0)), toInt64(ifNull(i.items_unknown_status, 0)),
   toInt64(ifNull(i.items_with_due_at, 0)), toInt64(ifNull(i.items_past_due_open, 0)),
-  toInt64(ifNull(s.sprint_count, 0)), toInt64(ifNull(s.next_count, 0)), toInt64(ifNull(s.next_end_ms, 0)), toInt64(ifNull(s.latest_end_ms, 0))
+  toInt64(ifNull(s.sprint_count, 0)), toInt64(ifNull(s.next_count, 0)), toInt64(ifNull(s.next_end_ms, 0)), toInt64(ifNull(s.latest_end_ms, 0)),
+  toInt64(ifNull(u.sprint_refs_unresolved, 0))
 FROM (
   SELECT project_key, toInt64(count()) AS items_all
   FROM project_rows
@@ -111,6 +113,18 @@ LEFT JOIN (
   WHERE pi.sprint_id != ''
   GROUP BY project_key
 ) AS s ON s.project_key = a.project_key
+LEFT JOIN (
+  SELECT pi.project_key AS project_key,
+    countIf(ifNull(ended.sprint_id, '') = '') AS sprint_refs_unresolved
+  FROM project_items AS pi
+  LEFT JOIN (
+    SELECT DISTINCT provider, sprint_id
+    FROM sprints FINAL
+    WHERE org_id = {org_id:String} AND isNotNull(ended_at)
+  ) AS ended ON ended.provider = pi.provider AND ended.sprint_id = pi.sprint_id
+  WHERE pi.sprint_id != ''
+  GROUP BY project_key
+) AS u ON u.project_key = a.project_key
 ORDER BY a.project_key
 )`
 }
@@ -122,7 +136,7 @@ type commitmentProjectRow struct {
 
 type commitmentItemRow struct {
 	all, total, open, closed, unknownStatus, withDueAt, pastDueOpen int64
-	sprintCount, nextCount                                          int64
+	sprintCount, nextCount, sprintRefsUnresolved                    int64
 	nextEndMs, latestEndMs                                          int64
 }
 
@@ -218,7 +232,7 @@ func (p *CommitmentProvider) readItemRows(ctx context.Context, principal storage
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectCommitmentItems", readers.WithSettings(commitmentItemRowsSQL(authorized), settings), orgID, ids, func(row readers.RowScanner) error {
 		var key string
 		var r commitmentItemRow
-		if err := row.Scan(&key, &r.all, &r.total, &r.open, &r.closed, &r.unknownStatus, &r.withDueAt, &r.pastDueOpen, &r.sprintCount, &r.nextCount, &r.nextEndMs, &r.latestEndMs); err != nil {
+		if err := row.Scan(&key, &r.all, &r.total, &r.open, &r.closed, &r.unknownStatus, &r.withDueAt, &r.pastDueOpen, &r.sprintCount, &r.nextCount, &r.nextEndMs, &r.latestEndMs, &r.sprintRefsUnresolved); err != nil {
 			return err
 		}
 		rows[key] = r
@@ -269,6 +283,10 @@ func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, item
 			fields["next_sprint_end"] = contextfabric.StringFactValue(time.UnixMilli(items.nextEndMs).UTC().Format(time.RFC3339))
 		}
 	}
+	fields["sprint_refs_unresolved"] = contextfabric.IntegerFactValue(items.sprintRefsUnresolved)
+	if items.sprintRefsUnresolved > 0 {
+		fields["sprint_refs_unresolved_reason"] = contextfabric.StringFactValue(commitmentSprintUnresolvedReason)
+	}
 	unreadable := max(items.all-items.total, 0)
 	fields["items_unreadable_count"] = contextfabric.IntegerFactValue(unreadable)
 	if unreadable > 0 {
@@ -277,7 +295,7 @@ func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, item
 	switch {
 	case stated:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusStated)
-	case unreadable == 0 && !sourceNotCollected && items.total > 0:
+	case unreadable == 0 && !sourceNotCollected && items.total > 0 && items.sprintRefsUnresolved == 0:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusNoneStated)
 	}
 	return fields

@@ -93,7 +93,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"status", "status_basis", "status_provenance", "status_since_basis", "story_points_completed_unavailable_reason",
 		"bug_completed_ratio_unavailable_reason", "theme", "unit_attribution_basis", "unit_kind", "unit_mix_source",
 		"window_basis", "window_mode",
-		"commitment_status", "items_unavailable_reason", "items_unreadable_reason", "iteration_basis", "project_state", "sprint_kind",
+		"commitment_status", "items_unavailable_reason", "items_unreadable_reason", "iteration_basis", "sprint_refs_unresolved_reason", "project_state", "sprint_kind",
 	} {
 		classes[name] = StringFieldToken
 	}

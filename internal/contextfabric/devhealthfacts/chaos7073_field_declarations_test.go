@@ -201,7 +201,7 @@ func t4Cases() []t4Case {
 	githubProject := []contextfabric.SubjectRef{projectSubject("github", "proj-1")}
 	add(t4Case{name: "commitment/project_unreadable_github", kind: contextfabric.FactCommitment, subjects: githubProject, tables: []fakeTable{
 		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("github", "proj-1", "", "", "", true)}},
-		{match: commitmentItemsMatch, rows: [][]any{commitmentItemRow("github", "proj-1", commitmentCounts{all: 3, total: 2, open: 1, unknown: 1})}},
+		{match: commitmentItemsMatch, rows: [][]any{commitmentItemRow("github", "proj-1", commitmentCounts{all: 3, total: 2, open: 1, unknown: 1, unresolved: 1})}},
 	}})
 
 	// ---- readiness
