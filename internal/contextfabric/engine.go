@@ -1138,6 +1138,9 @@ type EngineTelemetry interface {
 	// RecordProjectStatusDrivers reports one project status driver decision:
 	// counts and closed fact kinds only.
 	RecordProjectStatusDrivers(ctx context.Context, principal storage.Principal, event ProjectStatusDriverEvent)
+	// RecordTeamBlockersDrivers reports one team blockers driver decision:
+	// counts by reason only, never a team or a value.
+	RecordTeamBlockersDrivers(ctx context.Context, principal storage.Principal, event TeamBlockersDriverEvent)
 	// RecordEvidenceLabelFallback (CHAOS-4690 item 4, design §3.2) reports
 	// how many entries in ONE result's EvidenceRefLabels map fell back to
 	// the generic "Evidence"/"Evidence: <id>" label because their

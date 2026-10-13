@@ -228,6 +228,7 @@ func repeatDrivers(n int) []ContextFabricDriverJudgment {
 			Title:            escaped(ContextFabricDriverTitleMaxLength),
 			Summary:          escaped(ContextFabricDriverSummaryMaxLength),
 			Qualification:    escaped(ContextFabricDriverQualificationMaxLength),
+			Rank:             ContextFabricDriverRankMaxValue,
 			AffectedSubjects: distinctSubjects(ContextFabricDriverAffectedSubjectsMaxCount, i*ContextFabricDriverAffectedSubjectsMaxCount),
 			PathIDs:          repeatStrings(ContextFabricDriverPathIDsMaxCount, ContextFabricIdentifierRefMaxLength),
 			EvidenceRefIDs:   repeatEvidenceRefs(ContextFabricNestedEvidenceRefIDsMaxCount, ContextFabricEvidenceRefIDMaxLength),
