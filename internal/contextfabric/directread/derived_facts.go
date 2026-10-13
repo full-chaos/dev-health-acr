@@ -180,7 +180,7 @@ func derivedReason(row derivedRow) string {
 	if row.targets == 0 {
 		reason = fmt.Sprintf("scope expansion reached no %s from this subject (expansion: %s; policy: %s)", plural, row.expansion.outcome, row.expansion.policy)
 	} else {
-		reason = fmt.Sprintf("read through %d %s reached by scope expansion, %d with a fact (expansion: %s; policy: %s)", row.targets, plural, row.served, row.expansion.outcome, row.expansion.policy)
+		reason = fmt.Sprintf("scope expansion reached %d %s, %d with a served fact (expansion: %s; policy: %s)", row.targets, plural, row.served, row.expansion.outcome, row.expansion.policy)
 	}
 	if row.shared {
 		reason += fmt.Sprintf("; a %s that several requested %s reach is counted under only one of them, so this count may leave out %s that another requested %s's count holds", subjectKindNoun(row.expansion.targetKind), subjectKindPlural(row.rootKind), plural, subjectKindNoun(row.rootKind))
