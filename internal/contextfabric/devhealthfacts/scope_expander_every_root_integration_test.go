@@ -262,6 +262,7 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				}
 			}
 			measured := statementMemory{}
+			// devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows; they declare no table.
 			for _, table := range []string{"work_items", "team_repo_ownership", "team_project_ownership"} {
 				for hash, peak := range statementMemorySince(t, ctx, direct, statementFilter{Table: table, QueryContains: "arraySort(groupUniqArray("}, mark) {
 					measured[hash] = peak
