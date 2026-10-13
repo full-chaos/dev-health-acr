@@ -15,6 +15,11 @@ import (
 
 const redactedEpisodeText = "[redacted]"
 
+const (
+	sqlPurgedTombstone = "'" + contractsv1.AgentEpisodeRedactionPurgedTombstone + "'"
+	sqlRedacted        = "'" + contractsv1.AgentEpisodeRedactionRedacted + "'"
+)
+
 type EpisodeStore struct {
 	DB         *sql.DB
 	GenerateID func() (string, error)
@@ -40,11 +45,11 @@ func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.P
 		return contractsv1.AgentEpisode{}, false, fmt.Errorf("encode episode payload: %w", err)
 	}
 	digestText := episodeDigest(payload)
-	state := "active"
+	state := contractsv1.AgentEpisodeRedactionActive
 	storedPayload := episodePayload{Digest: digestText, Episode: &create}
 	if create.RetentionClass == "no_persist" {
 		storedPayload = episodePayload{Digest: digestText, Tombstone: true}
-		state = "purged_tombstone"
+		state = contractsv1.AgentEpisodeRedactionPurgedTombstone
 	}
 	payload, err = json.Marshal(storedPayload)
 	if err != nil {
@@ -86,7 +91,7 @@ func (s *EpisodeStore) GetByClientEpisodeID(ctx context.Context, principal stora
 SELECT episode_id, repo_slug, payload, created_at, redaction_state
 FROM acr.agent_episodes
 WHERE org_id = $1::uuid AND client_episode_id = $2
-  AND redaction_state <> 'purged_tombstone'
+  AND redaction_state <> `+sqlPurgedTombstone+`
   AND (expires_at IS NULL OR expires_at > NOW())`, principal.OrgID, clientEpisodeID)
 	episode, err := scanAuthorizedEpisode(row, principal)
 	if err != nil {
@@ -111,14 +116,14 @@ SELECT episode_id, repo_slug, payload, created_at, redaction_state
 	if err != nil {
 		return contractsv1.AgentEpisode{}, mapNotFound("load episode for redaction", err)
 	}
-	if episode.RedactionState == "active" {
+	if episode.RedactionState == contractsv1.AgentEpisodeRedactionActive {
 		episode.AgentEpisodeCreate = redactedCreate(episode.AgentEpisodeCreate)
 		payload, err := json.Marshal(episode.AgentEpisodeCreate)
 		if err != nil {
 			return contractsv1.AgentEpisode{}, fmt.Errorf("encode redacted episode: %w", err)
 		}
 		row = tx.QueryRowContext(ctx, `
-UPDATE acr.agent_episodes SET payload = jsonb_set(payload, '{episode}', $3::jsonb), redaction_state = 'redacted', redacted_at = NOW(), updated_at = NOW()
+UPDATE acr.agent_episodes SET payload = jsonb_set(payload, '{episode}', $3::jsonb), redaction_state = `+sqlRedacted+`, redacted_at = NOW(), updated_at = NOW()
 WHERE org_id = $1::uuid AND episode_id = $2
 RETURNING episode_id, payload, created_at, redaction_state`, principal.OrgID, episodeID, string(payload))
 		episode, err = scanEpisode(row)
@@ -157,7 +162,7 @@ LIMIT $4`, orgID, since, afterEpisodeID, limit)
 			return nil, fmt.Errorf("scan episode since: %w", sanitizeDatabaseError(err))
 		}
 		record.StartedAt, record.EndedAt, record.CreatedAt, record.UpdatedAt = record.StartedAt.UTC(), record.EndedAt.UTC(), record.CreatedAt.UTC(), record.UpdatedAt.UTC()
-		if record.RedactionState == "active" {
+		if record.RedactionState == contractsv1.AgentEpisodeRedactionActive {
 			if create, err := storedEpisodeCreate(payload); err == nil {
 				record.Goal, record.Summary, record.TaskRef = create.Goal, create.Summary, create.TaskRef
 			}
@@ -199,7 +204,7 @@ func (s *EpisodeStore) purgeExpired(ctx context.Context, orgID string, scopes []
 	result, err := s.DB.ExecContext(ctx, `
 WITH candidates AS (
     SELECT episode_id FROM acr.agent_episodes
-    WHERE expires_at <= $1 AND redaction_state <> 'purged_tombstone'
+    WHERE expires_at <= $1 AND redaction_state <> `+sqlPurgedTombstone+`
 	  AND org_id = $3::uuid
 	  AND EXISTS (
 	          SELECT 1 FROM jsonb_array_elements_text($4::jsonb) AS allowed(scope)
@@ -209,7 +214,7 @@ WITH candidates AS (
 )
 UPDATE acr.agent_episodes AS episode
 SET payload = jsonb_build_object('idempotency_digest', episode.payload->>'idempotency_digest', 'tombstone', true),
-    redaction_state = 'purged_tombstone', updated_at = NOW()
+    redaction_state = `+sqlPurgedTombstone+`, updated_at = NOW()
 FROM candidates WHERE episode.episode_id = candidates.episode_id`, before, limit, orgID, string(scopesJSON))
 	if err != nil {
 		return 0, fmt.Errorf("purge expired episodes: %w", err)
@@ -238,7 +243,7 @@ WHERE org_id = $1::uuid AND repo_id = $2::uuid AND (idempotency_key = $3 OR clie
 	if err := rows.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil || !sameEpisodeRepository(repoSlug, create.Repository.Slug) || episodePayloadDigest(payload) != expectedDigest || rows.Next() {
 		return contractsv1.AgentEpisode{}, storage.ErrConflict
 	}
-	if state == "purged_tombstone" {
+	if state == contractsv1.AgentEpisodeRedactionPurgedTombstone {
 		return contractsv1.AgentEpisode{}, rows.Err()
 	}
 	episode, err := decodeEpisode(episodeID, payload, createdAt, state)
@@ -274,7 +279,7 @@ func scanAuthorizedEpisode(row episodeScanner, principal storage.Principal) (con
 }
 
 func decodeEpisode(episodeID string, payload []byte, createdAt time.Time, state string) (contractsv1.AgentEpisode, error) {
-	if state == "purged_tombstone" {
+	if state == contractsv1.AgentEpisodeRedactionPurgedTombstone {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	episode := contractsv1.AgentEpisode{EpisodeID: episodeID, CreatedAt: createdAt, RedactionState: state}
