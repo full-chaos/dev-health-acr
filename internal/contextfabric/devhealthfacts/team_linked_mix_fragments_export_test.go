@@ -79,29 +79,6 @@ func TeamLinkedMixFragmentsForTest(scopeIDs []string) (fragments []LinkedMixFrag
 	owned := ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
 	add("m_rows", "SELECT count(), sum(length(mapKeys(theme_distribution_json))) FROM ("+m+")")
 	add("m_join_lr", "SELECT count() FROM ("+m+") AS m INNER JOIN "+lr+" AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num")
-	add("m_per_pr", `SELECT count() FROM (SELECT repo_uuid, pr_number,
-	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
-	sum(bugfix_share * effort) AS bugfix_effort
-FROM (`+m+`)
-GROUP BY repo_uuid, pr_number)`)
-	add("candidate_per_pr_first", withRowLimitOf(`SELECT lr.team_id AS team_id,
-	uniqExact(m.repo_uuid) AS repos,
-	sumMap(m.theme_effort) AS theme_effort,
-	sum(m.bugfix_effort) AS bugfix_effort
-FROM (
-	SELECT repo_uuid, pr_number,
-		sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
-		sum(bugfix_share * effort) AS bugfix_effort
-	FROM (
-`+m+`
-	)
-	GROUP BY repo_uuid, pr_number
-) AS m
-INNER JOIN `+lr+` AS lr
-	ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
-WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+owned+`)
-GROUP BY lr.team_id
-ORDER BY lr.team_id`, linkedMixTeamChunk+1))
 	statement := linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1)
 	notInAt := strings.Index(statement, "\nWHERE (lr.team_id, m.repo_uuid) NOT IN (")
 	groupAt := strings.LastIndex(statement, "\nGROUP BY lr.team_id")
@@ -114,47 +91,30 @@ ORDER BY lr.team_id`, linkedMixTeamChunk+1))
 	sum(bugfix_share * effort) AS bugfix_effort
 FROM (`+m+`)`)
 	add("m_join_lr_payload", "SELECT count(), sum(length(mapKeys(m.theme_distribution_json))), sum(m.effort), sum(m.bugfix_share) FROM ("+m+") AS m INNER JOIN "+lr+" AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num")
-	add("m_join_lr_grouped", `SELECT lr.team_id AS team_id, uniqExact(m.repo_uuid) AS repos,
-	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
-	sum(m.bugfix_share * m.effort) AS bugfix_effort
-FROM (`+m+`) AS m INNER JOIN `+lr+` AS lr ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
-GROUP BY lr.team_id`)
 	add("m_not_in_owned", "SELECT count(), sum(length(mapKeys(theme_distribution_json))), sum(effort) FROM ("+m+") AS m WHERE ({ids:Array(String)}[1], m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM "+owned+")")
 	add("lr_rows", "SELECT count() FROM "+lr)
-	// The same statement with the linked set tested as IN sets, so the set is
-	// never a literal array inside an expression of the main pipeline.
-	directOld := "hasAny(direct_refs, arrayMap(x -> (x.1, x.2), " + linked + "))"
-	directNew := "arrayExists(r -> r IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(" + linked + ") AS l)), direct_refs)"
-	lookupOldHead := "hasAny(lookup_refs, (\n\t\t\t\t\t\tSELECT groupUniqArray((rl.provider, rl.repo, lx.lp_pr)) FROM ("
-	lookupNewHead := "arrayExists(r -> r IN (\n\t\t\t\t\t\tSELECT rl.provider, rl.repo, lx.lp_pr FROM ("
-	lookupOldTail := "AS rl ON rl.repo_uuid = lx.lp_repo)))"
-	lookupNewTail := "AS rl ON rl.repo_uuid = lx.lp_repo), lookup_refs))"
-	if strings.Count(statement, directOld) != 1 || strings.Count(statement, lookupOldHead) != 1 || strings.Count(statement, lookupOldTail) != 1 {
-		return nil, "statement_sets"
-	}
-	sets := strings.Replace(statement, directOld, directNew, 1)
-	sets = strings.Replace(sets, lookupOldHead, lookupNewHead, 1)
-	sets = strings.Replace(sets, lookupOldTail, lookupNewTail, 1)
-	add("statement_sets", sets)
-	// The same statement with n and the per-pull-request c computed inside the
-	// unit fold, so the unit's reference array is not carried through the
-	// expansion to one row per pull request.
+	// Candidates that never carry the unit's reference array (pairs) to the
+	// rows of the expansion. A linked pull request rp comes from a reference
+	// row of the unit, so (rp.1, rp.1#rp.2) is in the unit's distinct pairs
+	// exactly once: c is 1.
 	cOld := "countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,"
-	foldOld := "AS pairs\n\tFROM ("
-	foldNew := "AS pairs,\n\t\tlength(pairs) AS n,\n\t\tarrayMap(rp -> countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))), repo_prs) AS cs\n\tFROM ("
-	expandOld := "ARRAY JOIN repo_prs AS rp\n"
-	if strings.Count(statement, cOld) != 1 || strings.Count(statement, foldOld) != 1 || strings.Count(statement, expandOld) != 1 {
-		return nil, "statement_counts_in_fold"
+	pairsOld := "groupUniqArray((ref_repo, if(ref_repo = '', ref_text, concat(ref_repo, '#', pr_number)))) AS pairs\n\tFROM ("
+	expandOld := "ARRAY JOIN repo_prs AS rp\nARRAY JOIN wins AS win\nWHERE rp.1 != '' AND rp IN ("
+	if strings.Count(statement, cOld) != 1 || strings.Count(statement, pairsOld) != 1 || strings.Count(statement, expandOld) != 1 {
+		return nil, "statement_unit_counts"
 	}
-	inFold := strings.Replace(statement, cOld, "c, n,", 1)
-	inFold = strings.Replace(inFold, foldOld, foldNew, 1)
-	inFold = strings.Replace(inFold, expandOld, "ARRAY JOIN repo_prs AS rp, cs AS c\n", 1)
-	add("statement_counts_in_fold", inFold)
+	lengthInFold := strings.Replace(statement, cOld, "1 AS c, n,", 1)
+	lengthInFold = strings.Replace(lengthInFold, pairsOld, strings.Replace(pairsOld, "AS pairs\n", "AS pairs,\n\t\tlength(pairs) AS n\n", 1), 1)
+	add("statement_n_length_in_fold", lengthInFold)
+	uniqInFold := strings.Replace(statement, cOld, "1 AS c, n,", 1)
+	uniqInFold = strings.Replace(uniqInFold, pairsOld, "uniqExact((ref_repo, if(ref_repo = '', ref_text, concat(ref_repo, '#', pr_number)))) AS n\n\tFROM (", 1)
+	add("statement_n_uniq_in_fold", uniqInFold)
+	filtered := strings.Replace(uniqInFold, expandOld, "ARRAY JOIN arrayFilter(x -> x.1 != '' AND x IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin("+linked+") AS l)), repo_prs) AS rp\nARRAY JOIN wins AS win\nWHERE rp.1 != '' AND rp IN (", 1)
+	add("statement_n_uniq_filtered_first", filtered)
 	add("m_effort_only", "SELECT sum(effort) FROM ("+m+")")
 	add("m_bugfix_only", "SELECT sum(bugfix_share) FROM ("+m+")")
 	add("m_theme_only", "SELECT sum(length(mapKeys(theme_distribution_json))) FROM ("+m+")")
 	fragments = append(fragments, LinkedMixFragment{Name: "statement_one_thread", SQL: statement, Bindings: bindings, Settings: "max_threads = 1"})
-	fragments = append(fragments, LinkedMixFragment{Name: "statement_no_join_swap", SQL: linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1), Bindings: bindings, Settings: "query_plan_join_swap_table = 0"})
 	add("owned_repositories", "SELECT count() FROM "+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
 	return fragments, ""
 }
