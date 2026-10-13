@@ -39,7 +39,8 @@ func init() {
 			clientValidate: "contractsv1.ContextPacket.ValidateRead",
 			sites:          []string{"context_packet.v1.freshness.watermarks.items.status"},
 			// schema: "fresh", "stale", "missing", "unavailable"
-			schemaOnly: "watermark statuses are string literals in contextpacket/packet_output_validation.go",
+			goSet:      contractsv1.SourceWatermarkStatusVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "v1.category",
@@ -92,7 +93,8 @@ func init() {
 			clientValidate: "contractsv1.EvidenceRef.ValidateRead",
 			sites:          []string{"evidence_ref.v1.provenance"},
 			// schema: "native", "explicit_text", "heuristic", "derived"
-			schemaOnly: "native/explicit_text/heuristic/derived are string literals in contracts/v1/validate_evidence.go",
+			goSet:      contractsv1.EvidenceProvenanceVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "v1.availability",

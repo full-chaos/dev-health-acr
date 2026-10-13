@@ -32,11 +32,16 @@ var producerSets = []producerSet{
 		"internal/storage/postgres/episodes.go", "internal/contextfabric/devhealthsource/episodes.go",
 	}, []string{"AgentEpisodeRedactionActive", "AgentEpisodeRedactionRedacted", "AgentEpisodeRedactionPurgedTombstone"}},
 	{"transcript_disposition", []string{"not_submitted", "accepted", "redacted"}, []string{"internal/mcp/record_episode.go", "internal/contracts/v1/mcp_validate.go"}, []string{"MCPTranscriptDispositionNotSubmitted", "MCPTranscriptDispositionAccepted", "MCPTranscriptDispositionRedacted"}},
+	{"commit_gate", []string{"caller_hint_short_circuit", "pre_committed_exact_hint", "exact_index", "identity_fast_path", "lone_floor", "top_of_two", "vector_margin_rescue", "evidence_census"}, []string{
+		"internal/contextfabric/graphrank/resolution.go", "internal/contextfabric/graphrank/resolve.go",
+		"internal/contextfabric/graphrank/explicit_handle_commit.go", "internal/contextfabric/graphrank/exact_label_proof.go",
+		"internal/contextfabric/count_population_scope.go",
+	}, []string{"CommitGatePreCommittedExactHint", "CommitGateExactIndex", "CommitGateIdentityFastPath", "CommitGateLoneFloor", "CommitGateTopOfTwo", "CommitGateVectorMarginRescue", "CommitGateEvidenceCensus", "CommitGateCallerHintShortCircuit"}},
 }
 
 // producerFields are struct fields that carry a pinned set; no production file
 // may assign a string literal to one.
-var producerFields = map[string]bool{"RedactionState": true, "TranscriptDisposition": true, "Axis": true, "LinkTier": true}
+var producerFields = map[string]bool{"RedactionState": true, "TranscriptDisposition": true, "Axis": true, "LinkTier": true, "CommitGate": true, "Provenance": true}
 
 type producerScan struct {
 	bareLiterals []string
