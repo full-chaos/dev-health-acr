@@ -133,7 +133,7 @@ func TestProjectStatusIsAppliedBeforeTheMemberCap(t *testing.T) {
 	if !result.Cohort.Complete || result.Cohort.Truncated {
 		t.Fatalf("cohort complete=%v truncated=%v, want a complete set", result.Cohort.Complete, result.Cohort.Truncated)
 	}
-	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectProject, Count: 1}); result.MemberStatusOutsideSet != want {
+	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectProject, Count: 1, Filtered: true, Reached: true}); result.MemberStatusOutsideSet != want {
 		t.Fatalf("outside the known set = %+v, want %+v", result.MemberStatusOutsideSet, want)
 	}
 	if len(telemetry.pullRequestStatusFilters) != 1 || telemetry.pullRequestStatusFilters[0].Site != PullRequestStatusFilterSiteWalk {
