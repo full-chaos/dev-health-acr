@@ -52,6 +52,7 @@ var scopeExpanderStatements = []struct {
 // transitions of the filler work items.
 func fillScopeOrganization(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, f everyRootFixture, prefix string, rows uint64) {
 	t.Helper()
+	// devhealthschema:not-a-production-replica: test seed and merge control over tables the shared DDL creates; they declare no table.
 	fillEveryRootOrganization(t, ctx, direct, f, prefix, rows)
 	at := time.Now().UTC().Truncate(time.Second)
 	for label, statement := range map[string]struct {
@@ -74,6 +75,7 @@ SELECT ?, NULL, ?, 'work_item', concat(?, '-', repeat('x', 64), '-', toString(nu
 	}
 }
 
+// devhealthschema:not-a-production-replica: test seed and merge control over tables the shared DDL creates; they declare no table.
 // mergeScopeTables leaves one part per filled table, so the guarded readings
 // follow the rows, not how many parts the inserts happen to leave unmerged.
 func mergeScopeTables(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
@@ -96,6 +98,7 @@ func seedMovedOwnership(t *testing.T, ctx context.Context, direct clickhousedriv
 	at := time.Now().UTC().Truncate(time.Second)
 	since, closed := at.Add(-30*24*time.Hour), at.Add(-time.Hour)
 	moved := movedOwnership{repo: repoUUID(f.orgID + "-moved"), projectRepo: repoUUID(f.orgID + "-moved-project")}
+	// devhealthschema:not-a-production-replica: test seed and merge control over tables the shared DDL creates; they declare no table.
 	exec := func(statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -174,6 +177,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		fixture.orgID, fixture.shared, since, since); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
+	// devhealthschema:not-a-production-replica: test seed and merge control over tables the shared DDL creates; they declare no table.
 	// Merges stay off on the ownership tables until the moved-ownership row
 	// has read the stale versions it seeds: a background merge would remove
 	// them, and the row would no longer see one.
@@ -213,6 +217,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		if !ok {
 			t.Fatal("teamRepositories statement was not sent")
 		}
+		// devhealthschema:not-a-production-replica: test seed and merge control over tables the shared DDL creates; they declare no table.
 		stale := strings.ReplaceAll(strings.ReplaceAll(captured.statement, "FROM team_repo_ownership FINAL", "FROM team_repo_ownership"), "FROM team_project_ownership FINAL", "FROM team_project_ownership")
 		if stale == captured.statement {
 			t.Fatal("the statement reads no ownership table with FINAL")
@@ -224,6 +229,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 		}
 	})
+	// devhealthschema:not-a-production-replica: test seed and merge control over tables the shared DDL creates; they declare no table.
 	for _, table := range []string{"team_repo_ownership", "team_project_ownership"} {
 		if err := direct.Exec(ctx, `SYSTEM START MERGES `+table); err != nil {
 			t.Fatalf("start merges on %s: %v", table, err)
