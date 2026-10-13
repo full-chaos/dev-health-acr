@@ -73,9 +73,15 @@ func purge(args []string) error {
 	purger := &orgpurge.Purger{DB: runtime.DB, Graph: deleter, Set: runtime.Coordinator, Entitlements: entitlementClient, Locker: locker}
 	report, err := purger.Run(ctx, *org, orgpurge.Options{DryRun: *dryRun, AttestDeleted: *attest, ConfirmOrgKey: *confirm})
 	if err != nil {
+		if errors.Is(err, orgpurge.ErrIncomplete) {
+			if encoded, marshalErr := json.MarshalIndent(report, "", "  "); marshalErr == nil {
+				fmt.Println(string(encoded))
+			}
+			logger.ErrorContext(ctx, "projection organization purge incomplete", "org_key", report.OrgKey, "graphs", report.Graphs)
+		}
 		return fmt.Errorf("purge organization %s: %w", report.OrgKey, err)
 	}
-	logger.InfoContext(ctx, "projection organization purged", "org_key", report.OrgKey, "dry_run", report.DryRun, "total_rows", report.TotalRows, "graphs", report.Graphs)
+	logger.InfoContext(ctx, "projection organization purge finished", "org_key", report.OrgKey, "status", report.Status, "total_rows", report.TotalRows, "graphs", report.Graphs)
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err

@@ -19,6 +19,9 @@ import (
 var (
 	ErrRefused = errors.New("orgpurge: purge refused")
 	ErrLocked  = errors.New("orgpurge: organization is locked by another projector")
+	// ErrIncomplete means the run failed after it started removing data:
+	// some graphs may be gone while database rows remain. Run it again.
+	ErrIncomplete = errors.New("orgpurge: purge INCOMPLETE")
 )
 
 // OrgKey is the log-safe, non-reversible handle of an organization.
@@ -66,9 +69,16 @@ type Options struct {
 	DeleteBatchHint int
 }
 
+const (
+	StatusDryRun     = "dry_run"
+	StatusPurged     = "purged"
+	StatusIncomplete = "incomplete"
+)
+
 // Report counts what a run removed (or, for a dry run, would remove).
 type Report struct {
 	OrgKey            string           `json:"org_key"`
+	Status            string           `json:"status"`
 	DryRun            bool             `json:"dry_run"`
 	Graphs            int              `json:"graphs"`
 	Rows              map[string]int64 `json:"rows"`
@@ -178,18 +188,36 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 	}
 	defer func() { _ = unlock() }()
 
+	if err := p.removeOrganization(ctx, orgID, opts, &report); err != nil {
+		if opts.DryRun {
+			return report, err
+		}
+		report.Status = StatusIncomplete
+		report.Rows, report.TotalRows, report.TableOrderApplied = map[string]int64{}, 0, nil // the rolled-back transaction removed nothing
+		report.AuditRowWritten = p.writeIncompleteAudit(ctx, orgID, report)
+		return report, fmt.Errorf("%w: graphs may be gone and database rows may remain; run it again: %v", ErrIncomplete, err)
+	}
+	report.Status = StatusPurged
+	if opts.DryRun {
+		report.Status = StatusDryRun
+	}
+	return report, nil
+}
+
+func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Options, report *Report) error {
+	var err error
 	if opts.DryRun {
 		report.Graphs, err = p.Graph.CountOrganizationGraphs(ctx, orgID)
 	} else {
 		report.Graphs, err = p.Graph.DeleteOrganizationGraphs(ctx, orgID)
 	}
 	if err != nil {
-		return report, fmt.Errorf("organization graphs: %w", err)
+		return fmt.Errorf("organization graphs: %w", err)
 	}
 
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return report, fmt.Errorf("begin purge transaction: %w", err)
+		return fmt.Errorf("begin purge transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, spec := range purgeTables {
@@ -198,7 +226,7 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 			var c int64
 			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM acr."+child+" WHERE device_code_hash IN (SELECT device_code_hash FROM acr."+spec.Name+" WHERE "+spec.Where+")", orgID).Scan(&c)
 			if err != nil {
-				return report, fmt.Errorf("count %s: %w", child, err)
+				return fmt.Errorf("count %s: %w", child, err)
 			}
 			report.Rows[child] = c
 			report.TotalRows += c
@@ -213,31 +241,31 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 			}
 		}
 		if err != nil {
-			return report, fmt.Errorf("purge %s: %w", spec.Name, err)
+			return fmt.Errorf("purge %s: %w", spec.Name, err)
 		}
 		report.Rows[spec.Name] = n
 		report.TotalRows += n
 		report.TableOrderApplied = append(report.TableOrderApplied, spec.Name)
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid`, orgID).Scan(&report.KeptAuditEvents); err != nil {
-		return report, fmt.Errorf("count audit events: %w", err)
+		return fmt.Errorf("count audit events: %w", err)
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM acr.agent_episodes WHERE org_id = $1::uuid AND retention_class = 'legal_hold'`, orgID).Scan(&report.KeptLegalHold); err != nil {
-		return report, fmt.Errorf("count legal hold episodes: %w", err)
+		return fmt.Errorf("count legal hold episodes: %w", err)
 	}
 	if opts.DryRun {
-		return report, nil
+		return nil
 	}
 	if report.TotalRows > 0 {
-		if err := p.writeAudit(ctx, tx, orgID, report); err != nil {
-			return report, err
+		if err := p.writeAudit(ctx, tx, orgID, *report); err != nil {
+			return err
 		}
 		report.AuditRowWritten = true
 	}
 	if err := tx.Commit(); err != nil {
-		return report, fmt.Errorf("commit purge transaction: %w", err)
+		return fmt.Errorf("commit purge transaction: %w", err)
 	}
-	return report, nil
+	return nil
 }
 
 func (p *Purger) writeAudit(ctx context.Context, tx *sql.Tx, orgID string, report Report) error {
@@ -257,4 +285,22 @@ VALUES ($1::uuid, $2::uuid, 'operator', 'acr-projector', 'org_purged', 'organiza
 		return fmt.Errorf("insert audit event: %w", err)
 	}
 	return nil
+}
+
+// writeIncompleteAudit records a failed run on its own statement, outside the
+// rolled-back transaction, so the attempt is visible. Best effort.
+func (p *Purger) writeIncompleteAudit(ctx context.Context, orgID string, report Report) bool {
+	now := time.Now
+	if p.Now != nil {
+		now = p.Now
+	}
+	metadata, err := json.Marshal(map[string]any{"graphs": report.Graphs})
+	if err != nil {
+		return false
+	}
+	_, err = p.DB.ExecContext(context.WithoutCancel(ctx), `
+INSERT INTO acr.audit_events (audit_event_id, org_id, actor_type, actor_id, action, resource_type, resource_id, status, metadata, created_at)
+VALUES ($1::uuid, $2::uuid, 'operator', 'acr-projector', 'org_purge_incomplete', 'organization', $3, 'failure', $4::jsonb, $5)`,
+		uuid.NewString(), orgID, report.OrgKey, string(metadata), now().UTC())
+	return err == nil
 }

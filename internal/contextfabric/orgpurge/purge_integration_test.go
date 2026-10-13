@@ -26,6 +26,7 @@ const (
 	falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
 	orgGone       = "aaaaaaaa-0000-4000-8000-000000000001"
 	orgKept       = "bbbbbbbb-0000-4000-8000-000000000002"
+	orgBroken     = "cccccccc-0000-4000-8000-000000000003"
 	graphSource   = "purge-test"
 )
 
@@ -247,4 +248,51 @@ func graphExists(t *testing.T, adapter *falkorgraph.Adapter, org string) bool {
 	}
 	require.ErrorIs(t, err, contextfabric.ErrProjectionWatermarkNotFound)
 	return false
+}
+
+func TestInterruptedPurgeIsIncompleteAndTheRetryCompletes(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	seedPostgres(t, r.db, orgBroken)
+	seedGraph(t, r.adapter, orgBroken)
+	before := rowCounts(t, r.db, orgBroken)
+	opts := orgpurge.Options{AttestDeleted: true, ConfirmOrgKey: orgpurge.OrgKey(orgBroken)}
+
+	_, err := r.db.ExecContext(ctx, `
+CREATE FUNCTION acr.purge_test_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$;
+CREATE TRIGGER purge_test_fail BEFORE DELETE ON acr.context_fabric_structure_priors FOR EACH ROW EXECUTE FUNCTION acr.purge_test_fail();`)
+	require.NoError(t, err)
+
+	report, err := r.run(t, orgBroken, opts)
+	require.ErrorIs(t, err, orgpurge.ErrIncomplete, "a failure after the graph drop must not look like success")
+	require.Equal(t, orgpurge.StatusIncomplete, report.Status)
+	require.Equal(t, 1, report.Graphs)
+	require.Equal(t, before, rowCounts(t, r.db, orgBroken), "the failed transaction must roll back every delete")
+	require.False(t, graphExists(t, r.adapter, orgBroken), "the graph drop already happened")
+
+	dry, err := r.run(t, orgBroken, orgpurge.Options{DryRun: true})
+	require.NoError(t, err)
+	require.Equal(t, orgpurge.StatusDryRun, dry.Status)
+	require.Positive(t, dry.TotalRows, "the dry run shows the residue")
+	require.Zero(t, dry.Graphs)
+
+	_, err = r.db.ExecContext(ctx, `DROP TRIGGER purge_test_fail ON acr.context_fabric_structure_priors`)
+	require.NoError(t, err)
+	final, err := r.run(t, orgBroken, opts)
+	require.NoError(t, err)
+	require.Equal(t, orgpurge.StatusPurged, final.Status)
+	after := rowCounts(t, r.db, orgBroken)
+	for _, table := range countedTables() {
+		want := int64(0)
+		if table == "agent_episodes" {
+			want = 1 // legal_hold stays
+		}
+		require.Equal(t, want, after[table], "%s after the retry", table)
+	}
+
+	for action, want := range map[string]int{"org_purge_incomplete": 1, "org_purged": 1} {
+		var n int
+		require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = $2`, orgBroken, action).Scan(&n))
+		require.Equal(t, want, n, "audit rows for %s", action)
+	}
 }
