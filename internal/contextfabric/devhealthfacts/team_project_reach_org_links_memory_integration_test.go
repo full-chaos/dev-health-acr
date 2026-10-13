@@ -44,6 +44,7 @@ func TestTeamProjectReachedStatementMemoryFollowsOwnedProjectsNotOrganizationLin
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	for _, statement := range devhealthschema.DDL(
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
@@ -71,6 +72,7 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 	}
 	for _, merged := range []bool{false, true} {
 		mode := map[bool]string{false: "unmerged", true: "merged"}[merged]
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		t.Run("organization links outside the owned projects "+mode, func(t *testing.T) {
 			measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg+"-"+mode, merged, linkFiller("outside", "", "repo-filler"),
 				"organization links outside the owned projects "+mode, prodLinkedIssues, 90_000, orgLinksMemoryCeilingLinks, axisGuard{smallMax: 40 << 20, largeMax: 100 << 20})
@@ -100,6 +102,7 @@ SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDat
 	t.Run("repository ownership history", func(t *testing.T) {
 		measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, false, func(exec func(string, ...any), org string, from, count int) {
 			n := count
+			// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 			exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 100, 0, addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ?) * 3600),
   addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ? + 1) * 3600), toDateTime64('2026-09-29 00:00:00', 3, 'UTC') FROM numbers(?)`,
@@ -125,6 +128,7 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 	}
 	const teamID, project, reachedItem = "team-owner", "proj-owner", "i-reached"
 	for _, label := range []string{"repo-reached", "repo-filler"} {
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), org, "acme/"+label, "github", at)
 	}
 	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
@@ -166,6 +170,7 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclick
 		if !mergedParts {
 			return
 		}
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		for _, table := range []string{"work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "team_repo_ownership"} {
 			exec(`OPTIMIZE TABLE ` + table + ` FINAL`)
 		}
