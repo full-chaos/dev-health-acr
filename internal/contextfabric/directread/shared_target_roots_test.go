@@ -63,7 +63,7 @@ func TestDirectReadServesEveryShareCompleteWhenTheExpanderNamesEveryRoot(t *test
 		t.Fatal(err)
 	}
 	for _, team := range []contextfabric.SubjectRef{teamT, teamU} {
-		if row := coverageOf(t, response, "blockers", team); row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "read through 1 work items") || strings.Contains(row.Reason, "counted under only one") {
+		if row := coverageOf(t, response, "blockers", team); row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "scope expansion reached 1 work items") || strings.Contains(row.Reason, "counted under only one") {
 			t.Fatalf("row %+v", row)
 		}
 	}
