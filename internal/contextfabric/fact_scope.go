@@ -2160,7 +2160,12 @@ func (r *FactReadScopeResolver) expand(
 	// Truncated, or ignores the limit entirely and returns thousands, is
 	// contained by this rather than believed.
 	overflowed := false
+	// Targets past the cap are never admitted, but one an earlier origin kind
+	// already admitted was reached by this origin too, so its root is still
+	// recorded below.
+	var overflow []SubjectRef
 	if len(admitted) > rule.limitOrDefault() {
+		overflow = append(overflow, admitted[rule.limitOrDefault():]...)
 		admitted = admitted[:rule.limitOrDefault()]
 		overflowed = true
 	}
@@ -2270,7 +2275,7 @@ func (r *FactReadScopeResolver) expand(
 	for _, origin := range origins {
 		originKeys[canonicalFactSubjectKey(origin)] = struct{}{}
 	}
-	rootsComplete, sharedTargets := true, 0
+	rootsComplete, sharedTargets := true, map[string]struct{}{}
 	rootsOf := func(key string) []SubjectRef {
 		var roots []SubjectRef
 		listedKeys := map[string]struct{}{}
@@ -2290,7 +2295,7 @@ func (r *FactReadScopeResolver) expand(
 				return canonicalFactSubjectKey(roots[i]) < canonicalFactSubjectKey(roots[j])
 			})
 			if len(roots) > 1 {
-				sharedTargets++
+				sharedTargets[key] = struct{}{}
 			}
 			return roots
 		}
@@ -2299,7 +2304,12 @@ func (r *FactReadScopeResolver) expand(
 		}
 		root := origins[0]
 		if override, ok := result.TargetRoot[key]; ok {
-			root = override
+			if _, requested := originKeys[canonicalFactSubjectKey(override)]; requested {
+				root = override
+			} else {
+				// An origin the request did not name is never recorded.
+				rootsComplete = false
+			}
 		}
 		return []SubjectRef{root}
 	}
@@ -2323,14 +2333,35 @@ func (r *FactReadScopeResolver) expand(
 	}
 	defer func() {
 		event.RootsComplete = rootsComplete
-		event.SharedTargetCount = sharedTargets
+		event.SharedTargetCount = len(sharedTargets)
 	}()
 	seen := make(map[string]struct{}, len(existing)+len(admitted))
 	for _, target := range existing {
 		seen[canonicalFactSubjectKey(target)] = struct{}{}
 	}
+	// noteDuplicate handles a target an earlier origin kind already admitted:
+	// the weaker basis wins, and this origin kind's roots reached the target
+	// too, so each is recorded and its row counts the target it reached.
+	noteDuplicate := func(target SubjectRef, key string) {
+		indexes, tracked := derivationIndex[key]
+		if !tracked {
+			return
+		}
+		basis := rule.Basis
+		if override, ok := result.TargetBasis[key]; ok {
+			basis = override
+		}
+		for _, idx := range indexes {
+			if factScopeBasisWeaker(basis, scope.Derivations[idx].Basis) {
+				scope.Derivations[idx].Basis = basis
+			}
+		}
+		recordDerivations(target, key, basis)
+	}
 	kept := make([]SubjectRef, 0, len(admitted))
+	processed := 0
 	for _, target := range admitted {
+		processed++
 		// DUPLICATE CHECK BEFORE THE CAP CHECK (codex xhigh review round 3,
 		// confirmed real, MEDIUM): a duplicate never consumes a cap slot --
 		// it was already counted in `existing` -- so checking the cap first
@@ -2355,20 +2386,7 @@ func (r *FactReadScopeResolver) expand(
 			// alone here: it counts sources for targets admitted BY THIS
 			// EVENT (the R1 fix above), and a duplicate was not admitted by
 			// this event.
-			if indexes, tracked := derivationIndex[key]; tracked {
-				basis := rule.Basis
-				if override, ok := result.TargetBasis[key]; ok {
-					basis = override
-				}
-				for _, idx := range indexes {
-					if factScopeBasisWeaker(basis, scope.Derivations[idx].Basis) {
-						scope.Derivations[idx].Basis = basis
-					}
-				}
-				// This origin kind's roots reached the target too: each is
-				// recorded, so its row counts the target it reached.
-				recordDerivations(target, key, basis)
-			}
+			noteDuplicate(target, key)
 			continue
 		}
 		if len(existing)+len(kept) >= rule.limitOrDefault() {
@@ -2383,6 +2401,16 @@ func (r *FactReadScopeResolver) expand(
 		}
 		seen[key] = struct{}{}
 		kept = append(kept, target)
+	}
+	// Past the requirement cap (the loop stopped at processed) or the
+	// expander's overflow row: no new subject, but an already admitted one
+	// still records this origin's roots.
+	late := append(append([]SubjectRef{}, admitted[min(processed, len(admitted)):]...), overflow...)
+	for _, target := range late {
+		key := canonicalFactSubjectKey(target)
+		if _, inScope := seen[key]; inScope {
+			noteDuplicate(target, key)
+		}
 	}
 	event.AdmittedCount = len(kept)
 	if len(kept) == 0 {
