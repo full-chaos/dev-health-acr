@@ -203,6 +203,13 @@ func (c *repositoryCheck) validateExamples() error {
 		if err := c.registry.validate(exampleSchemaPairs[name], value); err != nil {
 			return fmt.Errorf("example %s: %w", name, err)
 		}
+		if !isMCPResponseSchema(exampleSchemaPairs[name]) {
+			c.ok("contracts/examples/v1/%s", name)
+			continue
+		}
+		if err := c.registry.rejectUndeclared(exampleSchemaPairs[name], value); err != nil {
+			return fmt.Errorf("example %s: %w", name, err)
+		}
 		c.ok("contracts/examples/v1/%s", name)
 	}
 	return nil
