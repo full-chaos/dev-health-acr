@@ -193,9 +193,37 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 		}
 	}
 	fixture := seedEveryRootFixture(t, ctx, direct, "6a3e1f90-7b2c-4d58-9e14-3c8b5f0a2d71")
-	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
 	expander := devhealthfacts.NewScopeExpander(query)
 	unrequested := map[string]bool{fixture.teamC.CanonicalID: true, fixture.projectR.CanonicalID: true}
+
+	t.Run("read_facts two teams", func(t *testing.T) {
+		registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{ScopeExpander: expander})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := directread.NewFactsReader(directread.NewSubjectGate(grantedRepositoryGraph{reached: "acme/shared"}, nil), directread.NewFactReader(registry.DirectReadFactSource()), nil)
+		response, err := reader.Read(observability.WithRequestID(ctx, "req_0000000000000000000000000000b07e"), storage.Principal{OrgID: fixture.orgID, Subject: "every-root", CredentialID: "every-root"}, directread.FactsRequest{
+			Kinds:    []string{"blockers"},
+			Subjects: []directread.RequestSubject{{Kind: "team", CanonicalID: fixture.teamA.CanonicalID}, {Kind: "team", CanonicalID: fixture.teamB.CanonicalID}},
+		})
+		if err != nil {
+			t.Fatalf("read_facts: %v", err)
+		}
+		var shared []directread.ServedFact
+		for _, fact := range response.Facts {
+			if fact.Subject.Kind == string(contextfabric.SubjectWorkItem) && fact.Subject.CanonicalID == fixture.bothItem.CanonicalID {
+				shared = append(shared, fact)
+			}
+		}
+		if len(shared) != 1 || len(shared[0].ReachedFrom) != 2 {
+			t.Fatalf("shared work item facts %+v, want one naming both teams; coverage %+v", shared, response.Coverage)
+		}
+		for _, row := range response.Coverage {
+			if row.Outcome == directread.OutcomeUnavailable || strings.Contains(row.Reason, "counted under only one") {
+				t.Fatalf("row %+v is not complete", row)
+			}
+		}
+	})
 
 	for _, tc := range fixture.cases() {
 		t.Run("roots/"+tc.name, func(t *testing.T) {
@@ -224,35 +252,7 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 		})
 	}
 
-	t.Run("read_facts two teams", func(t *testing.T) {
-		registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{ScopeExpander: expander})
-		if err != nil {
-			t.Fatal(err)
-		}
-		reader := directread.NewFactsReader(directread.NewSubjectGate(grantedRepositoryGraph{reached: "acme/shared"}, nil), directread.NewFactReader(registry.DirectReadFactSource()), nil)
-		response, err := reader.Read(observability.WithRequestID(ctx, "req_0000000000000000000000000000b07e"), storage.Principal{OrgID: fixture.orgID, Subject: "every-root", CredentialID: "every-root"}, directread.FactsRequest{
-			Kinds:    []string{"blockers"},
-			Subjects: []directread.RequestSubject{{Kind: "team", CanonicalID: fixture.teamA.CanonicalID}, {Kind: "team", CanonicalID: fixture.teamB.CanonicalID}},
-		})
-		if err != nil {
-			t.Fatalf("read_facts: %v", err)
-		}
-		var shared []directread.ServedFact
-		for _, fact := range response.Facts {
-			if fact.Subject.Kind == string(contextfabric.SubjectWorkItem) && fact.Subject.CanonicalID == fixture.bothItem.CanonicalID {
-				shared = append(shared, fact)
-			}
-		}
-		if len(shared) != 1 || len(shared[0].ReachedFrom) != 2 {
-			t.Fatalf("shared work item facts %+v, want one naming both teams", shared)
-		}
-		for _, row := range response.Coverage {
-			if row.Outcome == directread.OutcomeUnavailable || strings.Contains(row.Reason, "counted under only one") {
-				t.Fatalf("row %+v is not complete", row)
-			}
-		}
-	})
-
+	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
 	t.Run("memory", func(t *testing.T) {
 		read := func() statementMemory {
 			mark := serverNowMicros(t, ctx, direct)
