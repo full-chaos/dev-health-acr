@@ -25,6 +25,20 @@ func memberStatusNoMatchRationale(kind contextfabric.SubjectKind) string {
 	return "No " + string(kind) + " reached from the subject the question names holds the status asked for now; that is a count of matches, not a statement about health."
 }
 
+// statusNoMatchRationaleFor is the no-match rationale of a status read: the
+// anchored one when a subject is committed, otherwise the one of a read over
+// the organization, which names no subject.
+func statusNoMatchRationaleFor(anchored string, kind contextfabric.SubjectKind, committed []contextfabric.SubjectRef) string {
+	if len(committed) > 0 {
+		return anchored
+	}
+	noun := string(kind)
+	if kind == contextfabric.SubjectPullRequest {
+		noun = "pull request"
+	}
+	return "No " + noun + " the read reached holds the status asked for now; that is a count of matches, not a statement about health."
+}
+
 // filterMembersByStoredStatus keeps the pool's nodes that are not of kind and
 // the members of kind whose stored status is status now. The status is read
 // from each member's stored node, as of now whatever window the question

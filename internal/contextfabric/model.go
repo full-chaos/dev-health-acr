@@ -389,11 +389,14 @@ type GraphContext struct {
 	// answer states how many members were checked. Engine bookkeeping,
 	// `json:"-"` for the same reason as MemberStatusOutsideSet.
 	MemberStatusPoolCut MemberStatusPoolCut `json:"-"`
-	Paths               []RelationshipPath  `json:"paths"`
-	DriverCandidates    []DriverJudgment    `json:"driver_candidates"`
-	EvidenceRefIDs      []string            `json:"evidence_ref_ids"`
-	FactRequirements    []FactRequirement   `json:"fact_requirements"`
-	Coverage            Coverage            `json:"coverage"`
+	// StatusMeasuredZero: a status read reached members of the kind and kept
+	// none (statusMeasuredZero). The answer is a count of zero, never no_match.
+	StatusMeasuredZero bool               `json:"-"`
+	Paths              []RelationshipPath `json:"paths"`
+	DriverCandidates   []DriverJudgment   `json:"driver_candidates"`
+	EvidenceRefIDs     []string           `json:"evidence_ref_ids"`
+	FactRequirements   []FactRequirement  `json:"fact_requirements"`
+	Coverage           Coverage           `json:"coverage"`
 }
 
 type CanonicalFactRequest struct {
