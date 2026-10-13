@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -49,9 +50,23 @@ func (s *OrgPurgeMarkerStore) IsPurged(ctx context.Context, orgID string) (bool,
 	return purged, nil
 }
 
-// ClearPurged removes the markers of the given organizations and returns the
-// canonical ids whose marker existed.
-func (s *OrgPurgeMarkerStore) ClearPurged(ctx context.Context, orgIDs []string) ([]string, error) {
+// DiscoveryClock reads the database clock. The purge stamps its marker with
+// the same clock, so comparing the two never depends on host clock skew.
+func (s *OrgPurgeMarkerStore) DiscoveryClock(ctx context.Context) (time.Time, error) {
+	if s == nil || s.db == nil {
+		return time.Time{}, errors.New("pgprojection: org purge marker store is not configured")
+	}
+	var now time.Time
+	if err := s.db.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("read discovery clock: %w", sanitizeError(err))
+	}
+	return now, nil
+}
+
+// ClearPurged removes the markers of the given organizations that were written
+// before discoveryStarted and returns the canonical ids whose marker was
+// removed. A marker written after the discovery began stays.
+func (s *OrgPurgeMarkerStore) ClearPurged(ctx context.Context, orgIDs []string, discoveryStarted time.Time) ([]string, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pgprojection: org purge marker store is not configured")
 	}
@@ -64,7 +79,7 @@ func (s *OrgPurgeMarkerStore) ClearPurged(ctx context.Context, orgIDs []string) 
 	if len(canonical) == 0 {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = ANY($1) RETURNING org_id`, canonical)
+	rows, err := s.db.QueryContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = ANY($1) AND purged_at < $2 RETURNING org_id`, canonical, discoveryStarted)
 	if err != nil {
 		return nil, fmt.Errorf("clear org purge markers: %w", sanitizeError(err))
 	}
