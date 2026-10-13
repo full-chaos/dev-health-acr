@@ -7,27 +7,22 @@ import (
 	"strings"
 	"testing"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// A team that owns a project reaches repositories only through the project's
-// issues' linked pull requests. Its investment mix counts the work units of
-// those linked pull requests, never the whole mix of a repository it does not
-// own; a repository it owns keeps its whole mix.
-func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t *testing.T) {
-	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	createCHAOS5930Tables(t, ctx, direct)
-	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
+// seedProjectLinkedOrg seeds the tree the project-linked reads are asserted
+// over: team-owner owns repo-a; team-both owns repo-a and proj-1;
+// team-project-only owns proj-1 only; team-nothing owns nothing. proj-1's
+// issues link repo-a#1 (native), repo-r#2 (explicit_text) and repo-r#3
+// (heuristic); repo-r is owned by nobody.
+func seedProjectLinkedOrg(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string) {
+	t.Helper()
 	at := ts(2026, 9, 18, 0, 0, 0)
-	const orgID = "org-linked-investment"
 	exec := func(what, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -81,6 +76,23 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 	seed("wu2", map[string]float64{"risk": 1.0}, 8, r+"#pr3", r+"#pr20")
 	seed("wu3", map[string]float64{"maintenance": 1.0}, 6, r+"#pr4")
 	seed("wu4", map[string]float64{"operational": 1.0}, 20, a+"#pr10")
+}
+
+// A team that owns a project reaches repositories only through the project's
+// issues' linked pull requests. Its investment mix counts the work units of
+// those linked pull requests, never the whole mix of a repository it does not
+// own; a repository it owns keeps its whole mix.
+func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	const orgID = "org-linked-investment"
+	seedProjectLinkedOrg(t, ctx, direct, orgID)
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	read := func(team string) contextfabric.FactProviderResult {
