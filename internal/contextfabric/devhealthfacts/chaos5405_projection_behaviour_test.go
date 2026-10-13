@@ -57,7 +57,7 @@ func TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED(t *testing.T) {
 	type row struct {
 		repoID, workItemID, repoSlug, originID, attributionSource string
 		authorized, repoLess                                      uint8
-		paths, repositories                                       []string
+		paths, repositories, originIDs                            []string
 	}
 	var got []row
 	for rows.Next() {
@@ -67,8 +67,8 @@ func TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED(t *testing.T) {
 		if err := rows.Scan(&r.repoID, &r.workItemID, &r.repoSlug, &r.originID, &r.attributionSource,
 			&r.authorized, &r.repoLess, &r.paths, &r.repositories,
 			&scoped, &authorizedPop, &repoLessPop, &repoLessDenied, &orphaned,
-			&organizationPop, &directPop, &projectPop, &linkPop, &excludedTextPop, &excludedHeuristicPop); err != nil {
-			t.Fatalf("scan: %v -- the twenty-column shape %s and the scanner have drifted", err, devhealthfacts.WorkItemScopeSelectionColumnsForTest)
+			&organizationPop, &directPop, &projectPop, &linkPop, &excludedTextPop, &excludedHeuristicPop, &r.originIDs); err != nil {
+			t.Fatalf("scan: %v -- the twenty-one-column shape %s and the scanner have drifted", err, devhealthfacts.WorkItemScopeSelectionColumnsForTest)
 		}
 		got = append(got, r)
 	}
@@ -112,6 +112,9 @@ func TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED(t *testing.T) {
 		}
 		if len(r.paths) != 0 || len(r.repositories) != 0 {
 			t.Errorf("row %d is DENIED and still carried authorization paths %v / repositories %v", i, r.paths, r.repositories)
+		}
+		if len(r.originIDs) != 0 {
+			t.Errorf("row %d is DENIED and still carried origin ids %v", i, r.originIDs)
 		}
 	}
 
