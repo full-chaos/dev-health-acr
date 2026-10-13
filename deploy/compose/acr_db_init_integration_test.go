@@ -304,6 +304,15 @@ func TestAcrDbInit_RuntimeRoleCanInsertIntoEveryOtherContextFabricTable(t *testi
 			selectGranted: true,
 		},
 		{
+			name:  "org_purge_markers",
+			table: "context_fabric_org_purge_markers",
+			insertSQL: `INSERT INTO acr.context_fabric_org_purge_markers
+    (org_id, purged_at) VALUES ($1, $2)`,
+			args:          []any{"org-acl-purge-markers", now},
+			orgID:         "org-acl-purge-markers",
+			selectGranted: true,
+		},
+		{
 			name:  "investigation_results",
 			table: "context_fabric_investigation_results",
 			insertSQL: `INSERT INTO acr.context_fabric_investigation_results

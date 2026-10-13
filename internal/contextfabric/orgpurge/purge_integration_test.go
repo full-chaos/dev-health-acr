@@ -185,6 +185,12 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.False(t, again.AuditRowWritten, "second run writes no audit row")
 	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = 'org_purged'`, orgGone).Scan(&audit))
 	require.Equal(t, 1, audit)
+
+	var marked, keptMarked int
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, orgGone).Scan(&marked))
+	require.Equal(t, 1, marked, "a purge sets the durable purge marker and a second run keeps it")
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, orgKept).Scan(&keptMarked))
+	require.Zero(t, keptMarked, "other organizations are not marked")
 }
 
 func TestEveryOrgKeyedTableIsPurgedOrKept(t *testing.T) {
