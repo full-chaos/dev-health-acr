@@ -101,3 +101,13 @@ func UnprunedPullRequestStatementForTest(statement string) (out string, rewritte
 		rewritten++
 	}
 }
+
+// OrgWideProjectRollupStatementForTest rewrites the project pull request
+// roll-up back to its organization-wide form: every link row, issue and pull
+// request of the organization, as before it read the requested projects'
+// work items only. It reports whether it rewrote anything.
+func OrgWideProjectRollupStatementForTest(statement string) (string, bool) {
+	out := strings.ReplaceAll(statement, " AND work_item_id IN "+projectRollupWorkItemIDsSQL+")\n) AS pr", ")\n) AS pr")
+	out = strings.ReplaceAll(out, projectRollupWorkItemIDsSQL, linkedWorkItemIDsSQL)
+	return out, out != statement
+}

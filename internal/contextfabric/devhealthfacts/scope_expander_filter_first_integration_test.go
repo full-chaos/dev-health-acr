@@ -463,6 +463,7 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 		if !ok {
 			t.Fatalf("a narrowed pull request read is not closed as the rewrite expects:\n%s", statement.statement)
 		}
+		whole, _ = devhealthfacts.OrgWideProjectRollupStatementForTest(whole)
 		if rewritten == 0 {
 			continue
 		}
