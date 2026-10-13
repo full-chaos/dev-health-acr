@@ -72,7 +72,7 @@ var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssu
 // linkedWorkItemIDsSQL is every work item id with a link row in the
 // organization, of any tier and version: a superset of the admitted link rows'
 // work items, used to prune work_items by primary key before a join to them.
-const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
+const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} UNION ALL SELECT concat(work_item_id, '#') FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 
 // admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
