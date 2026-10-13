@@ -3,7 +3,9 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -44,8 +46,10 @@ func (p *BlockersProvider) blockerAuthorization(ctx context.Context, principal s
 		return "", nil, err
 	}
 	if len(ids) > blockerAuthorizedIDsBound {
+		logBlockerAuthorization(ctx, "in_statement", len(ids))
 		return set, bindings, nil
 	}
+	logBlockerAuthorization(ctx, "materialized", len(ids))
 	return "{" + blockerAuthorizedIDsBinding + ":Array(String)}", []readers.Binding{{Name: blockerAuthorizedIDsBinding, Value: ids}}, nil
 }
 
@@ -55,4 +59,12 @@ type blockerAuthorizationMemo struct {
 	sql      string
 	bindings []readers.Binding
 	settings readers.Settings
+}
+
+// logBlockerAuthorization records which way the blocker statements were
+// authorized: the organization-wide shape, the relation read once with its ids
+// carried as a binding, or the relation kept inside each statement because the
+// endpoints exceeded the bound. mode is a closed vocabulary; ids is a count.
+func logBlockerAuthorization(ctx context.Context, mode string, ids int) {
+	slog.InfoContext(ctx, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "bound", blockerAuthorizedIDsBound)
 }
