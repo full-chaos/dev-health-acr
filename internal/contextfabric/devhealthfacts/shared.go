@@ -1080,12 +1080,18 @@ import (
 // v213 -> v214: the security_alerts fact kind is served for a repository.
 // An answer saved under v213 cannot carry it.
 //
-// v214 -> v215: a team whose owned repositories hold work units that all have
+// v214 -> v215: the blocker statements authorize their edge endpoints without
+// the library's organization-wide relation for an organization-wide grant, and
+// read it once, apart from the statements, for any other caller. The rows are
+// unchanged; the statements and their memory are not, so an answer saved under
+// v214 is not reused as one produced by the new statements.
+//
+// v215 -> v216: a team whose owned repositories hold work units that all have
 // zero persisted effort is named investment_team_effort_not_measurable, with
 // the unit count, instead of investment_team_no_unit_in_window. Still no fact
-// and no zero mix. An answer saved under v214 states the false reason that no
+// and no zero mix. An answer saved under v215 states the false reason that no
 // effort was persisted.
-const QueryVersion = "devhealthfacts.clickhouse.v215"
+const QueryVersion = "devhealthfacts.clickhouse.v216"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
