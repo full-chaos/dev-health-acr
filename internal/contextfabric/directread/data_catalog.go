@@ -389,6 +389,9 @@ func catalogToolAccessIf(servable bool) CatalogToolAccess {
 // a clause here because the API wraps the catalogue route and every tool route
 // in the same gate: a catalogue is never served while a tool would refuse
 // for a store outage.
+//
+// The map is evaluated at this call. It is not a grant: every tool call
+// re-checks access.
 func catalogToolAccess(catalogue *Catalogue, caller CatalogCaller) map[string]CatalogToolAccess {
 	graphQLReason := catalogAccessReason(caller.GraphQL != nil && caller.GraphQLServable, CatalogUnavailableGraphQLNotConfigured, caller.GateComposed, caller.DataRead)
 	return map[string]CatalogToolAccess{
