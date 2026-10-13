@@ -57,7 +57,7 @@ var factSchemaTables = []string{
 	// The shared work-item authorization relation joins the project
 	// ownership chain and the issue-to-pull-request links into every
 	// work-item reader's statement.
-	"team_repo_ownership", "work_graph_issue_pr",
+	"team_repo_ownership", "work_graph_issue_pr", "security_alerts",
 }
 
 // TestLiveSchemaParityAcrossEveryFactProvider is the round-2 F1 guard: no
@@ -144,6 +144,8 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		orgID, "github", "CHAOS", "scope-1", day, uint32(3), uint32(2), uint32(1), 4.5, 6.0, 2.0, 0.1, 3.0, at)
 	seed("ic_landscape_rolling_30d", `INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, as_of_day, identity_id, team_id, map_name, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, repoID, day, "identity-parity", "CHAOS", "backend", uint64(100), uint32(2), 5.0, uint32(3), at)
+	seed("security_alerts", `INSERT INTO security_alerts (org_id, repo_id, alert_id, source, severity, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, repoID, "alert-parity", "dependabot", "high", "open", at, at)
 	// projects/team_project_ownership back FlowProvider/LandscapeProvider's
 	// PROJECT subject branches (codex R3 P2).
 	seed("projects", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -186,6 +188,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		contextfabric.FactSourceHealth:            organizationSubject(orgID),
 		contextfabric.FactFlow:                    teamSubject("CHAOS"),
 		contextfabric.FactLandscape:               teamSubject("CHAOS"),
+		contextfabric.FactSecurityAlerts:          repoSubject(repoID),
 	}
 
 	providers := devhealthfacts.NewProviders(client)
@@ -250,6 +253,21 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 			Kind:     contextfabric.FactFlow,
 			Subjects: []contextfabric.SubjectRef{projectSubject("github", "proj-parity")},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
+		}
+		if result.State == contextfabric.SourceUnavailable {
+			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
+		}
+	})
+
+	t.Run("security_alerts_repository", func(t *testing.T) {
+		alertsProvider := findProvider(t, providers, contextfabric.FactSecurityAlerts)
+		result, err := alertsProvider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind:     contextfabric.FactSecurityAlerts,
+			Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))

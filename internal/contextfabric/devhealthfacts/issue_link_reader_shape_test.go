@@ -19,7 +19,10 @@ func TestIssueLinkReaders_EveryLinkReadAdmitsOnlyExistingPullRequestsOfIssues(t 
 			continue
 		}
 		reading++
-		if !strings.Contains(query.statement, "INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number") {
+		const on = " ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number"
+		whole := strings.Contains(query.statement, "INNER JOIN git_pull_requests AS pr FINAL"+on)
+		linked := strings.Contains(query.statement, "INNER JOIN (SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ") && strings.Contains(query.statement, ") AS pr"+on)
+		if !whole && !linked {
 			t.Errorf("statement reads work_graph_issue_pr without joining the pull request it names:\n%s", query.statement)
 		}
 		if !strings.Contains(query.statement, "NOT IN ('pr', 'merge_request')") {
