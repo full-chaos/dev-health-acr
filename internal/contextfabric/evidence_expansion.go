@@ -47,7 +47,7 @@ const ContextFabricEvidenceSystem = "acr-investigation-record"
 
 // ContextFabricEvidenceProvenance is the expansion's provenance: derived from
 // a stored investigation result.
-const ContextFabricEvidenceProvenance = "derived"
+const ContextFabricEvidenceProvenance = contractsv1.EvidenceProvenanceDerived
 
 // persistedRecordCitationPrefix opens every expansion's citation, so the
 // rendered markdown says what the record is.
