@@ -48,14 +48,14 @@ func MemberStatusStoredProperty(kind SubjectKind) string {
 // children_of_scope frame whose status qualifier carries a value of the set of
 // its member kind. Pull requests are PullRequestStatusFilterOf.
 func MemberStatusFilterOf(frame *QuestionFrame) (SubjectKind, string) {
-	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+	if frame == nil {
 		return "", ""
 	}
-	scoped := frame.SubjectExpression.Scoped
-	if scoped.MemberKind == SubjectPullRequest || scoped.MemberQualifier != MemberQualifierStatus || !InMemberStatusVocabulary(scoped.MemberKind, scoped.MemberQualifierValue) {
+	kind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+	if !ok || kind == SubjectPullRequest || qualifier != MemberQualifierStatus || !InMemberStatusVocabulary(kind, value) {
 		return "", ""
 	}
-	return scoped.MemberKind, scoped.MemberQualifierValue
+	return kind, value
 }
 
 // MemberStatusOutsideSet is how many members of a kind the pool held whose
@@ -91,9 +91,9 @@ func MemberStatusUnappliedOf(frame *QuestionFrame, kind SubjectKind) bool {
 		return false
 	}
 	switch frame.SubjectExpression.Kind {
-	case SubjectExpressionChildrenOfScope:
-		scoped := frame.SubjectExpression.Scoped
-		return scoped != nil && scoped.MemberKind == kind && scoped.MemberQualifier == MemberQualifierStatus && scoped.MemberQualifierValue == ""
+	case SubjectExpressionChildrenOfScope, SubjectExpressionDiscoveredKind, SubjectExpressionOrganizationScope, SubjectExpressionGroupedMembers:
+		memberKind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+		return ok && memberKind == kind && qualifier == MemberQualifierStatus && value == ""
 	case SubjectExpressionExplicitSet:
 		if frame.SubjectExpression.Explicit == nil {
 			return false
@@ -143,6 +143,9 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 			sentences = append(sentences, contractsv1.ContextFabricMemberStatusUnappliedLimitation(string(kind)))
 		}
 	}
+	if sentence := memberStatusNotApplied(result, frame); sentence != "" {
+		sentences = append(sentences, sentence)
+	}
 	for _, sentence := range sentences {
 		if sentence == "" {
 			continue
@@ -162,6 +165,27 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 		result.LimitationsDisplaced += displaced
 	}
 	return result
+}
+
+// memberStatusNotApplied is the one rule for a status the engine has no filter
+// for: a frame that states a status on a kind without a status set (any shape
+// that carries the qualifier) is answered unfiltered, and says so. Pull
+// request, project and incident statuses have filters, and work items their
+// own member filter.
+func memberStatusNotApplied(result InvestigationResult, frame *QuestionFrame) string {
+	if frame == nil || result.Status == InvestigationClarificationRequired {
+		return ""
+	}
+	kind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+	if !ok || qualifier != MemberQualifierStatus || kind == "" || kind == SubjectWorkItem {
+		return ""
+	}
+	for _, filtered := range MemberStatusKinds() {
+		if kind == filtered {
+			return ""
+		}
+	}
+	return contractsv1.ContextFabricMemberStatusNotAppliedLimitation(string(kind), value)
 }
 
 // withMemberStatusPoolCut states that the status filter was decided within

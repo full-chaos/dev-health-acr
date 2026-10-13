@@ -907,6 +907,8 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"unknown_attribution_source_count", event.UnknownAttributionSourceCount,
 		"scope_query_count", event.ScopeQueryCount,
 		"scope_rows_returned", event.ScopeRowsReturned,
+		"roots_complete", event.RootsComplete,
+		"shared_target_count", event.SharedTargetCount,
 		"decision_reason", SanitizeLogAttr(string(loggableFactScopeDecisionReason(event.DecisionReason))),
 	}, requestIDLogAttrs(ctx)...)
 	if factScopeGapDegrades(event.Outcome) {
