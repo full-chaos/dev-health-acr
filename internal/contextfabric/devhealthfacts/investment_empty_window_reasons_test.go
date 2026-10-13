@@ -28,9 +28,10 @@ func TestInvestmentEmptyTeamWindowKeepsItsReasonBesideARestrictedOrganization(t 
 	if len(result.Facts) != 0 || result.State != contextfabric.SourceNotApplicable {
 		t.Fatalf("facts=%d state=%q, want no fact and not_applicable", len(result.Facts), result.State)
 	}
+	served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote)
 	for _, want := range []string{"repository-bound", "investment_team_no_owned_repository", "investment_ownership_as_synced"} {
-		if !strings.Contains(result.Reason, want) {
-			t.Errorf("reason = %q, want it to keep %q", result.Reason, want)
+		if !strings.Contains(served, want) {
+			t.Errorf("reason = %q, want it to keep %q", served, want)
 		}
 	}
 }
