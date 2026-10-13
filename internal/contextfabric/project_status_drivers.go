@@ -67,11 +67,8 @@ func projectStatusUsableState(state SourceState) bool {
 }
 
 func projectStatusStateLabel(state SourceState) string {
-	switch state {
-	case SourceTruncated:
-		return " (partial: the source read was truncated)."
-	case SourceStale:
-		return " (stale: the source read is out of date)."
+	if label, cause := driverSourceStateCause(state); label != "" {
+		return " (" + label + ": " + cause + ")."
 	}
 	return "."
 }

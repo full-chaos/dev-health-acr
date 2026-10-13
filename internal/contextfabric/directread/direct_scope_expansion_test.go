@@ -578,9 +578,8 @@ func TestDirectReadProjectRollupRootCountsItsDerivedPullRequests(t *testing.T) {
 }
 
 // A work item a requested project and a requested team both reach is derived
-// from the project only (the first origin kind); the team, whose own rollup
-// is served, is not a complete row.
-func TestDirectReadTargetSharedAcrossOriginKindsIsALowerBoundForTheOtherRoot(t *testing.T) {
+// from both: served once, both roots in reached_from, both rows complete.
+func TestDirectReadTargetSharedAcrossOriginKindsCountsForBothRoots(t *testing.T) {
 	shared := labelled(workA, "WI-A")
 	expander := &scriptedExpander{expand: func(request contextfabric.FactScopeExpansionRequest) contextfabric.FactScopeExpansionResult {
 		return contextfabric.FactScopeExpansionResult{
@@ -608,17 +607,16 @@ func TestDirectReadTargetSharedAcrossOriginKindsIsALowerBoundForTheOtherRoot(t *
 		t.Fatalf("expansions %d, want the project and the team expansion", len(expander.requests))
 	}
 	fact := servedOn(response, "blockers", shared)
-	if fact == nil || len(fact.ReachedFrom) != 1 || fact.ReachedFrom[0].Kind != "project" {
-		t.Fatalf("shared work item %s, want one fact derived from the project", mustJSON(t, response.Facts))
+	if fact == nil || len(fact.ReachedFrom) != 2 || fact.ReachedFrom[0].Kind != "project" || fact.ReachedFrom[1].Kind != "team" {
+		t.Fatalf("shared work item %s, want one fact derived from the project and the team", mustJSON(t, response.Facts))
 	}
-	if row := coverageOf(t, response, "blockers", projectQ); row.Outcome != OutcomeFactServed {
-		t.Fatalf("project row %+v", row)
+	for _, root := range []contextfabric.SubjectRef{projectQ, teamT} {
+		if row := coverageOf(t, response, "blockers", root); row.Outcome != OutcomeFactServed || strings.Contains(row.Reason, "counted under only one") {
+			t.Fatalf("row %+v, want fact_served with no lower-bound note", row)
+		}
 	}
-	if row := coverageOf(t, response, "blockers", teamT); row.Outcome != OutcomeTruncated || !strings.Contains(row.Reason, "is counted under only one of them") {
-		t.Fatalf("team row %+v, want truncated with the lower-bound note", row)
-	}
-	if response.Status != StatusPartial {
-		t.Fatalf("status %q, want partial", response.Status)
+	if response.Status != StatusComplete {
+		t.Fatalf("status %q, want complete", response.Status)
 	}
 }
 
