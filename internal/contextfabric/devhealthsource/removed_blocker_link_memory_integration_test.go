@@ -13,25 +13,32 @@ import (
 )
 
 // The projector caps every statement at 192 MiB. The relation-current rule
-// builds, per statement, the read times of every blocker endpoint of the
-// organization, so a statement that carries it follows the number of blocks
-// links, not the page size. This row drains a seeded organization of blocker
-// links through the production statement under that cap and holds the peak of
-// the statements that carry the rule to 7/8 of it.
+// needs the read times of every blocker endpoint of the organization, so it is
+// evaluated by ONE statement per projection call (the removed-link set); the
+// page statements receive only that set. This row drains a seeded organization
+// of blocker links through the production statements under the cap, at two
+// sizes, and reports the two statements apart: the set statement's peak and
+// the page statements' peak.
 func TestRemovedBlockerLinkRuleStaysUnderTheProjectorStatementCap(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
 	const smallLinks, largeLinks = 5000, 20000
-	small := measureRuleStatements(t, ctx, query, direct, "95140000-0000-4000-8000-0000000000f1", "95140000-0000-4000-8000-0000000000f2", smallLinks)
-	large := measureRuleStatements(t, ctx, query, direct, "95140000-0000-4000-8000-0000000000f3", "95140000-0000-4000-8000-0000000000f4", largeLinks)
-	growth := float64(large) / float64(small)
-	t.Logf("SLOPE: peak %d bytes at %d links, %d bytes at %d links, growth %.2fx for %.0fx the links", small, smallLinks, large, largeLinks, growth, float64(largeLinks)/smallLinks)
-	if growth > 1.15*float64(largeLinks)/smallLinks {
-		t.Errorf("peak grew %.2fx for %.0fx the links, over the linear slope", growth, float64(largeLinks)/smallLinks)
+	smallSet, smallPage := measureRuleStatements(t, ctx, query, direct, "95140000-0000-4000-8000-0000000000f1", "95140000-0000-4000-8000-0000000000f2", smallLinks)
+	largeSet, largePage := measureRuleStatements(t, ctx, query, direct, "95140000-0000-4000-8000-0000000000f3", "95140000-0000-4000-8000-0000000000f4", largeLinks)
+	ratio := float64(largeLinks) / smallLinks
+	t.Logf("SLOPE set statement: %d bytes at %d links, %d bytes at %d links, %.2fx for %.0fx the links", smallSet, smallLinks, largeSet, largeLinks, float64(largeSet)/float64(smallSet), ratio)
+	t.Logf("SLOPE page statements: %d bytes at %d links, %d bytes at %d links, %.2fx for %.0fx the links", smallPage, smallLinks, largePage, largeLinks, float64(largePage)/float64(smallPage), ratio)
+	if float64(largeSet) > 1.15*ratio*float64(smallSet) {
+		t.Errorf("the set statement grew %.2fx for %.0fx the links, over the linear slope", float64(largeSet)/float64(smallSet), ratio)
+	}
+	if float64(largePage) > 1.15*ratio*float64(smallPage) {
+		t.Errorf("the page statements grew %.2fx for %.0fx the links, over the linear slope", float64(largePage)/float64(smallPage), ratio)
 	}
 }
 
-func measureRuleStatements(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, repo string, links int) uint64 {
+// measureRuleStatements returns the peak memory of the removed-link set
+// statement and of the dependency page statements for one seeded size.
+func measureRuleStatements(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, repo string, links int) (setPeak, pagePeak uint64) {
 	t.Helper()
 	const (
 		cap       = uint64(192 << 20)
@@ -69,18 +76,25 @@ SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", err)
 	}
-	var statements, peak uint64
-	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
-WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND position(query, 'work_item_relations_read') > 0 AND query NOT LIKE 'INSERT%'`,
-		start.UTC().Format("2006-01-02 15:04:05.000000")).Scan(&statements, &peak); err != nil {
-		t.Fatal(err)
+	peakOf := func(marker string) (uint64, uint64) {
+		var statements, peak uint64
+		if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
+WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND position(query, ?) > 0 AND query NOT LIKE 'INSERT%'`,
+			start.UTC().Format("2006-01-02 15:04:05.000000"), marker).Scan(&statements, &peak); err != nil {
+			t.Fatal(err)
+		}
+		return statements, peak
 	}
-	t.Logf("PEAK: %d statements carrying the rule over %d pages and %d links; peak %d bytes against the %d byte cap", statements, pages, links, peak, cap)
-	if statements == 0 {
-		t.Fatal("no statement carrying the rule was logged: the measurement did not happen")
+	setCount, setPeak := peakOf("AS ended_links")
+	pageCount, pagePeak := peakOf("arrayZip")
+	t.Logf("PEAK at %d links over %d pages: %d set statements, peak %d bytes; %d page statements, peak %d bytes; cap %d bytes", links, pages, setCount, setPeak, pageCount, pagePeak, cap)
+	if setCount == 0 || pageCount == 0 {
+		t.Fatalf("the measurement did not happen: %d set statements and %d page statements were logged", setCount, pageCount)
 	}
-	if peak >= maxPeak {
-		t.Fatalf("a statement carrying the rule peaked at %d bytes, want under %d (7/8 of the projector cap)", peak, maxPeak)
+	for name, peak := range map[string]uint64{"set": setPeak, "page": pagePeak} {
+		if peak >= maxPeak {
+			t.Fatalf("a %s statement peaked at %d bytes, want under %d (7/8 of the projector cap)", name, peak, maxPeak)
+		}
 	}
-	return peak
+	return setPeak, pagePeak
 }

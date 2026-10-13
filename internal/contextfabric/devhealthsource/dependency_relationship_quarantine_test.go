@@ -57,7 +57,7 @@ var beyondGoInstantRange = time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC)
 // order queryWorkItemDependencies scans.
 func dependencyRow(sourceID, targetID, relationshipType string, at, created time.Time) []any {
 	return []any{sourceID, targetID, relationshipType, "repo-1", "example-org/widget-service", at,
-		created, uint8(0), zeroTime, uint8(1), created, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, zeroTime}
+		created, uint8(0), zeroTime, uint8(1), created, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, at}
 }
 
 // unresolvedDependencyRow is dependencyRow with targetHasCreated = 0: the
@@ -66,7 +66,7 @@ func dependencyRow(sourceID, targetID, relationshipType string, at, created time
 // edge. Every external issue key has this shape by construction.
 func unresolvedDependencyRow(sourceID, targetID, relationshipType string, at, created time.Time) []any {
 	return []any{sourceID, targetID, relationshipType, "repo-1", "example-org/widget-service", at,
-		created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, zeroTime}
+		created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, at}
 }
 
 // projectWithQuarantineLog projects one batch with a captured logger and
@@ -521,7 +521,7 @@ func TestQuarantiningAnEdgeAlsoDropsTheStubThatOnlyExistedToBeItsEndpoint(t *tes
 	// resolve to a work item, which is what an external issue key always is.
 	unresolved := func(sourceID, targetID, relType string, observedAt time.Time) []any {
 		return []any{sourceID, targetID, relType, "repo-1", "example-org/widget-service", observedAt,
-			created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, zeroTime}
+			created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, at}
 	}
 
 	t.Run("unknown type drops the edge AND its stub", func(t *testing.T) {

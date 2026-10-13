@@ -3,7 +3,6 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"sort"
 	"strings"
 	"time"
@@ -940,6 +939,10 @@ func dependencyRowKey(repoID, sourceID, targetID, relationshipType string) strin
 // there is no ref-stub case to close there.
 func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	seenNodeTombstones := make(map[string]struct{})
+	ended, err := endedLinksFor(ctx, client, orgID)
+	if err != nil {
+		return nil, false, err
+	}
 	rowKey := dependencyRowKeySQL
 	isEnded := dependencyEndedSQL()
 	position := dependencyCursorExpr()
@@ -951,9 +954,9 @@ FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
 LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-LEFT JOIN ` + relationcurrent.RowsSQL() + ` AS rr ON rr.s = d.source_work_item_id AND rr.t = d.target_work_item_id AND rr.rt = d.relationship_type
+` + endedLinksJoinSQL + `
 WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + orderBy(position, rowKey)
-	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	return fetchIngest(ctx, client, statement, append(rowLimitBindings(orgID, cursor, limit), ended.bindings()...), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoID, repoSlug, targetRepoID string
 		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt, endedAt time.Time
 		var sourceHasEnded, targetHasCreated, targetHasEnded, linkEnded uint8
@@ -1456,9 +1459,8 @@ func dependencyCursorExpr() string {
 }
 
 // dependencyEndedSQL is true for a work_item_dependencies row d that the
-// provider no longer reports: the shared relation-current rule, read from the
-// join of relationcurrent.RowsSQL as rr, which holds the rule's one row per
-// relation of the type it covers.
+// provider no longer reports: the shared relation-current rule, evaluated once
+// per call (endedLinks) and joined as rr.
 func dependencyEndedSQL() string {
 	return "ifNull(rr.ended, 0) = 1"
 }

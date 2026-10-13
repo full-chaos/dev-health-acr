@@ -544,7 +544,7 @@ func TestNormalizationCoversEveryLabelFamily(t *testing.T) {
 		// raw target id, so a dirty target is an IDENTITY breach, not a label
 		// one -- see TestAnUntrimmedDependencyTargetIsAnIdentityBreachNotALabelOne.
 		{match: dependencyTable, rows: [][]any{
-			{"WI-1", "T-UNRESOLVED", "BLOCKS", "repo-1", slug, at, created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, zeroTime}}},
+			{"WI-1", "T-UNRESOLVED", "BLOCKS", "repo-1", slug, at, created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, at}}},
 		// A clean CI run, so its label family is present and demonstrably
 		// untouched rather than absent.
 		{match: "FROM ci_pipeline_runs AS c", rows: [][]any{
