@@ -23,25 +23,25 @@ const workGraphIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WH
 
 // workGraphIssueTitlesSQL yields one row per issue key that is an endpoint of
 // the scoped repository's edges, with the title only when exactly one distinct
-// title is readable for that key (an empty title otherwise). The work_items
+// title is readable for that key and it fits a label (an empty title
+// otherwise): every readable title counts toward a collision, however long. The work_items
 // key (org_id, repo_id, work_item_id) bounds the read to the scoped
 // repository's own rows and rows with no repository. The scoped repository is
 // authorized upstream; a row with no repository is readable only when its key
 // is in readable_repositoryless_issue_ids, which the caller's grant decided
 // (ReadableRepositorylessIssueIDs).
-const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.title) = 1, any(w.title), '') AS title ` +
+const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.title) = 1 AND lengthUTF8(any(w.title)) <= 1000, any(w.title), '') AS title ` +
 	`FROM work_items AS w FINAL ` +
 	`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) AND w.work_item_id IN ` + workGraphIssueEndpointIDsSQL + ` ` +
 	`AND (w.repo_id = {repo_id:UUID} OR w.work_item_id IN {readable_repositoryless_issue_ids:Array(String)}) ` +
-	`AND lengthUTF8(w.title) BETWEEN 1 AND 1000 GROUP BY w.work_item_id`
+	`AND w.title != '' GROUP BY w.work_item_id`
 
 // workGraphIssueTitlesMapSQL is the issue titles as one scalar map (issue key
 // to title). ClickHouse evaluates identical scalar subqueries once per
-// statement, so the labels look the map up without a join: a title join per
-// endpoint held about 36 MB of join state and a single-row join about 18 MB,
-// where the scalar map costs about 1 MB on the same rows. It is inlined at
-// each use because a named alias would be an unqualified name the org-scope
-// sweep cannot tell from a column.
+// statement, so the labels look the map up without a join (warm, about 3.7 MB
+// against 5.0 MB for a join per endpoint). It is inlined at each use because a
+// named alias would be an unqualified name the org-scope sweep cannot tell
+// from a column.
 const workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) FROM (` + workGraphIssueTitlesSQL + `))`
 
 func workGraphIssueTitleOf(id string) string {

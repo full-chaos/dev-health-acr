@@ -56,6 +56,10 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	workItem("CHAOS-81", wgRepo, "Title in the scoped repository", "linear", "")
 	workItem("CHAOS-81", wgNilRepo, "Title of an issue with no repository", "linear", "")
 	edge("e-collide", "pr", wgRepo+"#pr311", "issue", "CHAOS-81", "implements", "")
+	// A second readable title that is too long to display still collides.
+	workItem("CHAOS-82", wgRepo, "Short title in the scoped repository", "linear", "")
+	workItem("CHAOS-82", wgNilRepo, strings.Repeat("long ", 300), "linear", "")
+	edge("e-collide-long", "pr", wgRepo+"#pr311", "issue", "CHAOS-82", "implements", "")
 	// A repository-less issue reachable only through a native pull request link.
 	workItem("PROJ-6", wgNilRepo, "Jira issue linked by a native pull request", "jira", "")
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, wgRepo, "PROJ-6", uint32(311), float32(1), "native", "", now, wgOrg)
@@ -116,6 +120,7 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 			"e-pr-issue":           pr + "implements CHAOS-77 Gate deploy stages on smoke tests",
 			"e-pr-issue-unique":    pr + "implements CHAOS-78 Gate deploy stages on smoke tests",
 			"e-collide":            pr + "implements CHAOS-81",
+			"e-collide-long":       pr + "implements CHAOS-82",
 			"e-pr-jira-issue":      pr + "implements PROJ-5 Jira issue without a repository",
 			"e-pr-linked-jira":     pr + "implements PROJ-6 Jira issue linked by a native pull request",
 			"e-owned-project-jira": pr + "implements PROJ-7 Jira issue in an owned project",
@@ -127,6 +132,7 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 			"e-pr-issue":           pr + "implements CHAOS-77 Gate deploy stages on smoke tests",
 			"e-pr-issue-unique":    pr + "implements CHAOS-78 Gate deploy stages on smoke tests",
 			"e-collide":            pr + "implements CHAOS-81 Title in the scoped repository",
+			"e-collide-long":       pr + "implements CHAOS-82 Short title in the scoped repository",
 			"e-pr-jira-issue":      pr + "implements PROJ-5",
 			"e-pr-linked-jira":     pr + "implements PROJ-6 Jira issue linked by a native pull request",
 			"e-owned-project-jira": pr + "implements PROJ-7 Jira issue in an owned project",
@@ -246,8 +252,8 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 		if stage.memory >= ceiling || stage.gateMemory >= ceiling {
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes and its issue gate at %d, want under %d", name, stage.memory, stage.gateMemory, ceiling)
 		}
-		// The statement alone peaks near 2.5 MB without titles and 3.5 MB with
-		// them; a title join per endpoint held 38 MB.
+		// Warm, the statement peaks near 2.5 MB without titles and 3.7 MB with
+		// them.
 		if stage.memory >= statementCeiling || stage.freshnessMemory >= statementCeiling {
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes (freshness read %d), want under %d", name, stage.memory, stage.freshnessMemory, statementCeiling)
 		}
