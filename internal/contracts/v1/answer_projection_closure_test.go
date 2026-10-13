@@ -76,6 +76,7 @@ var copiedBounds = []copiedBound{
 	{projection: "answer#$defs.ProjectedDriver.properties.title", canonical: "common#$defs.DriverJudgment.properties.title"},
 	{projection: "answer#$defs.ProjectedDriver.properties.summary", canonical: "common#$defs.DriverJudgment.properties.summary"},
 	{projection: "answer#$defs.ProjectedDriver.properties.qualification", canonical: "common#$defs.DriverJudgment.properties.qualification"},
+	{projection: "answer#$defs.ProjectedDriver.properties.source_state_note", canonical: "common#$defs.DriverJudgment.properties.source_state_note"},
 	{projection: "answer#$defs.ProjectedDriver.properties.evidence_ref_ids", canonical: "common#$defs.DriverJudgment.properties.evidence_ref_ids"},
 	{projection: "answer#$defs.ProjectedDriver.properties.claimed_fact_ids", canonical: "common#$defs.DriverJudgment.properties.claimed_fact_ids"},
 	{projection: "answer#$defs.ProjectedFact.properties.field", canonical: "common#$defs.ClaimedFact.properties.field"},

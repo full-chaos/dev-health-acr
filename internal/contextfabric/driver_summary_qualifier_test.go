@@ -61,7 +61,7 @@ func TestWriteBackUncorrectedDriverCarriesNoNote(t *testing.T) {
 	}
 }
 
-func TestWriteBackDraftCannotSetTheServerNote(t *testing.T) {
+func TestWriteBackOverwritesAServerNoteACallerSetInMemory(t *testing.T) {
 	t.Parallel()
 	wb := newWriteBackRig(t, nil)
 	_, bundle := wb.firstCall()
