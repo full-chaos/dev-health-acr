@@ -14,7 +14,7 @@ import (
 // client carries the 192 MiB memory cap, and a statement's own SETTINGS wins.
 func TestOpenProjectorClickHouseSendsTheStatementMemoryCapToTheServer(t *testing.T) {
 	dsn := chserver.StartDSN(t, context.Background())
-	client, err := openProjectorClickHouse(config.ProjectorConfig{ClickHouseDSN: dsn, ClickHouseMaxBytesToRead: 256 << 20}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	client, err := openProjectorClickHouse(config.ProjectorConfig{ClickHouseDSN: dsn, ClickHouseMaxBytesToRead: 256 << 20}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
