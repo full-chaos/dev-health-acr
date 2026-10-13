@@ -128,11 +128,9 @@ func TestFactScopeTeamProjectReachMatrix(t *testing.T) {
 		}
 	}
 	// source_health is organization-scoped: no team/project chain exists.
-	// commitment serves a project subject only; a team reaches it through its
-	// owned projects and that pair is disclosed, never pruned.
 	var unexpected []string
 	for _, gap := range gaps {
-		if gap == "team x source_health = pruned" || gap == "project x source_health = pruned" || gap == "team x commitment = disclosed" {
+		if gap == "team x source_health = pruned" || gap == "project x source_health = pruned" {
 			continue
 		}
 		unexpected = append(unexpected, gap)

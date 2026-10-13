@@ -413,3 +413,40 @@ func TestCommitmentProjectOutsideTheCallerOwnershipReachIsDeniedAndNothingLeaks(
 		t.Errorf("the provider read %d statements for a denied project", len(client.queries))
 	}
 }
+
+func TestCommitmentForATeamIsDisclosedThroughItsOwnedProjectsNeverPruned(t *testing.T) {
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(commitmentClient(nil, nil)), contextfabric.FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	team := teamSubject("CHAOS")
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org-commitment"}, contextfabric.CanonicalFactRequest{
+		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+		Subjects:     []contextfabric.SubjectRef{team},
+		Requirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactCommitment}},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	raw, _ := json.Marshal(bundle)
+	if len(bundle.Facts) != 0 {
+		t.Fatalf("a team commitment read served facts: %s", raw)
+	}
+	for _, source := range bundle.Coverage.Sources {
+		if source.State == contextfabric.SourcePruned {
+			t.Fatalf("a team commitment read is pruned, a proof of absence on a chain that exists: %s", raw)
+		}
+	}
+	named := false
+	for _, event := range bundle.Scope.Events {
+		if event.RequirementKind == contextfabric.FactCommitment && event.OriginKind == contextfabric.SubjectTeam && event.Policy == contextfabric.FactScopePolicyTeamProjectOwnershipCommitment {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the team commitment read does not name team_project_ownership_commitment_v1: %s", raw)
+	}
+	if !bundle.Coverage.Partial {
+		t.Errorf("a team commitment read that serves nothing reads as complete: %s", raw)
+	}
+}
