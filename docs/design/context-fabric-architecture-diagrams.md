@@ -91,8 +91,8 @@ flowchart TD
   DISCOVER["DiscoverContext<br/>cohort + structure offers, falkorgraph/reader.go"]
   DISCOVER --> SCOPE["FactReadScopeResolver<br/>fact_scope.go -- CHAOS-4099, activated<br/>project/team origin -> activity-proxy / attributed-team expansion"]
   SCOPE --> PLAN["planFactReads<br/>fact_planner.go:183 -- per-capability<br/>SupportedSubjectKinds partition: prune / narrow / run"]
-  PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned:subject_kind_unsupported<br/>proof of absence (CHAOS-3783)"]
-  PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded:&lt;outcome&gt;<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
+  PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned (coverage detail code fact_pruned)<br/>proof of absence (CHAOS-3783)"]
+  PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded (outcome on the coverage detail)<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
   PLAN -->|"some/all subjects supported"| READ["FactCapabilityRegistry.ReadFacts<br/>fan-out over devhealthfacts providers (ClickHouse)<br/>-- see diagram 4"]
 
   READ --> ROUTE{"project subject:<br/>does the source carry work_scope_id?<br/>CHAOS-4521b"}
