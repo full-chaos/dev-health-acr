@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -113,7 +112,7 @@ func TestIncidentStatusPopulationNotComputedNamesTheCause(t *testing.T) {
 	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
 	served := investigateIncidentStatus(t, incidentStatusRow{anchor: SubjectTeam, status: InvestigationDegraded,
 		graph: GraphContext{Coverage: Coverage{Sources: []SourceObservation{{Source: "context-fabric:graph", State: SourceAvailable}}, Partial: true, DegradedReasons: []string{"walk_cut_before_member:incident"}, Details: []CoverageDetail{detail}}}})
-	wantLimitation(t, served, contractsv1.ContextFabricMemberStatusNotComputedLimitation("incident", contractsv1.ComposeCoverageDetailLabel(detail)))
+	wantLimitation(t, served, contractsv1.ContextFabricMemberStatusNotComputedLimitation("incident", contractsv1.ContextFabricCoverageCauseReason(detail.Code)))
 }
 
 func TestDegradedAnswerWithoutAnyOwnLimitationIsServedTheLoudFallback(t *testing.T) {
@@ -134,18 +133,14 @@ func TestDegradedAnswerWithoutAnyOwnLimitationIsServedTheLoudFallback(t *testing
 	}
 }
 
-func TestNoDegradedExitDependsOnTheFallbackSentence(t *testing.T) {
-	t.Parallel()
-	known := map[string]bool{
-		"budget_trim.go": true, "claim_depth_narrowing.go": true, "fact_row_truncation.go": true,
-		"model_runtime.go": true, "path_drop.go": true,
-	}
-	assign := regexp.MustCompile(`\.Status = Investigation(Partial|Degraded)\b`)
-	files, err := filepath.Glob("*.go")
+func statusLoweringSites(t *testing.T, dir string) map[string]int {
+	t.Helper()
+	assign := regexp.MustCompile(`\bStatus(?: =|:)\s*Investigation(?:Partial|Degraded)\b|\bfloorNoMatchTo\(`)
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := []string{}
+	found := map[string]int{}
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
@@ -155,25 +150,122 @@ func TestNoDegradedExitDependsOnTheFallbackSentence(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, line := range strings.Split(string(body), "\n") {
-			if assign.MatchString(line) && !strings.Contains(line, "shadow.") {
-				found = append(found, file)
-				break
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "func floorNoMatchTo(") || strings.Contains(line, "shadow.") {
+				continue
+			}
+			if assign.MatchString(line) {
+				found[filepath.Base(file)]++
 			}
 		}
 	}
-	sort.Strings(found)
-	for _, file := range found {
-		if !known[file] && file != "work_item_authorization_gap.go" {
-			t.Errorf("%s lowers a status to partial or degraded: give the exit its own limitation, then list it here", file)
+	return found
+}
+
+// The exits that lower a status to partial or degraded. Each file composes a
+// limitation of its own; a new site, a removed site, or a file outside this
+// table fails until the exit is classified here.
+var statusLoweringExits = map[string]int{
+	"budget_trim.go": 1, "claim_depth_narrowing.go": 1, "fact_row_truncation.go": 1, "model_runtime.go": 1,
+	"path_drop.go": 1, "synthesis_model_failure.go": 1, "synthesis_status_floor.go": 4, "work_item_authorization_gap.go": 1,
+}
+
+func TestNoDegradedExitDependsOnTheFallbackSentence(t *testing.T) {
+	t.Parallel()
+	found := statusLoweringSites(t, ".")
+	total := 0
+	for _, count := range found {
+		total += count
+	}
+	if total < 10 {
+		t.Fatalf("found %d status-lowering sites, want at least 10: the scan measured nothing", total)
+	}
+	for file, count := range found {
+		if want, ok := statusLoweringExits[file]; !ok || want != count {
+			t.Errorf("%s has %d status-lowering sites, table has %d: give the exit its own limitation, then list it", file, count, want)
 		}
 	}
-	for _, file := range []string{"budget_trim.go", "claim_depth_narrowing.go", "fact_row_truncation.go", "path_drop.go"} {
+	for file, want := range statusLoweringExits {
+		if found[file] != want {
+			t.Errorf("%s: scan found %d sites, table has %d", file, found[file], want)
+		}
 		body, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(string(body), "appendBoundedLimitations") {
-			t.Errorf("%s lowers a status without composing a limitation", file)
+			t.Errorf("%s lowers a status without composing a limitation of its own", file)
 		}
+	}
+}
+
+func TestStatusLoweringScanSeesAPlantedSiteWithoutALimitation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	planted := "package contextfabric\n\nfunc plantedExit(result *InvestigationResult) {\n\tresult.Status = InvestigationDegraded\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "planted_exit.go"), []byte(planted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	found := statusLoweringSites(t, dir)
+	if found["planted_exit.go"] != 1 {
+		t.Fatalf("scan found %v for a planted lowering site, want planted_exit.go:1", found)
+	}
+	if _, listed := statusLoweringExits["planted_exit.go"]; listed {
+		t.Fatal("planted site is in the exit table")
+	}
+}
+
+func TestAReusedCompleteAnswerCorrectedToDegradedIsServedALimitation(t *testing.T) {
+	t.Parallel()
+	project, candidate := outcomeAuthorityCandidate(InvestigationComplete, contractsv1.ContextFabricAnswerCompletenessDegraded)
+	candidate.Limitations = []string{}
+	engine := completenessAuthorityTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	}, true, false)
+	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if served.Status != InvestigationDegraded || len(served.Limitations) == 0 {
+		t.Fatalf("status=%s limitations=%q, want a degraded answer with a limitation", served.Status, served.Limitations)
+	}
+}
+
+func TestStatusAbsenceRecognisersMatchOnlyGeneratedSentences(t *testing.T) {
+	t.Parallel()
+	generated := []string{
+		contractsv1.ContextFabricMemberStatusNoneReachedLimitation("incident", "team"),
+		contractsv1.ContextFabricMemberStatusNoneReachedLimitation("project", "project"),
+		contractsv1.ContextFabricMemberStatusNotComputedLimitation("incident", contractsv1.ContextFabricNoCoverageCauseReason),
+		contractsv1.ContextFabricDegradedWithoutLimitation("degraded", contractsv1.ContextFabricNoCoverageCauseReason),
+	}
+	for _, sentence := range generated {
+		if sentence == "" || !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
+			t.Errorf("generated sentence %q is not recognised", sentence)
+		}
+	}
+	lookalikes := []string{
+		"No incidents were reached from the team through the repositories of its linked pull requests, so the status was matched against none.",
+		"The incidents were not read by status, so whether any holds it is unknown: the model felt unsure.",
+		"This answer is degraded and the service recorded its cause: the model felt unsure.",
+	}
+	for _, sentence := range lookalikes {
+		if contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
+			t.Errorf("lookalike %q is recognised as service-authored", sentence)
+		}
+	}
+	if contractsv1.ContextFabricMemberStatusNotComputedLimitation("incident", "any text") != "" || contractsv1.ContextFabricDegradedWithoutLimitation("degraded", "any text") != "" {
+		t.Error("a reason outside the closed set generated a sentence")
+	}
+}
+
+func TestNoneReachedIsNotClaimedForACutReachProbe(t *testing.T) {
+	t.Parallel()
+	result := withMemberStatusNoneReached(InvestigationResult{Limitations: []string{}}, MemberStatusOutsideSet{Kind: SubjectProject, Filtered: true, ReachCut: true}, MemberStatusPoolCut{}, nil, SubjectTeam)
+	if len(result.Limitations) != 0 {
+		t.Fatalf("limitations = %q, want none claimed for a cut reach probe", result.Limitations)
 	}
 }

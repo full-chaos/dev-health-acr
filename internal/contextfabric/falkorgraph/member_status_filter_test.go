@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -313,5 +314,26 @@ func TestMemberStatusForACallerWhoCanReadNoneOfTheReachedMembers(t *testing.T) {
 	want := []PullRequestStatusFilterDecision{{MemberKind: contextfabric.SubjectIncident, Status: "open", Site: PullRequestStatusFilterSitePool, Pool: -1}}
 	if !reflect.DeepEqual(telemetry.pullRequestStatusFilters, want) {
 		t.Fatalf("status filter lines = %+v, want %+v (0 candidates)", telemetry.pullRequestStatusFilters, want)
+	}
+}
+
+// TestACutReachProbeIsNotReadAsNoMemberReached: more projects the caller cannot
+// read precede the one it can than the reach probe reads, and none holds the
+// status. The probe's prefix holds no readable project, so reached stays false;
+// the read says the probe was cut, so the answer does not claim none was reached.
+func TestACutReachProbeIsNotReadAsNoMemberReached(t *testing.T) {
+	fixtures := []memberStatusFixture{}
+	for i := 0; i < exactNameCandidateQueryLimit+5; i++ {
+		fixtures = append(fixtures, memberStatusFixture{id: fmt.Sprintf("project:a-hidden-%05d", i), label: "H", stored: "completed", repo: "acme/secret"})
+	}
+	fixtures = append(fixtures, memberStatusFixture{id: "project:z-readable", label: "R", stored: "completed", repo: "acme/granted"})
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
+	result, _, err := discoverMemberStatusAs(t, memberStatusFake(contextfabric.SubjectProject, fixtures, nil), contextfabric.SubjectProject, "started", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := result.MemberStatusOutsideSet
+	if !outside.Filtered || (!outside.Reached && !outside.ReachCut) {
+		t.Fatalf("outside = %+v: a readable project exists past a cut probe, the read must report it reached or the probe cut", outside)
 	}
 }

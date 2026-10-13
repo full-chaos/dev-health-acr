@@ -1813,7 +1813,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation, CohortPopulationLowerBound: cohortPoolTruncated,
 		CohortMemberSource:     cohortMemberSource,
-		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast, Filtered: statusFiltered, Reached: statusReached},
+		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast, Filtered: statusFiltered, Reached: statusReached, ReachCut: statusWalk.reachCut},
 		MemberStatusPoolCut:    statusPoolCut,
 		Paths:                  admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
