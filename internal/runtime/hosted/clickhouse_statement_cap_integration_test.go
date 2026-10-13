@@ -62,12 +62,17 @@ func TestMemoryNearCapObserverSeesTheServersPeakMemory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = raw.Close() })
 	var seen []contextpacket.MemoryNearCap
+	unobserved := 0
 	client := contextpacket.NewMemoryCappedQueryClient(raw, contextpacket.APIStatementMaxMemoryUsage,
 		contextpacket.WithMemoryNearCapRatio(0.0001),
-		contextpacket.WithMemoryNearCapObserver(func(_ context.Context, near contextpacket.MemoryNearCap) { seen = append(seen, near) }))
+		contextpacket.WithMemoryNearCapObserver(func(_ context.Context, near contextpacket.MemoryNearCap) { seen = append(seen, near) }),
+		contextpacket.WithMemoryPeakUnobservedObserver(func(context.Context, string) { unobserved++ }))
 	const statement = "SELECT toString(count()) FROM (SELECT number FROM numbers(1000000) GROUP BY number)"
 	if got := readSetting(t, client, statement); got != "1000000" {
 		t.Fatalf("statement returned %s, want 1000000", got)
+	}
+	if unobserved != 0 {
+		t.Fatalf("the server sent no peak memory value for %d statements; profile event names: %v", unobserved, profileEventNames(t, dsn))
 	}
 	if len(seen) != 1 || seen[0].PeakBytes == 0 || seen[0].CapBytes != contextpacket.APIStatementMaxMemoryUsage || seen[0].Statement != statement {
 		t.Fatalf("near-cap observer saw %+v, want one call with a nonzero peak and the API cap; profile event names the server sent: %v", seen, profileEventNames(t, dsn))

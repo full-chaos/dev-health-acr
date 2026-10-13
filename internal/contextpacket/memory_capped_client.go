@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -45,6 +46,16 @@ type MemoryNearCap struct {
 // near-cap share. It must not block.
 type MemoryNearCapObserver func(context.Context, MemoryNearCap)
 
+// MemoryPeakUnobservedObserver is called once per finished statement for which
+// the server sent no peak-memory value, so a silent near-cap check is visible.
+type MemoryPeakUnobservedObserver func(ctx context.Context, statement string)
+
+// WithMemoryPeakUnobservedObserver reports statements that finish with no peak
+// memory value from the server.
+func WithMemoryPeakUnobservedObserver(observer MemoryPeakUnobservedObserver) MemoryCapOption {
+	return func(c *memoryCappedQueryClient) { c.unobserved = observer }
+}
+
 // MemoryCapOption configures NewMemoryCappedQueryClient.
 type MemoryCapOption func(*memoryCappedQueryClient)
 
@@ -60,10 +71,11 @@ func WithMemoryNearCapRatio(ratio float64) MemoryCapOption {
 }
 
 type memoryCappedQueryClient struct {
-	inner    ClickHouseQueryClient
-	capBytes uint64
-	observer MemoryNearCapObserver
-	ratio    float64
+	inner      ClickHouseQueryClient
+	capBytes   uint64
+	observer   MemoryNearCapObserver
+	unobserved MemoryPeakUnobservedObserver
+	ratio      float64
 }
 
 // NewMemoryCappedQueryClient wraps inner so every statement is sent with
@@ -85,7 +97,7 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 	ctx = context.WithValue(ctx, statementMemoryCapKey{}, c.capBytes)
 	var peak atomic.Uint64
 	driverOptions := []clickhousedriver.QueryOption{clickhousedriver.WithSettings(clickhousedriver.Settings{"max_memory_usage": c.capBytes})}
-	if c.observer != nil {
+	if c.observer != nil || c.unobserved != nil {
 		driverOptions = append(driverOptions, clickhousedriver.WithProfileEvents(func(events []clickhousedriver.ProfileEvent) {
 			for _, event := range events {
 				if event.Name != "MemoryTrackerPeakUsage" || event.Value <= 0 {
@@ -101,7 +113,7 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 		}))
 	}
 	rows, err := c.inner.Query(clickhousedriver.Context(ctx, driverOptions...), statement, bindings)
-	if err != nil || rows == nil || c.observer == nil {
+	if err != nil || rows == nil || (c.observer == nil && c.unobserved == nil) {
 		return rows, err
 	}
 	return &memoryObservedRows{ClickHouseRowScanner: rows, ctx: ctx, statement: statement, client: c, peak: &peak}, nil
@@ -120,7 +132,10 @@ func (r *memoryObservedRows) Close() error {
 	err := r.ClickHouseRowScanner.Close()
 	if r.reported.CompareAndSwap(false, true) {
 		peak := r.peak.Load()
-		if float64(peak) > r.client.ratio*float64(r.client.capBytes) {
+		if peak == 0 && r.client.unobserved != nil {
+			r.client.unobserved(r.ctx, r.statement)
+		}
+		if r.client.observer != nil && float64(peak) > r.client.ratio*float64(r.client.capBytes) {
 			r.client.observer(r.ctx, MemoryNearCap{Statement: r.statement, PeakBytes: peak, CapBytes: r.client.capBytes})
 		}
 	}
@@ -146,5 +161,25 @@ func NewSlogMemoryNearCapObserver(logger *slog.Logger, count func(context.Contex
 		logger.WarnContext(ctx, "clickhouse statement memory near cap",
 			"statement_sha", hex.EncodeToString(sum[:6]), "statement_head", head,
 			"peak_bytes", near.PeakBytes, "cap_bytes", near.CapBytes)
+	}
+}
+
+// NewSlogMemoryPeakUnobservedObserver counts every statement that finished with
+// no peak-memory value and logs one WARN per statement (by hash) per process.
+func NewSlogMemoryPeakUnobservedObserver(logger *slog.Logger, count func(context.Context)) MemoryPeakUnobservedObserver {
+	var warned sync.Map
+	return func(ctx context.Context, statement string) {
+		if count != nil {
+			count(ctx)
+		}
+		if logger == nil {
+			return
+		}
+		sum := sha256.Sum256([]byte(statement))
+		key := hex.EncodeToString(sum[:6])
+		if _, seen := warned.LoadOrStore(key, struct{}{}); seen {
+			return
+		}
+		logger.WarnContext(ctx, "clickhouse statement sent no peak memory value; the near-cap check is blind for it", "statement_sha", key)
 	}
 }

@@ -17,20 +17,21 @@ import (
 
 // Instrument names. docs/observability.md documents exactly these.
 const (
-	ToolCallsName               = "acr_mcp_tool_calls_total"
-	ToolLatencyName             = "acr_mcp_tool_latency_seconds"
-	AnswersName                 = "acr_answers_total"
-	BudgetRefusalsName          = "acr_budget_refusals_total"
-	AnswerReuseName             = "acr_answer_reuse_total"
-	RequirementOutcomesName     = "acr_requirement_outcomes_total"
-	FactReadAbortsName          = "acr_fact_read_aborts_total"
-	InvestigationLatencyName    = "acr_investigation_latency_seconds"
-	ClickHouseNearMemoryCapName = "acr_clickhouse_statement_near_memory_cap_total"
+	ToolCallsName                = "acr_mcp_tool_calls_total"
+	ToolLatencyName              = "acr_mcp_tool_latency_seconds"
+	AnswersName                  = "acr_answers_total"
+	BudgetRefusalsName           = "acr_budget_refusals_total"
+	AnswerReuseName              = "acr_answer_reuse_total"
+	RequirementOutcomesName      = "acr_requirement_outcomes_total"
+	FactReadAbortsName           = "acr_fact_read_aborts_total"
+	InvestigationLatencyName     = "acr_investigation_latency_seconds"
+	ClickHouseNearMemoryCapName  = "acr_clickhouse_statement_near_memory_cap_total"
+	ClickHousePeakUnobservedName = "acr_clickhouse_statement_peak_unobserved_total"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -69,6 +70,7 @@ type Instruments struct {
 	factReadAborts     metric.Int64Counter
 	investigationLat   metric.Float64Histogram
 	nearMemoryCap      metric.Int64Counter
+	peakUnobserved     metric.Int64Counter
 	vocab              Vocabularies
 }
 
@@ -98,6 +100,7 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		requirementOutcome: counter(RequirementOutcomesName, "Plan requirement outcome rows of served investigations by outcome."),
 		factReadAborts:     counter(FactReadAbortsName, "Investigations aborted in the fact read by cause."),
 		investigationLat:   histogram(InvestigationLatencyName, "Investigation request latency by terminal status."),
+		peakUnobserved:     counter(ClickHousePeakUnobservedName, "ClickHouse statements that finished with no peak memory value from the server."),
 		nearMemoryCap:      counter(ClickHouseNearMemoryCapName, "ClickHouse statements that finished above half of their memory cap."),
 		vocab:              vocab,
 	}
@@ -188,6 +191,15 @@ func (i *Instruments) ClickHouseNearMemoryCap(ctx context.Context) {
 		return
 	}
 	i.nearMemoryCap.Add(ctx, 1)
+}
+
+// ClickHousePeakUnobserved records one ClickHouse statement that finished with
+// no peak memory value, which blinds the near-cap check for it.
+func (i *Instruments) ClickHousePeakUnobserved(ctx context.Context) {
+	if i == nil {
+		return
+	}
+	i.peakUnobserved.Add(ctx, 1)
 }
 
 // StatusClass buckets an HTTP status.

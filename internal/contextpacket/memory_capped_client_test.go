@@ -60,3 +60,37 @@ func TestSlogMemoryNearCapObserverLogsTheStatementByHashAndCounts(t *testing.T) 
 		t.Fatalf("counter called %d times, want 1", counted)
 	}
 }
+
+func TestMemoryCappedQueryClientCountsAStatementWithNoPeakValue(t *testing.T) {
+	t.Parallel()
+	inner := &scannerClient{}
+	var counted []string
+	client := NewMemoryCappedQueryClient(inner, APIStatementMaxMemoryUsage,
+		WithMemoryPeakUnobservedObserver(func(_ context.Context, statement string) { counted = append(counted, statement) }))
+	rows, err := client.Query(context.Background(), "SELECT 1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(counted) != 1 || counted[0] != "SELECT 1" {
+		t.Fatalf("unobserved statements = %v, want exactly [SELECT 1] (a fake server sends no profile events)", counted)
+	}
+}
+
+type scannerClient struct{}
+
+func (*scannerClient) Query(context.Context, string, []ClickHouseBinding) (ClickHouseRowScanner, error) {
+	return emptyScanner{}, nil
+}
+
+type emptyScanner struct{}
+
+func (emptyScanner) Next() bool        { return false }
+func (emptyScanner) Scan(...any) error { return nil }
+func (emptyScanner) Err() error        { return nil }
+func (emptyScanner) Close() error      { return nil }

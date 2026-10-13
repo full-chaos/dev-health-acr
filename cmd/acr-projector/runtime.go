@@ -399,7 +399,8 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger) (p
 	}
 	return projectorClickHouseClient{
 		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage,
-			contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, nil))),
+			contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, nil)),
+			contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, nil))),
 		ping: clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
 }
