@@ -1707,6 +1707,17 @@ after a rebuild. Workaround on those builds only: set
 `0` means the default 500) on the projector, then REMOVE the override once
 the stream is drained and verify the projector env has no such variable.
 
+### Purging a deleted organization
+
+`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB epoch graph and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`.
+
+1. `purge --org <uuid> --dry-run` prints row counts, the graph epochs it would drop, and the `org_key`. It changes nothing.
+2. `purge --org <uuid> --attest-deleted --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.
+
+The verb fails closed. It refuses when the organization is in the projector set (the static list or discovery), when discovery cannot be read, when Dev Health still answers 200 for the organization, when another projector holds its lock, or when either flag is missing. A 404 from Dev Health cannot be told apart from an outage, so the operator attestation is required.
+
+Kept on purpose: `audit_events` (no retention rule exists in this repository), and episodes with `retention_class = legal_hold`. A purge that deletes any row adds one `org_purged` audit event holding counts only. A second run is a no-op.
+
 ### CHAOS-3916 production graph cutover runbook
 
 This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,

@@ -34,6 +34,8 @@ import (
 type Runtime struct {
 	Coordinator *projectionrun.Coordinator
 	Checks      []api.ReadinessCheck
+	DB          *sql.DB
+	Backend     contextfabric.ProjectionBackend
 	closers     []func() error
 }
 
@@ -229,6 +231,8 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(fmt.Errorf("build projection coordinator: %w", err), runtime.Close())
 	}
 	runtime.Coordinator = coordinator
+	runtime.DB = db
+	runtime.Backend = backend
 	runtime.Checks = []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: func(ctx context.Context) error { return checkPostgresRuntime(ctx, db, runner) }},
 		api.CheckFunc{CheckName: "clickhouse", Fn: projectorClickHouse.ping},
