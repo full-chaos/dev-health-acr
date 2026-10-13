@@ -252,17 +252,30 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes (freshness read %d), want under %d", name, stage.memory, stage.freshnessMemory, statementCeiling)
 		}
 	}
+	// Slope: a stage is red when it exceeds 1.15x the base plus an absolute
+	// floor (2 MiB of memory; 8 KiB of read volume, which only absorbs granule
+	// and mark rounding on figures of a few KiB). Each figure is the smallest of
+	// three warm runs, so a regression that grows the cost lifts all three.
+	const memoryFloor = float64(2 << 20)
+	const readSlack = float64(8192)
 	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise} {
-		if float64(stage.memory) > 1.15*float64(base.memory) {
-			t.Errorf("%s: memory %d bytes against %d at the base, over the 1.15x slope", name, stage.memory, base.memory)
+		for what, pair := range map[string][2]uint64{
+			"work_graph.v1 memory":  {stage.memory, base.memory},
+			"freshness read memory": {stage.freshnessMemory, base.freshnessMemory},
+			"issue gate memory":     {stage.gateMemory, base.gateMemory},
+		} {
+			if float64(pair[0]) > 1.15*float64(pair[1])+memoryFloor {
+				t.Errorf("%s: %s %d bytes against %d at the base, over the 1.15x slope plus the 2 MiB floor", name, what, pair[0], pair[1])
+			}
 		}
-		// readSlack absorbs granule and mark rounding on figures of a few KiB.
-		const readSlack = 8192
-		if float64(stage.readBytes) > 1.15*float64(base.readBytes)+readSlack {
-			t.Errorf("%s: read volume %d bytes against %d at the base, over the 1.15x slope", name, stage.readBytes, base.readBytes)
-		}
-		if float64(stage.gateMemory) > 1.15*float64(base.gateMemory) || float64(stage.gateReadBytes) > 1.15*float64(base.gateReadBytes)+readSlack {
-			t.Errorf("%s: issue gate memory %d / read %d bytes against %d / %d at the base, over the 1.15x slope", name, stage.gateMemory, stage.gateReadBytes, base.gateMemory, base.gateReadBytes)
+		for what, pair := range map[string][2]uint64{
+			"work_graph.v1 read volume": {stage.readBytes, base.readBytes},
+			"freshness read volume":     {stage.freshnessReadBytes, base.freshnessReadBytes},
+			"issue gate read volume":    {stage.gateReadBytes, base.gateReadBytes},
+		} {
+			if float64(pair[0]) > 1.15*float64(pair[1])+readSlack {
+				t.Errorf("%s: %s %d bytes against %d at the base, over the 1.15x slope", name, what, pair[0], pair[1])
+			}
 		}
 	}
 }
