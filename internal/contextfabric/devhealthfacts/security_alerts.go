@@ -99,7 +99,7 @@ func (p *SecurityAlertsProvider) ReadFacts(ctx context.Context, principal storag
 		if readErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query security alerts", readErr)
 		}
-		truncated = rowCount >= securityGroupRowLimit
+		truncated = rowCount > securityGroupRowLimit
 		budget := newFactBudget()
 		for _, identityRow := range identities {
 			subject, ok := bySubject[identityRow.ID]
@@ -136,8 +136,8 @@ func (p *SecurityAlertsProvider) readStoredAlerts(ctx context.Context, orgID str
 FROM (
 	SELECT repo_id, alert_id,
 		argMax(source, last_synced) AS latest_source,
-		argMax(severity, last_synced) AS latest_severity,
-		argMax(state, last_synced) AS latest_state,
+		argMax(ifNull(severity, ''), last_synced) AS latest_severity,
+		argMax(ifNull(state, ''), last_synced) AS latest_state,
 		argMax(created_at, last_synced) AS latest_created_at,
 		max(last_synced) AS latest_synced
 	FROM security_alerts
@@ -145,7 +145,7 @@ FROM (
 	GROUP BY repo_id, alert_id
 )
 GROUP BY repo_id, latest_source, latest_severity
-ORDER BY repo_id, latest_source, latest_severity`, securityGroupRowLimit)
+ORDER BY repo_id, latest_source, latest_severity`, securityGroupRowLimit+1)
 	rowCount := 0
 	err := p.facts.query(ctx, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
@@ -154,6 +154,9 @@ ORDER BY repo_id, latest_source, latest_severity`, securityGroupRowLimit)
 		var lastSynced time.Time
 		if err := row.Scan(&repoID, &g.source, &g.severity, &g.open, &g.stored, &g.oldest, &g.newest, &lastSynced); err != nil {
 			return err
+		}
+		if rowCount > securityGroupRowLimit {
+			return nil
 		}
 		repo := out[repoID]
 		if repo == nil {

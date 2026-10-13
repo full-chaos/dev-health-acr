@@ -84,7 +84,7 @@ func TestSecurityAlertsGitHubServesOpenCountsBySourceAndSeverity(t *testing.T) {
 		}
 	}
 	statement := client.queries[len(client.queries)-1].statement
-	if !strings.Contains(statement, "argMax(state, last_synced)") || !strings.Contains(statement, "org_id = {org_id:String}") {
+	if !strings.Contains(statement, "argMax(ifNull(state, ''), last_synced)") || !strings.Contains(statement, "org_id = {org_id:String}") {
 		t.Fatalf("statement = %q, want the newest stored version of each alert, scoped to the org", statement)
 	}
 }
@@ -156,5 +156,42 @@ func TestSecurityAlertsRefusesAPastTime(t *testing.T) {
 	}
 	if result.State != contextfabric.SourceNotApplicable || len(result.Facts) != 0 {
 		t.Fatalf("result = %#v, want not_applicable with no facts", result)
+	}
+}
+
+func securityGroupRows(n int) [][]any {
+	at := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	rows := make([][]any, 0, n)
+	for i := 0; i < n; i++ {
+		rows = append(rows, []any{"repo-1", "dependabot", "high", int64(1), int64(1), at, at, at})
+	}
+	return rows
+}
+
+func TestSecurityAlertsExactlyTheRowLimitIsNotTruncated(t *testing.T) {
+	t.Parallel()
+	_, _, atLimit := readSecurityAlerts(t, "github", securityGroupRows(1000))
+	if atLimit.Truncated {
+		t.Errorf("a read of exactly 1000 groups is marked truncated")
+	}
+	_, _, overLimit := readSecurityAlerts(t, "github", securityGroupRows(1001))
+	if !overLimit.Truncated {
+		t.Errorf("a read of 1001 groups is not marked truncated")
+	}
+}
+
+func TestSecurityAlertsStatementKeepsANullStateOfTheNewestVersion(t *testing.T) {
+	t.Parallel()
+	_, client, _ := readSecurityAlerts(t, "github", securityGroupRows(1))
+	var statement string
+	for _, recorded := range client.queries {
+		if strings.Contains(recorded.statement, "FROM security_alerts") {
+			statement = recorded.statement
+		}
+	}
+	for _, want := range []string{"argMax(ifNull(state, ''), last_synced)", "argMax(ifNull(severity, ''), last_synced)", "LIMIT 1001"} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("statement lacks %q: %s", want, statement)
+		}
 	}
 }
