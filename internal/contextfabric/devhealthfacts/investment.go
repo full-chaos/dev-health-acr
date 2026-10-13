@@ -262,7 +262,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgUnattributedOnlyReason)
 	}
 	if orgRestricted {
-		if len(facts) == 0 {
+		if len(facts) == 0 && coversEveryQueriedSubject(query.Subjects, orgSubjects) {
 			result.State = contextfabric.SourceNotApplicable
 		}
 		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgRestrictedReason)

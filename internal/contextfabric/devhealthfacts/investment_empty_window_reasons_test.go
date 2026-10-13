@@ -25,13 +25,36 @@ func TestInvestmentEmptyTeamWindowKeepsItsReasonBesideARestrictedOrganization(t 
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
-	if len(result.Facts) != 0 || result.State != contextfabric.SourceNotApplicable {
-		t.Fatalf("facts=%d state=%q, want no fact and not_applicable", len(result.Facts), result.State)
+	if len(result.Facts) != 0 || result.State == contextfabric.SourceNotApplicable {
+		t.Fatalf("facts=%d state=%q, want no fact and no kind-wide not_applicable: the team was read beside the organization", len(result.Facts), result.State)
 	}
 	served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote)
 	for _, want := range []string{"repository-bound", "investment_team_no_owned_repository", "investment_ownership_as_synced"} {
 		if !strings.Contains(served, want) {
 			t.Errorf("reason = %q, want it to keep %q", served, want)
 		}
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(organizationSubject("org-1"))]; !strings.Contains(got, "repository-bound") || strings.Contains(got, "owns no repository") {
+		t.Errorf("organization own reason = %q", got)
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("team-none"))]; strings.Contains(got, "repository-bound") {
+		t.Errorf("team own reason carries the organization restriction: %q", got)
+	}
+}
+
+func TestInvestmentRestrictedOrganizationAloneIsNotApplicable(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(60 * 24 * time.Hour)
+	provider := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/repo-a"}}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{organizationSubject("org-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceNotApplicable || !strings.Contains(result.Reason, "repository-bound") {
+		t.Fatalf("facts=%d state=%q reason=%q, want not_applicable naming the restriction", len(result.Facts), result.State, result.Reason)
 	}
 }
