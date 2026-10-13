@@ -773,6 +773,57 @@ func ContextFabricServiceAuthoredLimitations() []string {
 	}
 }
 
+var contextFabricProjectStatusMissingKinds = []string{"workload", "readiness", "health"}
+
+var contextFabricProjectStatusMissingReasons = []string{
+	"no data", "conflicting sources", "source unavailable", "not read for this answer", "no value reported",
+	"no evidence reference", "unconfigured", "unauthorized", "pruned", "not applicable",
+	"stale, nothing retained", "truncated, nothing retained", "no fact returned",
+}
+
+// ContextFabricProjectStatusMissingLimitation is the sentence a project status
+// answer carries for a status fact kind that has no usable value, naming why.
+// state is a source state name, or not_read, no_value or no_evidence.
+func ContextFabricProjectStatusMissingLimitation(kind, state string) string {
+	reason := "not read for this answer"
+	switch state {
+	case "no_data":
+		reason = "no data"
+	case "conflicted":
+		reason = "conflicting sources"
+	case "unavailable":
+		reason = "source unavailable"
+	case "no_value":
+		reason = "no value reported"
+	case "no_evidence":
+		reason = "no evidence reference"
+	case "unconfigured", "unauthorized", "pruned":
+		reason = state
+	case "not_applicable":
+		reason = "not applicable"
+	case "stale":
+		reason = "stale, nothing retained"
+	case "truncated":
+		reason = "truncated, nothing retained"
+	case "available":
+		reason = "no fact returned"
+	}
+	return kind + ": " + reason + "."
+}
+
+// IsContextFabricProjectStatusMissingLimitation recognizes the sentences
+// ContextFabricProjectStatusMissingLimitation composes.
+func IsContextFabricProjectStatusMissingLimitation(limitation string) bool {
+	for _, kind := range contextFabricProjectStatusMissingKinds {
+		for _, reason := range contextFabricProjectStatusMissingReasons {
+			if limitation == kind+": "+reason+"." {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // IsContextFabricServiceAuthoredLimitation reports whether one limitation
 // is a disclosure this service composes rather than a model caveat.
 func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
@@ -819,7 +870,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
 		IsContextFabricStatedRangeConflictLimitation(limitation) ||
 		IsContextFabricComparisonPeriodUnreadLimitation(limitation) ||
-		IsContextFabricCoverageEntriesDroppedLimitation(limitation)
+		IsContextFabricCoverageEntriesDroppedLimitation(limitation) ||
+		IsContextFabricProjectStatusMissingLimitation(limitation)
 }
 
 // ContextFabricStatedRangeConflictLimitation is served when a turn ran on the

@@ -997,7 +997,16 @@ import (
 // (complete), and an answer whose status was decided within a cut read is
 // partial. A candidate saved under v196 may hold the cut, mismatched set, that
 // no_match, or a complete status over a cut read.
-const QueryVersion = "devhealthfacts.clickhouse.v198"
+//
+// v197 -> v198: a project status answer serves a truncated readiness fact as a
+// partial estimate coverage driver with source_state truncated. An answer saved
+// under v197 has no such driver.
+//
+// v198 -> v199: a client synthesis answer with a caller byte budget is fitted
+// to what the synthesis input leaves of that budget, and the input is cut to
+// the budget with the cut stated. An answer saved under v198 was fitted to the
+// whole budget.
+const QueryVersion = "devhealthfacts.clickhouse.v199"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
