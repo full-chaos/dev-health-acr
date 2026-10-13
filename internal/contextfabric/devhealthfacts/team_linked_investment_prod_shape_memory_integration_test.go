@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -369,21 +370,29 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	capped := contextpacket.NewMemoryCappedQueryClient(query, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 
+	// The plan is read on the native connection (the query client sends
+	// SELECT statements only); a failure here is logged, not fatal.
 	explain := fragmentNamed(t, fragments, "statement")
-	var plan []string
-	if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixExplain", "EXPLAIN PLAN "+explain.SQL+"\nSETTINGS max_result_rows = 0", orgID, []string{linkedShapeTeam}, func(row readers.RowScanner) error {
-		var line string
-		if err := row.Scan(&line); err != nil {
-			return err
+	parameters := clickhouse.Parameters{"org_id": orgID, "ids": "['" + linkedShapeTeam + "']"}
+	for _, binding := range explain.Bindings {
+		if value, ok := binding.Value.(string); ok {
+			parameters[binding.Name] = value
 		}
-		if len(plan) < 70 {
+	}
+	if rows, err := direct.Query(clickhouse.Context(ctx, clickhouse.WithParameters(parameters)), "EXPLAIN PLAN "+explain.SQL); err != nil {
+		t.Logf("explain did not run: %v", err)
+	} else {
+		var plan []string
+		for rows.Next() && len(plan) < 80 {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				break
+			}
 			plan = append(plan, line)
 		}
-		return nil
-	}, explain.Bindings...); err != nil {
-		t.Fatalf("explain: %v: %s", err, readFailureCause(err))
+		_ = rows.Close()
+		t.Logf("plan head of the statement:\n%s", strings.Join(plan, "\n"))
 	}
-	t.Logf("plan head of the statement:\n%s", strings.Join(plan, "\n"))
 	unmerged := measureLinkedMixFragments(t, ctx, query, direct, orgID, "unmerged", fragments)
 	servedUnmerged := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
 	for _, table := range tables {
