@@ -104,6 +104,9 @@ func TestRemovedBlockerLinksAreNotCountedOnRealClickHouse(t *testing.T) {
 	wantInt(t, fields, "blocked_work_items_current", counted)
 	wantInt(t, fields, "blocker_dependencies_current", counted)
 	wantAgeDays(t, "oldest open blocker after the removed links", fields, 5)
+	// One kept link is a text relation whose writer cannot be told; it is
+	// counted and flagged, never dropped silently.
+	wantInt(t, fields, "blocker_dependencies_writer_unresolved_current", 1)
 
 	for _, e := range edges {
 		repoID := repoUUID("repo-rel")
@@ -161,4 +164,5 @@ func TestRemovedBlockerLinksAreNotCountedInTheProjectRollup(t *testing.T) {
 	fields := factFor(t, result, project).Fields
 	wantInt(t, fields, "blocked_work_items_current", 2)
 	wantInt(t, fields, "blocker_dependencies_current", 2)
+	wantInt(t, fields, "blocker_dependencies_writer_unresolved_current", 0)
 }

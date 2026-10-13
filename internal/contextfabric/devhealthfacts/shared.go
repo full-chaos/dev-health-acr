@@ -1039,7 +1039,7 @@ import (
 // v205 -> v206: team and project blockers facts serve the age of the oldest
 // open blocker (oldest_blocked_age_days, with its basis or an unavailable
 // reason). An answer saved under v205 carries no age.
-const QueryVersion = "devhealthfacts.clickhouse.v206"
+const QueryVersion = "devhealthfacts.clickhouse.v207"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
