@@ -2302,9 +2302,10 @@
         "closed_vocabulary": [
           "gate_unavailable",
           "graph_read",
-          "gate_decision_refused"
+          "gate_decision_refused",
+          "served_vocabulary_refused"
         ],
-        "applicability": "written when the read was unavailable or its gate proof was refused"
+        "applicability": "written when the read was unavailable, its gate proof was refused or a served value fell outside its pinned set"
       },
       {
         "key": "request_id",
