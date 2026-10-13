@@ -46,6 +46,16 @@ An array of an additive vocabulary is capped by a fixed protocol bound (`Context
 
 An enum used as a request input, or inside an `if`/`then`/`not` condition, is not an output vocabulary and stays as written.
 
+## Adding an output field
+
+A client that cached `tools/list` validates every later response against the schema it cached, so an MCP output object that sets `additionalProperties: false` rejects any field the server adds. Rule: strict producer, tolerant consumer.
+
+- Every MCP output object (`contracts/jsonschema/v1/mcp_*_response.v1.schema.json` and its copy in `internal/mcp/schemas`) is open: it does not set `additionalProperties: false`. `TestEveryOutputObjectIsOpenUnlessListedClosed` fails for a closed output object that is not in `closedOutputObjects` with a reason it can never grow. The list is empty; only a fixed protocol envelope qualifies. Input (request) schemas stay closed.
+- Add a field as optional, never in `required`, and never rename or remove one without a deprecation path. Update in the same PR: both schema copies, the Go DTO, the golden example in `examples/v1`, and the required-field baseline check (`make contract-test`). The ask-dev pin bump follows separately.
+- The producer stays strict: `contractcheck` examples and the served-payload tests use `ValidateSerializedStrict`, which fails on any key no schema branch declares. So a new served field must be declared in the schema first.
+- The consumer is tolerant: Go response decoders ignore unknown keys (`tolerantUnmarshal`); request decoders stay strict (`strictUnmarshal`).
+- Canonical schemas that an MCP response embeds (`context_packet`, `evidence_ref`, `context_fabric_*`) keep their own closure for the HTTP API; the embedded MCP copy is the same document with `additionalProperties: false` removed, and the `$defs` sync check compares on that basis.
+
 ## Compatibility
 
 Additive optional fields may ship in a compatible v1 release. Removing fields, changing requiredness, narrowing accepted values, or changing semantics requires a new schema version.

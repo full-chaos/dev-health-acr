@@ -71,7 +71,7 @@ FROM (
 ` + orgSplitCore(memberships) + `		)
 	)
 )`
-	return withRowLimit(statement)
+	return withInvestmentSplitMemory(withRowLimit(statement))
 }
 
 func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bound factTimeBound) (orgMixRow, error) {

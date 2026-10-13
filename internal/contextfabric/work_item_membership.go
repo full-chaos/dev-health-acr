@@ -25,6 +25,8 @@ const WorkItemMembershipServeLimit = 200
 // ceiling. It follows the shared ClickHouse reader default (64 MiB) while
 // this PR keeps the value internal to the inactive port; no public setting is
 // inferred from it.
+//
+// memory-limit-measured: 56.28 MiB 2026-10-13 prod query_log team project link rows
 const WorkItemMembershipMaxMemoryUsage uint64 = 64 << 20
 
 // WorkItemMembershipCensusState says what S1 proved about the authorized
