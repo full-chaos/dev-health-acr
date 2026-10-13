@@ -1745,7 +1745,16 @@ type ContextFabricDriverJudgment struct {
 	// Absent means available.
 	// Additive v1 optional field.
 	SourceState ContextFabricSourceState `json:"source_state,omitempty"`
-	Current     bool                     `json:"current"`
+	// SourceStateNote is server-owned plain text naming the served
+	// SourceState and its cause, set only when the service corrected the
+	// state a draft carried. Summary is never edited; the note is stated
+	// next to it. Additive v1 optional field.
+	SourceStateNote string `json:"source_state_note,omitempty"`
+	// SummaryCorrected is true when the service corrected the draft's
+	// SourceState, so Summary may not describe the served state. Additive
+	// v1 optional field.
+	SummaryCorrected bool `json:"summary_corrected,omitempty"`
+	Current          bool `json:"current"`
 }
 
 type ContextFabricFinding struct {

@@ -306,14 +306,14 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		// the number a driver-weight source names IS present in the
 		// projection, one hop away, and a reader can see it.
 		for _, row := range projection.Cohort.RankingTable {
-			id, ok := row.Fields["team_canonical_id"]
-			if !ok || id.String == nil {
+			id, ok := RankingRowSubjectID(row)
+			if !ok {
 				continue
 			}
-			signals, exists := sources.driverWeight[*id.String]
+			signals, exists := sources.driverWeight[id]
 			if !exists {
 				signals = map[string]float64{}
-				sources.driverWeight[*id.String] = signals
+				sources.driverWeight[id] = signals
 			}
 			for key, value := range row.Fields {
 				name, isSignal := strings.CutPrefix(key, "driver_")

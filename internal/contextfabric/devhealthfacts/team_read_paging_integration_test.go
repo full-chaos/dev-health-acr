@@ -36,7 +36,7 @@ func TestTeamProjectReachedRepositoriesPageUnderTheClientRowCapOnRealClickHouse(
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership",
 		"work_item_team_attributions", "deploy_metrics_daily",
 	) {

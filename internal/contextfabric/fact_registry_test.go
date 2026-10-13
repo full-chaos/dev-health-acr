@@ -112,7 +112,7 @@ func TestFactCapabilityRegistryPreservesIndependentFactsWhenOneCapabilityDegrade
 	if len(bundle.Facts) != 1 || bundle.Facts[0].Kind != FactStatus || !bundle.Coverage.Partial {
 		t.Fatalf("bundle = %#v", bundle)
 	}
-	if len(bundle.Coverage.DegradedReasons) != 1 || !strings.Contains(bundle.Coverage.DegradedReasons[0], "readiness service") {
+	if len(bundle.Coverage.DegradedReasons) != 1 || !strings.Contains(bundle.Coverage.DegradedReasons[0], "read failed") || strings.Contains(bundle.Coverage.DegradedReasons[0], "readiness service") {
 		t.Fatalf("degraded reasons = %#v", bundle.Coverage.DegradedReasons)
 	}
 }

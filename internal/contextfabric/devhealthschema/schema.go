@@ -388,6 +388,14 @@ var ProductionColumns = map[string][]Column{
 		{Name: "relationship_type_raw", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
+		{Name: "relation_started_at", Type: "Nullable(DateTime64(3))"},
+	},
+	"work_item_dependency_first_seen": {
+		{Name: "org_id", Type: "String"},
+		{Name: "source_work_item_id", Type: "String"},
+		{Name: "target_work_item_id", Type: "String"},
+		{Name: "relationship_type", Type: "String"},
+		{Name: "first_seen_at", Type: "SimpleAggregateFunction(min, DateTime64(3))"},
 	},
 	// CHAOS-3802's four tables. Read off live system.columns the same way
 	// every entry above was, and listed in production POSITION order with
@@ -714,6 +722,7 @@ var EngineFull = map[string]string{
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
 	"work_item_transitions":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_item_dependency_first_seen":      "AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_measure_capability":         "ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192",
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",

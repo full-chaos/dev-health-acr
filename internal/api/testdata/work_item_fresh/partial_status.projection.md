@@ -38,7 +38,7 @@
 
 ## Source coverage
 > ```
-> - canonical_fact:status: unavailable (devhealthfacts: query work item status failed)
+> - canonical_fact:status: unavailable (The status read failed; the facts for it are not shown.)
 > - canonical_fact:work: available
 > ```
 

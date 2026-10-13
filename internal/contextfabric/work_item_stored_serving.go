@@ -209,8 +209,9 @@ func withWorkItemKindCensusDetail(candidate InvestigationResult, declared int) I
 		existing.DetailID = nextWorkItemCoverageDetailID(details)
 	}
 	detailIndex := len(details)
+	sortKeys := degradedSortKeys(details)
 	for index, detail := range details {
-		if !detail.Degrading || detail.Raw > existing.Raw {
+		if !detail.Degrading || degradedSortKey(sortKeys, detail.Raw) > existing.Raw {
 			detailIndex = index
 			break
 		}
@@ -223,7 +224,7 @@ func withWorkItemKindCensusDetail(candidate InvestigationResult, declared int) I
 	reasons := withoutWorkItemKindCensusReasons(candidate.Coverage.DegradedReasons)
 	reasonIndex := len(reasons)
 	for index, reason := range reasons {
-		if reason > raw {
+		if degradedSortKey(sortKeys, reason) > raw {
 			reasonIndex = index
 			break
 		}
@@ -269,8 +270,9 @@ func withWorkItemRepositoryUnlinkedDetail(candidate InvestigationResult, pullReq
 	details := append([]CoverageDetail(nil), candidate.Coverage.Details...)
 	detail.DetailID = nextWorkItemCoverageDetailID(details)
 	detailIndex := len(details)
+	sortKeys := degradedSortKeys(details)
 	for index, existing := range details {
-		if !existing.Degrading || existing.Raw > raw {
+		if !existing.Degrading || degradedSortKey(sortKeys, existing.Raw) > raw {
 			detailIndex = index
 			break
 		}
@@ -283,7 +285,7 @@ func withWorkItemRepositoryUnlinkedDetail(candidate InvestigationResult, pullReq
 	reasons := append([]string(nil), candidate.Coverage.DegradedReasons...)
 	reasonIndex := len(reasons)
 	for index, reason := range reasons {
-		if reason > raw {
+		if degradedSortKey(sortKeys, reason) > raw {
 			reasonIndex = index
 			break
 		}
