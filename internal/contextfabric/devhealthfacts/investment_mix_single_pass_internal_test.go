@@ -32,15 +32,15 @@ func TestRepoMixStatementReadsWorkUnitInvestmentsOnce(t *testing.T) {
 	}
 }
 
-// assertReposReadOnceBesidesTheRequestedLookup: the repos join is read once
-// over the organization; the only other read is the requested repositories'
-// own lookup rows, bounded by {ids}.
+// assertReposReadOnceBesidesTheRequestedLookup: repos is joined once over the
+// organization; its only other read is the requested repositories' own lookup
+// rows, bounded by {ids}.
 func assertReposReadOnceBesidesTheRequestedLookup(t *testing.T, name, statement string) {
 	t.Helper()
-	if got := strings.Count(statement, requestedRepositoryUnitFilter); got != 1 {
-		t.Errorf("%s: statement carries the requested repository unit filter %d times, want 1", name, got)
+	if got := strings.Count(statement, requestedRepositoryReach); got != 1 {
+		t.Errorf("%s: statement carries the requested repository reach %d times, want 1", name, got)
 	}
-	if got := strings.Count(strings.Replace(statement, requestedRepositoryUnitFilter, "", 1), "FROM repos"); got != 1 {
+	if got := strings.Count(strings.Replace(statement, requestedRepositoryReach, "", 1), "FROM repos"); got != 1 {
 		t.Errorf("%s: statement references repos %d times besides the requested lookup, want 1", name, got)
 	}
 }

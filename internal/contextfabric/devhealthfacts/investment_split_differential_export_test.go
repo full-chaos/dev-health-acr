@@ -72,74 +72,103 @@ func legacySplitCore(memberships []string, unitCols, unitAgg string, spanSentine
 `
 }
 
-// SplitStatementPair is one production statement built on the split, as it
-// is now (New) and as it was (Old), with the bindings both take besides
-// org_id and ids.
+// legacyRepoMixStatement is the repository mix as it stood before the
+// requested split, over the frozen split.
+func legacyRepoMixStatement(bounds []factTimeBound, scope membershipScope, limit int) string {
+	memberships := make([]string, 0, len(bounds))
+	for i, b := range bounds {
+		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
+	}
+	return withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
+	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
+	sum(bugfix_share * effort) AS bugfix_effort,
+	uniqExact(work_unit_id) AS work_units,
+	min(span_from) AS span_from
+FROM (
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
+	FROM (
+		SELECT win, repo_uuid, work_unit_id, c,
+			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
+			effort_value, theme_distribution_json, bugfix_share, span_from
+		FROM (
+`+legacySplitCore(memberships, "", "", true, scope, false)+`		)
+	)
+	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
+)
+GROUP BY win, repo_uuid
+ORDER BY win, repo_uuid`, limit)
+}
+
+// legacyRepositoryUnitsStatement is the repository unit listing (first page)
+// as it stood before the requested split, over the frozen split.
+func legacyRepositoryUnitsStatement(b factTimeBound, scope membershipScope) string {
+	memberships := []string{fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(0, b), 0)}
+	core := legacySplitCore(memberships, " from_ts, to_ts,", unitsCore, false, scope, false)
+	return `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
+FROM (
+	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
+		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
+		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
+	FROM (
+		SELECT win, repo_uuid, work_unit_id, c,
+			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
+			sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
+			arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs,
+			effort_value, theme_distribution_json, from_ts, to_ts, prs
+		FROM (
+` + core + `		)
+	)
+	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
+)
+ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
+LIMIT {` + unitLimitParam + `:UInt32}`
+}
+
+// SplitStatementPair is one production statement built on a split, as it is
+// now (New) and as it was (Old), with the bindings both take besides org_id
+// and ids. Old equals New for a statement whose text did not change.
 type SplitStatementPair struct {
 	Name     string
 	Old, New string
 	Bindings []readers.Binding
 }
 
-func swapCore(name, statement, current, legacy string) string {
-	if strings.Count(statement, current) != 1 {
-		panic(fmt.Sprintf("%s: the statement does not embed its split exactly once", name))
-	}
-	return strings.Replace(statement, current, legacy, 1)
-}
-
-const unitsCore = ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts"
-
-func orgRefs(core string) string {
-	return strings.Replace(core, repoRefsExpression+" AS refs",
-		"if(empty("+repoRefsExpression+"), "+orgNoRefUnit+", "+repoRefsExpression+") AS refs", 1)
-}
-
-// InvestmentSplitStatementPairs returns every statement built on the split for
-// the range [start, end) and its prior window of equal length, under the scope
-// subqueries.
+// InvestmentSplitStatementPairs returns every statement built on a split for
+// the range [start, end) (and its prior window of equal length for the
+// repository mix), under the scope subqueries.
 func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitStatementPair {
 	current := factTimeBound{active: true, hasStart: true, start: start, end: end}
 	prior := factTimeBound{active: true, hasStart: true, start: start.Add(-end.Sub(start)), end: start}
 	scope := subqueryMembershipScope
-	window := func(i int, b factTimeBound) string {
-		return fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i)
-	}
 	var mixBindings []readers.Binding
 	for i, b := range []factTimeBound{current, prior} {
 		startParam, endParam := mixWindowParams(i)
 		mixBindings = append(mixBindings, readers.Binding{Name: startParam, Value: b.start}, readers.Binding{Name: endParam, Value: b.end})
 	}
 	unitBindings := append(boundReaderBindings(current), readers.Binding{Name: unitLimitParam, Value: strconv.Itoa(unitLimit)})
-	two := []string{window(0, current), window(1, prior)}
-	one := []string{window(0, current)}
-	orgOne := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, current))}
-
-	repoMix := repoMixStatementScoped([]factTimeBound{current, prior}, scope, 100000)
-	repoUnits := investmentUnitsStatementFor(current, false, scope, false)
 	orgUnits := investmentUnitsStatementFor(current, false, scope, true)
 	orgMix := orgMixStatement(current)
 	linked := linkedPullRequestMixStatement(current, scope, 1000)
 	return []SplitStatementPair{
-		{Name: "repository mix", New: repoMix, Bindings: mixBindings,
-			Old: swapCore("repository mix", repoMix, repoSplitCoreRequested(two, "", "", true, scope), legacySplitCore(two, "", "", true, scope, false))},
-		{Name: "repository unit listing", New: repoUnits, Bindings: unitBindings,
-			Old: swapCore("repository unit listing", repoUnits, repoSplitCoreRequested(one, " from_ts, to_ts,", unitsCore, false, scope), legacySplitCore(one, " from_ts, to_ts,", unitsCore, false, scope, false))},
-		{Name: "organization unit listing", New: orgUnits, Bindings: unitBindings,
-			Old: swapCore("organization unit listing", orgUnits, orgRefs(repoSplitCoreScoped(one, " from_ts, to_ts,", unitsCore, false, scope)), orgRefs(legacySplitCore(one, " from_ts, to_ts,", unitsCore, false, scope, false)))},
-		{Name: "organization mix", New: orgMix, Bindings: boundReaderBindings(current),
-			Old: swapCore("organization mix", orgMix, orgSplitCore(orgOne), orgRefs(legacySplitCore(orgOne, "", "", true, subqueryMembershipScope, false)))},
-		{Name: "team linked pull request mix", New: linked, Bindings: boundReaderBindings(current),
-			Old: swapCore("team linked pull request mix", linked, repoSplitCoreGrouped(orgOne, "", "", false, scope, true), legacySplitCore(orgOne, "", "", false, scope, true))},
+		{Name: "repository mix", Bindings: mixBindings,
+			New: repoMixStatementScoped([]factTimeBound{current, prior}, scope, 100000),
+			Old: legacyRepoMixStatement([]factTimeBound{current, prior}, scope, 100000)},
+		{Name: "repository unit listing", Bindings: unitBindings,
+			New: investmentUnitsStatementFor(current, false, scope, false),
+			Old: legacyRepositoryUnitsStatement(current, scope)},
+		{Name: "organization unit listing", Bindings: unitBindings, New: orgUnits, Old: orgUnits},
+		{Name: "organization mix", Bindings: boundReaderBindings(current), New: orgMix, Old: orgMix},
+		{Name: "team linked pull request mix", Bindings: boundReaderBindings(current), New: linked, Old: linked},
 	}
 }
 
-// RequestedUnitFilterDefects are the requested-repository unit filter with
-// one clause removed; the differential must tell each apart from the old
-// statement.
-func RequestedUnitFilterDefects() map[string][2]string {
+// RequestedReachDefects are the requested repository reach with one clause
+// removed; the differential must tell each apart from the old statement.
+func RequestedReachDefects() map[string][2]string {
 	return map[string][2]string{
 		"direct and fallback references dropped": {"has({ids:Array(String)}, r.1)", "0"},
-		"lookup references dropped":              {"(r.2, r.3))), refs)", "(r.2, r.3)) AND 0), refs)"},
+		"lookup references dropped":              {"(r.2, r.3)))", "(r.2, r.3)) AND 0)"},
 	}
 }
+
+const unitsCore = ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts"

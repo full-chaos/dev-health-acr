@@ -24,6 +24,7 @@ type splitDiffSeed struct {
 	direct clickhousedriver.Conn
 	at     time.Time
 	units  []string
+	rows   [][]any
 }
 
 func (s *splitDiffSeed) exec(statement string, args ...any) {
@@ -56,23 +57,38 @@ func (s *splitDiffSeed) unit(id string, computedAt, from, to time.Time, repoLabe
 	if repoLabel != "" {
 		repo = repoUUID(repoLabel)
 	}
-	s.exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		id, from, to, repo, effort, themes, map[string]float64{readers.BugfixSubcategoryKey: 0.25}, splitDiffEvidence(prs, issues), computedAt, splitDiffOrg)
+	s.rows = append(s.rows, []any{id, from, to, repo, effort, themes, map[string]float64{readers.BugfixSubcategoryKey: 0.25}, splitDiffEvidence(prs, issues), computedAt, splitDiffOrg})
 	if !slices.Contains(s.units, id) {
 		s.units = append(s.units, id)
 	}
 }
 
+func (s *splitDiffSeed) batch(statement string, rows [][]any) {
+	s.t.Helper()
+	b, err := s.direct.PrepareBatch(s.ctx, statement)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	for _, row := range rows {
+		if err := b.Append(row...); err != nil {
+			s.t.Fatal(err)
+		}
+	}
+	if err := b.Send(); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
 func pr(label string, number int) string { return fmt.Sprintf("%s#pr%d", repoUUID(label), number) }
 
-// The split statements (repository mix, repository unit listing,
-// organization unit listing, organization mix, team linked pull request mix)
-// return the same rows as their old text on one organization that holds every
-// reach rule: direct, issue-side github and gitlab, the repository fallback,
+// The repository mix and the repository unit listing (now on the requested
+// split) return the same rows as their old text on one organization that
+// holds every reach rule: direct, issue-side github and gitlab, the repository fallback,
 // an older version that reached a requested repository, a superseded unit, a
 // unit outside the membership run, ambiguous and multi-provider names,
 // unresolved and duplicate references. Every value is dyadic, so equal rows
-// are equal bytes whatever the summation order.
+// are equal bytes whatever the summation order. The organization statements
+// keep their text (TestWholeOrganizationSplitTextIsUnchanged).
 func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -141,14 +157,16 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		s.exec(`INSERT INTO work_unit_supersessions (org_id, superseded_work_unit_id, superseded_at) VALUES (?,?,?)`, splitDiffOrg, id, s.at)
 	}
 	s.unit("e16-outside-run", v2, in, inTo, "", 1000, risk, []string{pr("sd-r1", 60)}, nil)
+	s.batch(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)`, s.rows)
 	s.exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, splitDiffOrg, "run-1", s.at)
+	var members [][]any
 	for i, id := range s.units {
 		if id == "e16-outside-run" {
 			continue
 		}
-		s.exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
-			splitDiffOrg, "issue", fmt.Sprintf("n-%d", i), id, "theme", "feature_delivery", s.at, "run-1")
+		members = append(members, []any{splitDiffOrg, "issue", fmt.Sprintf("n-%d", i), id, "theme", "feature_delivery", s.at, "run-1"})
 	}
+	s.batch(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)`, members)
 	s.exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		splitDiffOrg, "github", "team-1", repoUUID("sd-r1"), "acme/r1", "exact", "native", uint8(1), uint16(100), int32(0), ts(2026, 1, 1, 0, 0, 0), nil, s.at)
 	s.exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -167,7 +185,12 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 	rows := func(name, statement string, ids []string, bindings []readers.Binding) []string {
 		t.Helper()
 		var out []string
-		err := readers.QueryOrgScopedNamed(ctx, query, "SplitDifferential", "SELECT formatRow('TSV', *) FROM (\n"+statement+"\n)", splitDiffOrg, ids,
+		columns := "*"
+		if strings.Contains(statement, "scope_unattributed_rows") {
+			// Array order is not served: the fact sorts both lists.
+			columns = "work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, arraySort(prs), unresolved_n, arraySort(unresolved_refs), scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows"
+		}
+		err := readers.QueryOrgScopedNamed(ctx, query, "SplitDifferential", "SELECT formatRow('TSV', "+columns+") FROM (\n"+statement+"\n)", splitDiffOrg, ids,
 			func(row readers.RowScanner) error {
 				var line string
 				if err := row.Scan(&line); err != nil {
@@ -189,7 +212,7 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		"organization mix":             {},
 		"team linked pull request mix": {"team-1"},
 	}
-	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 100000)
+	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 900)
 	if len(pairs) != len(idsFor) {
 		t.Fatalf("%d split statements, want the %d this test seeds for", len(pairs), len(idsFor))
 	}
@@ -198,22 +221,22 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		if !ok {
 			t.Fatalf("no ids for split statement %q", p.Name)
 		}
+		if p.Old == p.New {
+			if p.Name == "repository mix" || p.Name == "repository unit listing" {
+				t.Fatalf("%s: the old and new statements are the same text", p.Name)
+			}
+			continue
+		}
 		old := rows(p.Name+" (old)", p.Old, ids, p.Bindings)
 		got := rows(p.Name+" (new)", p.New, ids, p.Bindings)
-		if len(old) < 2 && p.Name != "organization mix" && p.Name != "team linked pull request mix" {
+		if len(old) < 10 {
 			t.Errorf("%s: the old statement returned %d rows; the fixture proves nothing", p.Name, len(old))
-		}
-		if len(old) == 0 {
-			t.Errorf("%s: the old statement returned no rows", p.Name)
 		}
 		if !slices.Equal(old, got) {
 			t.Errorf("%s: rows differ from the old statement\nold (%d):\n%s\nnew (%d):\n%s", p.Name, len(old), strings.Join(old, ""), len(got), strings.Join(got, ""))
 		}
 		t.Logf("%s: %d equal rows", p.Name, len(got))
-		if p.Name != "repository mix" && p.Name != "repository unit listing" {
-			continue
-		}
-		for defect, swap := range devhealthfacts.RequestedUnitFilterDefects() {
+		for defect, swap := range devhealthfacts.RequestedReachDefects() {
 			if !strings.Contains(p.New, swap[0]) {
 				t.Fatalf("%s: defect %q does not apply to the statement", p.Name, defect)
 			}

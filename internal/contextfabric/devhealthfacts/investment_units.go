@@ -86,11 +86,7 @@ func investmentOrgUnitsStatement(b factTimeBound, withCursor bool, scope members
 
 func investmentUnitsStatementFor(b factTimeBound, withCursor bool, scope membershipScope, organization bool) string {
 	memberships := []string{fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(0, b), 0)}
-	split := repoSplitCoreRequested
-	if organization {
-		split = repoSplitCoreScoped
-	}
-	core := split(memberships, " from_ts, to_ts,",
+	core := repoSplitCoreScoped(memberships, " from_ts, to_ts,",
 		",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) AS to_ts,\n\t\t\t\tgroupUniqArray(parsed.pr_number) AS prs,\n\t\t\t\tgroupUniqArray(parsed.ref_text) AS ref_texts", false, scope)
 	rowFilter := "WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}"
 	if organization {
@@ -105,12 +101,7 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 	OR (share = toFloat64({` + unitCursorShareParam + `:String}) AND (work_unit_id > {` + unitCursorIDParam + `:String}
 		OR (work_unit_id = {` + unitCursorIDParam + `:String} AND repo_uuid > {` + unitCursorRepoParam + `:String})))`
 	}
-	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
-FROM (
-	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
-		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
-		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
-	FROM (
+	rows := `
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
@@ -119,7 +110,16 @@ FROM (
 		FROM (
 ` + core + `		)
 	)
-	` + rowFilter + `
+	` + rowFilter
+	if !organization {
+		rows = "\n" + requestedSplitRows(memberships, false, scope, true) + "\t)"
+	}
+	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
+FROM (
+	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
+		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
+		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
+	FROM (` + rows + `
 )` + keyset + `
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
