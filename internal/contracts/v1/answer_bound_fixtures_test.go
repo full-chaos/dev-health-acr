@@ -511,8 +511,8 @@ const irreducibleAnswerBytes = 1023
 // 521555762 -> 521585712 (+29950): driver source_state_note at its 96 maximum on every driver.
 //
 // 521585712 -> 521657911 (+72199): the fact kind vocabulary gained security_alerts.
-// main + commitment (one more fact kind and one more census record): CI-measured, not yet pinned.
-const maximalAnswerBytes = 521657911
+// 521657911 -> 521729440 (+71529, CI-measured): the vocabulary gained commitment (+71189) and the census one record for team_project_ownership_commitment_v1 (+340).
+const maximalAnswerBytes = 521729440
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {

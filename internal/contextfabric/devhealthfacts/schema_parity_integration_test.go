@@ -153,6 +153,8 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		"proj-parity", orgID, "github", "PARITY", "Parity Project", uint8(1), "active", "", at)
 	seed("team_project_ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, "github", "CHAOS", "proj-parity", "PARITY", "native", at, nil, at)
+	// devhealthschema:not-a-production-replica the seeding block continues past the second window:
+	// INSERT rows into tables devhealthschema.DDL already created.
 	seed("projects", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, state_source, target_date, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"proj-commitment", orgID, "github", nil, "Commitment Project", uint8(1), "started", "github.project.state", at, "", at)
 	seed("work_items", `INSERT INTO work_items (work_item_id, org_id, repo_id, provider, type, status, title, project_id, created_at, due_at, sprint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
