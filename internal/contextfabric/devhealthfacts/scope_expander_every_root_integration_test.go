@@ -269,75 +269,6 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 	}
 
 	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
-	t.Run("team repositories diagnosis", func(t *testing.T) {
-		recorder := &recordingQueryClient{inner: query}
-		diagnosed := devhealthfacts.NewScopeExpander(recorder)
-		var request contextfabric.FactScopeExpansionRequest
-		for _, tc := range fixture.cases() {
-			if tc.name == "team repositories" {
-				request = tc.request
-			}
-		}
-		if _, err := diagnosed.ExpandFactScope(ctx, request); err != nil {
-			t.Fatalf("ExpandFactScope: %v", err)
-		}
-		captured, ok := recorder.find("argMin(source, source_rank) AS best_source")
-		if !ok {
-			t.Fatal("team repositories statement not sent")
-		}
-		variants := map[string]string{
-			"served":                   captured.statement,
-			"without":                  stripOriginArrays(captured.statement),
-			"groupArray+arrayDistinct": strings.Replace(captured.statement, "arraySort(groupUniqArray(origin_team_id))", "arraySort(arrayDistinct(groupArray(origin_team_id)))", 1),
-		}
-		for _, name := range []string{"served", "without", "groupArray+arrayDistinct"} {
-			statement := variants[name]
-			var lines []string
-			for attempt := 0; attempt < 3; attempt++ {
-				mark := serverNowMicros(t, ctx, direct)
-				rows, err := query.Query(ctx, statement, captured.bindings)
-				if err != nil {
-					t.Fatalf("%s: %v", name, err)
-				}
-				for rows.Next() {
-				}
-				_ = rows.Close()
-				if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-					t.Fatal(err)
-				}
-				profile, err := direct.Query(ctx, `SELECT concat('memory=', toString(memory_usage), ' peak_threads=', toString(peak_threads_usage),
-  ' arena_bytes=', toString(ProfileEvents['ArenaAllocBytes']), ' arena_chunks=', toString(ProfileEvents['ArenaAllocChunks']),
-  ' two_level=', toString(ProfileEvents['AggregationHashTablesInitializedAsTwoLevel']), ' prealloc=', toString(ProfileEvents['AggregationPreallocatedElementsInHashTables']),
-  ' read_rows=', toString(read_rows), ' result_rows=', toString(result_rows))
-FROM system.query_log WHERE event_time_microseconds > fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'argMin(source, source_rank) AS best_source') > 0
-ORDER BY event_time_microseconds DESC LIMIT 1`, mark)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for profile.Next() {
-					var line string
-					if err := profile.Scan(&line); err != nil {
-						t.Fatal(err)
-					}
-					lines = append(lines, line)
-				}
-				_ = profile.Close()
-			}
-			explain, err := query.Query(ctx, "EXPLAIN PIPELINE "+statement, captured.bindings)
-			var pipeline []string
-			if err == nil {
-				for explain.Next() {
-					var line string
-					_ = explain.Scan(&line)
-					pipeline = append(pipeline, line)
-				}
-				_ = explain.Close()
-			} else {
-				pipeline = append(pipeline, "explain failed: "+err.Error())
-			}
-			t.Errorf("DIAG teamRepositories %s: %s || pipeline: %s", name, strings.Join(lines, " | "), strings.Join(pipeline, " / "))
-		}
-	})
 	t.Run("memory", func(t *testing.T) {
 		recorder := &recordingQueryClient{inner: query}
 		recordingExpander := devhealthfacts.NewScopeExpander(recorder)
@@ -362,7 +293,7 @@ ORDER BY event_time_microseconds DESC LIMIT 1`, mark)
 					t.Fatalf("%s: no statement carrying %q was sent", statement.label, statement.fragment)
 				}
 				stripped := stripOriginArrays(captured.statement)
-				if strings.Contains(stripped, "arraySort(groupUniqArray(") || strings.Contains(stripped, "origin_ids") {
+				if strings.Contains(stripped, "groupUniqArray(p.id)") || strings.Contains(stripped, "groupUniqArray(origin_team_id)") || strings.Contains(stripped, "groupUniqArray(a.team_id)") || strings.Contains(stripped, "origin_ids") {
 					t.Fatalf("%s: arrays left after stripping:\n%s", statement.label, stripped)
 				}
 				baseMark := serverNowMicros(t, ctx, direct)
@@ -459,14 +390,29 @@ func (c *recordingQueryClient) find(fragment string) (capturedStatement, bool) {
 
 // stripOriginArrays removes the origin id array expressions (and the
 // work-item projection's masked copy) with their list comma, leaving the
-// statement as it was before the arrays were added.
+// statement as it was before the arrays were added. Only an array over an
+// origin column is removed: the statements carry other aggregates of the same
+// shape (the work-item authorization's repository lists) that must stay.
 func stripOriginArrays(statement string) string {
+	isOrigin := func(expression string) bool {
+		if strings.HasPrefix(expression, "if(authorized = 1, origin_ids,") {
+			return true
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(expression, "arraySort(groupUniqArray("), "))")
+		switch inner {
+		case "p.id", "a.origin_project_id", "origin_team_id", "a.team_id", "own.team_id":
+			return true
+		}
+		return strings.HasPrefix(inner, "concat(p.provider, ") && strings.HasSuffix(inner, "p.id)")
+	}
 	for _, open := range []string{"arraySort(groupUniqArray(", "if(authorized = 1, origin_ids,"} {
+		from := 0
 		for {
-			start := strings.Index(statement, open)
-			if start < 0 {
+			found := strings.Index(statement[from:], open)
+			if found < 0 {
 				break
 			}
+			start := from + found
 			depth, end := 0, start
 			for index := start; index < len(statement); index++ {
 				if statement[index] == '(' {
@@ -478,6 +424,10 @@ func stripOriginArrays(statement string) string {
 						break
 					}
 				}
+			}
+			if !isOrigin(statement[start:end]) {
+				from = end
+				continue
 			}
 			rest := strings.TrimLeft(statement[end:], " ")
 			if strings.HasPrefix(rest, "AS ") {
@@ -491,14 +441,17 @@ func stripOriginArrays(statement string) string {
 			before := strings.TrimRight(statement[:start], " \n\t")
 			if strings.HasSuffix(before, ",") {
 				statement = strings.TrimSuffix(before, ",") + statement[end:]
+				from = len(strings.TrimSuffix(before, ","))
 				continue
 			}
 			after := strings.TrimLeft(statement[end:], " \n\t")
 			if strings.HasPrefix(after, ",") {
 				statement = statement[:start] + strings.TrimLeft(strings.TrimPrefix(after, ","), " ")
+				from = start
 				continue
 			}
 			statement = statement[:start] + statement[end:]
+			from = start
 		}
 	}
 	return statement

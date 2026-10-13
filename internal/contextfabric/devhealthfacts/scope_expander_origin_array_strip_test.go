@@ -33,7 +33,14 @@ func TestStripOriginArraysLeavesEachExpanderStatementWellFormed(t *testing.T) {
 			t.Fatalf("%s: the served statement carries no origin array", statement.label)
 		}
 		stripped := stripOriginArrays(captured.statement)
-		for _, banned := range []string{"arraySort(groupUniqArray(", "origin_ids", "origin_team_ids", "origin_project_ids", "project_keys", ",,", ", ,", ",\nFROM", ", FROM", "SELECT ,", "population,\nFROM", "population, FROM"} {
+		// Every other aggregate stays: only the origin arrays go.
+		if strings.Count(captured.statement, "groupUniqArray")-strings.Count(stripped, "groupUniqArray") != strings.Count(captured.statement, "arraySort(groupUniqArray(")-strings.Count(stripped, "arraySort(groupUniqArray(") {
+			t.Fatalf("%s: stripping removed an aggregate that is not an origin array", statement.label)
+		}
+		if strings.Contains(captured.statement, "wia_project_repositories") && !strings.Contains(stripped, "AS wia_project_repositories") {
+			t.Fatalf("%s: stripping removed the work-item authorization's repository list", statement.label)
+		}
+		for _, banned := range []string{"groupUniqArray(p.id)", "groupUniqArray(a.origin_project_id)", "groupUniqArray(origin_team_id)", "groupUniqArray(a.team_id)", "groupUniqArray(own.team_id)", "groupUniqArray(concat(p.provider", "origin_ids", "origin_team_ids", "origin_project_ids", "project_keys", ",,", ", ,", ",\nFROM", ", FROM", "SELECT ,", "population,\nFROM", "population, FROM"} {
 			if at := strings.Index(stripped, banned); at >= 0 {
 				t.Fatalf("%s: stripped statement still holds %q near: %s", statement.label, banned, stripped[max(0, at-200):min(len(stripped), at+120)])
 			}
