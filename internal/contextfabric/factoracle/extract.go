@@ -498,10 +498,12 @@ func (t SeedTarget) query(ctx context.Context, database, statement string, body 
 // they would qualify are excluded from comparison by factPlan.
 // work_item_measure_capability qualifies the flow bug_completed_ratio and
 // story_points_completed, both excluded there; empty, the provider serves them
-// as capability_unknown.
+// as capability_unknown. team_project_ownership is read to decide whether a team
+// reaches repositories through an owned project; the venue's teams own none, so it
+// is created empty.
 //
 // devhealthschema:not-a-production-replica the name indexes devhealthschema.ProductionColumns; nothing physical is declared here.
-var seededEmptyTables = []string{"work_item_measure_capability"}
+var seededEmptyTables = []string{"work_item_measure_capability", "team_project_ownership"}
 
 // Seed creates the database and the extract tables, with the declared
 // production types and engines, and loads the rows. ClickHouse parses its own
