@@ -37,13 +37,26 @@ const requestedRepositoryLookups = `(
 							GROUP BY id
 						))`
 
-// requestedRepositoryReach is true when one of refs reaches a repository in
-// {ids} by the rule repoLookupJoin applies: a direct repository id, or a
-// (provider, name) lookup equal to a requested repository's own lookup row.
-func requestedRepositoryReach(refs string) string {
-	return `(hasAny(arrayMap(r -> r.1, arrayFilter(r -> r.1 != '', ` + refs + `)), {ids:Array(String)})
-							OR hasAny(arrayMap(r -> (r.2, r.3), arrayFilter(r -> r.1 = '', ` + refs + `)), ` + requestedRepositoryLookups + `))`
-}
+// referenceKeys are, per work-unit row, the parts of its references the
+// reach tests read, without building the full reference tuples: the direct
+// (repository id, PR number) pairs and the (provider, name, PR number)
+// lookups. They are the parts prRefsExpression parses, by the same patterns.
+const referenceKeys = `arrayMap(r -> (substring(r, 1, 36), substring(r, 40)),
+								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))) AS direct_refs,
+							arrayConcat(
+								arrayMap(r -> ('github', substring(r, 6, position(r, '#') - 6), substring(r, position(r, '#') + 1)),
+									arrayFilter(r -> match(r, '^ghpr:[^#]+#[0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)'))),
+								arrayMap(r -> ('gitlab', substring(r, 8, position(r, '!') - 8), substring(r, position(r, '!') + 1)),
+									arrayFilter(r -> match(r, '^gitlab:[^!]+![0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))
+							) AS lookup_refs`
+
+// requestedRepositoryReach is true when a row's references reach a
+// repository in {ids} by the rule repoLookupJoin applies: a direct repository
+// id, a (provider, name) lookup equal to a requested repository's own lookup
+// row, or, for a row with no reference, its own repository.
+const requestedRepositoryReach = `(hasAny(arrayMap(x -> x.1, direct_refs), {ids:Array(String)})
+								OR hasAny(arrayMap(x -> (x.1, x.2), lookup_refs), ` + requestedRepositoryLookups + `)
+								OR (empty(direct_refs) AND empty(lookup_refs) AND repo_id IS NOT NULL AND has({ids:Array(String)}, toString(repo_id))))`
 
 // requestedSplitRows returns, per window, kept work unit and requested
 // repository: win, work_unit_id, repo_uuid, c, n, effort_value,
@@ -67,13 +80,13 @@ func linkedPullRequestSplitRows(memberships []string, scope membershipScope, lin
 	return foldedSplitRows(memberships, false, scope, false, linked)
 }
 
-// linkedPullRequestReach is true when one of refs resolves to a linked
+// linkedPullRequestReach is true when a row's references resolve to a linked
 // (repository, pull request): a direct repository id with its number, or a
 // (provider, name, number) lookup equal to a linked repository's own lookup
-// row with the linked number.
-func linkedPullRequestReach(linked, refs string) string {
-	return `(hasAny(arrayMap(r -> (r.1, r.4), arrayFilter(r -> r.1 != '', ` + refs + `)), arrayMap(x -> (x.1, x.2), ` + linked + `))
-							OR hasAny(arrayMap(r -> (r.2, r.3, r.4), arrayFilter(r -> r.1 = '', ` + refs + `)), (
+// row with the linked number. A row's own repository names no pull request.
+func linkedPullRequestReach(linked string) string {
+	return `(hasAny(direct_refs, arrayMap(x -> (x.1, x.2), ` + linked + `))
+								OR hasAny(lookup_refs, (
 						SELECT groupUniqArray((rl.provider, rl.repo, lx.lp_pr)) FROM (
 							SELECT arrayJoin(` + linked + `) AS lp, lp.1 AS lp_repo, lp.2 AS lp_pr
 						) AS lx
@@ -84,9 +97,9 @@ func linkedPullRequestReach(linked, refs string) string {
 // file). With linked empty a unit is kept and expanded per requested
 // repository; otherwise per linked (repository, pull request).
 func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, unitColumns bool, linked string) string {
-	reaches := requestedRepositoryReach(repoRefsExpression)
+	reaches := requestedRepositoryReach
 	if linked != "" {
-		reaches = linkedPullRequestReach(linked, repoRefsExpression)
+		reaches = linkedPullRequestReach(linked)
 	}
 	wins := "arrayFilter(w -> w >= 0, [" + strings.Join(memberships, ", ") + "])"
 	if spanSentinel {
@@ -142,8 +155,9 @@ FROM (
 					FROM (
 						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS unit_bugfix_share,
-							` + prRefsExpression + ` AS pr_refs,
-							` + reaches + ` AS reaches
+							` + referenceKeys + `,
+							` + reaches + ` AS reaches,
+							if(reaches, ` + prRefsExpression + `, []) AS pr_refs
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 					)

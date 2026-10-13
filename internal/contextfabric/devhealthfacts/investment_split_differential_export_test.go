@@ -195,13 +195,14 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 func ReachDefects(statement string) map[string][2]string {
 	if statement == "team linked pull request mix" {
 		return map[string][2]string{
-			"direct references dropped": {"(hasAny(arrayMap(r -> (r.1, r.4),", "(0 AND hasAny(arrayMap(r -> (r.1, r.4),"},
-			"lookup references dropped": {"OR hasAny(arrayMap(r -> (r.2, r.3, r.4),", "OR 0 AND hasAny(arrayMap(r -> (r.2, r.3, r.4),"},
+			"direct references dropped": {"(hasAny(direct_refs,", "(0 AND hasAny(direct_refs,"},
+			"lookup references dropped": {"OR hasAny(lookup_refs,", "OR 0 AND hasAny(lookup_refs,"},
 		}
 	}
 	return map[string][2]string{
-		"direct and fallback references dropped": {"(hasAny(arrayMap(r -> r.1,", "(0 AND hasAny(arrayMap(r -> r.1,"},
-		"lookup references dropped":              {"OR hasAny(arrayMap(r -> (r.2, r.3),", "OR 0 AND hasAny(arrayMap(r -> (r.2, r.3),"},
+		"direct references dropped":       {"(hasAny(arrayMap(x -> x.1, direct_refs),", "(0 AND hasAny(arrayMap(x -> x.1, direct_refs),"},
+		"lookup references dropped":       {"OR hasAny(arrayMap(x -> (x.1, x.2), lookup_refs),", "OR 0 AND hasAny(arrayMap(x -> (x.1, x.2), lookup_refs),"},
+		"own repository fallback dropped": {"OR (empty(direct_refs)", "OR 0 AND (empty(direct_refs)"},
 	}
 }
 
