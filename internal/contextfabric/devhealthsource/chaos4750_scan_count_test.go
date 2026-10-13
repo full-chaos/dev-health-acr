@@ -49,19 +49,13 @@ import (
 // catch a regression back toward per-arm embedding, not by counting arms
 // (which stayed meaningful, just fewer of them).
 //
-// Six as of CHAOS-9546: the retraction arm's ownership read is gated on a scalar
-// that reads the ambiguous-key source once more (one identity read + one
-// watermark read, a 47-row table at the largest prod org), so the four above
-// became six while the ownership table, the large one, is read once per arm
-// instead of twice.
-//
 // The name says Four rather than Six as of the v0.6.3 pin: a test whose
 // name states a number it no longer asserts reads as coverage of something
 // it does not cover.
-func TestCHAOS4750_ProjectTeamsScansProjectsSixTimesNotTwelve(t *testing.T) {
+func TestCHAOS4750_ProjectTeamsScansProjectsFourTimesNotTwelve(t *testing.T) {
 	t.Parallel()
 	statement := projectTeamsStatement(cursorState{})
-	if got, want := strings.Count(statement, "FROM projects FINAL"), 6; got != want {
+	if got, want := strings.Count(statement, "FROM projects FINAL"), 4; got != want {
 		t.Errorf("`projects FINAL` scanned %d times, want %d -- see this test's doc comment for the accounting\n%s", got, want, statement)
 	}
 }
