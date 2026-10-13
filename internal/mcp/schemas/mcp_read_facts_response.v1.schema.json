@@ -222,7 +222,17 @@
             "properties": {
               "outcome": {
                 "type": "string",
-                "description": "The scope-expansion decision for this row, for example policy_unavailable. An open vocabulary: new values are additive."
+                "description": "The scope-expansion decision for this row. Open vocabulary; documented values: not_needed, policy_unavailable, attempted_empty, target_kind_mismatch, expanded, expanded_partial, failed, matched_unauthorized. A client must tolerate values it does not know.",
+                "x-documented-values": [
+                  "not_needed",
+                  "policy_unavailable",
+                  "attempted_empty",
+                  "target_kind_mismatch",
+                  "expanded",
+                  "expanded_partial",
+                  "failed",
+                  "matched_unauthorized"
+                ]
               },
               "policy": {
                 "type": "string"

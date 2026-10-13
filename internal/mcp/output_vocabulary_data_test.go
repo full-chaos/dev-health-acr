@@ -189,6 +189,15 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			name:           "expansion.outcome",
+			kind:           vocabAdditive,
+			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
+			sites:          []string{"read_facts:coverage.items.expansion.outcome"},
+			// schema: "not_needed", "policy_unavailable", "attempted_empty", "target_kind_mismatch", "expanded", "expanded_partial", "failed", "matched_unauthorized"
+			goSet:      strs(contextfabric.FactScopeNotNeeded, contextfabric.FactScopePolicyUnavailable, contextfabric.FactScopeAttemptedEmpty, contextfabric.FactScopeTargetKindMismatch, contextfabric.FactScopeExpanded, contextfabric.FactScopeExpandedPartial, contextfabric.FactScopeFailed, contextfabric.FactScopeMatchedUnauthorized),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:  "status#3",
 			kind:  vocabFrozen,
 			why:   "state-machine",
