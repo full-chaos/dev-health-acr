@@ -574,25 +574,32 @@ var rankingTableFieldOrder = []string{
 
 const rankingRowSubjectKindKey = "subject_kind"
 
-// rankingRowSubjectNoun is the display noun of the row's own subject kind.
-// The structured keys keep their team_ names; only the served wording follows
-// the kind. A row with no or an unknown kind keeps "team".
+// rankingRowSubjectNouns is the display noun per cohort subject kind. The
+// structured keys keep their team_ names; only the served wording follows
+// the kind.
+var rankingRowSubjectNouns = map[contractsv1.ContextFabricSubjectKind]string{
+	contractsv1.ContextFabricSubjectTeam:        "team",
+	contractsv1.ContextFabricSubjectProject:     "project",
+	contractsv1.ContextFabricSubjectRepository:  "repository",
+	contractsv1.ContextFabricSubjectIncident:    "incident",
+	contractsv1.ContextFabricSubjectPullRequest: "pull request",
+	contractsv1.ContextFabricSubjectDeployment:  "deployment",
+}
+
+// rankingRowNeutralNoun is what a row with no kind, or a kind without a
+// noun, reads as: a wrong specific word on a served sentence is worse than a
+// neutral one.
+const rankingRowNeutralNoun = "subject"
+
 func rankingRowSubjectNoun(row contractsv1.ContextFabricClaimedFactRow) string {
 	kind, ok := row.Fields[rankingRowSubjectKindKey]
 	if !ok || kind.String == nil {
-		return "team"
+		return rankingRowNeutralNoun
 	}
-	switch contractsv1.ContextFabricSubjectKind(*kind.String) {
-	case contractsv1.ContextFabricSubjectProject:
-		return "project"
-	case contractsv1.ContextFabricSubjectRepository:
-		return "repository"
-	case contractsv1.ContextFabricSubjectIncident:
-		return "incident"
-	case contractsv1.ContextFabricSubjectPullRequest:
-		return "pull request"
+	if noun, known := rankingRowSubjectNouns[contractsv1.ContextFabricSubjectKind(*kind.String)]; known {
+		return noun
 	}
-	return "team"
+	return rankingRowNeutralNoun
 }
 
 // rankingTableRowLine renders one Rows-panel row as a single compact line.
