@@ -1,6 +1,9 @@
 package contextfabric
 
 import (
+	"log/slog"
+	"strings"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -60,6 +63,12 @@ func MemberStatusFilterOf(frame *QuestionFrame) (SubjectKind, string) {
 type MemberStatusOutsideSet struct {
 	Kind  SubjectKind
 	Count int
+	// Filtered is true when the graph read applied the status filter, and
+	// Reached when the anchor reached at least one member of Kind.
+	Filtered bool
+	Reached  bool
+	// ReachCut: the reach probe was cut, so a false Reached is unknown.
+	ReachCut bool
 	// AtLeast: the count read was cut, so Count is a lower bound.
 	AtLeast bool
 }
@@ -213,4 +222,78 @@ func statusMeasuredZero(frame *QuestionFrame, cohort *Cohort) bool {
 // graph's key form.
 func callerOrganizationSubject(principal storage.Principal) SubjectRef {
 	return SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:" + principal.OrgID, Label: principal.OrgID}
+}
+
+// coverageReason is the closed reason phrase for the first degrading coverage
+// detail of a result, or the cause a ledger row names, or the no-cause phrase.
+func coverageReason(result InvestigationResult, graph Coverage) string {
+	for _, detail := range append(append([]CoverageDetail{}, graph.Details...), result.Coverage.Details...) {
+		if detail.Degrading {
+			if reason := contractsv1.ContextFabricCoverageCauseReason(detail.Code); reason != "" {
+				return reason
+			}
+		}
+	}
+	for _, row := range result.Completeness.Outcomes {
+		if reason := contractsv1.ContextFabricCoverageCauseReason(row.CauseCoverage); reason != "" {
+			return reason
+		}
+	}
+	return contractsv1.ContextFabricNoCoverageCauseReason
+}
+
+// withMemberStatusNoneReached states that the status filter ran and the anchor
+// reached no member of the kind, so the empty set is not read as members
+// holding another status.
+func withMemberStatusNoneReached(result InvestigationResult, outside MemberStatusOutsideSet, cut MemberStatusPoolCut, cohort *Cohort, anchorKind SubjectKind) InvestigationResult {
+	if !outside.Filtered || outside.Reached || outside.ReachCut || outside.AtLeast || cut.Kind != "" || cohort != nil {
+		return result
+	}
+	return withServiceLimitation(result, contractsv1.ContextFabricMemberStatusNoneReachedLimitation(string(outside.Kind), string(anchorKind)))
+}
+
+// withMemberStatusNotComputed states that a status question over projects or
+// incidents was answered without any read applying the status.
+func withMemberStatusNotComputed(result InvestigationResult, frame *QuestionFrame, graph Coverage) InvestigationResult {
+	if result.Status == InvestigationComplete || result.Status == InvestigationClarificationRequired {
+		return result
+	}
+	kind, _ := MemberStatusFilterOf(frame)
+	if kind == "" || (result.Cohort != nil && result.Cohort.Kind == kind) {
+		return result
+	}
+	for _, limitation := range result.Limitations {
+		if contractsv1.IsContextFabricMemberStatusLimitation(limitation) && !strings.Contains(limitation, "outside the known set") {
+			return result
+		}
+	}
+	return withServiceLimitation(result, contractsv1.ContextFabricMemberStatusNotComputedLimitation(string(kind), coverageReason(result, graph)))
+}
+
+// withDegradedLimitationFallback is the safety net: a partial or degraded
+// answer is never served with an empty limitations list. Reaching it means a
+// degraded exit has no limitation of its own, so it logs.
+func withDegradedLimitationFallback(result InvestigationResult) InvestigationResult {
+	if (result.Status != InvestigationPartial && result.Status != InvestigationDegraded) || len(result.Limitations) > 0 {
+		return result
+	}
+	reason := coverageReason(result, Coverage{})
+	slog.Default().Warn("context_fabric: a degraded answer reached assembly without a limitation of its own",
+		"status", SanitizeLogAttr(string(result.Status)), "reason", SanitizeLogAttr(reason))
+	return withServiceLimitation(result, contractsv1.ContextFabricDegradedWithoutLimitation(string(result.Status), reason))
+}
+
+func withServiceLimitation(result InvestigationResult, sentence string) InvestigationResult {
+	if sentence == "" {
+		return result
+	}
+	for _, limitation := range result.Limitations {
+		if limitation == sentence {
+			return result
+		}
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	return result
 }

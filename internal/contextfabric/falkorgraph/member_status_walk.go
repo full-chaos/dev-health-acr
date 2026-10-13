@@ -125,6 +125,8 @@ type memberStatusWalk struct {
 	// reached: the anchor reaches at least one authorized member of the kind,
 	// whatever its status.
 	reached bool
+	// reachCut: the reach probe stopped at its bound, so a false reached is unknown.
+	reachCut bool
 	// poolCut: the member read stopped with rows unread that could hold the
 	// status, so the status was decided within the first read members only.
 	poolCut bool
@@ -155,6 +157,7 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	w.read += other.read
 	w.kept += other.kept
 	w.reached = w.reached || other.reached
+	w.reachCut = w.reachCut || other.reachCut
 	w.poolCut = w.poolCut || other.poolCut
 	if other.pool >= 0 {
 		w.pool = max(w.pool, 0) + other.pool
@@ -329,10 +332,11 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 	if !out.status.reached {
 		probe := unfiltered
 		probe.projected = true
-		hits, _, err := a.walkStepHits(ctx, key, orgID, frontier, probe, temporal, budget)
+		hits, reachCut, err := a.walkStepHits(ctx, key, orgID, frontier, probe, temporal, budget)
 		if err != nil {
 			return err
 		}
+		out.status.reachCut = reachCut
 		for _, h := range hits {
 			if state.authorizedHit(hop, h) {
 				out.status.reached = true
