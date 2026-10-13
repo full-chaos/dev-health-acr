@@ -984,10 +984,14 @@ import (
 // aggregate scope of a team or project fact whose capability declares no
 // subject reference. A stored answer can differ.
 //
-// v195 -> v196: a team cohort answer to a blockers question now carries each
+// v195 -> v196: a partial or degraded answer is never served with an empty
+// limitations list; a status question over projects or incidents that reached
+// no member, or whose status no read applied, says which.
+//
+// v196 -> v197: a team cohort answer to a blockers question now carries each
 // team's blocked work item count as a driver with a minted claim. An answer
-// saved under v195 has none.
-const QueryVersion = "devhealthfacts.clickhouse.v196"
+// saved under v196 has none.
+const QueryVersion = "devhealthfacts.clickhouse.v197"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
