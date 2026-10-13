@@ -1071,7 +1071,7 @@ import (
 // linked pull requests). The rows are the same; a sum may differ from a v211
 // answer in its last digits (another summation order), and on two versions of
 // one unit with equal computed_at the version kept can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v212"
+const QueryVersion = "devhealthfacts.clickhouse.v213"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
