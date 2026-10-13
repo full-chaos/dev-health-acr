@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/mcp/guide"
 	"strings"
 	"testing"
 
@@ -66,4 +67,19 @@ func TestServedInstructionsForACallerWithoutInvestigateQuestionNameItNowhere(t *
 	require.NotContains(t, text, "investigate_question")
 	require.Contains(t, text, "call no model and spend no model budget")
 	require.NotContains(t, listedToolNames(t, session), toolInvestigateQuestion)
+}
+
+func TestServedQuestionGuideLeadsWithTheDataToolsBeforeInvestigateQuestion(t *testing.T) {
+	cfg, caller := dataFirstCaller(t, true)
+	session := connectedClientForCaller(t, cfg, caller)
+	read, err := readResource(t, session, guide.URIQuestions)
+	require.NoError(t, err)
+	require.Len(t, read.Contents, 1)
+	text := read.Contents[0].Text
+
+	data := strings.Index(text, "start with the data tools that `tools/list` shows (`data_catalog`, `find_subjects`, `read_facts`, `read_relationships`, `run_operation`")
+	first := strings.Index(text, "`investigate_question`")
+	require.GreaterOrEqual(t, data, 0)
+	require.Less(t, data, first, "the guide names investigate_question before the data tools")
+	require.Contains(t, text, "they call no model and spend no model budget")
 }
