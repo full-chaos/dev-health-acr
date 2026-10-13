@@ -21,4 +21,4 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - run: go test -timeout 20m -count=1 -v -run '^(TestLiveMembershipStatementRunsPerTick|TestLiveMembershipStatementDuration)$' ./internal/contextfabric/devhealthsource/ 2>&1 | grep -E "SLOPE|^(---|ok|FAIL|PASS)|code:|_test.go|panic|want" | head -80
+      - run: go test -timeout 20m -count=1 -v -run '^TestLiveMembershipStatementDuration$' ./internal/contextfabric/devhealthsource/ 2>&1 | grep -E "SLOPE|^(---|ok|FAIL|PASS)|code:|_test.go|panic|want" | head -80

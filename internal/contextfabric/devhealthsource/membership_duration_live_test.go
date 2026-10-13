@@ -40,7 +40,11 @@ func TestLiveMembershipStatementDuration(t *testing.T) {
 		} {
 			for i := 0; i < 7; i++ {
 				comment := fmt.Sprintf("dur cur=%s %s", cur.name, name)
-				rows, err := query.Query(ctx, "SELECT count() FROM ("+sql+") SETTINGS log_comment='"+comment+"'", bindings)
+				settings := ""
+				if name == "pruned_1_thread" {
+					settings = ", max_threads = 1"
+				}
+				rows, err := query.Query(ctx, "SELECT count() FROM ("+sql+") SETTINGS log_comment='"+comment+"'"+settings, bindings)
 				if err != nil {
 					t.Fatalf("%s: %v", comment, err)
 				}
