@@ -357,6 +357,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), projectStatusDriverCandidates(candidates)...)
 		}
 	}
+	if graphContext.Cohort != nil && clientSynthesisRequested(request) {
+		if blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, nil, nil, synthesisAllocation, 0); len(blockers.Drivers) > 0 {
+			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), teamBlockersDriverCandidates(blockers.Drivers)...)
+		}
+	}
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: inputGraph, Facts: facts,
@@ -396,6 +401,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// The raw draft, before assembly writes to it, kept for the member cut.
 		draft := copyResultDeep(result)
 		pending.Draft = &draft
+	}
+	for index := range result.Drivers {
+		result.Drivers[index].Rank = 0
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -711,6 +719,31 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			}
 		}
 	}
+	if graphContext.Cohort != nil {
+		narrationSpent := 0
+		if pending.CohortNarration != nil {
+			narrationSpent = 2 * pending.CohortNarration.JudgmentsEmitted
+		}
+		blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation, narrationSpent)
+		pending.TeamBlockersDrivers = blockers.Event
+		if len(blockers.Drivers) > 0 || len(blockers.CoveredRanks) > 0 || blockers.Limitation != "" {
+			if err := validateMintedClaimsGrounded(blockers.Claims, facts.Facts); err != nil {
+				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			}
+			for index := range result.Drivers {
+				if rank, ranked := blockers.CoveredRanks[result.Drivers[index].DriverID]; ranked {
+					result.Drivers[index].Rank = rank
+				}
+			}
+			result.Drivers = append(result.Drivers, blockers.Drivers...)
+			result.ClaimedFacts = append(result.ClaimedFacts, blockers.Claims...)
+			if blockers.Limitation != "" {
+				composed, displaced := appendBoundedLimitations(result.Limitations, []string{blockers.Limitation})
+				result.Limitations = composed
+				result.LimitationsDisplaced += displaced
+			}
+		}
+	}
 	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
 	// above is deliberate, not an accident of layout.
 	//
@@ -909,6 +942,7 @@ type assemblyTelemetry struct {
 	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
 	CohortNarration         *CohortDriverNarrationEvent
 	ProjectStatusDrivers    *ProjectStatusDriverEvent
+	TeamBlockersDrivers     *TeamBlockersDriverEvent
 	// CohortRanked is seeded by the engine from the pre-synthesis ranking and
 	// REPLACED by stage 3 when a retry re-ranks a narrowed cohort, so the
 	// event published always describes the cohort actually served.
@@ -975,6 +1009,9 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 	}
 	if e.telemetry != nil && pending.ProjectStatusDrivers != nil {
 		e.telemetry.RecordProjectStatusDrivers(ctx, principal, *pending.ProjectStatusDrivers)
+	}
+	if e.telemetry != nil && pending.TeamBlockersDrivers != nil {
+		e.telemetry.RecordTeamBlockersDrivers(ctx, principal, *pending.TeamBlockersDrivers)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
 	e.recordCommitKeptByNoMemberFound(ctx, principal, pending.CommitKeptByNoMemberFound)
