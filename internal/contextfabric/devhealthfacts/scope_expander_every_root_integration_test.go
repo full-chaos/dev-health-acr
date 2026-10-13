@@ -176,6 +176,20 @@ func (f everyRootFixture) cases() []everyRootCase {
 	}
 }
 
+// everyRootStatementFragments names each expander statement by a fragment its
+// text carries with or without the origin id arrays.
+// devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows; they declare no table.
+var everyRootStatementFragments = []struct{ label, table, fragment string }{
+	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)"},
+	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history"},
+	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source"},
+	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id"},
+	{"projectWorkItems", "work_items", "p.id)) AS origin_id"},
+	{"teamOwnedRepositoryCandidates", "team_repo_ownership", "min(own.team_id)"},
+	{"projectLinkedRepositories", "work_items", "AS link_state"},
+	{"projectOwningTeams", "team_project_ownership", "AS project_key, ifNull(any(t.name)"},
+}
+
 // One dataset, every changed statement: each names every requested origin
 // that reached a target and no origin the request did not name; read_facts
 // on the real expander serves a work item two teams reach once, naming both;
@@ -254,26 +268,29 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 
 	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
 	t.Run("memory", func(t *testing.T) {
-		read := func() statementMemory {
+		read := func() map[string]uint64 {
 			mark := serverNowMicros(t, ctx, direct)
 			for _, tc := range fixture.cases() {
 				if _, err := expander.ExpandFactScope(ctx, tc.request); err != nil {
 					t.Fatalf("%s: ExpandFactScope: %v: %s", tc.name, err, readFailureCause(err))
 				}
 			}
-			measured := statementMemory{}
-			// devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows; they declare no table.
-			for _, table := range []string{"work_items", "team_repo_ownership", "team_project_ownership"} {
-				for hash, peak := range statementMemorySince(t, ctx, direct, statementFilter{Table: table, QueryContains: "arraySort(groupUniqArray("}, mark) {
-					measured[hash] = peak
+			peaks := map[string]uint64{}
+			for _, statement := range everyRootStatementFragments {
+				for _, peak := range statementMemorySince(t, ctx, direct, statementFilter{Table: statement.table, QueryContains: statement.fragment}, mark) {
+					if peak > peaks[statement.label] {
+						peaks[statement.label] = peak
+					}
 				}
 			}
-			return measured
+			return peaks
 		}
 		read()
 		small := read()
 		fillEveryRootOrganization(t, ctx, direct, fixture, "large", 200_000)
 		large := read()
-		assertStatementMemoryFollowsEvidence(t, ctx, direct, "every-root expansion statements", small, large, len(fixture.cases()))
+		for _, statement := range everyRootStatementFragments {
+			t.Errorf("PROBE %s small=%d large=%d", statement.label, small[statement.label], large[statement.label])
+		}
 	})
 }
