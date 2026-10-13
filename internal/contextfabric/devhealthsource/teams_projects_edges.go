@@ -522,7 +522,7 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 }
 
 func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger, ingest bool) ([]candidate, bool, error) {
-	statement := membershipStatement(cursor, ingest, true)
+	statement := membershipStatement(cursor, ingest, false)
 	fetchRows := fetch
 	if ingest {
 		fetchRows = fetchIngest
