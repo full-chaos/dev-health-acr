@@ -31,7 +31,7 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -70,13 +70,25 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
 SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
 		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryFillerItems))
+	for _, blocked := range []string{"blocked-repo", "blocked-project"} {
+		exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at) VALUES (?, ?, ?, ?, ?)`,
+			blockerMemoryOrg, "blocker-open", blocked, "blocks", at)
+	}
+	exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at)
+SELECT ?, 'blocker-open', concat('unrelated-target-', toString(number)), 'blocks', ? FROM numbers(?)`,
+		blockerMemoryOrg, at, uint64(50_000))
+	exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at)
+SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), concat('filler-', repeat('x', 96), '-', toString(number + 1)), 'relates', ? FROM numbers(?)`,
+		blockerMemoryOrg, at, uint64(blockerMemoryFillerItems))
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
+	var lastAge statementMemory
 	read := func() (statementMemory, contextfabric.FactProviderResult, error) {
 		mark := serverNowMicros(t, ctx, direct)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: blockerMemoryOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
+		lastAge = statementMemorySince(t, ctx, direct, statementFilter{Table: "work_item_dependencies", QueryContains: "start_unix IS NOT NULL"}, mark)
 		return statementMemorySince(t, ctx, direct, statementFilter{Table: "work_item_dependencies"}, mark), result, err
 	}
 	if _, _, err := read(); err != nil {
@@ -87,8 +99,17 @@ SELECT concat('filler-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler'
 SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
 		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryMoreFillerItems))
 	large, largeResult, largeErr := read()
-	// The roll-up, the totals and the unlinked count run on every read.
-	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 3)
+	// The roll-up, the totals, the oldest age and the unlinked count run on every read.
+	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 4)
+	for hash, peak := range large {
+		t.Logf("team blocker statement %d peak memory: %d bytes (%.1f MiB) against the 256 MiB API cap", hash, peak, float64(peak)/(1<<20))
+	}
+	if len(lastAge) != 1 {
+		t.Fatalf("the oldest-age statement was measured %d times, want 1: the measurement did not happen", len(lastAge))
+	}
+	for hash, peak := range lastAge {
+		t.Logf("team blocker OLDEST-AGE statement %d peak memory: %d bytes (%.1f MiB) against the 256 MiB API cap", hash, peak, float64(peak)/(1<<20))
+	}
 	for _, read := range []struct {
 		result contextfabric.FactProviderResult
 		err    error
@@ -113,7 +134,7 @@ func TestTeamBlockerFactsRefuseAnEndpointWithAnUnauthorizedSiblingRowOnRealClick
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {

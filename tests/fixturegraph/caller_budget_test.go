@@ -15,6 +15,9 @@ func jsonLen(v any) int {
 }
 
 func synthesisInputOf(d doc) map[string]any {
+	if in, ok := d["synthesis_input"].(map[string]any); ok {
+		return in
+	}
 	in, _ := structured(d).(map[string]any)["synthesis_input"].(map[string]any)
 	return in
 }
@@ -74,7 +77,7 @@ ORDER BY p.name LIMIT 1`, sqlStr(orgID(t))))
 	if isErr || synthesisInputOf(whole) == nil {
 		t.Fatalf("the generous-budget call carries no synthesis_input: %.1500s", raw)
 	}
-	wholeSize := jsonLen(structured(whole))
+	wholeSize := jsonLen(whole)
 	t.Logf("whole structured response %d bytes, synthesis_input %d bytes", wholeSize, jsonLen(synthesisInputOf(whole)))
 	// One budget the whole answer cannot fit, one it can.
 	over, fits := wholeSize-2000, wholeSize+25000
@@ -89,7 +92,7 @@ ORDER BY p.name LIMIT 1`, sqlStr(orgID(t))))
 			continue
 		}
 		served++
-		if size := jsonLen(structured(d)); size > budget {
+		if size := jsonLen(d); size > budget {
 			t.Errorf("budget %d: served %d bytes, over the caller budget", budget, size)
 		}
 	}

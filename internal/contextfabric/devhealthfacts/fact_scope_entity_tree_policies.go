@@ -57,7 +57,7 @@ func (e *ScopeExpander) expandEntityTree(ctx context.Context, orgID string, requ
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
 		targets, targetBasis, targetRoot, authCounts := authorizeRepositories(request.Principal, repos)
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetRoot: targetRoot, Counts: mergeCounts(counts, authCounts)}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: mergeCounts(counts, authCounts)}, nil
 
 	case contextfabric.FactScopePolicyProjectIssuePullRequestContinuousIntegration,
 		contextfabric.FactScopePolicyProjectIssuePullRequestDeployments:
@@ -69,7 +69,7 @@ func (e *ScopeExpander) expandEntityTree(ctx context.Context, orgID string, requ
 		return contextfabric.FactScopeExpansionResult{
 			Targets: targets, TargetBasis: targetBasis,
 			TargetAttributionSource: repositoryAttributionSources(repos, targets),
-			TargetRoot:              targetRoot, Counts: mergeCounts(counts, authCounts),
+			TargetRoot:              targetRoot.first(), TargetRoots: targetRoot, Counts: mergeCounts(counts, authCounts),
 		}, nil
 
 	case contextfabric.FactScopePolicyProjectIssuePullRequestIncidents:
@@ -96,14 +96,14 @@ func (e *ScopeExpander) expandEntityTree(ctx context.Context, orgID string, requ
 		incidentCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
 		incidentCounts.UnknownAttributionSourceCount += repoCounts.UnknownAttributionSourceCount
 		incidentCounts.Truncated = incidentCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: incidentCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: incidentCounts}, nil
 
 	case contextfabric.FactScopePolicyProjectTeamOwnershipOperationalDeficiencies:
 		targets, targetRoot, counts, err := e.projectOwningTeams(ctx, request.Principal, orgID, request.Origins, limit)
 		if err != nil {
 			return contextfabric.FactScopeExpansionResult{}, err
 		}
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetRoot: targetRoot, Counts: counts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: counts}, nil
 	}
 	return contextfabric.FactScopeExpansionResult{}, fmt.Errorf("devhealthfacts: scope expander does not implement policy %q", request.Policy)
 }
@@ -119,7 +119,7 @@ func (e *ScopeExpander) teamOwnedRepositoryCandidates(ctx context.Context, orgID
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	limitPlusOne := limit + 1
-	statement := `SELECT own.repo_key, ifNull(any(r.repo), ''), min(own.team_id)
+	statement := `SELECT own.repo_key, ifNull(any(r.repo), ''), min(own.team_id), arraySort(groupUniqArray(own.team_id))
 FROM ` + ownedRepositoriesSource(` AND team_id IN {team_ids:Array(String)}`+ownershipValidityPredicate(factTimeBound{})) + ` AS own
 LEFT JOIN (SELECT toString(id) AS repo_key, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS r ON r.repo_key = own.repo_key
 GROUP BY own.repo_key
@@ -139,7 +139,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	counts := contextfabric.FactScopeExpansionCounts{}
 	for rows.Next() {
 		var repoID, repoSlug, originTeamID string
-		if err := rows.Scan(&repoID, &repoSlug, &originTeamID); err != nil {
+		var originTeamIDs []string
+		if err := rows.Scan(&repoID, &repoSlug, &originTeamID, &originTeamIDs); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		if repoID == zeroRepositoryID || repoSlug == "" {
@@ -149,6 +150,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		counts.CandidateCount++
 		candidates = append(candidates, repositoryCandidate{
 			repoID: repoID, repoSlug: repoSlug, originRoot: originsByID[originTeamID],
+			originRoots: originRootsOf(originsByID[originTeamID], originTeamIDs, originsByID),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -199,7 +201,8 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
        min(p.id),
        toUInt8(max(l.link_rank)),
        argMax(ifNull(l.provenance, ''), l.link_rank),
-       toInt64(uniqExact(w.work_item_id))
+       toInt64(uniqExact(w.work_item_id)),
+       arraySort(groupUniqArray(p.id))
 FROM work_items AS w FINAL
 INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
 LEFT JOIN ` + issueLinkRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
@@ -226,7 +229,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		var linkState, rank uint8
 		var repoID, repoSlug, originProjectID, tier string
 		var issues int64
-		if err := rows.Scan(&linkState, &repoID, &repoSlug, &originProjectID, &rank, &tier, &issues); err != nil {
+		var originProjectIDs []string
+		if err := rows.Scan(&linkState, &repoID, &repoSlug, &originProjectID, &rank, &tier, &issues, &originProjectIDs); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		groups++
@@ -243,6 +247,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			counts.CandidateCount++
 			candidates = append(candidates, repositoryCandidate{
 				repoID: repoID, repoSlug: repoSlug, attributionSource: tier, originRoot: originsByID[originProjectID],
+				originRoots: originRootsOf(originsByID[originProjectID], originProjectIDs, originsByID),
 			})
 		}
 	}
@@ -258,7 +263,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 // edge repository is one the caller may read. An incident that also names an
 // unauthorized or unresolvable repository is dropped whole and counted:
 // admitting it would expose a repository the caller was never granted.
-func (e *ScopeExpander) incidentsForRepositories(ctx context.Context, principal storage.Principal, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) incidentsForRepositories(ctx context.Context, principal storage.Principal, orgID string, repos []repositoryCandidate, limit int) ([]contextfabric.SubjectRef, map[string]string, targetRootSet, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
 		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
@@ -287,7 +292,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	byRepo := repoCandidateIndex(repos)
 	var targets []contextfabric.SubjectRef
 	var targetSource map[string]string
-	var targetRoot map[string]contextfabric.SubjectRef
+	var targetRoot targetRootSet
 	counts := contextfabric.FactScopeExpansionCounts{}
 	scanned := 0
 	for rows.Next() {
@@ -301,14 +306,18 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		sort.Strings(edgeRepos)
 		allAuthorized := len(edgeRepos) > 0
 		var reaching repositoryCandidate
+		var reachingRoots []contextfabric.SubjectRef
 		for _, edgeRepo := range edgeRepos {
 			repoID, slug, _ := strings.Cut(edgeRepo, "|")
 			if slug == "" || !authorizedForRepository(principal, slug) {
 				allAuthorized = false
 				break
 			}
-			if candidate, ok := byRepo[repoID]; ok && reaching.repoID == "" {
-				reaching = candidate
+			if candidate, ok := byRepo[repoID]; ok {
+				if reaching.repoID == "" {
+					reaching = candidate
+				}
+				reachingRoots = append(reachingRoots, candidate.roots()...)
 			}
 		}
 		if !allAuthorized || reaching.repoID == "" {
@@ -324,12 +333,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			}
 			targetSource[key] = reaching.attributionSource
 		}
-		if reaching.originRoot.CanonicalID != "" {
-			if targetRoot == nil {
-				targetRoot = map[string]contextfabric.SubjectRef{}
-			}
-			targetRoot[key] = reaching.originRoot
-		}
+		targetRoot = targetRoot.add(key, reaching.roots())
+		targetRoot = targetRoot.add(key, reachingRoots)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, err
@@ -343,7 +348,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 // is visible to a repository-restricted caller only when the caller may read
 // at least one repository it owns (a team that owns none carries the "*"
 // scope, which admits nobody restricted).
-func (e *ScopeExpander) projectOwningTeams(ctx context.Context, principal storage.Principal, orgID string, origins []contextfabric.SubjectRef, limit int) ([]contextfabric.SubjectRef, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) projectOwningTeams(ctx context.Context, principal storage.Principal, orgID string, origins []contextfabric.SubjectRef, limit int) ([]contextfabric.SubjectRef, targetRootSet, contextfabric.FactScopeExpansionCounts, error) {
 	projectKeys, bySubject, _ := v2Index(origins, identity.KindProject)
 	if len(projectKeys) == 0 {
 		return nil, nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
@@ -352,7 +357,7 @@ func (e *ScopeExpander) projectOwningTeams(ctx context.Context, principal storag
 	// ONE ROW PER DISTINCT TEAM, before the limit: the ownership join returns a
 	// row per (team, source), so limiting its rows would let a few multi-source
 	// teams use the whole limit and cut the set with Truncated unset.
-	statement := `SELECT p.team_id, min(concat(p.provider, ':', p.id)) AS project_key, ifNull(any(t.name), '')
+	statement := `SELECT p.team_id, min(concat(p.provider, ':', p.id)) AS project_key, ifNull(any(t.name), ''), arraySort(groupUniqArray(concat(p.provider, ':', p.id))) AS project_keys
 FROM ` + projectOwnershipJoinSQL(ownershipValidityPredicate(factTimeBound{})) + `
 INNER JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = p.team_id
 GROUP BY p.team_id
@@ -367,12 +372,13 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	}
 	type owningTeam struct {
 		id, name, originKey string
+		originKeys          []string
 	}
 	var teams []owningTeam
 	seen := map[string]struct{}{}
 	for rows.Next() {
 		var team owningTeam
-		if err := rows.Scan(&team.id, &team.originKey, &team.name); err != nil {
+		if err := rows.Scan(&team.id, &team.originKey, &team.name, &team.originKeys); err != nil {
 			rows.Close()
 			return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
@@ -401,7 +407,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	var targets []contextfabric.SubjectRef
-	var targetRoot map[string]contextfabric.SubjectRef
+	var targetRoot targetRootSet
 	for _, team := range teams {
 		// The graph's own convention for a team: its owned repositories'
 		// slugs, or the wildcard string when it owns none.
@@ -419,12 +425,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		}
 		target := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: teamCanonicalIDPrefix + team.id, Label: label}
 		targets = append(targets, target)
-		if origin, ok := bySubject[team.originKey]; ok {
-			if targetRoot == nil {
-				targetRoot = map[string]contextfabric.SubjectRef{}
-			}
-			targetRoot[contextfabric.FactSubjectKey(target)] = origin
-		}
+		targetRoot = targetRoot.add(contextfabric.FactSubjectKey(target), originRootsOf(bySubject[team.originKey], team.originKeys, bySubject))
 	}
 	counts.Truncated = len(teams) >= limitPlusOne
 	return targets, targetRoot, counts, nil
