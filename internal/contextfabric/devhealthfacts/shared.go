@@ -1060,7 +1060,11 @@ import (
 // read-wide count only the request note), and owning_teams_truncated rides only
 // the repositories whose owner table was cut. An answer saved under v209
 // carries both on repositories they are false for.
-const QueryVersion = "devhealthfacts.clickhouse.v210"
+//
+// v210 -> v211: a team's workload forecast scalars are declared aggregate, so a
+// repository-restricted caller admitted to the team gets them labelled
+// all_owned_repositories. An answer saved under v210 carries them unlabelled.
+const QueryVersion = "devhealthfacts.clickhouse.v211"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
