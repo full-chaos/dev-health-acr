@@ -32,6 +32,7 @@ var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactWork, contextfabric.FactActualCompletion, contextfabric.FactBlockers,
 	contextfabric.FactRequiredChildren, contextfabric.FactPullRequests, contextfabric.FactReviews,
 	contextfabric.FactContinuousIntegration, contextfabric.FactDeployments, contextfabric.FactIncidents,
+	contextfabric.FactSecurityAlerts,
 }
 
 // declaredButNotExercised lists declarations no case here can reach, with a
@@ -469,6 +470,25 @@ func t4Cases() []t4Case {
 	add(t4Case{name: "continuous_integration/repository", kind: contextfabric.FactContinuousIntegration, subjects: repo, tables: []fakeTable{
 		{match: "FROM cicd_metrics_daily", rows: [][]any{cicdMetricsRow("repo-1"), noDurations}},
 	}})
+	alertsAt := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name, provider string
+		rows           [][]any
+	}{
+		{"github", "github", [][]any{
+			{"repo-1", "dependabot", "critical", int64(2), int64(3), alertsAt, alertsAt.Add(24 * time.Hour), alertsAt.Add(48 * time.Hour)},
+			{"repo-1", "code_scanning", "", int64(1), int64(1), alertsAt, alertsAt, alertsAt.Add(48 * time.Hour)},
+			{"repo-1", "advisory", "low", int64(0), int64(1), time.Time{}, time.Time{}, alertsAt},
+		}},
+		{"gitlab", "gitlab", [][]any{{"repo-1", "gitlab_vulnerability", "high", int64(1), int64(1), alertsAt, alertsAt, alertsAt}, {"repo-1", "gitlab_dependency", "medium", int64(1), int64(1), alertsAt, alertsAt, alertsAt}}},
+		{"no_rows", "github", nil},
+		{"not_collected", "jira", nil},
+	} {
+		add(t4Case{name: "security_alerts/repository_" + c.name, kind: contextfabric.FactSecurityAlerts, subjects: repo, tables: []fakeTable{
+			{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", c.provider}}},
+			{match: "FROM security_alerts", rows: c.rows},
+		}})
+	}
 	add(t4Case{name: "deployments/deployment", kind: contextfabric.FactDeployments, subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")}, tables: []fakeTable{
 		{match: "FROM deployments", rows: [][]any{{"deploy-1", "success", "production", "repo-1"}, {"deploy-1", "", "", "repo-1"}}},
 	}})
@@ -701,7 +721,7 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 		}
 	}
 	if len(registered) != 21 {
-		t.Errorf("registered providers = %d kinds, want 21", len(registered))
+		t.Errorf("registered providers = %d kinds, want 22", len(registered))
 	}
 	for kind := range direct {
 		if !registered[kind] {

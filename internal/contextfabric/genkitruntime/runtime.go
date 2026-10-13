@@ -531,6 +531,8 @@ const (
 	// string field, member_qualifier_value (widening, same reasoning as v3/v4
 	// above -- a v7-era model was never offered this field and could not have
 	// emitted it).
+	// v10: the fact-kind enum gained security_alerts (widening of the decoded
+	// output space; a v9-era model was never offered it).
 	DefaultSchemaVersion    = interpretprompt.OutputVersion
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND

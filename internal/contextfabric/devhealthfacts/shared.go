@@ -1055,7 +1055,10 @@ import (
 // severity omission, owning-teams cut) is served on the rows it describes and
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
-const QueryVersion = "devhealthfacts.clickhouse.v209"
+//
+// v209 -> v210: the security_alerts fact kind is served for a repository.
+// An answer saved under v209 cannot carry it.
+const QueryVersion = "devhealthfacts.clickhouse.v210"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1528,7 +1531,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// code_ownership_risk: health.go's compounding_risk formula is
 	// literally w_churn/w_complexity/w_ownership/w_review-weighted risk --
 	// its own doc comment names ownership as one of the weighted inputs.
-	case contextfabric.FactHealth:
+	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts:
 		return contextfabric.HealthDimensionCodeOwnershipRisk
 	// cognitive_workload_pressure: capacity forecasts (workload.go),
 	// IC-level churn/cycle/WIP throughput scatter (landscape.go), and
@@ -1761,6 +1764,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 	case contextfabric.FactIncidents:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectIncident: {contextfabric.ObligationState, contextfabric.ObligationPrincipalDrivers},
+		}
+	// Stored security alert counts explain a repository's risk: a driver,
+	// never a state or a score.
+	case contextfabric.FactSecurityAlerts:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
 		}
 	// Fired operational-deficiency rules explain pressure: a driver, never
 	// a state.

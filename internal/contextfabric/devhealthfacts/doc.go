@@ -102,6 +102,10 @@
 //     (team_id, map_name) -- never per-identity, see landscape.go's
 //     package doc comment for why), rolled up to project via
 //     team_project_ownership.
+//   - FactSecurityAlerts from security_alerts (repository only): counts of
+//     stored open alerts by source and severity. Closed alerts and secret
+//     scanning are reported as not collected, never as zero; see
+//     security_alerts.go.
 //
 // See flow.go and landscape.go for the full design and SQL.
 //
