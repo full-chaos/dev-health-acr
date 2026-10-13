@@ -37,14 +37,14 @@ func TestSemanticReadingOverItsWholeInputDomain(t *testing.T) {
 				ContextFabricInvestigationComplete:              false,
 				ContextFabricInvestigationNoMatch:               false,
 			} {
-				err := validateSemanticReadingOnResult(&reading, status)
+				err := validateSemanticReadingOnResult(&reading, status, contextFabricWriteBounds)
 				if want := testCase.valid && allowed; (err == nil) != want {
 					t.Fatalf("on status %q: err = %v, want valid=%v", status, err, want)
 				}
 			}
 		})
 	}
-	if err := validateSemanticReadingOnResult(nil, ContextFabricInvestigationComplete); err != nil {
+	if err := validateSemanticReadingOnResult(nil, ContextFabricInvestigationComplete, contextFabricWriteBounds); err != nil {
 		t.Fatalf("an absent disclosure was refused: %v", err)
 	}
 	if len(ContextFabricSemanticReadingStatuses()) != 1 || len(ContextFabricSemanticReadingReasons()) != 2 {

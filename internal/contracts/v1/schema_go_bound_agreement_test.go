@@ -203,7 +203,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// mutation walked through on limitations_displaced above.
 		"common#$defs.AnswerPlan.properties.render_kinds.maxItems":              ContextFabricAnswerPlanRenderKindsMaxCount,
 		"common#$defs.AnswerPlan.properties.axes.maxItems":                      ContextFabricAnswerPlanAxesMaxCount,
-		"common#$defs.AnswerPlan.properties.fact_kinds.maxItems":                ContextFabricFactKindCount,
+		"common#$defs.AnswerPlan.properties.fact_kinds.maxItems":                ContextFabricFactKindListMaxItems,
 		"common#$defs.AnswerPlan.properties.narrowing.maxItems":                 ContextFabricPlanNarrowingMaxCount,
 		"common#$defs.AnswerPlanBudget.properties.max_items.minimum":            0,
 		"common#$defs.AnswerPlanBudget.properties.max_serialized_bytes.minimum": 0,
@@ -223,8 +223,8 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.PlanRequirement.properties.requirement.minLength":          1,
 		"common#$defs.PlanRequirement.properties.obligation.maxLength":           ContextFabricRequirementObligationMaxLength,
 		"common#$defs.PlanRequirement.properties.obligation.minLength":           1,
-		"common#$defs.PlanRequirement.properties.fact_kinds.maxItems":            ContextFabricFactKindCount,
-		"common#$defs.PlanRequirement.properties.input_fact_kinds.maxItems":      ContextFabricFactKindCount,
+		"common#$defs.PlanRequirement.properties.fact_kinds.maxItems":            ContextFabricFactKindListMaxItems,
+		"common#$defs.PlanRequirement.properties.input_fact_kinds.maxItems":      ContextFabricFactKindListMaxItems,
 		"common#$defs.PlanRequirementOutcomeRow.properties.refinements.maxItems": ContextFabricRequirementRefinementMaxCount,
 		"common#$defs.RequirementRefinement.properties.before.minimum":           0,
 		"common#$defs.RequirementRefinement.properties.after.minimum":            0,
@@ -318,7 +318,10 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// reports unreachable instead of a rejection. Mapped explicitly here
 		// rather than left to the result-level catch-all classification,
 		// which is what let the 50-vs-64 drift sit unnoticed.
-		"common#$defs.InterpretedQuestion.properties.fact_requirements.maxItems": ContextFabricFactRequirementsMaxCount,
+		// The fact-kind lists publish the fixed read bound, not the write cap:
+		// fact kinds are additive, and a write past the vocabulary size
+		// repeats or invents a kind, which the write path refuses anyway.
+		"common#$defs.InterpretedQuestion.properties.fact_requirements.maxItems": ContextFabricFactKindListMaxItems,
 		"common#$defs.FactRequirement.properties.parameters.maxProperties":       ContextFabricFactRequirementParametersMaxCount,
 		// Also unprobeable, for the same honest reason (codex round-12):
 		// Finding.kind is a closed vocabulary, so no filler string of any
@@ -1271,7 +1274,7 @@ func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
 
 	// The schema's own enum must be the vocabulary, in order.
 	node := schemaNodeAt(t, documents, "common#$defs.FactRequirement.properties.kind")
-	raw, ok := node["enum"].([]any)
+	raw, ok := schemaVocabulary(node)
 	if !ok {
 		t.Fatal("common#$defs.FactRequirement.properties.kind declares no enum")
 	}
@@ -1308,9 +1311,12 @@ func TestFactRequirementsBoundDerivesFromTheVocabulary(t *testing.T) {
 	if !ok {
 		t.Fatal("fact_requirements declares no maxItems")
 	}
-	if int(value) != ContextFabricFactKindCount {
-		t.Errorf("the schema caps fact_requirements at %d but only %d distinct kinds exist, so the contract promises a document the service always rejects",
-			int(value), ContextFabricFactKindCount)
+	// The published cap is the fixed fact-kind list bound, not the vocabulary
+	// size: a client that cached the schema must read a server that added a
+	// kind. The write path still caps at the vocabulary size.
+	if int(value) != ContextFabricFactKindListMaxItems {
+		t.Errorf("the schema caps fact_requirements at %d, want the fixed list bound %d",
+			int(value), ContextFabricFactKindListMaxItems)
 	}
 }
 
