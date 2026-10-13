@@ -130,10 +130,10 @@ func TestMemoryNearCapObserverSeesAMemoryLimitRefusal(t *testing.T) {
 	const statement = "SELECT toString(count()) FROM (SELECT number FROM numbers(2000000) GROUP BY number) SETTINGS max_memory_usage = 1048576"
 	rows, err := client.Query(ctx, statement, nil)
 	if err == nil {
-		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 		}
 		err = rows.Err()
+		_ = rows.Close()
 	}
 	var exception *clickhousedriver.Exception
 	if !errors.As(err, &exception) || exception.Code != 241 {
