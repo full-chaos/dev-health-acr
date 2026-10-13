@@ -257,10 +257,12 @@ func (r RuntimeAnswerSynthesizer) encodeWithinInputBound(ctx context.Context, pr
 			event.Selection = selection
 		}
 		if !reduced || event.Passes == maxSynthesisInputBoundPasses {
-			if widenTo > maxBytes && overflow.Bytes <= widenTo {
-				// The smallest input is above its preferred share of the
-				// caller's budget but, with its envelope and the answer floor,
-				// fits the budget: serve it whole and say so.
+			if !reduced && widenTo > maxBytes && overflow.Bytes <= widenTo {
+				// Nothing more can be removed: this smallest input is above its
+				// preferred share of the caller's budget but, with its envelope
+				// and the answer floor, fits the budget: serve it whole and say
+				// so. An input the pass limit stopped has a smaller form and is
+				// not widened.
 				if widened, widenErr := encode(principal.OrgID, given, widenTo); widenErr == nil {
 					event.Outcome = SynthesisInputBoundShareExceeded
 					event.InputBytes, event.MaxInputBytes = overflow.Bytes, maxBytes
