@@ -44,9 +44,6 @@ var projectLinkedPullRequestsSQL = `(
   GROUP BY project_key, pr_repo_id, pr_number
 )`
 
-// linkedWorkItemIDsSQL is every work item id a link row names.
-const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
-
 // pullRequestOpenStateSQL is the open rule of the pull request fact and the
 // status filter: the stored state is exactly open (ops stores it normalized).
 // An unknown state is not open.
