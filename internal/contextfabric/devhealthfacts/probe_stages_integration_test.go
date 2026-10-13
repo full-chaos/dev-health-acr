@@ -24,6 +24,7 @@ func TestProbeRequestedSplitStagesOnRealClickHouse(t *testing.T) {
 	sizes := []size{
 		{org: "org-mem-large", units: 15000, prs: 3, commits: 10, edges: 10},
 		{org: "org-mem-many-small", units: 3000, prs: 14},
+		{org: "org-mem-many-mid", units: 6000, prs: 14},
 		{org: "org-mem-many-refs", units: 12000, prs: 14},
 	}
 	for _, s := range sizes {
@@ -33,7 +34,7 @@ func TestProbeRequestedSplitStagesOnRealClickHouse(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		ids = append(ids, "'"+repoUUID(fmt.Sprintf("mem-%d", i))+"'")
 	}
-	stages := devhealthfacts.ProbeRequestedStages()
+	stages := devhealthfacts.ProbeRowStages()
 	names := make([]string, 0, len(stages))
 	for n := range stages {
 		names = append(names, n)
@@ -42,14 +43,14 @@ func TestProbeRequestedSplitStagesOnRealClickHouse(t *testing.T) {
 	variants := map[string]clickhouse.Settings{
 		"default":  {},
 		"threads1": {"max_threads": 1},
-		"block8k":  {"max_block_size": 8192},
+		"block8k":  {"max_block_size": 1024, "max_threads": 1, "preferred_block_size_bytes": 65536},
 	}
 	var report strings.Builder
 	for _, s := range sizes {
 		fmt.Fprintf(&report, "\n== %s units=%d prs=%d\n", s.org, s.units, s.prs)
 		for _, name := range names {
 			for _, v := range []string{"default", "threads1", "block8k"} {
-				if v != "default" && name != "z_full" && name != "a1_agg" {
+				if v != "default" && name != "r5_parse" && name != "r2_json_len" {
 					continue
 				}
 				tag := s.org + "/" + name + "/" + v

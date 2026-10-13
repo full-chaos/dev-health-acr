@@ -31,3 +31,18 @@ func ProbeRequestedStages() map[string]string {
 		"z_full":          full,
 	}
 }
+
+func ProbeRowStages() map[string]string {
+	where := "\nFROM work_unit_investments WHERE org_id = {org_id:String}"
+	filtered := where + supersededWorkUnitIDsFilter() + subqueryMembershipScope.filter()
+	return map[string]string{
+		"r1_count":        "SELECT count()" + where,
+		"r2_json_len":     "SELECT sum(length(structural_evidence_json))" + where,
+		"r3_prs":          "SELECT sum(length(JSONExtract(structural_evidence_json, 'prs', 'Array(String)')))" + where,
+		"r4_prs_issues":   "SELECT sum(length(JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))) + sum(length(JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))" + where,
+		"r5_parse":        "SELECT sum(length(" + prRefsExpression + "))" + where,
+		"r6_parse_scoped": "SELECT sum(length(" + prRefsExpression + "))" + filtered,
+		"r7_json_scoped":  "SELECT sum(length(structural_evidence_json))" + filtered,
+		"r8_maps":         "SELECT sum(length(mapKeys(theme_distribution_json))) + sum(length(mapKeys(subcategory_distribution_json)))" + where,
+	}
+}
