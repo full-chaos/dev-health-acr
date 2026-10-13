@@ -131,11 +131,12 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 	if err != nil || len(both.Facts) != 2 {
 		t.Fatalf("two-team read: err=%v facts=%d reason=%q", err, len(both.Facts), both.Reason)
 	}
-	if !strings.Contains(both.Reason, "team:team-late: the window starts") || !strings.Contains(both.Reason, end.Add(-100*day).Format(time.RFC3339)) {
-		t.Fatalf("team-late reason = %q, want its own earliest unit", both.Reason)
+	late := both.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("team-late"))]
+	if !strings.Contains(late, "team:team-late: the window starts") || !strings.Contains(late, end.Add(-100*day).Format(time.RFC3339)) {
+		t.Fatalf("team-late reason = %q, want its own earliest unit", late)
 	}
-	if strings.Contains(both.Reason, "team:team-long") {
-		t.Fatalf("team-long (history starts before the window) carries a span reason: %q", both.Reason)
+	if long := both.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("team-long"))]; strings.Contains(long, "team:team-long: the window starts") {
+		t.Fatalf("team-long (history starts before the window) carries a span reason: %q", long)
 	}
 
 	// A 60-day window inside the stored history carries no span limitation.
