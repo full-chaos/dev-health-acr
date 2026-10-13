@@ -15,10 +15,15 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// repoScopedSplitMemoryCeiling is 3/4 of the 64 MiB API statement cap: a read
-// scoped to some repositories must stay clear of it however large the
-// organization around them is.
-const repoScopedSplitMemoryCeiling = uint64(48 << 20)
+// repoScopedSplitMemoryCeiling bounds the repository, team and linked pull
+// request reads at every organization size measured here; they run under the
+// API default (256 MiB), with this margin.
+const repoScopedSplitMemoryCeiling = uint64(64 << 20)
+
+// repoScopedSplitMemorySlope bounds how a read's peak may grow from the small
+// to the large organization, as a share of how much the organization grew (6x
+// the units): the split over the whole organization grew 6.5x there.
+const repoScopedSplitMemorySlope = 0.6
 
 const splitMemoryRepos = 200
 
@@ -137,6 +142,13 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 	}
 	repoScoped := map[string]bool{"repository mix": true, "repository unit listing": true, "team linked pull request mix": true}
 	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 101)
+	peaks := map[string]map[string]uint64{}
+	record := func(org, name string, peak uint64) {
+		if peaks[name] == nil {
+			peaks[name] = map[string]uint64{}
+		}
+		peaks[name][org] = peak
+	}
 	for _, s := range sizes {
 		var mark int64
 		for i := 0; i < 2; i++ {
@@ -153,6 +165,7 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 		}
 		served := peakOf(s.org+" served repository mix", statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "toUInt8(if(win < 0, 255, win)) AS window"}, mark))
 		t.Logf("%s (%d units, %d PR refs): served repository mix peak %.2f MiB", s.org, s.units, s.prs, float64(served)/(1<<20))
+		record(s.org, "served repository mix", served)
 		if served >= repoScopedSplitMemoryCeiling {
 			t.Errorf("%s: served repository mix peaked at %d bytes, want under %d", s.org, served, repoScopedSplitMemoryCeiling)
 		}
@@ -166,9 +179,25 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 			}
 			peak := peakOf(s.org+" "+p.Name, statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments"}, mark))
 			t.Logf("%s (%d units, %d PR refs): %s peak %.2f MiB", s.org, s.units, s.prs, p.Name, float64(peak)/(1<<20))
-			if repoScoped[p.Name] && peak >= repoScopedSplitMemoryCeiling {
+			if !repoScoped[p.Name] {
+				continue
+			}
+			record(s.org, p.Name, peak)
+			if peak >= repoScopedSplitMemoryCeiling {
 				t.Errorf("%s: %s peaked at %d bytes, want under %d", s.org, p.Name, peak, repoScopedSplitMemoryCeiling)
 			}
+		}
+	}
+	unitGrowth := float64(sizes[1].units) / float64(sizes[0].units)
+	for name, byOrg := range peaks {
+		small, large := byOrg[sizes[0].org], byOrg[sizes[1].org]
+		if small == 0 || large == 0 {
+			t.Fatalf("%s: measurement did not happen at both sizes (%d, %d)", name, small, large)
+		}
+		growth := float64(large) / float64(small)
+		t.Logf("%s grew %.2fx for %.0fx the units", name, growth, unitGrowth)
+		if growth > repoScopedSplitMemorySlope*unitGrowth {
+			t.Errorf("%s grew %.2fx from %d to %d units, want at most %.2fx", name, growth, sizes[0].units, sizes[1].units, repoScopedSplitMemorySlope*unitGrowth)
 		}
 	}
 }

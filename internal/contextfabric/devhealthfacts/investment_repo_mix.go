@@ -109,26 +109,6 @@ func repoMixStatement(bounds []factTimeBound) string {
 	return repoMixStatementScoped(bounds, subqueryMembershipScope, maxFactRowsPerQuery)
 }
 
-// investmentSplitMaxMemoryUsage is the named per-statement memory limit of the
-// three statements built on repoSplitCore (repository/team mix, organization
-// mix, unit listing). The repository mix (normalized_query_hash
-// 1024715550238946426) measured p50 118 MiB and max 124.4 MiB on prod
-// (system.query_log, 3 runs since 2026-10-13 01:11Z), above the 64 MiB API
-// default, so those reads carry their own limit. The CI fixture needs far
-// more: TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse
-// reached 288.76 MiB (and failed at 256 MiB), so the limit is 512 MiB.
-// This is a safety ceiling, not a fit: the statement's memory grows with org
-// units x refs (prod 124.4 MiB, CI fixture 288.76 MiB, 359 MiB measured at 12k
-// units x 14 refs), so no fixed number fits until its query shape is fixed
-// (CHAOS-9473); this override is then removed.
-//
-// memory-limit-measured: 288.76 MiB 2026-10-13 CI fixture TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse (prod 124.4 MiB hash 1024715550238946426; unbounded by org size until CHAOS-9473)
-const investmentSplitMaxMemoryUsage = uint64(512 << 20)
-
-func withInvestmentSplitMemory(statement string) string {
-	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: investmentSplitMaxMemoryUsage})
-}
-
 // repoMixStatementScoped is repoMixStatement with the membership scope the
 // caller resolved: the run's unit ids as one bound array, no filter, or the
 // scope subqueries (investment_membership_scope.go).
@@ -137,7 +117,7 @@ func repoMixStatementScoped(bounds []factTimeBound, scope membershipScope, limit
 	for i, b := range bounds {
 		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
 	}
-	return withInvestmentSplitMemory(withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
+	return withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
 	uniqExact(work_unit_id) AS work_units,
@@ -148,7 +128,7 @@ FROM (
 `+requestedSplitRows(memberships, true, scope, false)+`	)
 )
 GROUP BY win, repo_uuid
-ORDER BY win, repo_uuid`, limit))
+ORDER BY win, repo_uuid`, limit)
 }
 
 // repoSplitCore is the per-(window, work unit, repository) split shared by the
