@@ -394,17 +394,33 @@ func TestCommitmentItemsTheCallerCannotReadWithholdNoneStated(t *testing.T) {
 	wantAbsent(t, fact, "items_unreadable_reason")
 	fact = servedCommitment(t, response, dated)
 	wantServed(t, fact, map[string]any{"items_unreadable_count": "3", "commitment_status": "stated"})
+	wantCommitmentCallerFilterOnServedCountsOnly(t, client, storage.Principal{OrgID: "org-commitment"})
+
+	restrictedClient := commitmentClient([][]any{commitmentProjectRow("gitlab", "proj-hidden", "", "", "", true)}, nil)
+	restricted := storage.Principal{OrgID: "org-commitment", Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/repo-commitment"}}
+	readCommitmentFactsThrough(t, restrictedClient, ownershipReachGraph{repositories: []string{"acme/repo-commitment"}}, restricted, hidden)
+	wantCommitmentCallerFilterOnServedCountsOnly(t, restrictedClient, restricted)
+}
+
+func wantCommitmentCallerFilterOnServedCountsOnly(t *testing.T, client *fakeClient, principal storage.Principal) {
+	t.Helper()
+	authorized := devhealthfacts.CommitmentAuthorizedItemIDsSQLForTest(principal, nil)
+	checked := 0
 	for _, query := range client.queries {
 		if !strings.Contains(query.statement, commitmentItemsMatch) {
 			continue
 		}
+		checked++
 		rows := query.statement[:strings.Index(query.statement, "project_items AS (")]
-		if strings.Contains(rows, "work_item_id IN (SELECT w.work_item_id FROM work_items AS w FINAL") || strings.Contains(rows, "HAVING min(") {
+		if strings.Contains(rows, authorized) {
 			t.Errorf("the unfiltered project count applies the caller filter:\n%s", rows)
 		}
-		if !strings.Contains(query.statement, "FROM project_rows\n  WHERE work_item_id IN (SELECT w.work_item_id FROM work_items AS w FINAL") {
-			t.Errorf("the served counts do not apply the caller filter:\n%s", query.statement)
+		if !strings.Contains(query.statement, "FROM project_rows\n  WHERE work_item_id IN "+authorized) {
+			t.Errorf("the served counts do not apply the caller filter %s:\n%s", authorized, query.statement)
 		}
+	}
+	if checked == 0 {
+		t.Fatal("no item statement was read, so the caller filter was not checked")
 	}
 }
 

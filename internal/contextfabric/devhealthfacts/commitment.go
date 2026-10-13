@@ -203,8 +203,12 @@ func (p *CommitmentProvider) readProjectRows(ctx context.Context, orgID string, 
 	return rows, err
 }
 
+func commitmentAuthorizedItemIDsSQL(principal storage.Principal, requestedScope []string) (string, []readers.Binding) {
+	return workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), commitmentProjectItemIDsSQL)
+}
+
 func (p *CommitmentProvider) readItemRows(ctx context.Context, principal storage.Principal, orgID string, requestedScope, ids []string, asOf time.Time) (map[string]commitmentItemRow, error) {
-	authorized, bindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), commitmentProjectItemIDsSQL)
+	authorized, bindings := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
 	settings, err := workItemReaderSettings(ctx)
 	if err != nil {
 		return nil, err
