@@ -182,6 +182,13 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 			t.Fatalf("seed noise pull requests: %v", err)
 		}
 	}
+	// Background merges would otherwise change the part layout, and with it the
+	// bytes a statement reads, between the stages being compared.
+	for _, table := range []string{"work_items", "work_graph_edges", "git_pull_requests", "work_graph_issue_pr", "repos"} {
+		if err := direct.Exec(ctx, "OPTIMIZE TABLE "+table+" FINAL"); err != nil {
+			t.Fatalf("optimize %s: %v", table, err)
+		}
+	}
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true)}
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
 	// The first run loads the table indexes into the server, which the first
