@@ -25,6 +25,7 @@ const linkRowsDifferentialOrg = "a3c71e58-2f94-4b06-8d1a-9e4b60c7d235"
 func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	_, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
+	// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 	for _, statement := range devhealthschema.DDL("repos", "teams", "work_items", "work_graph_issue_pr", "git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -50,6 +51,7 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		if p.id == "proj-other" {
 			team = "team-other"
 		}
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			org, p.provider, team, p.id, key, "native", ts(2026, 1, 1, 0, 0, 0), nil, at)
 	}
@@ -74,6 +76,7 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 			v.id, repoUUID("repo-x"), org, "t", at, v.project, v.lastSynced)
 	}
 	for _, id := range []string{"i-moved-away", "i-moved-in"} {
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoUUID("repo-y"), id, uint32(1), float32(1), "native", "", at, org)
 	}
@@ -119,6 +122,9 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 	}
 	var movedIn, movedAway bool
 	for _, row := range current {
+		if row[0] != "team-owner" {
+			continue
+		}
 		movedIn = movedIn || row[1] == "i-moved-in"
 		movedAway = movedAway || row[1] == "i-moved-away"
 	}
@@ -132,6 +138,7 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		}
 	}
 	if reachedTwice < 3 {
+		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		t.Fatalf("no pull request is linked from two issues of the owned projects: %v", current)
 	}
 }
