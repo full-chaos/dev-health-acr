@@ -269,6 +269,75 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 	}
 
 	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
+	t.Run("team repositories diagnosis", func(t *testing.T) {
+		recorder := &recordingQueryClient{inner: query}
+		diagnosed := devhealthfacts.NewScopeExpander(recorder)
+		var request contextfabric.FactScopeExpansionRequest
+		for _, tc := range fixture.cases() {
+			if tc.name == "team repositories" {
+				request = tc.request
+			}
+		}
+		if _, err := diagnosed.ExpandFactScope(ctx, request); err != nil {
+			t.Fatalf("ExpandFactScope: %v", err)
+		}
+		captured, ok := recorder.find("argMin(source, source_rank) AS best_source")
+		if !ok {
+			t.Fatal("team repositories statement not sent")
+		}
+		variants := map[string]string{
+			"served":                   captured.statement,
+			"without":                  stripOriginArrays(captured.statement),
+			"groupArray+arrayDistinct": strings.Replace(captured.statement, "arraySort(groupUniqArray(origin_team_id))", "arraySort(arrayDistinct(groupArray(origin_team_id)))", 1),
+		}
+		for _, name := range []string{"served", "without", "groupArray+arrayDistinct"} {
+			statement := variants[name]
+			var lines []string
+			for attempt := 0; attempt < 3; attempt++ {
+				mark := serverNowMicros(t, ctx, direct)
+				rows, err := query.Query(ctx, statement, captured.bindings)
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				for rows.Next() {
+				}
+				_ = rows.Close()
+				if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+					t.Fatal(err)
+				}
+				profile, err := direct.Query(ctx, `SELECT concat('memory=', toString(memory_usage), ' peak_threads=', toString(peak_threads_usage),
+  ' arena_bytes=', toString(ProfileEvents['ArenaAllocBytes']), ' arena_chunks=', toString(ProfileEvents['ArenaAllocChunks']),
+  ' two_level=', toString(ProfileEvents['AggregationHashTablesInitializedAsTwoLevel']), ' prealloc=', toString(ProfileEvents['AggregationPreallocatedElementsInHashTables']),
+  ' read_rows=', toString(read_rows), ' result_rows=', toString(result_rows))
+FROM system.query_log WHERE event_time_microseconds > fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'argMin(source, source_rank) AS best_source') > 0
+ORDER BY event_time_microseconds DESC LIMIT 1`, mark)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for profile.Next() {
+					var line string
+					if err := profile.Scan(&line); err != nil {
+						t.Fatal(err)
+					}
+					lines = append(lines, line)
+				}
+				_ = profile.Close()
+			}
+			explain, err := query.Query(ctx, "EXPLAIN PIPELINE "+statement, captured.bindings)
+			var pipeline []string
+			if err == nil {
+				for explain.Next() {
+					var line string
+					_ = explain.Scan(&line)
+					pipeline = append(pipeline, line)
+				}
+				_ = explain.Close()
+			} else {
+				pipeline = append(pipeline, "explain failed: "+err.Error())
+			}
+			t.Errorf("DIAG teamRepositories %s: %s || pipeline: %s", name, strings.Join(lines, " | "), strings.Join(pipeline, " / "))
+		}
+	})
 	t.Run("memory", func(t *testing.T) {
 		recorder := &recordingQueryClient{inner: query}
 		recordingExpander := devhealthfacts.NewScopeExpander(recorder)
@@ -327,11 +396,11 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				if size.base == 0 || size.with == 0 {
 					t.Fatalf("%s %s: measurement did not happen (with %d, without %d)", label, size.name, size.with, size.base)
 				}
-				if float64(size.with) > arrayMemoryShare*float64(size.base) && size.with > size.base+arrayMemoryAllowance {
-					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx and over %d bytes", label, size.name, size.with, size.base, arrayMemoryShare, arrayMemoryAllowance)
+				if float64(size.with) > arrayMemoryShare*float64(size.base) {
+					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.with, size.base, arrayMemoryShare)
 				}
 			}
-			if largeDelta > 0 && float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(arrayMemoryAllowance) {
+			if largeDelta > 0 && float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0)) {
 				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller", label, largeDelta, smallDelta)
 			}
 		}
@@ -339,12 +408,8 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 }
 
 // The origin id arrays may add at most this share over the same statement
-// without them, or this fixed allowance (aggregation arenas are allocated per
-// thread, so a statement with a few small groups still pays a fixed setup).
-const (
-	arrayMemoryShare     = 1.15
-	arrayMemoryAllowance = uint64(16 << 20)
-)
+// without them.
+const arrayMemoryShare = 1.15
 
 func peakOf(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, table, fragment string, mark int64) uint64 {
 	t.Helper()
