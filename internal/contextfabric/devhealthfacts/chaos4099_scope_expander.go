@@ -98,7 +98,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		}
 		targets, targetBasis, targetRoot, authCounts := authorizeRepositories(request.Principal, repos)
 		targetSource := repositoryAttributionSources(repos, targets)
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: mergeCounts(counts, authCounts)}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: mergeCounts(counts, authCounts)}, nil
 
 	case contextfabric.FactScopePolicyProjectWorkItemPullRequest:
 		// One hop further than repository. Read the SAME work-item-scoped
@@ -150,7 +150,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		// silently query pull requests from only the first 200 while
 		// reporting a clean, non-truncated result.
 		prCounts.Truncated = prCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: prCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: prCounts}, nil
 
 	case contextfabric.FactScopePolicyProjectWorkItemPullRequestReview:
 		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout, request.TimeContext)
@@ -178,7 +178,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		reviewCounts.MalformedTouchCount += repoCounts.MalformedTouchCount
 		reviewCounts.DuplicateAddCount += repoCounts.DuplicateAddCount
 		reviewCounts.Truncated = reviewCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: reviewCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: reviewCounts}, nil
 
 	// --- CHAOS-4101: team-origin policies, ruled 2026-08-24 ---
 	//
@@ -195,7 +195,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		targets, targetBasis, targetRoot, authCounts := authorizeRepositories(request.Principal, repos)
 		merged := mergeCounts(counts, authCounts)
 		targetSource := repositoryAttributionSources(repos, targets)
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: merged}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: merged}, nil
 
 	case contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequest:
 		repos, repoCounts, err := e.teamRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
@@ -216,7 +216,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		prCounts.AuthorizationDroppedCount += dropped
 		prCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
 		prCounts.Truncated = prCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: prCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: prCounts}, nil
 
 	case contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequestReview:
 		repos, repoCounts, err := e.teamRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout)
@@ -237,7 +237,7 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		reviewCounts.AuthorizationDroppedCount += dropped
 		reviewCounts.MissingNextHopCount += repoCounts.MissingNextHopCount
 		reviewCounts.Truncated = reviewCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot, Counts: reviewCounts}, nil
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: reviewCounts}, nil
 
 	// --- CHAOS-5405: the fourteen work-item-target policies ---
 	//
@@ -336,6 +336,18 @@ type repositoryCandidate struct {
 	// FactScopeExpansionResult.TargetRoot when it is non-zero, mirroring
 	// basis/attributionSource's own "only set on a real value" discipline.
 	originRoot contextfabric.SubjectRef
+	// originRoots is every requested origin that reached this repository,
+	// originRoot first (the statement's arraySort(groupUniqArray(origin))
+	// beside its min(origin), same GROUP BY, so rows and LIMIT are unchanged).
+	originRoots []contextfabric.SubjectRef
+}
+
+// roots is every requested origin that reached the repository.
+func (c repositoryCandidate) roots() []contextfabric.SubjectRef {
+	if len(c.originRoots) > 0 {
+		return c.originRoots
+	}
+	return []contextfabric.SubjectRef{c.originRoot}
 }
 
 // projectRepositories runs the activity-proxy chain's first hop: project ->
@@ -445,7 +457,7 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	// "first origin in the caller's slice order" because origins order is
 	// not part of any documented contract and SQL has no visibility into it
 	// anyway.
-	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank)
+	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank), arraySort(groupUniqArray(p.id))
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
@@ -469,11 +481,12 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	repositoryRows := 0
 	for rows.Next() {
 		var repoID, repoSlug, originProjectID, tier string
-		if err := rows.Scan(&repoID, &repoSlug, &originProjectID, &tier); err != nil {
+		var originProjectIDs []string
+		if err := rows.Scan(&repoID, &repoSlug, &originProjectID, &tier, &originProjectIDs); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
-		classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originsByID[originProjectID])
+		classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originRootsOf(originsByID[originProjectID], originProjectIDs, originsByID))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
@@ -668,7 +681,7 @@ func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID strin
 	// BY key (repo_id_str, repo_slug) is unchanged, so this changes neither
 	// which repositories are returned nor how many. See projectRepositories'
 	// own identical comment for why "smallest id" is the tiebreak.
-	statement := `SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, max(a.via_history) AS via_history, min(a.origin_project_id) AS origin_project_id, argMax(l.provenance, l.link_rank) AS tier
+	statement := `SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, max(a.via_history) AS via_history, min(a.origin_project_id) AS origin_project_id, argMax(l.provenance, l.link_rank) AS tier, arraySort(groupUniqArray(a.origin_project_id)) AS origin_project_ids
 FROM (` + projectIssueArmsAsOfSQL + `) AS a
 INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = a.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
@@ -692,12 +705,13 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	repositoryRows := 0
 	for rows.Next() {
 		var repoID, repoSlug, originProjectID, tier string
+		var originProjectIDs []string
 		var viaHistory uint8
-		if err := rows.Scan(&repoID, &repoSlug, &viaHistory, &originProjectID, &tier); err != nil {
+		if err := rows.Scan(&repoID, &repoSlug, &viaHistory, &originProjectID, &tier, &originProjectIDs); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
-		if classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originsByID[originProjectID]) && viaHistory == 0 {
+		if classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originRootsOf(originsByID[originProjectID], originProjectIDs, originsByID)) && viaHistory == 0 {
 			counts.UnboundedValidityCount++
 		}
 	}
@@ -994,10 +1008,10 @@ func projectOriginsByRawID(origins []contextfabric.SubjectRef) map[string]contex
 // built from each admitted candidate's own repositoryCandidate.basis --
 // empty for every project-origin candidate (zero-value basis), which
 // fact_scope.go's expand() treats as "no override, use the rule's default".
-func authorizeRepositories(principal storage.Principal, repos []repositoryCandidate) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts) {
+func authorizeRepositories(principal storage.Principal, repos []repositoryCandidate) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, targetRootSet, contextfabric.FactScopeExpansionCounts) {
 	targets := make([]contextfabric.SubjectRef, 0, len(repos))
 	var targetBasis map[string]contextfabric.FactScopeBasis
-	var targetRoot map[string]contextfabric.SubjectRef
+	var targetRoot targetRootSet
 	dropped := 0
 	for _, repo := range repos {
 		if !authorizedForRepository(principal, repo.repoSlug) {
@@ -1018,12 +1032,7 @@ func authorizeRepositories(principal storage.Principal, repos []repositoryCandid
 		// real value" discipline -- repo.originRoot is the zero SubjectRef
 		// when the underlying query could not resolve one (see
 		// repositoryCandidate.originRoot's own doc comment).
-		if repo.originRoot.CanonicalID != "" {
-			if targetRoot == nil {
-				targetRoot = map[string]contextfabric.SubjectRef{}
-			}
-			targetRoot[contextfabric.FactSubjectKey(target)] = repo.originRoot
-		}
+		targetRoot = targetRoot.add(contextfabric.FactSubjectKey(target), repo.roots())
 	}
 	return targets, targetBasis, targetRoot, contextfabric.FactScopeExpansionCounts{AuthorizationDroppedCount: dropped}
 }
@@ -1092,7 +1101,7 @@ func repoCandidateIndex(repos []repositoryCandidate) map[string]repositoryCandid
 //
 // A status reads only the pull requests that hold it (pullRequestStatusSQL),
 // inside the statement and so before its LIMIT.
-func (e *ScopeExpander) pullRequestsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int, status string) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) pullRequestsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int, status string) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, targetRootSet, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
 		return nil, nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
@@ -1117,7 +1126,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	var targets []contextfabric.SubjectRef
 	var targetBasis map[string]contextfabric.FactScopeBasis
 	var targetSource map[string]string
-	var targetRoot map[string]contextfabric.SubjectRef
+	var targetRoot targetRootSet
 	for rows.Next() {
 		var repoID string
 		var number uint32
@@ -1149,12 +1158,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			// repository, and that repository's own origin attribution
 			// (set by projectRepositories/teamRepositories) is the correct
 			// root for every PR reached through it.
-			if repo.originRoot.CanonicalID != "" {
-				if targetRoot == nil {
-					targetRoot = map[string]contextfabric.SubjectRef{}
-				}
-				targetRoot[contextfabric.FactSubjectKey(target)] = repo.originRoot
-			}
+			targetRoot = targetRoot.add(contextfabric.FactSubjectKey(target), repo.roots())
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1191,7 +1195,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 // Returns a per-target basis override map alongside targets/counts
 // (CHAOS-4101), the same way pullRequestsForRepositories does: each review
 // inherits the basis of the repository its pull request belongs to.
-func (e *ScopeExpander) pullRequestReviewsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int, status string) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts, error) {
+func (e *ScopeExpander) pullRequestReviewsForRepositories(ctx context.Context, orgID string, repos []repositoryCandidate, limit int, status string) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, targetRootSet, contextfabric.FactScopeExpansionCounts, error) {
 	if len(repos) == 0 {
 		return nil, nil, nil, nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
@@ -1217,7 +1221,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	var targets []contextfabric.SubjectRef
 	var targetBasis map[string]contextfabric.FactScopeBasis
 	var targetSource map[string]string
-	var targetRoot map[string]contextfabric.SubjectRef
+	var targetRoot targetRootSet
 	var missingNextHop int
 	for rows.Next() {
 		var reviewID, repoID string
@@ -1256,12 +1260,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			// CHAOS-4260: a review inherits the ROOT of the repository its
 			// pull request belongs to -- see pullRequestsForRepositories'
 			// own identical comment.
-			if repo.originRoot.CanonicalID != "" {
-				if targetRoot == nil {
-					targetRoot = map[string]contextfabric.SubjectRef{}
-				}
-				targetRoot[contextfabric.FactSubjectKey(target)] = repo.originRoot
-			}
+			targetRoot = targetRoot.add(contextfabric.FactSubjectKey(target), repo.roots())
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1409,6 +1408,15 @@ type workItemCandidate struct {
 	basis                     contextfabric.FactScopeBasis
 	attributionSource         string
 	originRoot                contextfabric.SubjectRef
+	originRoots               []contextfabric.SubjectRef
+}
+
+// roots is every requested origin that reached the work item.
+func (c workItemCandidate) roots() []contextfabric.SubjectRef {
+	if len(c.originRoots) > 0 {
+		return c.originRoots
+	}
+	return []contextfabric.SubjectRef{c.originRoot}
 }
 
 // The two sentinels devhealthsource/clickhouse.go's workItemAuthorization
@@ -1443,7 +1451,7 @@ func workItemAuthorizationSlug(repoID, repoSlug string) string {
 	return orphanedRepositorySentinelForScope
 }
 
-// workItemScopeSelectionColumns documents the TWENTY columns every
+// workItemScopeSelectionColumns documents the TWENTY-ONE columns every
 // work-item selection statement returns, in order, because the scanner
 // depends on that exact shape and a silent drift between the two is a
 // mis-scan, not a compile error:
@@ -1454,7 +1462,8 @@ func workItemAuthorizationSlug(repoID, repoSlug string) string {
 //	repo_less_denied, orphaned_population,
 //	organization_grant_population, direct_repo_population,
 //	project_ownership_population, pr_link_population,
-//	excluded_explicit_text_link_population, excluded_heuristic_link_population
+//	excluded_explicit_text_link_population, excluded_heuristic_link_population,
+//	origin_ids
 //
 // The first five and the two authorization arrays are MASKED on an
 // unauthorized row (see workItemScopeAuthorizationColumnsSQL). The last ELEVEN
@@ -1462,7 +1471,7 @@ func workItemAuthorizationSlug(repoID, repoSlug string) string {
 // can never come from two different observations -- D-a's "a count and page
 // obtained from unrelated observations cannot constitute a complete census",
 // made mechanical.
-const workItemScopeSelectionColumns = "repo_id, work_item_id, repo_slug, origin_id, attribution_source, authorized, repo_less, authorization_paths, authorization_repositories, scoped_population, authorized_population, repo_less_population, repo_less_denied, orphaned_population, organization_grant_population, direct_repo_population, project_ownership_population, pr_link_population, excluded_explicit_text_link_population, excluded_heuristic_link_population"
+const workItemScopeSelectionColumns = "repo_id, work_item_id, repo_slug, origin_id, attribution_source, authorized, repo_less, authorization_paths, authorization_repositories, scoped_population, authorized_population, repo_less_population, repo_less_denied, orphaned_population, organization_grant_population, direct_repo_population, project_ownership_population, pr_link_population, excluded_explicit_text_link_population, excluded_heuristic_link_population, origin_ids"
 
 // projectWorkItems runs the ONE-HOP project chain: project -> work_item,
 // stopping at the work item rather than continuing to its repository.
@@ -1519,7 +1528,7 @@ func (e *ScopeExpander) teamWorkItems(ctx context.Context, principal storage.Pri
 	}
 	scope := workItemRepositoryAuthorization(principal, nil)
 	rendered := readers.WorkItemScopeSQL(scope)
-	statement := workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(a.team_id) AS origin_id, argMin(toString(a.source), `+teamAttributionSourceRankSQL+`) AS attribution_source,
+	statement := workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(a.team_id) AS origin_id, arraySort(groupUniqArray(a.team_id)) AS origin_ids, argMin(toString(a.source), `+teamAttributionSourceRankSQL+`) AS attribution_source,
 `+workItemScopeAuthorizationColumnsSQL(rendered)+`,
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,
     toUInt8(toString(w.repo_id) != '`+zeroRepositoryID+`' AND ifNull(r.repo, '') = '') AS orphaned
@@ -1642,7 +1651,8 @@ func workItemScopeProjection(inner string, limit int) string {
   -- Rows with a link to a granted repository that is evidence, not a grant
   -- (only native links authorize), by kind, authorized or not.
   countIf(has(authorization_excluded_links, 'explicit_text')) OVER () AS excluded_explicit_text_link_population,
-  countIf(has(authorization_excluded_links, 'heuristic')) OVER () AS excluded_heuristic_link_population
+  countIf(has(authorization_excluded_links, 'heuristic')) OVER () AS excluded_heuristic_link_population,
+  if(authorized = 1, origin_ids, CAST([] AS Array(String))) AS origin_ids
 FROM (
 ` + inner + `
 )
@@ -1703,11 +1713,12 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 		var scopedPopulation, authorizedPopulation, repoLessPopulation, repoLessDenied, orphanedPopulation uint64
 		var organizationGrantPopulation, directRepoPopulation, projectOwnershipPopulation, pullRequestLinkPopulation uint64
 		var excludedExplicitTextPopulation, excludedHeuristicPopulation uint64
+		var originIDs []string
 		if err := rows.Scan(&repoID, &workItemID, &repoSlug, &originID, &attributionSource,
 			&authorized, &repoLess, &authorizationPaths, &authorizationRepositories,
 			&scopedPopulation, &authorizedPopulation, &repoLessPopulation, &repoLessDenied, &orphanedPopulation,
 			&organizationGrantPopulation, &directRepoPopulation, &projectOwnershipPopulation, &pullRequestLinkPopulation,
-			&excludedExplicitTextPopulation, &excludedHeuristicPopulation); err != nil {
+			&excludedExplicitTextPopulation, &excludedHeuristicPopulation, &originIDs); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		returned++
@@ -1765,6 +1776,7 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 			authorizationRepositories: authorizationRepositories,
 			attributionSource:         attributionSource,
 			originRoot:                originsByID[originID],
+			originRoots:               originRootsOf(originsByID[originID], originIDs, originsByID),
 		}
 		if teamOrigin {
 			// A closed vocabulary, and an unrecognised source is a REFUSAL,
@@ -1839,11 +1851,11 @@ func knownComputedAttributionSource(source string) bool {
 // project-ownership or pull-request-link path returned; it is admitted only
 // when one of those repositories passes the same primitive, and never on the
 // statement's flag alone.
-func authorizeWorkItems(principal storage.Principal, candidates []workItemCandidate) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts) {
+func authorizeWorkItems(principal storage.Principal, candidates []workItemCandidate) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, targetRootSet, contextfabric.FactScopeExpansionCounts) {
 	targets := make([]contextfabric.SubjectRef, 0, len(candidates))
 	var targetBasis map[string]contextfabric.FactScopeBasis
 	var targetSource map[string]string
-	var targetRoot map[string]contextfabric.SubjectRef
+	var targetRoot targetRootSet
 	counts := contextfabric.FactScopeExpansionCounts{}
 
 	for _, candidate := range candidates {
@@ -1896,12 +1908,7 @@ func authorizeWorkItems(principal storage.Principal, candidates []workItemCandid
 			}
 			targetSource[key] = candidate.attributionSource
 		}
-		if candidate.originRoot.CanonicalID != "" {
-			if targetRoot == nil {
-				targetRoot = map[string]contextfabric.SubjectRef{}
-			}
-			targetRoot[key] = candidate.originRoot
-		}
+		targetRoot = targetRoot.add(key, candidate.roots())
 	}
 	return targets, targetBasis, targetSource, targetRoot, counts
 }
@@ -1972,7 +1979,7 @@ func workItemExpansionResult(principal storage.Principal, candidates []workItemC
 	counts.PullRequestLinkAdmittedCount += authCounts.PullRequestLinkAdmittedCount
 	return contextfabric.FactScopeExpansionResult{
 		Targets: targets, TargetBasis: targetBasis,
-		TargetAttributionSource: targetSource, TargetRoot: targetRoot,
+		TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot,
 		Counts: counts,
 	}
 }
@@ -1988,7 +1995,7 @@ func workItemExpansionResult(principal storage.Principal, candidates []workItemC
 // satisfied by a mutant that put the expected text in an SQL comment. The
 // answer is to execute it, which needs the string to be reachable.
 func projectWorkItemSelectionSQL(rendered readers.WorkItemScopeSQLResult, limit int) string {
-	return workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(concat(p.provider, '`+projectOriginKeySeparator+`', p.id)) AS origin_id, '' AS attribution_source,
+	return workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(concat(p.provider, '`+projectOriginKeySeparator+`', p.id)) AS origin_id, arraySort(groupUniqArray(concat(p.provider, '`+projectOriginKeySeparator+`', p.id))) AS origin_ids, '' AS attribution_source,
 `+workItemScopeAuthorizationColumnsSQL(rendered)+`,
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,
     toUInt8(toString(w.repo_id) != '`+zeroRepositoryID+`' AND ifNull(r.repo, '') = '') AS orphaned

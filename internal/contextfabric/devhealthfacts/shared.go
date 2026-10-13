@@ -1023,7 +1023,21 @@ import (
 // served once for the request and no longer on the row of a team it is false
 // for; a team that owns nothing gets its own reason. A stored answer can
 // differ.
-const QueryVersion = "devhealthfacts.clickhouse.v203"
+//
+// v202 -> v203: a pull request, project or incident list question that names no
+// organization or parent now applies its stated status. An answer saved under
+// v202 listed the unfiltered set.
+//
+// v203 -> v204: the scope expander names every requested origin that reached a
+// target, so a multi-root answer derives each shared target from every root.
+// An answer saved under v203 attributed it to one root only.
+//
+// v204 -> v205: a secondary caveat sentence (project-reach absence, unwindowed
+// project links, revert-rate day count, investment units cursor, incident
+// severity omission, owning-teams cut) is served on the rows it describes and
+// no longer on every row of the kind. An answer saved under v204 carries each
+// on rows it is false for.
+const QueryVersion = "devhealthfacts.clickhouse.v205"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
