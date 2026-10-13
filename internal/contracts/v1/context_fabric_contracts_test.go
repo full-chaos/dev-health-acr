@@ -701,7 +701,7 @@ func collectSourceStateEnums(node any) [][]string {
 	var found [][]string
 	switch typed := node.(type) {
 	case map[string]any:
-		if rawEnum, ok := typed["enum"].([]any); ok {
+		if rawEnum, ok := schemaVocabulary(typed); ok {
 			values := make([]string, 0, len(rawEnum))
 			hasNotApplicable := false
 			hasPruned := false

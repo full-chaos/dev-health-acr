@@ -30,7 +30,9 @@
       "maxLength": 256
     },
     "category": {
-      "enum": [
+      "type": "string",
+      "description": "Open vocabulary; documented values: state, pressure, cause, evidence, action. A client must tolerate values it does not know.",
+      "x-documented-values": [
         "state",
         "pressure",
         "cause",
@@ -39,7 +41,9 @@
       ]
     },
     "claim_kind": {
-      "enum": [
+      "type": "string",
+      "description": "Open vocabulary; documented values: observed, inferred, recommendation. A client must tolerate values it does not know.",
+      "x-documented-values": [
         "observed",
         "inferred",
         "recommendation"
@@ -71,7 +75,9 @@
       "maximum": 1
     },
     "severity": {
-      "enum": [
+      "type": "string",
+      "description": "Open vocabulary; documented values: info, warning, high, critical. A client must tolerate values it does not know.",
+      "x-documented-values": [
         "info",
         "warning",
         "high",
