@@ -80,6 +80,8 @@ func producedInstruments(t *testing.T) map[string][]string {
 	instruments.RequirementOutcome(ctx, "served", 1)
 	instruments.FactReadAbort(ctx, "other")
 	instruments.InvestigationLatency(ctx, "complete", time.Second)
+	instruments.ClickHouseNearMemoryCap(ctx)
+	instruments.ClickHousePeakUnobserved(ctx)
 	produced := map[string][]string{}
 	for cell := range read() {
 		name, rest, _ := strings.Cut(cell, "{")

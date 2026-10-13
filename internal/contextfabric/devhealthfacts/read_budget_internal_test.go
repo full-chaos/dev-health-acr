@@ -127,8 +127,8 @@ func TestRepoMixRowLimitHoldsEveryRepositoryWindowAndSpanRowPlusOneProbe(t *test
 		}
 	}
 	statement := repoMixStatementScoped([]factTimeBound{{}}, membershipScope{mode: membershipScopeIDs, ids: []string{"a"}}, 1001)
-	if !strings.HasSuffix(statement, "\nLIMIT 1001") {
-		t.Fatalf("statement does not end with the sized LIMIT: %q", statement[len(statement)-40:])
+	if !strings.HasSuffix(statement, "\nLIMIT 1001\nSETTINGS max_memory_usage = 536870912") {
+		t.Fatalf("statement does not end with the sized LIMIT and the memory limit: %q", statement[len(statement)-80:])
 	}
 }
 
