@@ -107,7 +107,7 @@ func TestProjectRollupsServeNoFactForAProjectWithNothingCounted(t *testing.T) {
 func TestProjectBlockerRollupServesTheProjectIssueCounts(t *testing.T) {
 	t.Parallel()
 	project := projectRollupSubject(t, "P1")
-	client := &fakeClient{tables: []fakeTable{{match: projectBlockerRollupMatch, rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: "arrayJoin([(1, de.source_work_item_id)", rows: nil}, {match: projectBlockerRollupMatch, rows: [][]any{
 		{"github:P1", int64(2), int64(3), int64(1), int64(0)},
 	}}}}
 	result := readProjectRollup(t, client, contextfabric.FactBlockers, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, project)
