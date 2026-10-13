@@ -175,7 +175,7 @@ func (s *EpisodesProjectionSource) clock() time.Time {
 // ordering.
 func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 	canonicalID := "episode:" + row.EpisodeID
-	if row.RedactionState != "active" {
+	if row.RedactionState != contractsv1.AgentEpisodeRedactionActive {
 		tombstone := contractsv1.ContextFabricProjectionTombstone{
 			Kind: "episode", CanonicalID: canonicalID, Reason: row.RedactionState, EffectiveAt: row.UpdatedAt, SourceVersion: EpisodesSourceVersion,
 		}

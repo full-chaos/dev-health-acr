@@ -574,6 +574,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// distinguishes real degradation from ordinary, silent filtering, and it
 	// alone drives Coverage.Partial.
 	failedLookups := 0
+	// poolFailedLookups is the part of failedLookups that can have lost a member
+	// of the cohort. A failure in a walk whose declared-kind members are
+	// discarded (an anchor owns the member set) loses none.
+	poolFailedLookups := 0
 	// exactNameTruncated (CHAOS-4395, codex round-1 P1) reports whether
 	// chaos4348ExactNameCandidates' bounded org-wide kind census was cut
 	// off before it finished -- only ever set for a discovered_cohort
@@ -703,6 +707,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		anchoredMembers = []contextfabric.SubjectRef{*orgStatusAnchor}
 	}
 	teamAnchoredMembers := len(anchoredMembers) > 0
+	memberSetOwnedByAnchor := teamAnchoredMembers || ownershipRoutedRepoSlug != "" || deploymentAnchor != nil
 	anchoredMemberTiers := map[string]string{}
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
@@ -774,6 +779,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
 		failedLookups += failed
+		if !memberSetOwnedByAnchor {
+			poolFailedLookups += failed
+		}
 		// ANY committed subject's walk hitting its cap clips the shared pool
 		// (CHAOS-5168, r1 finding 1): every walk appends into the same
 		// resolvedNodes that becomes cohortNodes, so this is an OR across
@@ -1045,6 +1053,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		switch resolution {
 		case edgeLookupFailed:
 			failedLookups++
+			if !memberSetOwnedByAnchor {
+				poolFailedLookups++
+			}
 			// SITE 3 OF 3 on this one counter -- the committed-subject text
 			// walk. Same cause as the hop walk's edge-admission failure, so
 			// the same `edge_endpoint` site value: the vocabulary names the
@@ -1438,7 +1449,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// census, so the exact-name cut is not a loss from this cohort's pool.
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
+		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, poolFailedLookups > 0, censusCoversThisCohort)
 	// request's OWN RequestedScope reaches admission completely unmodified
 	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
 	// for where an ownership-routed call's membership is actually decided.

@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func init() {
@@ -239,7 +240,8 @@ func init() {
 			why:   "protocol",
 			sites: []string{"read_relationships:effective.axis"},
 			// schema: "current", "as_of"
-			schemaOnly: "the current/as_of axis is served from string literals in directread/read_relationships.go with no constant",
+			goSet:      directread.RelationshipsAxisVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "from.status",
@@ -256,7 +258,8 @@ func init() {
 			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
 			sites:          []string{"read_relationships:edges.items.provenance.link_tier"},
 			// schema: "native", "explicit_text", "heuristic"
-			schemaOnly: "directread.linkTierVocabulary is unexported",
+			goSet:      directread.LinkTierVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "truncated_by",
@@ -273,7 +276,8 @@ func init() {
 			why:   "state-machine",
 			sites: []string{"record_episode:status"},
 			// schema: "recorded", "no_persist"
-			schemaOnly: "recorded/no_persist are string literals in mcp/record_episode.go",
+			goSet:      contractsv1.MCPRecordEpisodeStatusVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "redaction_state",
@@ -281,7 +285,8 @@ func init() {
 			clientValidate: "contractsv1.MCPRecordEpisodeResponse.ValidateRead",
 			sites:          []string{"record_episode:redaction_state"},
 			// schema: "active", "redacted", "purged_tombstone"
-			schemaOnly: "active/redacted/purged_tombstone are string literals in contracts/v1/validate.go",
+			goSet:      contractsv1.AgentEpisodeRedactionStateVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "transcript_disposition",
@@ -289,7 +294,8 @@ func init() {
 			clientValidate: "none: minted by the local sidecar from the request and the hosted episode; it never carries a server-added value",
 			sites:          []string{"record_episode:transcript_disposition"},
 			// schema: "not_submitted", "accepted", "redacted"
-			schemaOnly: "not_submitted/accepted/redacted are string literals in contracts/v1/mcp_validate.go",
+			goSet:      contractsv1.MCPTranscriptDispositionVocabulary(),
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "refusal.code#2",

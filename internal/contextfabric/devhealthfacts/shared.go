@@ -1039,7 +1039,18 @@ import (
 // v205 -> v206: team and project blockers facts serve the age of the oldest
 // open blocker (oldest_blocked_age_days, with its basis or an unavailable
 // reason). An answer saved under v205 carries no age.
-const QueryVersion = "devhealthfacts.clickhouse.v207"
+//
+// v206 -> v207: a cohort anchored to a team, repository, project or the
+// caller's organization is no longer marked truncated by an unrelated
+// subject's failed lookup. An answer saved under v206 can mark a complete set
+// truncated.
+//
+// v207 -> v208: every blocker read (team, project, work item) keeps only the
+// links the provider still reports; a link it removed is no longer counted or
+// named the oldest blocker. Team and project blockers facts carry
+// blocker_dependencies_writer_unresolved_current. An answer saved under v207
+// can count a removed link.
+const QueryVersion = "devhealthfacts.clickhouse.v208"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
