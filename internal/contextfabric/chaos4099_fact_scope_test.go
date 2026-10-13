@@ -178,9 +178,8 @@ func TestChaos4099_ProjectSubjectNoLongerClaimsAProofOfAbsence(t *testing.T) {
 		if strings.HasPrefix(observation.Reason, FactPruneReasonSubjectKindUnsupported) {
 			t.Fatalf("%s reason = %q, want the unexpanded vocabulary, not the prune vocabulary", kind, observation.Reason)
 		}
-		wantPrefix := FactScopeReasonUnexpanded + ":" + string(FactScopePolicyUnavailable)
-		if !strings.HasPrefix(observation.Reason, wantPrefix) {
-			t.Fatalf("%s reason = %q, want prefix %q", kind, observation.Reason, wantPrefix)
+		if !strings.HasPrefix(observation.Reason, "no resolved subject holds this capability's facts directly and ") || strings.Contains(observation.Reason, "unexpanded:") {
+			t.Fatalf("%s reason = %q, want the plain unexpanded sentence with no internal token", kind, observation.Reason)
 		}
 	}
 	if !bundle.Coverage.Partial {
@@ -2553,7 +2552,7 @@ func TestChaos4099_APartiallyLostExpansionDegradesTheBundle(t *testing.T) {
 	if !factStateDegrades(observation.State) {
 		t.Fatalf("coverage state = %q does not degrade -- the gap is invisible to every bundle consumer", observation.State)
 	}
-	if !strings.Contains(observation.Reason, string(FactScopeReasonUnexpanded)) {
+	if !strings.Contains(observation.Reason, "scope expansion") || strings.Contains(observation.Reason, "unexpanded:") {
 		t.Fatalf("reason = %q, want the unexpanded note riding on the capability's own observation", observation.Reason)
 	}
 	if len(bundle.Coverage.DegradedReasons) == 0 {

@@ -211,6 +211,24 @@
           "reason": {
             "type": "string"
           },
+          "expansion": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "outcome",
+              "policy"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "description": "The scope-expansion decision for this row, for example policy_unavailable. An open vocabulary: new values are additive."
+              },
+              "policy": {
+                "type": "string"
+              }
+            },
+            "description": "Set when the row's own facts were read and the facts reachable only through scope expansion were not added on this read. The row outcome describes what was read; this note describes what expansion did not add, so the row's counts are a lower bound for the expanded part."
+          },
           "withheld": {
             "type": "array",
             "items": {

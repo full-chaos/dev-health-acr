@@ -1078,6 +1078,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// Coverage.Partial, and it permits facts. Same discipline as the
 		// registry fan-out cap and the R4-2 omission path, which reach this
 		// state for the same reason.
+		gapOnlyTruncation := planned.ScopeGap != nil && !result.Truncated && result.OmittedCount == 0
 		if planned.ScopeGap != nil {
 			result.Truncated = true
 		}
@@ -1128,6 +1129,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
 		r.recordEvaluationCoverage(ctx, principal, planned.Kind, result.Evaluation, len(result.EvaluatedSubjects))
 		bundle.recordOutcome(planned.Kind, factReadCompleted, planned.Subjects, query.Subjects, &result)
+		if gapOnlyTruncation && mergedState == SourceTruncated && factCountOfKind(bundle.Facts, planned.Kind) == factsReturned {
+			ledgered := bundle.Outcomes[planned.Kind]
+			ledgered.TruncatedOnlyByScopeGap = true
+			bundle.Outcomes[planned.Kind] = ledgered
+		}
 		bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
@@ -2162,4 +2168,14 @@ func onlyLinkScopedWorkItems(request CanonicalFactRequest, subjects []SubjectRef
 		}
 	}
 	return len(subjects) > 0
+}
+
+func factCountOfKind(facts []CanonicalFact, kind FactKind) int {
+	count := 0
+	for _, fact := range facts {
+		if fact.Kind == kind {
+			count++
+		}
+	}
+	return count
 }

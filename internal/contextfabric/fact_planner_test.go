@@ -578,7 +578,7 @@ func TestReadFactsProjectCohortNowAnswers(t *testing.T) {
 	// report is a disclosed gap.
 	if got := byKind["canonical_fact:health"]; got.State == SourcePruned {
 		t.Fatalf("health = %+v, want a disclosed gap: its facts ARE reachable from a project", got)
-	} else if !strings.HasPrefix(got.Reason, FactScopeReasonUnexpanded) {
+	} else if !strings.Contains(got.Reason, "scope expansion") || strings.Contains(got.Reason, "unexpanded:") {
 		t.Fatalf("health reason = %q, want the unexpanded vocabulary", got.Reason)
 	}
 	// workload is TEAM-scoped. Reaching it from a project would have to run

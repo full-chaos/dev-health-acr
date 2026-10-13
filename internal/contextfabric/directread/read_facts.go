@@ -331,7 +331,17 @@ type CoverageRow struct {
 	ProviderState string         `json:"provider_state,omitempty"`
 	KindState     string         `json:"kind_state,omitempty"`
 	Reason        string         `json:"reason,omitempty"`
-	Withheld      []string       `json:"withheld,omitempty"`
+	// Expansion names the scope-expansion decision beside a row whose own
+	// facts were read: facts reachable only through expansion are a separate
+	// part of the answer and never the row outcome.
+	Expansion *RowExpansion `json:"expansion,omitempty"`
+	Withheld  []string      `json:"withheld,omitempty"`
+}
+
+// RowExpansion is a row's scope-expansion decision.
+type RowExpansion struct {
+	Outcome string `json:"outcome"`
+	Policy  string `json:"policy"`
 }
 
 // Truncation describes response-level truncation.
@@ -1118,7 +1128,12 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
-				if share, expanded := derived.derivedCoverage(kind, subject, served); expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
+				if share, expanded := derived.derivedCoverage(kind, subject, served); expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable {
+					row.Expansion = &RowExpansion{Outcome: string(share.expansion.outcome), Policy: share.expansion.policy}
+					if row.Outcome == OutcomeTruncated && row.ProviderState == "" && outcome.TruncatedOnlyByScopeGap {
+						row.Outcome = OutcomeFactServed
+					}
+				} else if expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
 					row.Reason = joinReason(row.Reason, derivedReason(share))
 					lowerBound := share.shared || expansionCut(share.expansion.outcome)
 					switch {

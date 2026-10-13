@@ -27,22 +27,6 @@ const (
 	// cannot be a second Coverage entry -- it is prefixed onto the
 	// capability's own observation instead.
 	FactNarrowReasonSubjectKindUnsupported = "narrowed:subject_kind_unsupported"
-	// FactScopeReasonUnexpanded is CHAOS-4099's SEPARATE prefix for a
-	// capability that no resolved subject can answer directly AND that
-	// scope expansion did not reach.
-	//
-	// A THIRD PREFIX RATHER THAN A FOURTH SPELLING OF "pruned" (ruling
-	// invariant 7). The two prefixes above both describe a decision the
-	// planner can PROVE: the capability's declared subject kinds and the
-	// resolved subject kinds do not intersect, therefore no admissible fact
-	// existed. This prefix describes the opposite epistemic state -- the
-	// facts may well exist and be reachable, and the system did not reach
-	// them. Reusing "pruned:" for it is precisely how a structural gap came
-	// to be reported as a proof of absence for the whole life of this
-	// defect. The suffix after the colon is the closed
-	// FactScopeExpansionOutcome value, so operators and tests match on a
-	// vocabulary rather than parsing a sentence.
-	FactScopeReasonUnexpanded = "unexpanded"
 )
 
 // factPlanRequirement is one requested fact family, reduced to the only two
@@ -238,7 +222,7 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 				plan = append(plan, factPlanEntry{
 					Kind:     requirement.Kind,
 					ScopeGap: &gap,
-					Reason:   unexpandedReason(capability, gap),
+					Reason:   unexpandedReason(capability, gap, false),
 				})
 				continue
 			}
@@ -377,29 +361,24 @@ func prunedReason(capability FactCapability, unsupported []SubjectKind) string {
 // resolver knows it: telling a reader "3 targets existed but you cannot see
 // them" is an existence side-channel (ruling invariant 9). That count goes to
 // telemetry, and only to telemetry.
-func unexpandedReason(capability FactCapability, gap FactScopeGap) string {
-	if gap.WindowUnsupported() {
-		support := "does not support an observed-time window; ask without a window, or with an as-of or date-range window, to read it"
-		if gap.CurrentAxisOnly {
-			support = "supports the current window only; ask without a window to read it"
-		}
-		return fmt.Sprintf(
-			"%s:%s: no resolved subject holds this capability's facts directly and the scope policy %s (origin: %s; supported: %s; policy: %s; basis: %s)",
-			FactScopeReasonUnexpanded, gap.Outcome, support, gap.OriginKind,
-			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
-		)
+func unexpandedReason(capability FactCapability, gap FactScopeGap, ownFactsRead bool) string {
+	lead := "no resolved subject holds this capability's facts directly and"
+	if ownFactsRead {
+		lead = "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because"
 	}
-	if gap.ScopeExpansionUnavailable() {
-		return fmt.Sprintf(
-			"%s:%s: no resolved subject holds this capability's facts directly and no scope expander is wired on this server (origin: %s; supported: %s; policy: %s; basis: %s)",
-			FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
-			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
-		)
+	cause := "scope expansion did not reach them"
+	switch {
+	case gap.WindowUnsupported():
+		cause = "the scope policy does not support an observed-time window; ask without a window to read it"
+		if gap.CurrentAxisOnly {
+			cause = "the scope policy supports the current window only; ask without a window to read it"
+		}
+	case gap.ScopeExpansionUnavailable():
+		cause = "no scope expander is wired on this server"
 	}
 	return fmt.Sprintf(
-		"%s:%s: no resolved subject holds this capability's facts directly and scope expansion did not reach them (origin: %s; supported: %s; policy: %s; basis: %s)",
-		FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
-		joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
+		"%s %s (origin: %s; supported: %s; policy: %s; basis: %s)",
+		lead, cause, gap.OriginKind, joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
 	)
 }
 
@@ -491,7 +470,7 @@ func withScopeGapDisclosure(entry factPlanEntry, scope *FactReadScope, capabilit
 		return entry
 	}
 	entry.ScopeGap = &gap
-	entry.Reason = strings.TrimSpace(entry.Reason + " " + unexpandedReason(capability, gap))
+	entry.Reason = strings.TrimSpace(entry.Reason + " " + unexpandedReason(capability, gap, true))
 	return entry
 }
 

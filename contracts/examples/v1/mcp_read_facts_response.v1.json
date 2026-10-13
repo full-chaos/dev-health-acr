@@ -82,7 +82,21 @@
       },
       "outcome": "unavailable",
       "kind_state": "window_unsupported",
-      "reason": "unexpanded:policy_unavailable: no resolved subject holds this capability's facts directly and the scope policy supports the current window only; ask without a window to read it (origin: project; supported: repository; policy: project_issue_pull_request_deployments_v1; basis: activity_proxy)"
+      "reason": "no resolved subject holds this capability's facts directly and the scope policy supports the current window only; ask without a window to read it (origin: project; supported: repository; policy: project_issue_pull_request_deployments_v1; basis: activity_proxy)"
+    },
+    {
+      "kind": "pull_requests",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project-checkout"
+      },
+      "outcome": "fact_served",
+      "kind_state": "truncated",
+      "reason": "the requested subjects that hold this capability's facts directly were read; facts reachable only through scope expansion were not added because no scope expander is wired on this server (origin: project; supported: project,team,repository; policy: project_work_item_pull_request_v1; basis: activity_proxy)",
+      "expansion": {
+        "outcome": "policy_unavailable",
+        "policy": "project_work_item_pull_request_v1"
+      }
     }
   ],
   "versions": {
