@@ -22,7 +22,7 @@ import (
 //     declared kind with at least one case; an undeclared kind fails.
 
 // directServableKinds are the declared kinds: the nine aggregate kinds
-// (CHAOS-7073), the twelve entity kinds (CHAOS-7120) and commitment. Every registered
+// (CHAOS-7073) and the thirteen entity kinds and commitment. Every registered
 // provider must be one of them; there is no "not yet" list.
 var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactInvestment, contextfabric.FactHealth, contextfabric.FactMetrics,
@@ -32,6 +32,7 @@ var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactWork, contextfabric.FactActualCompletion, contextfabric.FactBlockers,
 	contextfabric.FactRequiredChildren, contextfabric.FactPullRequests, contextfabric.FactReviews,
 	contextfabric.FactContinuousIntegration, contextfabric.FactDeployments, contextfabric.FactIncidents,
+	contextfabric.FactSecurityAlerts,
 	contextfabric.FactCommitment,
 }
 
@@ -491,6 +492,25 @@ func t4Cases() []t4Case {
 	add(t4Case{name: "continuous_integration/repository", kind: contextfabric.FactContinuousIntegration, subjects: repo, tables: []fakeTable{
 		{match: "FROM cicd_metrics_daily", rows: [][]any{cicdMetricsRow("repo-1"), noDurations}},
 	}})
+	alertsAt := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name, provider string
+		rows           [][]any
+	}{
+		{"github", "github", [][]any{
+			{"repo-1", "dependabot", "critical", int64(2), int64(3), alertsAt, alertsAt.Add(24 * time.Hour), alertsAt.Add(48 * time.Hour)},
+			{"repo-1", "code_scanning", "", int64(1), int64(1), alertsAt, alertsAt, alertsAt.Add(48 * time.Hour)},
+			{"repo-1", "advisory", "low", int64(0), int64(1), time.Time{}, time.Time{}, alertsAt},
+		}},
+		{"gitlab", "gitlab", [][]any{{"repo-1", "gitlab_vulnerability", "high", int64(1), int64(1), alertsAt, alertsAt, alertsAt}, {"repo-1", "gitlab_dependency", "medium", int64(1), int64(1), alertsAt, alertsAt, alertsAt}}},
+		{"no_rows", "github", nil},
+		{"not_collected", "jira", nil},
+	} {
+		add(t4Case{name: "security_alerts/repository_" + c.name, kind: contextfabric.FactSecurityAlerts, subjects: repo, tables: []fakeTable{
+			{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", c.provider}}},
+			{match: "FROM security_alerts", rows: c.rows},
+		}})
+	}
 	add(t4Case{name: "deployments/deployment", kind: contextfabric.FactDeployments, subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")}, tables: []fakeTable{
 		{match: "FROM deployments", rows: [][]any{{"deploy-1", "success", "production", "repo-1"}, {"deploy-1", "", "", "repo-1"}}},
 	}})
@@ -704,8 +724,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 	for _, kind := range directServableKinds {
 		direct[kind] = true
 	}
-	if len(directServableKinds) != 22 || len(direct) != 22 {
-		t.Fatalf("expected 22 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
+	if len(directServableKinds) != 23 || len(direct) != 23 {
+		t.Fatalf("expected 23 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
 	}
 	registered := map[contextfabric.FactKind]bool{}
 	for _, provider := range devhealthfacts.NewProviders(&fakeClient{}) {
@@ -722,8 +742,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 			t.Errorf("%s: declared kind has no catalogue-truth case", kind)
 		}
 	}
-	if len(registered) != 22 {
-		t.Errorf("registered providers = %d kinds, want 22", len(registered))
+	if len(registered) != 23 {
+		t.Errorf("registered providers = %d kinds, want 23", len(registered))
 	}
 	for kind := range direct {
 		if !registered[kind] {
@@ -806,7 +826,7 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 	}
 	// Labels and ratios are not scores; no entity field is an aggregate
 	// (actual_completion's project counts are over the caller's own items).
-	entity := directServableKinds[9:21]
+	entity := directServableKinds[9:22]
 	for _, kind := range entity {
 		capability := t4Capability(kind)
 		for _, field := range capability.Fields {
@@ -832,8 +852,8 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 			}
 		}
 	}
-	if len(entity) != 12 || entity[0] != contextfabric.FactIdentity {
-		t.Fatalf("entity kinds = %v, want the twelve CHAOS-7120 kinds", entity)
+	if len(entity) != 13 || entity[0] != contextfabric.FactIdentity {
+		t.Fatalf("entity kinds = %v, want the thirteen entity kinds", entity)
 	}
 }
 

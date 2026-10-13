@@ -471,7 +471,7 @@ type FactScopeExpansionEvent struct {
 	// how many project_membership_transitions touches the expander's own
 	// historical traversal flagged as malformed: a REMOVE touch with no
 	// prior ADD to close -- see devhealthsource's membershipIntervalsSubquery
-	// and devhealthfacts' membershipTouchesAsOfSQL, which both derive this
+	// and devhealthfacts' membershipTouchesAsOfAmongSQL, which both derive this
 	// the same way. A malformed touch is silently excluded from the answer
 	// (never guessed into an interval boundary); this count is the ONLY
 	// signal that anything was excluded for that reason rather than

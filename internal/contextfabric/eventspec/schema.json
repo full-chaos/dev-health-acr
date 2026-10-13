@@ -1279,6 +1279,11 @@
         "presence": "required"
       },
       {
+        "key": "claimed_facts_security_alerts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "claimed_facts_commitment",
         "type": "int",
         "presence": "required"
@@ -3244,6 +3249,11 @@
         "presence": "required"
       },
       {
+        "key": "requirement_computed_input_kind_unplanned_security_alerts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "requirement_computed_input_kind_unplanned_commitment",
         "type": "int",
         "presence": "required"
@@ -3415,6 +3425,11 @@
       },
       {
         "key": "requirement_computed_input_kind_landscape",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_security_alerts",
         "type": "int",
         "presence": "required"
       },

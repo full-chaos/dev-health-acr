@@ -31,8 +31,8 @@ const (
 	// v21 -> v22: the input cohort carries the population a cut list was
 	// drawn from, so an answer reused under v21 is never served without it.
 	//
-	// v22 -> v23: the quoted closed fact-kind set names commitment.
-	PromptVersion = "context-fabric-synthesis.v23"
+	// v23 -> v24: the quoted closed fact-kind set names commitment.
+	PromptVersion = "context-fabric-synthesis.v24"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

@@ -46,6 +46,7 @@ var contextFabricFactKindLabels = map[ContextFabricFactKind]string{
 	ContextFabricFactEvidence:                "evidence",
 	ContextFabricFactFlow:                    "flow",
 	ContextFabricFactLandscape:               "landscape",
+	ContextFabricFactSecurityAlerts:          "security alerts",
 	ContextFabricFactCommitment:              "commitment",
 }
 

@@ -13,7 +13,7 @@
           "system_sha256"
         ],
         "current": {
-          "model_output_version": "context-fabric-model-output.v10",
+          "model_output_version": "context-fabric-model-output.v11",
           "prompt_version": "context-fabric-interpretation.v30",
           "system_sha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
         }

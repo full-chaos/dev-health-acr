@@ -226,7 +226,7 @@ func validMCPWriteBackFixture() MCPInvestigateWithInterpretationRequest {
 		},
 		Interpretation: json.RawMessage(`{"shape":"open"}`),
 		Contract: ContextFabricInterpretationContract{
-			ModelOutputVersion: "context-fabric-model-output.v10",
+			ModelOutputVersion: "context-fabric-model-output.v11",
 			PromptVersion:      "context-fabric-interpretation.v30",
 			SystemSHA256:       strings.Repeat("a", 64),
 		},

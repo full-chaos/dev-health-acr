@@ -331,6 +331,16 @@ var ProductionColumns = map[string][]Column{
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
+	"security_alerts": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "alert_id", Type: "String"},
+		{Name: "source", Type: "String"},
+		{Name: "severity", Type: "Nullable(String)"},
+		{Name: "state", Type: "Nullable(String)"},
+		{Name: "created_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
+		{Name: "org_id", Type: "String"},
+	},
 	"repos": {
 		{Name: "id", Type: "UUID"},
 		{Name: "repo", Type: "String"},
@@ -723,6 +733,7 @@ var EngineFull = map[string]string{
 	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"security_alerts":                         "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id) SETTINGS index_granularity = 8192",
 	"sprints":                                 "ReplacingMergeTree(last_synced) ORDER BY (org_id, provider, sprint_id) SETTINGS index_granularity = 8192",
 	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so
 	// FINAL cannot collapse two windows of the same edge -- that is exactly

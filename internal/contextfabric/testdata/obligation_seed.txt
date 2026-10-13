@@ -34,7 +34,7 @@ principal_drivers
   project              flow health investment landscape metrics readiness workload
   pull_request         pull_requests
   pull_request_review  reviews
-  repository           continuous_integration deployments flow health metrics
+  repository           continuous_integration deployments flow health metrics security_alerts
   team                 deployments flow health incidents investment landscape metrics operational_deficiencies pull_requests readiness workload
 
 readiness

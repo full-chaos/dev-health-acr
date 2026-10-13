@@ -37,7 +37,7 @@ var rootPairs = map[string]rootPair{
 	"complexityTimeseries": {Mode: ModeShape, Reason: "no acr fact: no fact provider reads repo_complexity_daily or file_complexity_snapshots"},
 	"compoundingRisk":      {Mode: ModeValue, compare: compareHealth},
 	"hotspots":             {Mode: ModeShape, Reason: "no acr fact: no file subject kind and no provider reads file_hotspot_daily"},
-	"securityOverview":     {Mode: ModeShape, Reason: "no acr fact: no fact kind reads security_alerts"},
+	"securityOverview":     {Mode: ModeShape, Reason: "no value compare yet: the security_alerts fact serves open counts per repository only, with no organization aggregate, trend or mean days to fix"},
 	"throughputForecast":   {Mode: ModeValue, compare: compareReadiness},
 	"workGraphArtifacts":   {Mode: ModeShape, Reason: "no acr fact: acr serves graph edges through read_relationships, from other tables than work_graph_edges (lead ruling: shape only)"},
 	"workGraphEdges":       {Mode: ModeShape, Reason: "no acr fact: acr serves graph edges through read_relationships, from other tables than work_graph_edges (lead ruling: shape only)"},

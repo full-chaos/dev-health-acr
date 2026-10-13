@@ -509,9 +509,10 @@ const irreducibleAnswerBytes = 1023
 //
 // 521555112 -> 521555762 (+650): driver rank, 10000 on 50 drivers.
 // 521555762 -> 521585712 (+29950): driver source_state_note at its 96 maximum on every driver.
-// 521585712 -> 521656901 (+71189): the fact-kind vocabulary gains commitment, so every full kind list is one member longer.
-// 521656901 -> 521657241 (+340): ContextFabricFactScopeCensusMaxCount 26 -> 27 (team_project_ownership_commitment_v1), one more maximal census record.
-const maximalAnswerBytes = 521657241
+//
+// 521585712 -> 521657911 (+72199): the fact kind vocabulary gained security_alerts.
+// main + commitment (one more fact kind and one more census record): CI-measured, not yet pinned.
+const maximalAnswerBytes = 521657911
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {

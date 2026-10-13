@@ -43,6 +43,7 @@ func TestNewProvidersRegistersExactlyTheCoveredKinds(t *testing.T) {
 		contextfabric.FactSourceHealth:            true,
 		contextfabric.FactFlow:                    true,
 		contextfabric.FactLandscape:               true,
+		contextfabric.FactSecurityAlerts:          true,
 		contextfabric.FactCommitment:              true,
 	}
 	if len(capabilities) != len(want) {

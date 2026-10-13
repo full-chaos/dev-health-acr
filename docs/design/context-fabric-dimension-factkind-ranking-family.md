@@ -2,7 +2,7 @@
 
 CHAOS-4468 asked for a mapping between the nine canonical
 [`HealthDimension`](../../internal/contextfabric/chaos4632_question_family_registry.go)
-values, the 22 registered `FactKind`s, and `cohort_ranking.go`'s five
+values, the 23 registered `FactKind`s, and `cohort_ranking.go`'s five
 `RankingSignal*` ranking families. Before CHAOS-4468 this mapping existed
 nowhere: North Star §19 says so itself ("No such mapping exists as of
 2026-08-28").
@@ -56,6 +56,7 @@ and `—` says so honestly rather than leaving a placeholder.
 | execution_completion | readiness | devhealthfacts.readiness | readiness.coverage_gap |
 | dependencies_and_blockers | required_children | devhealthfacts.required_children | — |
 | review_and_ci_pressure | reviews | devhealthfacts.reviews | — |
+| code_ownership_risk | security_alerts | devhealthfacts.security_alerts | — |
 | data_trust | source_health | devhealthfacts.source_health | — |
 | execution_completion | status | devhealthfacts.status | — |
 | execution_completion | work | devhealthfacts.work | — |
