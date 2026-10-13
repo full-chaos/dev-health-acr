@@ -25,7 +25,7 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 	orgID := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "projects") {
-		if err := direct.Exec(ctx, statement); err != nil {
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
