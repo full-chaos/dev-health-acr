@@ -178,7 +178,13 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 	}
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true)}
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
+	// The first run loads the table indexes into the server, which the first
+	// statement to touch a table is charged for; only the second run is measured.
+	var mark int64
 	for i := 0; i < 2; i++ {
+		if i == 1 {
+			mark = time.Now().UnixMicro()
+		}
 		result, err := contextpacket.ExecuteCatalog(ctx, executor, plan)
 		if err != nil {
 			t.Fatalf("catalog: %v", err)
@@ -198,27 +204,27 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 	}
 	var c workGraphCost
 	var statements uint64
-	row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database)
+	row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database, mark)
 	if err := row.Scan(&c.memory, &c.readBytes, &statements); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
-	if statements < 2 || c.memory == 0 || c.readBytes == 0 {
+	if statements < 1 || c.memory == 0 || c.readBytes == 0 {
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 	}
 	var freshness uint64
-	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database)
+	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database, mark)
 	if err := row.Scan(&c.freshnessMemory, &c.freshnessReadBytes, &freshness); err != nil {
 		t.Fatalf("read query_log for the freshness read: %v", err)
 	}
-	if freshness < 2 || c.freshnessMemory == 0 {
+	if freshness < 1 || c.freshnessMemory == 0 {
 		t.Fatalf("freshness measurement did not happen: %d statements, %+v", freshness, c)
 	}
 	var gates uint64
-	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database)
+	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database, mark)
 	if err := row.Scan(&c.gateMemory, &c.gateReadBytes, &gates); err != nil {
 		t.Fatalf("read query_log for the gate: %v", err)
 	}
-	if gates < 2 || c.gateMemory == 0 || c.gateReadBytes == 0 {
+	if gates < 1 || c.gateMemory == 0 || c.gateReadBytes == 0 {
 		t.Fatalf("gate measurement did not happen: %d statements, %+v", gates, c)
 	}
 	return c

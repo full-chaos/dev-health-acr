@@ -24,7 +24,7 @@ func workGraphEndpointLabelSQL(id, kind, pr string) string {
 	return "multiIf(" + pr + ".ref != '', concat(" + pr + ".slug, '#', toString(" + pr + ".number), if(" + pr + ".title = '', '', concat(' ', " + pr + ".title))), " +
 		"match(" + id + ", '^[0-9a-fA-F-]{36}#pr[0-9]+$'), concat('pull request #', splitByString('#pr', " + id + ")[2]), " +
 		"match(" + id + ", '^[0-9a-fA-F-]{36}$'), concat(replaceAll(" + kind + ", '_', ' '), ' ', substring(" + id + ", 1, 8)), " +
-		kind + " = 'issue' AND " + workGraphIssueTitleOf(id) + " != '', concat(" + id + ", ' ', " + workGraphIssueTitleOf(id) + "), " + id + ")"
+		kind + " = 'issue', trimRight(concat(" + id + ", ' ', " + workGraphIssueTitleOf(id) + ")), " + id + ")"
 }
 
 const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String} AND p.repo_id = {repo_id:UUID}`
