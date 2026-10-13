@@ -157,7 +157,7 @@ func TestLiveProjectAndIncidentStatusFilterSelectsByStoredStatus(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("served %s = %v, want %v", tc.kind, got, tc.want)
 			}
-			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside}); graphContext.MemberStatusOutsideSet != want {
+			if want := (contextfabric.MemberStatusOutsideSet{Kind: tc.kind, Count: tc.outside, Filtered: true, Reached: true}); graphContext.MemberStatusOutsideSet != want {
 				t.Fatalf("outside the known set = %+v, want %+v", graphContext.MemberStatusOutsideSet, want)
 			}
 		})
@@ -278,7 +278,7 @@ func TestLiveMemberStatusFilterHonoursARestrictedCallersScope(t *testing.T) {
 	if want := []string{"incident:readable-open"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("served incidents = %v, want %v: an incident outside the caller's scope must not be served", got, want)
 	}
-	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1}); graphContext.MemberStatusOutsideSet != want {
+	if want := (contextfabric.MemberStatusOutsideSet{Kind: contextfabric.SubjectIncident, Count: 1, Filtered: true, Reached: true}); graphContext.MemberStatusOutsideSet != want {
 		t.Fatalf("outside the known set = %+v, want %+v: only the readable unmapped incident counts", graphContext.MemberStatusOutsideSet, want)
 	}
 }
