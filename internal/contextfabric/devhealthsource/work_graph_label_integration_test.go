@@ -157,7 +157,7 @@ type workGraphCost struct{ memory, readBytes, freshnessMemory, freshnessReadByte
 // workGraphStatementCost seeds one isolated database with the label rows plus
 // the requested extra rows, runs work_graph.v1 for a restricted caller (the
 // widest authorization relation) and returns the statement's peak cost.
-func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGraphCost {
+func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGraphCost {
 	t.Helper()
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
@@ -174,19 +174,32 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 			t.Fatalf("seed filler work items: %v", err)
 		}
 	}
-	if noise {
-		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(20000)`, wgOther, wgOrg)); err != nil {
+	if noiseRows > 0 {
+		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise edges: %v", err)
 		}
-		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(20000)`, wgOther, wgOrg)); err != nil {
+		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise pull requests: %v", err)
 		}
 	}
 	// Background merges would otherwise change the part layout, and with it the
 	// bytes a statement reads, between the stages being compared.
-	for _, table := range []string{"work_items", "work_graph_edges", "git_pull_requests", "work_graph_issue_pr", "repos"} {
-		if err := direct.Exec(ctx, "OPTIMIZE TABLE "+table+" FINAL"); err != nil {
-			t.Fatalf("optimize %s: %v", table, err)
+	tables, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree'`)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+	var names []string
+	for tables.Next() {
+		var name string
+		if err := tables.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		names = append(names, name)
+	}
+	tables.Close()
+	for _, name := range names {
+		if err := direct.Exec(ctx, "OPTIMIZE TABLE `"+name+"` FINAL"); err != nil {
+			t.Fatalf("optimize %s: %v", name, err)
 		}
 	}
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true)}
@@ -251,10 +264,10 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testing.T) {
 	const ceiling = uint64(56 << 20)
 	const statementCeiling = uint64(12 << 20)
-	base := workGraphStatementCost(t, 50000, false)
-	filler := workGraphStatementCost(t, 125000, false)
-	noise := workGraphStatementCost(t, 50000, true)
-	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +20k edges and pull requests %+v", base, filler, noise)
+	base := workGraphStatementCost(t, 50000, 20000)
+	filler := workGraphStatementCost(t, 125000, 20000)
+	noise := workGraphStatementCost(t, 50000, 60000)
+	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +40k edges and pull requests %+v", base, filler, noise)
 	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise} {
 		if stage.memory >= ceiling || stage.gateMemory >= ceiling {
 			t.Errorf("%s: work_graph.v1 peaked at %d bytes and its issue gate at %d, want under %d", name, stage.memory, stage.gateMemory, ceiling)
