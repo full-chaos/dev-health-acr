@@ -95,6 +95,9 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 	if err != nil {
 		return clickHouseComponents{}, err
 	}
+	capped := contextpacket.NewMemoryCappedQueryClient(client, contextpacket.APIStatementMaxMemoryUsage,
+		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(request.logger, request.metrics.ClickHouseNearMemoryCap)),
+		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(request.logger, request.metrics.ClickHousePeakUnobserved)))
 	fail := func(cause error) (clickHouseComponents, error) {
 		return clickHouseComponents{}, errors.Join(cause, client.Close())
 	}
@@ -104,15 +107,15 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 	if err != nil {
 		return fail(fmt.Errorf("create evidence identifier codec: %w", err))
 	}
-	rows := contextpacket.NewObservedCatalogClickHouseRows(client, request.assemblyObserver)
+	rows := contextpacket.NewObservedCatalogClickHouseRows(capped, request.assemblyObserver)
 	factory := contextpacket.NewObservedEvidenceStoreFactory(codec, request.expansionObserver, request.assemblyObserver)
 	evidence, err := factory(rows)
 	if err != nil {
 		return fail(fmt.Errorf("create evidence store: %w", err))
 	}
 	return clickHouseComponents{
-		evidence: evidence, factory: factory, queryClient: measuredClickHouseQueryClient(client, request.config),
-		check: func(ctx context.Context) error { return checkClickHouseRuntime(ctx, client.Ping, client) }, close: client.Close,
+		evidence: evidence, factory: factory, queryClient: measuredClickHouseQueryClient(capped, request.config),
+		check: func(ctx context.Context) error { return checkClickHouseRuntime(ctx, client.Ping, capped) }, close: client.Close,
 	}, nil
 }
 
