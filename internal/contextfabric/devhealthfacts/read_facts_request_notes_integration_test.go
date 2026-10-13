@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -46,7 +47,8 @@ func TestReadFactsServesTheNOfMRequestNoteAgainstRealClickHouse(t *testing.T) {
 		t.Fatalf("read_facts: %v", err)
 	}
 	if len(response.RequestNotes) != 1 {
-		t.Fatalf("request_notes = %+v, want exactly one entry for the health kind", response.RequestNotes)
+		encoded, _ := json.Marshal(response)
+		t.Fatalf("request_notes = %+v, want exactly one entry for the health kind; response = %s", response.RequestNotes, encoded)
 	}
 	note := response.RequestNotes[0]
 	if note.Kind != "health" || !strings.HasPrefix(note.Note, "1 of 3 requested teams own no repository") {
