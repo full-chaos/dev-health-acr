@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
@@ -59,13 +60,19 @@ func readEndedLinks(ctx context.Context, client contextpacket.ClickHouseQueryCli
 	}
 	defer rows.Close()
 	links := &endedLinks{keys: []string{}}
+	var total uint64
 	for rows.Next() {
-		if err := rows.Scan(&links.keys); err != nil {
+		if err := rows.Scan(&links.keys, &total); err != nil {
 			return nil, err
 		}
 	}
 	if links.keys == nil {
 		links.keys = []string{}
+	}
+	if total > uint64(len(links.keys)) {
+		startLogger(ctx).WarnContext(ctx, "devhealthsource removed-link set cut",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "removed_links", total, "retracted_links", len(links.keys),
+			"reason", "removed links over the set bound keep their edge until the set fits")
 	}
 	return links, rows.Err()
 }

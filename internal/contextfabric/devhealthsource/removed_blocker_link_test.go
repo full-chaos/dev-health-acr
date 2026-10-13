@@ -1,10 +1,18 @@
 package devhealthsource_test
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 )
 
 // The producer reads an ended blocks link as a row flagged ended (the shared
@@ -55,5 +63,36 @@ func TestEndedBlockerLinkRowIsRetractedNotAsserted(t *testing.T) {
 		if seen[id] != kind {
 			t.Fatalf("no %s tombstone for %q; tombstones: %v", kind, id, seen)
 		}
+	}
+}
+
+// A removed-link set over the bound is cut, and the cut is disclosed with the
+// total and the count kept, never dropped silently.
+func TestRemovedLinkSetOverTheBoundIsDisclosed(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_item_dependencies AS d" {
+			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
+				at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, at}}
+			continue
+		}
+		tables[index].rows = nil
+	}
+	tables = append([]fakeTable{{match: endedLinksMarker, rows: [][]any{{[]string{"AA.BB.CC.1"}, uint64(relationcurrent.MaxEndedLinks + 5)}}}}, tables...)
+	var logged bytes.Buffer
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+		t.Fatal(err)
+	}
+	line := logged.String()
+	want := fmt.Sprintf("removed_links=%d", relationcurrent.MaxEndedLinks+5)
+	if !strings.Contains(line, "removed-link set cut") || !strings.Contains(line, want) || !strings.Contains(line, "retracted_links=1") {
+		t.Fatalf("the cut was not disclosed with its total and kept count (%s): %q", want, line)
 	}
 }

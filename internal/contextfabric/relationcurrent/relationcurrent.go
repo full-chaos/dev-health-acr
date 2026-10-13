@@ -1,5 +1,7 @@
 package relationcurrent
 
+import "fmt"
+
 // A relation the provider removed leaves its work_item_dependencies row behind
 // (the table is insert-only). A sync of an item writes again only the relations
 // that item still has, so a relation is gone when an item that WRITES it has a
@@ -98,13 +100,20 @@ func CurrentSQL(d string) string {
 	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + EndedKeysSQL()
 }
 
-// EndedLinksSQL is, for the organization, ONE row holding one element per
-// relation the provider no longer reports: hex(source), hex(target),
+// MaxEndedLinks bounds the removed-link set one call carries. The largest
+// organization measured holds 2,103 blocks relations; the bound is about ten
+// times that. A set over it is cut and the cut is disclosed (EndedLinksSQL
+// returns the total beside the kept keys).
+const MaxEndedLinks = 20000
+
+// EndedLinksSQL is, for the organization, ONE row: an array with one element
+// per relation the provider no longer reports (at most MaxEndedLinks) and the
+// total number of such relations. An element is hex(source), hex(target),
 // hex(relationship_type) and the end time in unix microseconds, dot
 // separated. Hex keeps any work item id inside the client's array binding
 // encoding, and one row keeps the read inside the result-row budget however
-// many links were removed. The column is aliased ended_links, the marker a
-// statement carries so a test client can route it.
+// many links were removed. The first column is aliased ended_links, the
+// marker a statement carries so a test client can route it.
 func EndedLinksSQL() string {
-	return `SELECT groupArray(concat(hex(s), '.', hex(t), '.', hex(rt), '.', toString(toInt64(toUnixTimestamp64Micro(ended_at))))) AS ended_links FROM ` + RowsSQL() + ` WHERE ended`
+	return fmt.Sprintf(`SELECT groupArray(%d)(concat(hex(s), '.', hex(t), '.', hex(rt), '.', toString(toInt64(toUnixTimestamp64Micro(ended_at))))) AS ended_links, count() AS ended_total FROM `, MaxEndedLinks) + RowsSQL() + ` WHERE ended`
 }

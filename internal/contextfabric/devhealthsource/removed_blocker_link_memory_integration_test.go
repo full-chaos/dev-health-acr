@@ -62,7 +62,7 @@ SELECT concat('jira:PROJECTKEY-', toString(2 * number)), ?, ?, 'issue', 'open', 
 	}
 	start := serverNow(t, ctx, direct)
 	deadline := time.Now().Add(wallLimit)
-	cursor, pages := "", 0
+	cursor, pages, tombstones := "", 0, 0
 	for ; time.Now().Before(deadline); pages++ {
 		batch, ok, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: org, Source: devhealthsource.SourceName, Cursor: cursor})
 		if err != nil {
@@ -72,6 +72,11 @@ SELECT concat('jira:PROJECTKEY-', toString(2 * number)), ?, ?, 'issue', 'open', 
 			break
 		}
 		cursor = batch.NextCursor
+		for _, tomb := range batch.Tombstones {
+			if tomb.Kind == "relationship" {
+				tombstones++
+			}
+		}
 	}
 	if time.Now().After(deadline) {
 		t.Fatalf("did not catch up in %s (%d pages)", wallLimit, pages)
@@ -93,6 +98,9 @@ WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 
 	t.Logf("PEAK at %d links over %d pages: %d set statements, peak %d bytes; %d page statements, peak %d bytes; cap %d bytes", links, pages, setCount, setPeak, pageCount, pagePeak, cap)
 	if setCount == 0 || pageCount == 0 {
 		t.Fatalf("the measurement did not happen: %d set statements and %d page statements were logged", setCount, pageCount)
+	}
+	if removed := links / 10; tombstones < removed {
+		t.Fatalf("%d relationship tombstones for %d removed links: a removed link kept its edge", tombstones, removed)
 	}
 	for name, peak := range map[string]uint64{"set": setPeak, "page": pagePeak} {
 		if peak >= maxPeak {
