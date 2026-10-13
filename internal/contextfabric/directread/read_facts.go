@@ -1078,10 +1078,19 @@ func naturalKeys(ids []string) []NaturalKey {
 }
 
 // coverageRows builds one row per (kind, admitted subject) from the ledger.
+func servedFactKind(kind string) bool {
+	for _, known := range contractsv1.ContextFabricFactKindVocabulary() {
+		if string(known) == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func requestNotes(plan readPlan, bundle contextfabric.CanonicalFactBundle) []RequestNote {
 	var notes []RequestNote
 	for _, kind := range plan.kinds {
-		if note := bundle.Outcomes[kind].RequestNote; note != "" {
+		if note := bundle.Outcomes[kind].RequestNote; note != "" && servedFactKind(string(kind)) {
 			notes = append(notes, RequestNote{Kind: string(kind), Note: note})
 		}
 	}

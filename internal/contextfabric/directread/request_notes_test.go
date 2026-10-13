@@ -76,3 +76,19 @@ func TestReadFactsRequestNotesNameOnlyTheKindsThatHaveOne(t *testing.T) {
 		t.Errorf("request_notes = %+v, want only blockers", served)
 	}
 }
+
+func TestRequestNotesServeOnlyKindsOfTheClosedFactKindVocabulary(t *testing.T) {
+	notes := func(kind contextfabric.FactKind) []RequestNote {
+		return requestNotes(readPlan{kinds: []contextfabric.FactKind{kind}}, contextfabric.CanonicalFactBundle{
+			Outcomes: contextfabric.FactOutcomeLedger{kind: {RequestNote: "1 of 2 requested teams"}},
+		})
+	}
+	for _, known := range contractsv1.ContextFabricFactKindVocabulary() {
+		if got := notes(contextfabric.FactKind(known)); len(got) != 1 || got[0].Kind != string(known) {
+			t.Errorf("vocabulary kind %s served %+v", known, got)
+		}
+	}
+	if got := notes("kind_outside_the_vocabulary"); got != nil {
+		t.Errorf("an off-set kind was served: %+v", got)
+	}
+}
