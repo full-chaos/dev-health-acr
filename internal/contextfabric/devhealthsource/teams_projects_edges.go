@@ -1193,7 +1193,7 @@ func projectTeamsOwnershipRowsSQL(ingest bool, gate string) string {
 	return `(
 		SELECT provider, project_ref, project_key, team_id, source_name,
 		       min(vf) AS first_valid_from,
-		       argMax(tuple(vf, vt), ord) AS latest_assertion,
+		       argMin(tuple(vf, vt), ord) AS latest_assertion,
 		       latest_assertion.1 AS valid_from, latest_assertion.2 AS valid_to,
 		       max(upd) AS updated_at` + ingestStampSQL(ingest, "max(ing) AS ingest_at") + `
 		FROM (
