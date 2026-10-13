@@ -303,11 +303,15 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	maxBytes, err := assembly.inputBoundWithin(budget)
 	measure.MaxBytes = maxBytes
 	if err != nil {
-		return InvestigationResult{}, nil, measure, clientSynthesisBudgetRefusal(budget, err)
+		return InvestigationResult{}, nil, measure, clientSynthesisBudgetRefusal(err, 0)
 	}
 	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes)
-	if maxBytes < assembly.MaxBytes {
-		err = clientSynthesisBudgetRefusal(budget, err)
+	if maxBytes < assembly.MaxBytes && err != nil {
+		envelope, envelopeErr := assembly.envelopeBytes()
+		if envelopeErr != nil {
+			return InvestigationResult{}, nil, measure, envelopeErr
+		}
+		err = clientSynthesisBudgetRefusal(err, envelope)
 	}
 	bounded := bound != nil
 	measure.FactsGiven, measure.Bounded = len(given.Facts.Facts), bounded
@@ -639,14 +643,17 @@ func (a *ClientSynthesisAssembly) envelopeBytes() (int, error) {
 
 // clientSynthesisBudgetRefusal turns "the input cannot be cut to the caller's
 // share" into the budget refusal the route serves as a 413: the smallest input
-// the facts reduce to is larger than the budget leaves. Any other error passes.
-func clientSynthesisBudgetRefusal(budget int, err error) error {
+// the facts reduce to, with its envelope, is larger than the share of the
+// caller's budget the input may take. Both numbers are body bytes of the input
+// and its envelope, so the refusal reads measured above maximum. Any other
+// error passes.
+func clientSynthesisBudgetRefusal(err error, envelope int) error {
 	var overflow *ModelInputOverflow
 	if !errors.As(err, &overflow) {
 		return err
 	}
 	return AnswerBudgetRefusal{
-		Overrun: contractsv1.ContextFabricBudgetOverrunBytes, MeasuredBytes: int64(overflow.Bytes), MaxSerializedBytes: int64(budget),
+		Overrun: contractsv1.ContextFabricBudgetOverrunBytes, MeasuredBytes: int64(overflow.Bytes + envelope), MaxSerializedBytes: int64(overflow.MaxBytes + envelope),
 		NothingLeftToCut: true, Stage: StageSynthesis,
 	}
 }

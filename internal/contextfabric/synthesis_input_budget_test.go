@@ -156,8 +156,8 @@ func TestClientSynthesisCoreOverTheBudgetShareIsABudgetRefusal(t *testing.T) {
 	t.Parallel()
 	turn := runBudgetTurn(t, 4, 6000, 8192)
 	var refusal AnswerBudgetRefusal
-	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) || refusal.MaxSerializedBytes != 8192 || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
-		t.Fatalf("Investigate() error = %v, want the byte budget refusal for 8192", turn.err)
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) || refusal.MaxSerializedBytes != int64(clientSynthesisBodyShare(8192)) || refusal.MeasuredBytes <= refusal.MaxSerializedBytes || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal naming the input share of 8192 with measured above it", turn.err)
 	}
 	if turn.collected != nil {
 		t.Fatal("a synthesis input was delivered with the refusal")

@@ -762,7 +762,7 @@ func TestClientSynthesisHeavyTeamCohortIsServedWithTheCutDisclosed(t *testing.T)
 // A team cohort answer is refused only where its body cannot fit: the smallest
 // budget that is served is the size of the body served there, so no band of
 // budgets is refused that the body would have fitted. Below it the refusal
-// comes from the engine and names the caller's budget.
+// comes from the engine and reports a measurement above its maximum.
 func TestClientSynthesisRefusesOnlyWhereTheBodyCannotFit(t *testing.T) {
 	for name, fixture := range map[string]func() clientRouteFixture{
 		"thirteen_teams": demoCohortFixture,
@@ -794,8 +794,10 @@ func TestClientSynthesisRefusesOnlyWhereTheBodyCannotFit(t *testing.T) {
 			if refused.Code != http.StatusRequestEntityTooLarge || json.Unmarshal(refused.Body.Bytes(), &refusal) != nil {
 				t.Fatalf("budget %d: status = %d, want 413", below, refused.Code)
 			}
-			if maximum, _ := refusal.Error.Details["max_serialized_bytes"].(float64); int(maximum) != below {
-				t.Errorf("max_serialized_bytes = %v, want the caller's %d", refusal.Error.Details["max_serialized_bytes"], below)
+			measured, _ := refusal.Error.Details["measured_bytes"].(float64)
+			maximum, _ := refusal.Error.Details["max_serialized_bytes"].(float64)
+			if maximum <= 0 || measured <= maximum || int(maximum) > below {
+				t.Errorf("refusal measured_bytes = %v max_serialized_bytes = %v: want measured above a maximum within the caller's %d", measured, maximum, below)
 			}
 		})
 	}
