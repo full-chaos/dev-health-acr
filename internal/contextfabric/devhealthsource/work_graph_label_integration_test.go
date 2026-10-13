@@ -130,7 +130,7 @@ func TestWorkGraphLabelStatementMemoryFollowsItsOwnEdges(t *testing.T) {
 		}
 		var c cost
 		var statements uint64
-		row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), uniqExact(normalized_query_hash) FROM system.query_log WHERE event_time_microseconds > fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS ist ON') > 0`, mark)
+		row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), uniqExact(normalized_query_hash) FROM system.query_log WHERE event_time_microseconds > fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0`, mark)
 		if err := row.Scan(&c.memory, &c.readBytes, &statements); err != nil {
 			t.Fatalf("read query_log: %v", err)
 		}
