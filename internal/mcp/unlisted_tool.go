@@ -13,7 +13,8 @@ import (
 // unlistedToolMiddleware turns the SDK's protocol error for a call to a tool
 // this server knows but did not register for this caller into a tool result
 // with isError set, so a client shows the reason instead of a bare failure.
-// A name the manifest does not declare keeps the protocol error.
+// A name the manifest does not declare keeps the protocol error, and so does
+// the write tool, which is off by default and is not a read-side listing.
 func unlistedToolMiddleware(caller *CallerContext) mcpsdk.Middleware {
 	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
@@ -29,7 +30,7 @@ func unlistedToolMiddleware(caller *CallerContext) mcpsdk.Middleware {
 			if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.HasPrefix(rpcErr.Message, "unknown tool") {
 				return result, err
 			}
-			if !slices.Contains(manifestToolNames(), call.Params.Name) {
+			if call.Params.Name == toolRecordEpisode || !slices.Contains(manifestToolNames(), call.Params.Name) {
 				return result, err
 			}
 			refused := &mcpsdk.CallToolResult{}
