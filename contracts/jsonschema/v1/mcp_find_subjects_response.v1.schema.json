@@ -56,8 +56,8 @@
           },
           "match": {
             "type": "string",
-            "description": "How the subject matched: exact, alias or provider_key (name mode; handle mode is provider_key). Empty in list and owned_by modes.",
-            "enum": [
+            "description": "How the subject matched: exact, alias or provider_key (name mode; handle mode is provider_key). Empty in list and owned_by modes. Open vocabulary; documented values: (empty), exact, alias, provider_key. A client must tolerate values it does not know.",
+            "x-documented-values": [
               "",
               "exact",
               "alias",
@@ -181,7 +181,14 @@
         "anchor": {
           "type": "object",
           "description": "Echo of anchor. The id is untrusted text.",
-          "properties": {"kind": {"type": "string"}, "id": {"type": "string"}}
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
         }
       }
     },

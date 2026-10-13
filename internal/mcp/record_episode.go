@@ -104,7 +104,7 @@ func recordEpisodeResponse(input contractsv1.MCPRecordEpisodeRequest, result sid
 	response.TranscriptDisposition = transcriptDisposition(input, result.Episode)
 	duplicate := result.Episode.Duplicate
 	response.Duplicate = &duplicate
-	return response, response.Validate()
+	return response, response.ValidateRead()
 }
 
 func transcriptDisposition(input contractsv1.MCPRecordEpisodeRequest, episode *contractsv1.AgentEpisode) string {

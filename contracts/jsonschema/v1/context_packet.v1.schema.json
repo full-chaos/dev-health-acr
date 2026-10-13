@@ -144,7 +144,9 @@
           "maxLength": 64
         },
         "resolution": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: exact_commit, branch_filtered, repo_fallback, unresolved. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "exact_commit",
             "branch_filtered",
             "repo_fallback",
@@ -290,7 +292,9 @@
                 "format": "date-time"
               },
               "status": {
-                "enum": [
+                "type": "string",
+                "description": "Open vocabulary; documented values: fresh, stale, missing, unavailable. A client must tolerate values it does not know.",
+                "x-documented-values": [
                   "fresh",
                   "stale",
                   "missing",
