@@ -11,7 +11,9 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics/hostedmetricstest"
 )
 
-type closingScanner struct{ contextpacket.ClickHouseRowScanner }
+type closingScanner struct {
+	contextpacket.ClickHouseRowScanner
+}
 
 func (closingScanner) Close() error { return nil }
 
