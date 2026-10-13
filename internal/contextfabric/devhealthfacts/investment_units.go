@@ -101,12 +101,7 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 	OR (share = toFloat64({` + unitCursorShareParam + `:String}) AND (work_unit_id > {` + unitCursorIDParam + `:String}
 		OR (work_unit_id = {` + unitCursorIDParam + `:String} AND repo_uuid > {` + unitCursorRepoParam + `:String})))`
 	}
-	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
-FROM (
-	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
-		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
-		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
-	FROM (
+	rows := `
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
@@ -115,7 +110,16 @@ FROM (
 		FROM (
 ` + core + `		)
 	)
-	` + rowFilter + `
+	` + rowFilter
+	if !organization {
+		rows = "\n" + requestedSplitRows(memberships, false, scope, true) + "\t)"
+	}
+	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
+FROM (
+	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
+		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
+		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
+	FROM (` + rows + `
 )` + keyset + `
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
@@ -129,7 +133,10 @@ LIMIT {` + unitLimitParam + `:UInt32}`
 		statement = strings.Replace(statement, "arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs",
 			"arrayFlatten(groupArray(if(repo_uuid = '', "+realRefs+", [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs", 1)
 	}
-	return withInvestmentSplitMemory(statement)
+	if organization {
+		return withInvestmentSplitMemory(statement)
+	}
+	return statement
 }
 
 // readInvestmentUnits reads one page of the units behind the allocation of
