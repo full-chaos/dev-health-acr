@@ -143,9 +143,9 @@ func coverage(b storage.EvidenceBundle) contractsv1.Coverage {
 	for _, w := range b.Watermarks {
 		considered = append(considered, w.Source)
 		switch w.Status {
-		case "fresh", "stale":
+		case contractsv1.SourceWatermarkStatusFresh, contractsv1.SourceWatermarkStatusStale:
 			available = append(available, w.Source)
-		case "missing", "unavailable":
+		case contractsv1.SourceWatermarkStatusMissing, contractsv1.SourceWatermarkStatusUnavailable:
 			unavailable = appendUnavailable(unavailable, w.Source, w.Status)
 		}
 	}
@@ -169,7 +169,7 @@ func appendUnavailable(values []contractsv1.UnavailableSource, source, reason st
 func warnings(b storage.EvidenceBundle) []string {
 	out := []string{}
 	for _, w := range b.Watermarks {
-		if w.Status == "stale" {
+		if w.Status == contractsv1.SourceWatermarkStatusStale {
 			out = append(out, "source_stale:"+w.Source)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,6 +23,11 @@ type producerSet struct {
 	consts []string
 }
 
+// A set whose name ends in "(SQL)" scans SQL text: only a value emitted or
+// compared as the provenance column counts, because other columns reuse the
+// same words.
+func (s producerSet) sql() bool { return strings.HasSuffix(s.name, "(SQL)") }
+
 var producerSets = []producerSet{
 	{"effective.axis", []string{"current", "as_of"}, []string{"internal/contextfabric/directread/read_relationships.go"}, []string{"RelationshipsAxisCurrent", "RelationshipsAxisAsOf"}},
 	{"provenance.link_tier", []string{"native", "explicit_text", "heuristic"}, []string{"internal/contextfabric/directread/read_relationships.go"}, []string{"TreeLinkTierNative", "TreeLinkTierExplicitText", "TreeLinkTierHeuristic"}},
@@ -37,6 +43,18 @@ var producerSets = []producerSet{
 		"internal/contextfabric/graphrank/explicit_handle_commit.go", "internal/contextfabric/graphrank/exact_label_proof.go",
 		"internal/contextfabric/count_population_scope.go",
 	}, []string{"CommitGatePreCommittedExactHint", "CommitGateExactIndex", "CommitGateIdentityFastPath", "CommitGateLoneFloor", "CommitGateTopOfTwo", "CommitGateVectorMarginRescue", "CommitGateEvidenceCensus", "CommitGateCallerHintShortCircuit"}},
+	{"watermark.status", []string{"fresh", "stale", "missing", "unavailable"}, []string{
+		"internal/contextpacket/read_adapter.go", "internal/contextpacket/evidence_quarantine.go", "internal/contextpacket/source_catalog.go",
+		"internal/contextpacket/packet_state.go", "internal/contextpacket/observation.go", "internal/contextpacket/packet_output_validation.go",
+		"internal/contracts/v1/validate_packet_nested.go",
+	}, []string{"SourceWatermarkStatusFresh", "SourceWatermarkStatusStale", "SourceWatermarkStatusMissing", "SourceWatermarkStatusUnavailable", "SourceWatermarkStatusVocabulary"}},
+	{"evidence.provenance", []string{"native", "explicit_text", "heuristic", "derived"}, []string{
+		"internal/contextpacket/read_adapter.go", "internal/contextpacket/evidence_validation.go", "internal/contextpacket/ranking.go",
+		"internal/mcp/federation.go", "internal/contextfabric/evidence_expansion.go", "internal/contracts/v1/validate_evidence.go",
+	}, []string{"EvidenceProvenanceNative", "EvidenceProvenanceExplicitText", "EvidenceProvenanceHeuristic", "EvidenceProvenanceDerived", "EvidenceProvenanceVocabulary"}},
+	{"evidence.provenance (SQL)", []string{"native", "explicit_text", "heuristic", "derived"}, []string{
+		"internal/contextpacket/source_queries.go", "internal/contextpacket/source_rows.go", "internal/contextpacket/read_adapter.go", "internal/contextpacket/source_executor.go", "internal/contextpacket/provenance_sql.go",
+	}, []string{"sqlProvenanceNative", "sqlProvenanceExplicitText", "sqlProvenanceHeuristic", "sqlProvenanceDerived", "provenanceRankSQL"}},
 }
 
 // producerFields are struct fields that carry a pinned set; no production file
@@ -73,6 +91,12 @@ func scanProducerSource(t *testing.T, name string, src []byte, set producerSet) 
 				return true
 			}
 			for _, value := range set.values {
+				if set.sql() {
+					if regexp.MustCompile(`'` + value + `'\s+(AS\s+)?provenance\b|provenance\s*=\s*'` + value + `'`).MatchString(text) {
+						out.bareLiterals = append(out.bareLiterals, fset.Position(v.Pos()).String()+" "+strconv.Quote(value))
+					}
+					continue
+				}
 				if text == value || strings.Contains(text, "'"+value+"'") {
 					out.bareLiterals = append(out.bareLiterals, fset.Position(v.Pos()).String()+" "+strconv.Quote(value))
 				}
