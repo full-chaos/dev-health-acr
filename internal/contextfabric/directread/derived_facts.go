@@ -139,7 +139,10 @@ func guardDerivedFacts(facts []contextfabric.CanonicalFact, admitted []contextfa
 // derivedRow is one root's share of a kind read through scope expansion.
 type derivedRow struct {
 	targets, served int
-	expansion       derivedExpansion
+	// evaluated counts reached subjects the provider evaluated with nothing
+	// found (a measured zero), as distinct from never evaluated.
+	evaluated int
+	expansion derivedExpansion
 	// shared: other requested roots expanded for the same kind and the kind
 	// reached subjects attributed elsewhere, so a subject this root also
 	// reaches may be counted under one of them instead.
@@ -149,7 +152,7 @@ type derivedRow struct {
 // derivedCoverage reports one (kind, root) row for a root whose facts are
 // reached through scope expansion. ok is false when the kind has no
 // expansion decision for the root's kind.
-func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextfabric.SubjectRef, servedKeys map[string]bool) (row derivedRow, ok bool) {
+func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextfabric.SubjectRef, servedKeys map[string]bool, evaluated map[string]struct{}) (row derivedRow, ok bool) {
 	row.expansion, ok = d.expansions[kind][root.Kind]
 	if !ok {
 		return row, false
@@ -158,6 +161,9 @@ func (d derivedIndex) derivedCoverage(kind contextfabric.FactKind, root contextf
 		row.targets++
 		if servedKeys[string(kind)+"\x00"+string(target.Kind)+"\x00"+target.CanonicalID] {
 			row.served++
+		}
+		if _, measured := evaluated[contextfabric.FactSubjectKey(target)]; measured {
+			row.evaluated++
 		}
 	}
 	row.shared = d.expandedRoots(kind) > 1 && len(d.targets[kind]) > row.targets
