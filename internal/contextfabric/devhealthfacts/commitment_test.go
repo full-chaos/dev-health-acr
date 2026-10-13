@@ -174,11 +174,21 @@ func TestCommitmentProjectWithNoStatedDateIsNoneStatedForEveryProvider(t *testin
 	}
 }
 
-func TestCommitmentProjectWithNoIssuesIsNoneStatedWithMeasuredZeroCounts(t *testing.T) {
-	project := projectSubject("gitlab", "proj-empty")
-	client := commitmentClient([][]any{commitmentProjectRow("gitlab", "proj-empty", "", "", "", true)}, nil)
-	fact := servedCommitment(t, readCommitmentFacts(t, client, project), project)
-	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "0", "items_open": "0", "items_closed": "0"})
+func TestCommitmentProjectWithNoIssuesServesZeroCountsAndNoStatus(t *testing.T) {
+	for _, provider := range []string{"jira", "gitlab", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			empty, targeted := projectSubject(provider, "proj-empty"), projectSubject(provider, "proj-targeted")
+			client := commitmentClient([][]any{
+				commitmentProjectRow(provider, "proj-empty", "", "", "", true),
+				commitmentProjectRow(provider, "proj-targeted", "", "", "2026-11-01", true),
+			}, nil)
+			response := readCommitmentFacts(t, client, empty, targeted)
+			fact := servedCommitment(t, response, empty)
+			wantServed(t, fact, map[string]any{"items_total": "0", "items_open": "0", "items_closed": "0", "items_unreadable_count": "0"})
+			wantAbsent(t, fact, "commitment_status")
+			wantServed(t, servedCommitment(t, response, targeted), map[string]any{"items_total": "0", "commitment_status": "stated"})
+		})
+	}
 }
 
 func TestCommitmentGithubWithNothingStatedIsNeverNoneStated(t *testing.T) {

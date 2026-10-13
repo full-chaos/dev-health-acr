@@ -273,7 +273,7 @@ func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, item
 	switch {
 	case stated:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusStated)
-	case unreadable == 0 && !sourceNotCollected:
+	case unreadable == 0 && !sourceNotCollected && items.total > 0:
 		fields["commitment_status"] = contextfabric.StringFactValue(commitmentStatusNoneStated)
 	}
 	return fields
