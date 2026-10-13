@@ -8,7 +8,10 @@ import (
 
 // APIStatementMaxMemoryUsage is the per-statement ClickHouse memory cap of
 // every read the API binary sends. It is the single definition: the work-item
-// reader settings use it too.
+// reader settings use it too. Prod peaks of statements on this default stay
+// under it (largest 58 MB, the project link-row read).
+//
+// memory-limit-measured: 58.1 MB 2026-10-13 prod query_log hash 15325842660101373389
 const APIStatementMaxMemoryUsage uint64 = 64 << 20
 
 type statementMemoryCapKey struct{}

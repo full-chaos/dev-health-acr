@@ -108,11 +108,13 @@ func repoMixStatement(bounds []factTimeBound) string {
 
 // investmentSplitMaxMemoryUsage is the named per-statement memory limit of the
 // three statements built on repoSplitCore (repository/team mix, organization
-// mix, unit listing). The repository mix measured p50 118 MiB and max 124.4 MiB
-// on prod (system.query_log, 3 runs since 2026-10-13 01:11Z), above the 64 MiB
-// API default, so those reads carry their own limit: 256 MiB, about twice the
-// measured peak. Re-measure from query_log after the roll.
-const investmentSplitMaxMemoryUsage = uint64(256 << 20)
+// mix, unit listing). The repository mix (normalized_query_hash
+// 1024715550238946426) measured p50 118 MiB and max 124.4 MiB on prod
+// (system.query_log, 3 runs since 2026-10-13 01:11Z), above the 64 MiB API
+// default, so those reads carry their own limit. Re-measure after the roll.
+//
+// memory-limit-measured: 124.4 MiB 2026-10-13 prod query_log hash 1024715550238946426
+const investmentSplitMaxMemoryUsage = uint64(160 << 20)
 
 func withInvestmentSplitMemory(statement string) string {
 	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: investmentSplitMaxMemoryUsage})

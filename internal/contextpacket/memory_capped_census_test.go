@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -129,4 +130,96 @@ func TestEveryClickHouseConnectionIsMemoryCapped(t *testing.T) {
 	if len(violations) > 0 {
 		t.Fatalf("%d uncapped ClickHouse paths:\n%s", len(violations), strings.Join(violations, "\n"))
 	}
+}
+
+// Every memory limit that is a literal (not an alias of another limit) must
+// cite the measurement it was set from, so a limit cannot grow without one.
+func TestEveryMemoryLimitConstantCitesAMeasurement(t *testing.T) {
+	t.Parallel()
+	root := repopath.Root(t)
+	tag := regexp.MustCompile(`memory-limit-measured: [0-9.]+ (MiB|MB) 20[0-9]{2}-[0-9]{2}-[0-9]{2} \S+`)
+	var violations []string
+	found := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == ".git" || name == "node_modules" || name == "tests" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(src), "MaxMemoryUsage") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		file, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ParseComments)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.GenDecl:
+				if node.Tok != token.CONST {
+					return true
+				}
+				for _, spec := range node.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, name := range vs.Names {
+						if !strings.HasSuffix(name.Name, "MaxMemoryUsage") || i >= len(vs.Values) || !literalLimit(vs.Values[i]) {
+							continue
+						}
+						found++
+						text := ""
+						for _, group := range []*ast.CommentGroup{node.Doc, vs.Doc, vs.Comment} {
+							if group != nil {
+								text += group.Text()
+							}
+						}
+						if !tag.MatchString(text) {
+							violations = append(violations, filepath.ToSlash(rel)+": "+name.Name+" has no `memory-limit-measured: <n> MiB|MB <date> <source>` comment")
+						}
+					}
+				}
+			case *ast.KeyValueExpr:
+				if id, ok := node.Key.(*ast.Ident); ok && id.Name == "MaxMemoryUsage" && literalLimit(node.Value) {
+					violations = append(violations, filepath.ToSlash(rel)+": MaxMemoryUsage set from a literal; name it as a constant with a measurement")
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found < 4 {
+		t.Fatalf("census found %d literal memory limits, want at least 4 (stale scan?)", found)
+	}
+	sort.Strings(violations)
+	if len(violations) > 0 {
+		t.Fatalf("%d unmeasured memory limits:\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}
+
+func literalLimit(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.BinaryExpr:
+		return literalLimit(e.X) && literalLimit(e.Y)
+	case *ast.ParenExpr:
+		return literalLimit(e.X)
+	case *ast.CallExpr:
+		return len(e.Args) == 1 && literalLimit(e.Args[0])
+	}
+	return false
 }

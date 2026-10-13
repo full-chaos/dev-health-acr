@@ -370,6 +370,8 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 // projector ClickHouse read. 128 MiB sits above the prod peak measured on
 // 2026-10-13 for the heaviest projector statement (94 MB, p50 85 MB,
 // querySubjectProjectMemberships); re-measure from system.query_log after the roll.
+//
+// memory-limit-measured: 93.9 MB 2026-10-13 prod query_log hash 783246543299970617
 const projectorStatementMaxMemoryUsage uint64 = 128 << 20
 
 type projectorClickHouseClient struct {
