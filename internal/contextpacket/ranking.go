@@ -78,13 +78,13 @@ func evidenceBefore(left, right contractsv1.EvidenceRef, goal string) bool {
 
 func provenanceRank(value string) int {
 	switch value {
-	case "native":
+	case contractsv1.EvidenceProvenanceNative:
 		return 0
-	case "explicit_text":
+	case contractsv1.EvidenceProvenanceExplicitText:
 		return 1
-	case "derived":
+	case contractsv1.EvidenceProvenanceDerived:
 		return 2
-	case "heuristic":
+	case contractsv1.EvidenceProvenanceHeuristic:
 		return 3
 	default:
 		return 4

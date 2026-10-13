@@ -28,15 +28,15 @@ func validatedEvidenceWatermarks(in []contractsv1.SourceWatermark, validation ev
 		observed, found := latest[out[index].Source]
 		if !found {
 			out[index].LastIngestedAt = nil
-			if out[index].Status == "fresh" || out[index].Status == "stale" {
-				out[index].Status = "missing"
+			if out[index].Status == contractsv1.SourceWatermarkStatusFresh || out[index].Status == contractsv1.SourceWatermarkStatusStale {
+				out[index].Status = contractsv1.SourceWatermarkStatusMissing
 			}
 			continue
 		}
 		out[index].LastIngestedAt = &observed
-		out[index].Status = "fresh"
+		out[index].Status = contractsv1.SourceWatermarkStatusFresh
 		if observed.Before(asOf.Add(-staleAfterSeconds * time.Second)) {
-			out[index].Status = "stale"
+			out[index].Status = contractsv1.SourceWatermarkStatusStale
 		}
 	}
 	return out

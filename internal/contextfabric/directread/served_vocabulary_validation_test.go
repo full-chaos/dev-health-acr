@@ -1,7 +1,12 @@
 package directread
 
 import (
+	"errors"
+	"slices"
+
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -41,25 +46,60 @@ func TestReadRelationshipsRunsTheServedVocabularyCheckOnItsReturnPath(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	telemetryAt, refuseAt, position := -1, -1, 0
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name.Name != "Read" || fn.Recv == nil {
 			continue
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if _, isDefer := n.(*ast.DeferStmt); isDefer {
-				ast.Inspect(n, func(m ast.Node) bool {
-					if id, ok := m.(*ast.Ident); ok && id.Name == "validateServedRelationshipsVocabulary" {
-						found = true
-					}
-					return true
-				})
+		for _, stmt := range fn.Body.List {
+			if _, isDefer := stmt.(*ast.DeferStmt); !isDefer {
+				continue
 			}
-			return true
-		})
+			position++
+			ast.Inspect(stmt, func(m ast.Node) bool {
+				if id, ok := m.(*ast.Ident); ok {
+					switch id.Name {
+					case "RecordDirectRelationshipsRead":
+						telemetryAt = position
+					case "refuseOffSetServedVocabulary":
+						refuseAt = position
+					}
+				}
+				return true
+			})
+		}
 	}
-	if !found {
-		t.Fatal("RelationshipsReader.Read has no deferred served-vocabulary check; the measurement found no call site")
+	if telemetryAt < 0 || refuseAt < 0 {
+		t.Fatalf("Read has telemetry defer at %d and vocabulary defer at %d; the measurement found no call site", telemetryAt, refuseAt)
+	}
+	if refuseAt < telemetryAt {
+		t.Fatal("the vocabulary defer is registered before the telemetry defer, so telemetry would record the unrefused result")
+	}
+}
+
+func TestOffSetServedVocabularyIsRecordedWithItsOwnFailureClass(t *testing.T) {
+	offAxis := fmt.Sprintf("%s_%d", "cur", 1)
+	response := RelationshipsResponse{Status: RelationshipsComplete, Effective: EffectiveRelationshipsRead{Axis: offAxis}}
+	var record RelationshipsReadRecord
+	var err error
+	refuseOffSetServedVocabulary(&record, &response, &err)
+	if !errors.Is(err, ErrRelationshipsInternal) || !errors.Is(err, ErrRelationshipsServedVocabulary) {
+		t.Fatalf("err = %v", err)
+	}
+	if record.FailureClass != gatevocab.RelationshipsFailureVocabulary || response.Status != "" {
+		t.Fatalf("record class %q, response %+v", record.FailureClass, response)
+	}
+	args := RelationshipsReadLogArgs(storage.Principal{}, record)
+	key := slices.Index(args, any("failure_class"))
+	if key < 0 || key+1 >= len(args) || args[key+1] != any(string(gatevocab.RelationshipsFailureVocabulary)) {
+		t.Fatalf("the read line does not carry failure_class=%s as a key/value pair: %v", gatevocab.RelationshipsFailureVocabulary, args)
+	}
+	clean := RelationshipsResponse{Status: RelationshipsComplete, Effective: EffectiveRelationshipsRead{Axis: RelationshipsAxisCurrent}}
+	var cleanRecord RelationshipsReadRecord
+	var cleanErr error
+	refuseOffSetServedVocabulary(&cleanRecord, &clean, &cleanErr)
+	if cleanErr != nil || cleanRecord.FailureClass != "" || clean.Status != RelationshipsComplete {
+		t.Fatalf("a served-set response was refused: %v %q", cleanErr, cleanRecord.FailureClass)
 	}
 }

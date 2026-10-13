@@ -20,7 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
-const rootUsage = `Usage: acr-projector [serve|rebuild|rollback|priors|version]
+const rootUsage = `Usage: acr-projector [serve|rebuild|rollback|purge|priors|version]
 
 Commands:
   serve             run the Context Fabric projection worker and readiness server
@@ -35,6 +35,11 @@ Commands:
                      ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED) -- the
                      disaster-recovery lever for a flip that should not have
                      happened. Refused outside the grace window.
+  purge --org ID    remove every graph and Postgres trace of an organization that
+                     left Dev Health (--dry-run counts first; needs
+                     --confirm-hash from the dry run and a positive
+                     unknown-organization answer from Dev Health; audit_events are kept;
+                     legal_hold episodes are kept).
   priors <sub>       CHAOS-3977 P5's own Bridge prior store operator surface
                      (curate/flip/rollback/revoke) -- see 'priors --help'.
   version            print build identity
@@ -71,10 +76,12 @@ func run(args []string) error {
 		return rebuild(args)
 	case "rollback":
 		return rollback(args)
+	case "purge":
+		return purge(args)
 	case "priors":
 		return priorsCommand(args)
 	default:
-		return fmt.Errorf("unknown command %q; use serve, rebuild, rollback, priors, or version", command)
+		return fmt.Errorf("unknown command %q; use serve, rebuild, rollback, purge, priors, or version", command)
 	}
 }
 

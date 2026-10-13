@@ -834,6 +834,9 @@ func serveFact(item GatedFact, capability contextfabric.FactCapability, plan rea
 		}
 		served.Tables[name] = table
 		driversServed[name] = true
+		if declaration.Aggregate && (fact.Subject.Kind == contractsv1.ContextFabricSubjectTeam || fact.Subject.Kind == contractsv1.ContextFabricSubjectProject) {
+			served.AggregateFields = append(served.AggregateFields, name)
+		}
 		if table.RowsWithheld > 0 {
 			served.Withheld = append(served.Withheld, WithheldItem{Field: name, Reason: "rows_subject_not_visible", Count: table.RowsWithheld})
 		}
@@ -1261,6 +1264,9 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 	if !queried {
 		// Narrowed away by the planner: this kind cannot be asked about
 		// this subject.
+		return OutcomeNotApplicable
+	}
+	if _, ok := outcome.NotApplicable[key]; ok {
 		return OutcomeNotApplicable
 	}
 	switch {

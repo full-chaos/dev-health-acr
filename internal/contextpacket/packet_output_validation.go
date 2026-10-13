@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -115,9 +116,7 @@ func validFreshness(freshness contractsv1.Freshness) bool {
 		if !packetString(watermark.Source, 1, 100) {
 			return false
 		}
-		switch watermark.Status {
-		case "fresh", "stale", "missing", "unavailable":
-		default:
+		if !slices.Contains(contractsv1.SourceWatermarkStatusVocabulary(), watermark.Status) {
 			return false
 		}
 	}

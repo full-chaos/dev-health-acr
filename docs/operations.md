@@ -1707,6 +1707,21 @@ after a rebuild. Workaround on those builds only: set
 `0` means the default 500) on the projector, then REMOVE the override once
 the stream is drained and verify the projector env has no such variable.
 
+### Purging a deleted organization
+
+`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`.
+
+1. `purge --org <uuid> --dry-run` prints row counts (cascaded OAuth rows included), the number of graphs it would drop, and the `org_key`. It changes nothing.
+2. `purge --org <uuid> --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.
+
+The verb fails closed. It refuses when the organization is in the projector set (the static list or discovery), when discovery cannot be read, when another projector holds its lock, when the confirm hash is missing or wrong, or unless Dev Health positively says the organization is gone. Only an HTTP 404 whose body carries the code `acr_organization_unknown` counts as that answer. HTTP 200 (any body), any 5xx, a timeout, a transport error, a 401/403, and a 404 without the code (a Dev Health that does not send the code yet, a proxy, a wrong URL) all refuse. `purge` accepts any spelling of a UUID (braced, upper case) and sends the canonical lowercase form to Dev Health; an id that is not a UUID at all is refused before any request, and the client itself refuses any id that is not canonical lowercase. The old `--attest-deleted` flag no longer exists.
+
+If a run fails after it started removing data, the report says `"status": "incomplete"`, the verb exits non-zero, and an `org_purge_incomplete` audit event is written. The graphs may already be gone and the database rows are untouched (one transaction). Run `--dry-run` to see the residue, then run the purge again; the retry finishes it.
+
+Run it with the projector `serve` process for that organization stopped, or run `--dry-run` once more after one poll interval and expect zero rows and zero graphs. The verb takes the per-organization lock but does not fence a tick that already selected the organization before the purge started; such a tick can recreate a few checkpoint rows or an empty graph, and a second purge run removes them.
+
+Kept on purpose: `audit_events` (no retention rule exists in this repository), and episodes with `retention_class = legal_hold`. A purge that deletes any row adds one `org_purged` audit event holding counts only. A second run is a no-op.
+
 ### CHAOS-3916 production graph cutover runbook
 
 This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,

@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -23,8 +25,9 @@ const scopeStatementCeiling = uint64(32 << 20)
 
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
-// at two threads (33 MB, 100k and 300k unrelated work items) plus the slope.
-const workItemSelectionCeiling = uint64(statementMemorySlope * 33_000_000)
+// at two threads on merged parts (21.8 MB at 100k and 300k unrelated work
+// items; unbounded 36.7-37.2 MB) plus the slope.
+const workItemSelectionCeiling = uint64(statementMemorySlope * 22_000_000)
 
 // scopeExpanderStatements names each scope expander statement that reads work
 // items, link rows or transitions by a fragment only it carries, and a table
@@ -81,9 +84,25 @@ SELECT ?, NULL, ?, 'work_item', concat(?, '-', repeat('x', 64), '-', toString(nu
 // follow the rows, not how many parts the inserts happen to leave unmerged.
 func mergeScopeTables(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 	t.Helper()
-	for _, table := range []string{"work_items", "work_item_team_attributions", "team_repo_ownership", "work_graph_issue_pr", "git_pull_requests", "project_membership_transitions"} {
-		if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
-			t.Fatalf("optimize %s: %v", table, err)
+	tables, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree%'`)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+	var names []string
+	for tables.Next() {
+		var name string
+		if err := tables.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		names = append(names, name)
+	}
+	tables.Close()
+	if len(names) == 0 {
+		t.Fatal("no table to merge: the layout step did not happen")
+	}
+	for _, name := range names {
+		if err := direct.Exec(ctx, "OPTIMIZE TABLE `"+name+"` FINAL"); err != nil {
+			t.Fatalf("optimize %s: %v", name, err)
 		}
 	}
 }
@@ -173,7 +192,9 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
-	for _, statement := range devhealthschema.DDL(append(append([]string{}, sharedClickHouseTables...), "project_membership_transitions", "work_item_dependencies")...) {
+	// Every declared table: the link helper's other callers are read through
+	// every provider, and a provider's own tables must exist.
+	for _, statement := range devhealthschema.DDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -324,10 +345,12 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		}
 		return readings
 	}
-	// grew applies the slope guard: the larger reading is over the slope AND
-	// beyond both sizes' run-to-run spread and the absolute floor.
+	// grew is the slope guard: the larger size's reading (the smallest of
+	// three warm runs, both sizes on one merged part per table) over 1.15x
+	// the smaller size's plus a fixed floor. A cost that grows with the rows
+	// lifts all three runs, so the minimum carries it; jitter does not.
 	grew := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+max(arrayMemoryFloor, small.spread+large.spread)
+		return float64(large.peak) > statementMemorySlope*float64(small.peak)+float64(arrayMemoryFloor)
 	}
 
 	// The guard reads merged parts; production tables are not one part, so
@@ -350,6 +373,9 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
 	unmerged(t, "small")
+	var callers []linkHelperCaller
+	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, query, fixture) })
+	t.Run("link helper callers at the smaller size", func(t *testing.T) { linkHelperCallersCost(t, ctx, query, direct, callers) })
 	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
 	t.Run("rows at the smaller size", func(t *testing.T) { differential(t, smallStatements) })
@@ -357,10 +383,11 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	small := measure(t, smallStatements)
 	fillScopeOrganization(t, ctx, direct, fixture, "large", 200_000)
 	unmerged(t, "large")
-	t.Run("link helper callers outside the expander", func(t *testing.T) { linkHelperCallersDifferential(t, ctx, query, fixture) })
+	t.Run("link helper callers at the larger size", func(t *testing.T) { linkHelperCallersCost(t, ctx, query, direct, callers) })
 	mergeScopeTables(t, ctx, direct)
 	largeStatements := served(t)
 	t.Run("rows at the larger size", func(t *testing.T) { differential(t, largeStatements) })
+	measure(t, largeStatements)
 	large := measure(t, largeStatements)
 
 	for _, statement := range scopeExpanderStatements {
@@ -426,7 +453,15 @@ var linkHelperCallerSites = []struct{ label, fragment string }{
 // teams, projects and repository through the real providers, and compares
 // each statement that reads the narrowed pull request rows with the same
 // statement over the whole pull request table: the rows must be equal.
-func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, f everyRootFixture) {
+// linkHelperCaller is one statement outside the expander that reads the
+// narrowed pull request rows, with its whole-table reference form.
+type linkHelperCaller struct {
+	label  string
+	served capturedStatement
+	whole  string
+}
+
+func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, f everyRootFixture) []linkHelperCaller {
 	recorder := &recordingQueryClient{inner: query}
 	principal := storage.Principal{OrgID: f.orgID, RepositoryScopes: []string{"*"}}
 	subjects := []contextfabric.SubjectRef{f.teamA, f.teamB, f.projectP, f.projectQ, {Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + f.shared, Label: "acme/shared"}}
@@ -443,20 +478,28 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 	recorder.mu.Unlock()
 	reached := map[string]int{}
 	compared := 0
+	var callers []linkHelperCaller
 	for _, statement := range captured {
 		whole, rewritten, ok := devhealthfacts.UnprunedPullRequestStatementForTest(statement.statement)
 		if !ok {
 			t.Fatalf("a narrowed pull request read is not closed as the rewrite expects:\n%s", statement.statement)
 		}
+		whole, _ = devhealthfacts.OrgWideProjectRollupStatementForTest(whole)
 		if rewritten == 0 {
 			continue
 		}
+		label := "other"
 		for _, site := range linkHelperCallerSites {
 			if strings.Contains(statement.statement, site.fragment) {
 				reached[site.label]++
+				label = site.label
 			}
 		}
-		narrowed, wholeRows := scopeRows(t, ctx, query, statement), scopeRows(t, ctx, query, capturedStatement{statement: whole, bindings: statement.bindings})
+		callers = append(callers, linkHelperCaller{label: label, served: statement, whole: whole})
+		head, _, _ := strings.Cut(strings.TrimSpace(statement.statement), "\n")
+		t.Logf("DIFFERENTIAL comparing %.120s", head)
+		narrowed := scopeRows(t, ctx, query, statement)
+		wholeRows := scopeRows(t, ctx, query, capturedStatement{statement: whole, bindings: statement.bindings})
 		if !slices.Equal(narrowed, wholeRows) {
 			t.Errorf("rows differ from the whole pull request table:\nnarrowed %q\nwhole    %q\n%s", narrowed, wholeRows, statement.statement)
 		}
@@ -471,5 +514,70 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 	}
 	if compared == 0 {
 		t.Fatal("no statement read the narrowed pull request rows")
+	}
+	return callers
+}
+
+// linkHelperCallersCost runs each link helper caller as served, and its
+// whole-table reference form, at the larger size, and holds the served form
+// under the caps production applies: its own max_memory_usage or the API
+// statement default, and the client's max_bytes_to_read.
+func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, callers []linkHelperCaller) {
+	if len(callers) == 0 {
+		t.Fatal("no link helper caller was captured at the smaller size")
+	}
+	var workItems, links uint64
+	if err := direct.QueryRow(ctx, `SELECT (SELECT count() FROM work_items), (SELECT count() FROM work_graph_issue_pr)`).Scan(&workItems, &links); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	t.Logf("CALLER stage: work_items %d rows, work_graph_issue_pr %d rows", workItems, links)
+	run := func(statement capturedStatement) (memory, readBytes, readRows, scalarMisses, scalarHits uint64, code int32, err error) {
+		mark := serverNowMicros(t, ctx, direct)
+		rows, err := query.Query(ctx, statement.statement, statement.bindings)
+		if err == nil {
+			for rows.Next() {
+			}
+			err = rows.Err()
+			_ = rows.Close()
+		}
+		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
+			t.Fatalf("flush logs: %v", flushErr)
+		}
+		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &scalarMisses, &scalarHits, &code); scanErr != nil {
+			t.Fatalf("read query_log: %v", scanErr)
+		}
+		return memory, readBytes, readRows, scalarMisses, scalarHits, code, err
+	}
+	for _, caller := range callers {
+		memoryCap := contextpacket.APIStatementMaxMemoryUsage
+		if at := strings.Index(caller.served.statement, "max_memory_usage = "); at >= 0 {
+			if _, scanErr := fmt.Sscanf(caller.served.statement[at:], "max_memory_usage = %d", &memoryCap); scanErr != nil {
+				t.Fatalf("%s: unreadable max_memory_usage: %v", caller.label, scanErr)
+			}
+		}
+		readCap := uint64(config.DefaultClickHouseMaxBytesToRead)
+		memory, readBytes, readRows, misses, hits, code, err := run(caller.served)
+		wholeMemory, wholeRead, wholeRows, _, _, wholeCode, wholeErr := run(capturedStatement{statement: caller.whole, bindings: caller.served.bindings})
+		t.Logf("CALLER %s served: memory=%d read_bytes=%d read_rows=%d scalar_misses=%d scalar_hits=%d code=%d; whole-table form: memory=%d read_bytes=%d read_rows=%d code=%d (caps: memory %d, read %d)", caller.label, memory, readBytes, readRows, misses, hits, code, wholeMemory, wholeRead, wholeRows, wholeCode, memoryCap, readCap)
+		// The project roll-up's candidate ids are one scalar subquery,
+		// referenced five times: it must be built exactly once (one cache
+		// miss; zero means the measurement did not happen).
+		if caller.label == "project linked pull requests" && misses != 1 {
+			t.Errorf("%s: scalar subquery executed %d times (reused %d), want once", caller.label, misses, hits)
+		}
+		if wholeErr != nil {
+			t.Logf("CALLER %s whole-table form failed: %v", caller.label, wholeErr)
+		}
+		if err != nil || code != 0 {
+			t.Errorf("%s: the served statement failed at the larger size (code %d): %v", caller.label, code, err)
+		}
+		if memory == 0 || memory >= memoryCap {
+			t.Errorf("%s: served peak memory %d, want above 0 and under %d", caller.label, memory, memoryCap)
+		}
+		if readBytes >= readCap {
+			t.Errorf("%s: served read %d bytes, want under %d", caller.label, readBytes, readCap)
+		}
 	}
 }
