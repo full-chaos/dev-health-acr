@@ -98,6 +98,56 @@
             "minLength": 1,
             "maxLength": 1000
           }
+        },
+        "if": {
+          "properties": {
+            "status": {
+              "const": "served"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        "then": {
+          "required": [
+            "structured",
+            "rendered_markdown"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "reason"
+                ]
+              },
+              {
+                "required": [
+                  "message"
+                ]
+              }
+            ]
+          }
+        },
+        "else": {
+          "required": [
+            "reason",
+            "message"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "structured"
+                ]
+              },
+              {
+                "required": [
+                  "rendered_markdown"
+                ]
+              }
+            ]
+          }
         }
       }
     }

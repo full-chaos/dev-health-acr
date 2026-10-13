@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -67,7 +68,7 @@ func sourceEvidenceBatch(ctx context.Context, cfg *ProcessConfig, caller *Caller
 		if err != nil {
 			ce := classify(err)
 			entries = append(entries, contractsv1.MCPSourceEvidenceEntry{EvidenceRefID: ref, Status: contractsv1.MCPSourceEvidenceEntryRefused, Reason: ce.category, Message: ce.message})
-			texts = append(texts, "Evidence "+ref+": refused ("+ce.category+"): "+ce.message)
+			texts = append(texts, "Evidence "+strconv.Quote(ref)+": refused ("+ce.category+"): "+ce.message)
 			continue
 		}
 		rendered, truncated := sidecar.RenderEvidenceMarkdown(evidence, sourceEvidenceBatchEntryMarkdownMaxBytes)

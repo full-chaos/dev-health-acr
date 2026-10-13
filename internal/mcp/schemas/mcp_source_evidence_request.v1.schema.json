@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP source_evidence Request v1",
-  "description": "Input for the source_evidence tool. Pass exactly one of evidence_ref_id (one reference) or evidence_ref_ids (up to 10 references of the same answer, expanded in one call). result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it; in a batch it applies to every reference. A pull-request or work-item reference names one row and needs no result_id. Each reference is authorized on its own: a refused or unknown reference is its own refused entry in the response, never a failed call.",
+  "description": "Input for the source_evidence tool. Pass exactly one of (the schema stays free of a top-level oneOf/anyOf/conditional because some model APIs refuse them; the tool refuses neither, both, or an empty list with a validation error) evidence_ref_id (one reference) or evidence_ref_ids (up to 10 references of the same answer, expanded in one call). result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it; in a batch it applies to every reference. A pull-request or work-item reference names one row and needs no result_id. Each reference is authorized on its own: a refused or unknown reference is its own refused entry in the response, never a failed call.",
   "examples": [
     {
       "evidence_ref_id": "ev_2f9c81ab"

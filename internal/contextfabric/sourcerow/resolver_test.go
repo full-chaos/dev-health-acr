@@ -200,7 +200,7 @@ func assertSourceRowExpansion(t *testing.T, expanded contractsv1.ExpandedEvidenc
 	}
 	wantPrefix := "citation of "
 	if kind == string(contractsv1.ContextFabricEvidenceEntityPullRequest) {
-		wantPrefix = slug + ": citation of "
+		wantPrefix = slug + ": PR #"
 	}
 	if !strings.HasPrefix(expanded.Excerpt, wantPrefix) || expanded.Availability != contractsv1.EvidenceAvailable {
 		t.Fatalf("excerpt %q availability %q", expanded.Excerpt, expanded.Availability)
@@ -717,7 +717,8 @@ func TestPullRequestExcerptNamesRepositoryAndTitleOnlyForAdmittedCaller(t *testi
 			w := newWorld()
 			w.repos[grantedID] = grantedRep
 			row := catalogRow("pull_requests.v1", locator, "pull_request", "7", grantedRep)
-			row.Excerpt = "PR #7 Rotate deploy keys (merged)"
+			row.Excerpt = "merged"
+			row.Evidence.Source.DisplayLabel = "Rotate deploy keys"
 			w.addRow(grantedID, "pull_requests.v1", locator, row)
 			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), tc.principal, "pull-request", grantedID+":7")
 			if got := decision.Reason == contextfabric.SourceRowServed; got != tc.served {

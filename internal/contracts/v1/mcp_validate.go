@@ -126,7 +126,7 @@ func (r MCPContextForTaskResponse) Validate() error {
 }
 
 func (r MCPSourceEvidenceRequest) Validate() error {
-	if (r.EvidenceRefID == "") == (len(r.EvidenceRefIDs) == 0) {
+	if (r.EvidenceRefID == "") == (len(r.EvidenceRefIDs) == 0) || (r.EvidenceRefID != "" && r.EvidenceRefIDs != nil) {
 		return fmt.Errorf("exactly one of evidence_ref_id and evidence_ref_ids is required")
 	}
 	if r.EvidenceRefID != "" && !stringLengthBetween(r.EvidenceRefID, 1, 256) {

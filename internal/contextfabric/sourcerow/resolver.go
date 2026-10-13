@@ -431,8 +431,8 @@ func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal,
 func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row found) (contractsv1.ExpandedEvidence, error) {
 	evidence := row.reference.Evidence
 	excerpt := row.reference.Excerpt
-	if entityType == string(contractsv1.ContextFabricEvidenceEntityPullRequest) && row.target.scope.RepoID != zeroRepositoryID && strings.TrimSpace(row.target.scope.RepoSlug) != "" {
-		excerpt = row.target.scope.RepoSlug + ": " + excerpt
+	if entityType == string(contractsv1.ContextFabricEvidenceEntityPullRequest) {
+		excerpt = pullRequestExcerpt(row)
 	}
 	expanded, err := r.expander.Expand(ctx, contextpacket.EvidenceExpansionInput{Evidence: evidence, Excerpt: excerpt})
 	if err != nil {
@@ -913,4 +913,23 @@ func (r *Resolver) discover(ctx context.Context, principal storage.Principal, di
 		return nil, errSaturated
 	}
 	return scopes, nil
+}
+
+// pullRequestExcerpt names the pull request: repository (only when its slug is
+// known, i.e. the repository was admitted), number, title and state. The
+// catalog row carries the title as its display label (or "PR #<n>" when the
+// title is absent) and the state as its citation.
+func pullRequestExcerpt(row found) string {
+	number := row.reference.Evidence.Source.EntityID
+	head := "PR #" + number
+	if title := strings.TrimSpace(row.reference.Evidence.Source.DisplayLabel); title != "" && title != head {
+		head += " " + title
+	}
+	if state := strings.TrimSpace(row.reference.Excerpt); state != "" {
+		head += " (" + state + ")"
+	}
+	if slug := strings.TrimSpace(row.target.scope.RepoSlug); slug != "" && row.target.scope.RepoID != zeroRepositoryID {
+		head = slug + ": " + head
+	}
+	return head
 }
