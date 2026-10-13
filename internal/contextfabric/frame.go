@@ -361,6 +361,10 @@ type GroupedSetExpression struct {
 	// (contracts/v1 answer-plan Validate, "groups %q members by their own
 	// kind").
 	MemberKind SubjectKind `json:"member_kind"`
+	// MemberQualifier and MemberQualifierValue state the same optional
+	// qualifier as ScopedSetExpression over the grouped members.
+	MemberQualifier      MemberQualifier `json:"member_qualifier,omitempty"`
+	MemberQualifierValue string          `json:"member_qualifier_value,omitempty"`
 }
 
 // OrganizationScopeExpression makes the organization itself the subject.
@@ -398,6 +402,10 @@ func (e SubjectExpression) MemberQualification() (kind SubjectKind, qualifier Me
 	case SubjectExpressionOrganizationScope:
 		if e.Org != nil && e.Org.MemberKind != nil {
 			return *e.Org.MemberKind, e.Org.MemberQualifier, e.Org.MemberQualifierValue, true
+		}
+	case SubjectExpressionGroupedMembers:
+		if e.Grouped != nil {
+			return e.Grouped.MemberKind, e.Grouped.MemberQualifier, e.Grouped.MemberQualifierValue, true
 		}
 	}
 	return "", "", "", false

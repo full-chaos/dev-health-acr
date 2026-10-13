@@ -22,8 +22,19 @@ type organizationPullRequest struct {
 	project, team string
 }
 
+// statusHarnessKind is the subject kind the fake store serves its rows as; a
+// test that asks about another kind sets it with useStatusHarnessKind.
+var statusHarnessKind = "pull_request"
+
+func useStatusHarnessKind(t *testing.T, kind string) {
+	t.Helper()
+	previous := statusHarnessKind
+	statusHarnessKind = kind
+	t.Cleanup(func() { statusHarnessKind = previous })
+}
+
 func organizationPullRequestNode(p organizationPullRequest) *node {
-	properties := map[string]interface{}{propKind: "pull_request", propCanonicalID: p.id, propLabel: p.id,
+	properties := map[string]interface{}{propKind: statusHarnessKind, propCanonicalID: p.id, propLabel: p.id,
 		propAuthzRepos: []string{p.repo}, propPropertyPrefix + "state": p.state}
 	if p.project != "" {
 		properties[propAuthzProjects] = []string{p.project}
@@ -150,7 +161,7 @@ func investigatePullRequestsFramed(t *testing.T, synthesizer contextfabric.Answe
 			return statusCensusRows(pulls, pullNode, params), nil
 		case strings.Contains(cypher, "IN $kinds"):
 			kinds, _ := params["kinds"].([]string)
-			if len(kinds) != 1 || kinds[0] != "pull_request" {
+			if len(kinds) != 1 || kinds[0] != statusHarnessKind {
 				return nil, nil
 			}
 			var rows []row

@@ -91,7 +91,7 @@ func MemberStatusUnappliedOf(frame *QuestionFrame, kind SubjectKind) bool {
 		return false
 	}
 	switch frame.SubjectExpression.Kind {
-	case SubjectExpressionChildrenOfScope, SubjectExpressionDiscoveredKind, SubjectExpressionOrganizationScope:
+	case SubjectExpressionChildrenOfScope, SubjectExpressionDiscoveredKind, SubjectExpressionOrganizationScope, SubjectExpressionGroupedMembers:
 		memberKind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
 		return ok && memberKind == kind && qualifier == MemberQualifierStatus && value == ""
 	case SubjectExpressionExplicitSet:
@@ -143,6 +143,9 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 			sentences = append(sentences, contractsv1.ContextFabricMemberStatusUnappliedLimitation(string(kind)))
 		}
 	}
+	if sentence := memberStatusNotApplied(result, frame); sentence != "" {
+		sentences = append(sentences, sentence)
+	}
 	for _, sentence := range sentences {
 		if sentence == "" {
 			continue
@@ -162,6 +165,27 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 		result.LimitationsDisplaced += displaced
 	}
 	return result
+}
+
+// memberStatusNotApplied is the one rule for a status the engine has no filter
+// for: a frame that states a status on a kind without a status set (any shape
+// that carries the qualifier) is answered unfiltered, and says so. Pull
+// request, project and incident statuses have filters, and work items their
+// own member filter.
+func memberStatusNotApplied(result InvestigationResult, frame *QuestionFrame) string {
+	if frame == nil || result.Status == InvestigationClarificationRequired {
+		return ""
+	}
+	kind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+	if !ok || qualifier != MemberQualifierStatus || kind == "" || kind == SubjectWorkItem {
+		return ""
+	}
+	for _, filtered := range MemberStatusKinds() {
+		if kind == filtered {
+			return ""
+		}
+	}
+	return contractsv1.ContextFabricMemberStatusNotAppliedLimitation(string(kind), value)
 }
 
 // withMemberStatusPoolCut states that the status filter was decided within

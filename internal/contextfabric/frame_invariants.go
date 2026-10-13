@@ -267,7 +267,7 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 	{ID: FrameInvariantI5, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind, FrameFieldMemberQualifier, FrameFieldMemberQualifierValue}},
 	{ID: FrameInvariantI6, Phase: FrameValidationPhaseA1,
-		Reads: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind}},
+		Reads: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind, FrameFieldMemberQualifier, FrameFieldMemberQualifierValue}},
 	{ID: FrameInvariantI7, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind}},
 	{ID: FrameInvariantI8, Phase: FrameValidationPhaseA1,
@@ -810,6 +810,12 @@ func checkI6(expression SubjectExpression) (FrameValidationFailure, bool) {
 	// here is what turns a late refusal into an early, repairable one.
 	if grouped.GroupKind == grouped.MemberKind {
 		return fail(FrameFailureGroupEqualsMember)
+	}
+	if !ValidMemberQualifier(grouped.MemberQualifier) {
+		return fail(FrameFailureMemberQualifierInvalid)
+	}
+	if !ValidMemberQualifierValue(grouped.MemberKind, grouped.MemberQualifier, grouped.MemberQualifierValue) {
+		return fail(FrameFailureMemberQualifierValueInvalid)
 	}
 	return FrameValidationFailure{}, false
 }

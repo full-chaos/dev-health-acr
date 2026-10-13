@@ -1026,6 +1026,14 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 			return fmt.Errorf("discovered member_qualifier_value is not valid beside its qualifier and member kind")
 		}
 	}
+	if expression.Grouped != nil {
+		if !ValidMemberQualifier(expression.Grouped.MemberQualifier) {
+			return fmt.Errorf("grouped member_qualifier %q is not a vocabulary member", expression.Grouped.MemberQualifier)
+		}
+		if !ValidMemberQualifierValue(expression.Grouped.MemberKind, expression.Grouped.MemberQualifier, expression.Grouped.MemberQualifierValue) {
+			return fmt.Errorf("grouped member_qualifier_value is not valid beside its qualifier and member kind")
+		}
+	}
 	if expression.Org != nil {
 		kind := SubjectKind("")
 		if expression.Org.MemberKind != nil {
