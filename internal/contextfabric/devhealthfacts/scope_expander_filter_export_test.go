@@ -113,3 +113,12 @@ func OrgWideProjectRollupStatementForTest(statement string) (string, bool) {
 	out = strings.ReplaceAll(out, projectRollupWorkItemIDsSQL, linkedWorkItemIDsSQL)
 	return out, out != statement
 }
+
+// OrgLinkSetProjectRollupStatementForTest rewrites the project pull request
+// roll-up back to the form that built the organization's link-id set before
+// reading the project's work items. It reports whether it rewrote anything.
+func OrgLinkSetProjectRollupStatementForTest(statement string) (string, bool) {
+	old := `(SELECT arrayJoin((SELECT groupUniqArray(work_item_id) FROM work_items WHERE org_id = {org_id:String} AND (provider, project_id) IN (SELECT provider, join_key FROM ` + projectJoinKeysSQL + `) AND work_item_id IN ` + linkedWorkItemIDsSQL + `)))`
+	out := strings.ReplaceAll(statement, projectRollupWorkItemIDsSQL, old)
+	return out, out != statement
+}
