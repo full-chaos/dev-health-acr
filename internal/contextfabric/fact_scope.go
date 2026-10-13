@@ -1395,6 +1395,11 @@ type FactScopeExpansionRequest struct {
 	// unconditionally -- see ScopeExpander.projectRepositories, which is the
 	// one implementation that exists today.
 	TimeContext TimeContext
+	// PullRequestStatus is the pull request status the question frame filters
+	// its members by, or empty. An expansion whose targets are pull requests,
+	// or their reviews, reads only the pull requests that hold it, inside the
+	// read and so before Limit cuts it.
+	PullRequestStatus string
 	// Limit bounds admitted targets. The implementation must read up to
 	// Limit+1 rows and return all of them: the resolver detects truncation
 	// from the OVERFLOW row and enforces the cap itself (ruling invariant 8).
@@ -1687,6 +1692,9 @@ type factScopeResolveInput struct {
 	// resolveRequirement, and TemporalObservedTime stays gated closed for
 	// every policy (see that switch's own comment).
 	TimeContext TimeContext
+	// PullRequestStatus is the request's PullRequestStatus, carried to every
+	// expansion.
+	PullRequestStatus string
 }
 
 // newFactScopeResolveInput narrows a fact request down to what scope
@@ -1700,9 +1708,10 @@ func newFactScopeResolveInput(request CanonicalFactRequest) factScopeResolveInpu
 		})
 	}
 	return factScopeResolveInput{
-		Roots:        investigationScopeSubjects(request),
-		Requirements: requirements,
-		TimeContext:  request.Question.TimeContext,
+		Roots:             investigationScopeSubjects(request),
+		Requirements:      requirements,
+		TimeContext:       request.Question.TimeContext,
+		PullRequestStatus: request.PullRequestStatus,
 	}
 }
 
@@ -1745,15 +1754,15 @@ func (r *FactReadScopeResolver) Resolve(
 			// for the SAME origin kind are stage 2's explicit case, gated
 			// on the same policy switch.
 			//
-			// The one carve-out is a team root of a kind in
-			// additiveTeamExpansionKinds: the team's direct rollup is the
+			// The one carve-out is a team or project root of a kind in
+			// additiveRollupExpansionKinds: the root's direct rollup is the
 			// summary, and the per-item facts its enabled policy reaches
 			// stay served beside it.
-			additive := r.additiveTeamRoots(requirement.Kind, roots)
+			additive := r.additiveRollupRoots(requirement.Kind, roots)
 			if len(additive) == 0 {
 				continue
 			}
-			r.resolveRequirement(ctx, principal, &scope, requirement.Kind, additive, input.TimeContext)
+			r.resolveRequirement(ctx, principal, &scope, requirement.Kind, additive, input.TimeContext, input.PullRequestStatus)
 			continue
 		}
 		// A root of a kind the capability answers directly must never
@@ -1775,37 +1784,42 @@ func (r *FactReadScopeResolver) Resolve(
 					unsupportedRoots = append(unsupportedRoots, root)
 				}
 			}
-			unsupportedRoots = append(unsupportedRoots, r.additiveTeamRoots(requirement.Kind, supported)...)
+			unsupportedRoots = append(unsupportedRoots, r.additiveRollupRoots(requirement.Kind, supported)...)
 			roots = unsupportedRoots
 		}
-		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext)
+		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext, input.PullRequestStatus)
 	}
 	sortFactScopeDerivations(scope.Derivations)
 	return scope
 }
 
-// additiveTeamExpansionKinds are the kinds whose provider answers a team root
-// directly with a rollup AND whose team-origin expansion rule reaches per-item
-// facts (pull requests; blockers via the team's work items). For these the
-// expansion stays on beside the direct answer: a team question keeps its
-// per-item facts, and the rollup is the summary over them.
-var additiveTeamExpansionKinds = map[FactKind]bool{FactPullRequests: true, FactBlockers: true}
+// additiveRollupExpansionKinds are the kinds whose provider answers a team or
+// project root directly with a rollup AND whose expansion rule from that root
+// reaches per-item facts (pull requests; blockers via the root's work items).
+// For these the expansion stays on beside the direct answer: the question keeps
+// its per-item facts, and the rollup is the summary over them.
+var additiveRollupExpansionKinds = map[FactKind]bool{FactPullRequests: true, FactBlockers: true}
 
-// additiveTeamRoots returns the team roots, among roots, that still owe an
-// expansion decision although their kind is directly readable. Only an enabled
-// rule qualifies: with none, the direct answer stands alone as before.
-func (r *FactReadScopeResolver) additiveTeamRoots(kind FactKind, roots []SubjectRef) []SubjectRef {
-	if !additiveTeamExpansionKinds[kind] {
-		return nil
-	}
-	rule, eligible := r.lookupFactScopePolicy(kind, SubjectTeam)
-	if !eligible || !rule.Enabled {
+// additiveRollupOrigins are the root kinds whose rollup is additive.
+var additiveRollupOrigins = []SubjectKind{SubjectTeam, SubjectProject}
+
+// additiveRollupRoots returns the team and project roots, among roots, that
+// still owe an expansion decision although their kind is directly readable.
+// Only an enabled rule qualifies: with none, the direct answer stands alone.
+func (r *FactReadScopeResolver) additiveRollupRoots(kind FactKind, roots []SubjectRef) []SubjectRef {
+	if !additiveRollupExpansionKinds[kind] {
 		return nil
 	}
 	var out []SubjectRef
-	for _, root := range roots {
-		if root.Kind == SubjectTeam {
-			out = append(out, root)
+	for _, origin := range additiveRollupOrigins {
+		rule, eligible := r.lookupFactScopePolicy(kind, origin)
+		if !eligible || !rule.Enabled {
+			continue
+		}
+		for _, root := range roots {
+			if root.Kind == origin {
+				out = append(out, root)
+			}
 		}
 	}
 	return out
@@ -1820,6 +1834,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	kind FactKind,
 	roots []SubjectRef,
 	timeContext TimeContext,
+	pullRequestStatus string,
 ) {
 	byOriginKind := map[SubjectKind][]SubjectRef{}
 	for _, root := range roots {
@@ -1948,7 +1963,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// remove, one field over.
 			event.DecisionReason = FactScopeDecisionExecuted
 			event.TargetLimit = rule.limitOrDefault()
-			r.expand(ctx, principal, scope, &event, origins, rule, timeContext, derivationIndex)
+			r.expand(ctx, principal, scope, &event, origins, rule, timeContext, pullRequestStatus, derivationIndex)
 		}
 
 		scope.Events = append(scope.Events, event)
@@ -2011,6 +2026,7 @@ func (r *FactReadScopeResolver) expand(
 	origins []SubjectRef,
 	rule factScopePolicyRule,
 	timeContext TimeContext,
+	pullRequestStatus string,
 	derivationIndex map[string][]int,
 ) {
 	// ADMISSION GATE (CHAOS-5405 D-a), work-item targets only. The repository
@@ -2036,13 +2052,14 @@ func (r *FactReadScopeResolver) expand(
 		}
 	}
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
-		Principal:       principal,
-		RequirementKind: event.RequirementKind,
-		Origins:         origins,
-		Policy:          rule.Policy,
-		TargetKind:      rule.TargetKind,
-		TimeContext:     timeContext,
-		Limit:           rule.limitOrDefault(),
+		Principal:         principal,
+		RequirementKind:   event.RequirementKind,
+		Origins:           origins,
+		Policy:            rule.Policy,
+		TargetKind:        rule.TargetKind,
+		TimeContext:       timeContext,
+		PullRequestStatus: pullRequestStatus,
+		Limit:             rule.limitOrDefault(),
 	})
 	event.CandidateCount = result.Counts.CandidateCount
 	event.AuthorizationDroppedCount = result.Counts.AuthorizationDroppedCount
