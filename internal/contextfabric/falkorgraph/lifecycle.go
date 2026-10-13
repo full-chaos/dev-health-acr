@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/google/uuid"
 )
 
 // This file is CHAOS-3898 S2a's falkorgraph-side KeyResolver plumbing
@@ -165,9 +166,12 @@ func (a *Adapter) DeleteEpochGraph(ctx context.Context, orgID string, epoch, act
 var _ contextfabric.EpochGraphDeleter = (*Adapter)(nil)
 
 // organizationGraphKeys returns every existing graph key that belongs to
-// orgID at any epoch: the unsuffixed epoch-0 key and "<key>-e<digits>".
-// It scans GRAPH.LIST instead of counting up to a recorded epoch, so a graph
-// above the recorded epoch (an aborted build) is found too.
+// orgID at any epoch. A graph key hashes the organization id exactly as the
+// projector supplied it, so an equivalent UUID spelling has a different key.
+// Keys of the canonical spelling are matched by name; every other graph with
+// this prefix and the "<prefix>-<32 hex>[-e<digits>]" shape is attributed by
+// the org_id stored on its nodes. It scans the existing keys instead of
+// counting epochs, so a graph above the recorded epoch is found too.
 func (a *Adapter) organizationGraphKeys(ctx context.Context, orgID string) ([]string, error) {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
@@ -177,7 +181,57 @@ func (a *Adapter) organizationGraphKeys(ctx context.Context, orgID string) ([]st
 	if err != nil {
 		return nil, safeDependencyError("list organization graphs", err)
 	}
-	return matchOrganizationGraphKeys(names, graphKey(a.config.GraphPrefix, orgID)), nil
+	base := graphKey(a.config.GraphPrefix, orgID)
+	keys := matchOrganizationGraphKeys(names, base)
+	matched := map[string]bool{}
+	for _, key := range keys {
+		matched[key] = true
+	}
+	want := normalizeOrgSpelling(orgID)
+	for _, name := range names {
+		if matched[name] || !isProjectionGraphName(name, a.config.GraphPrefix) {
+			continue
+		}
+		rows, err := a.api.query(ctx, name, "MATCH (n) WHERE n."+propOrgID+" IS NOT NULL RETURN n."+propOrgID+" AS org LIMIT 1", nil, true)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, safeDependencyError("read organization graph owner", err)
+		}
+		if len(rows) > 0 && normalizeOrgSpelling(propStringValue(rows[0].get("org"))) == want {
+			keys = append(keys, name)
+		}
+	}
+	return keys, nil
+}
+
+// isProjectionGraphName reports whether name is "<prefix>-<32 hex>" or
+// "<prefix>-<32 hex>-e<digits>".
+func isProjectionGraphName(name, prefix string) bool {
+	rest, ok := strings.CutPrefix(name, strings.TrimSpace(prefix)+"-")
+	if !ok || len(rest) < 32 {
+		return false
+	}
+	digest, suffix := rest[:32], rest[32:]
+	if strings.Trim(digest, "0123456789abcdef") != "" {
+		return false
+	}
+	if suffix == "" {
+		return true
+	}
+	epoch, ok := strings.CutPrefix(suffix, "-e")
+	return ok && epoch != "" && strings.Trim(epoch, "0123456789") == ""
+}
+
+// normalizeOrgSpelling returns the canonical lower-case UUID for any spelling
+// uuid.Parse accepts, and the trimmed input otherwise.
+func normalizeOrgSpelling(value string) string {
+	value = strings.TrimSpace(value)
+	if parsed, err := uuid.Parse(value); err == nil {
+		return parsed.String()
+	}
+	return value
 }
 
 // matchOrganizationGraphKeys keeps the names equal to base or to "<base>-e<digits>".

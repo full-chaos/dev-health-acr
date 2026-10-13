@@ -25,3 +25,29 @@ func TestGraphKeysDifferByUUIDSpelling(t *testing.T) {
 		t.Fatal("graph keys are expected to differ by spelling: that is why purge cannot derive keys from one spelling")
 	}
 }
+
+func TestIsProjectionGraphNameAcceptsOnlyTheProjectionShapes(t *testing.T) {
+	hash := "0123456789abcdef0123456789abcdef"
+	for name, want := range map[string]bool{
+		"acr-" + hash: true, "acr-" + hash + "-e3": true, "acr-" + hash + "-e12": true,
+		"acr-" + hash + "-e": false, "acr-" + hash + "-ex": false, "acr-" + hash + "x": false,
+		"acr-" + hash[:31]: false, "acr-" + "0123456789ABCDEF0123456789ABCDEF": false,
+		"other-" + hash: false, hash: false,
+	} {
+		if got := isProjectionGraphName(name, "acr"); got != want {
+			t.Errorf("isProjectionGraphName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestNormalizeOrgSpellingCollapsesEveryUUIDForm(t *testing.T) {
+	const canonical = "abcdef01-2345-4678-89ab-cdef01234567"
+	for _, spelling := range []string{canonical, "ABCDEF01-2345-4678-89AB-CDEF01234567", "{ABCDEF01-2345-4678-89AB-CDEF01234567}", "abcdef0123454678" + "89abcdef01234567", "urn:uuid:" + canonical, "  " + canonical + " "} {
+		if got := normalizeOrgSpelling(spelling); got != canonical {
+			t.Errorf("normalizeOrgSpelling(%q) = %q, want %q", spelling, got, canonical)
+		}
+	}
+	if got := normalizeOrgSpelling(" not-a-uuid "); got != "not-a-uuid" {
+		t.Errorf("non-UUID = %q", got)
+	}
+}

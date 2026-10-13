@@ -1718,6 +1718,8 @@ The verb fails closed. It refuses when the organization is in the projector set 
 
 If a run fails after it started removing data, the report says `"status": "incomplete"`, the verb exits non-zero, and an `org_purge_incomplete` audit event is written. The graphs may already be gone and the database rows are untouched (one transaction). Run `--dry-run` to see the residue, then run the purge again; the retry finishes it.
 
+Run it with the projector `serve` process for that organization stopped, or run `--dry-run` once more after one poll interval and expect zero rows and zero graphs. The verb takes the per-organization lock but does not fence a tick that already selected the organization before the purge started; such a tick can recreate a few checkpoint rows or an empty graph, and a second purge run removes them.
+
 Kept on purpose: `audit_events` (no retention rule exists in this repository), and episodes with `retention_class = legal_hold`. A purge that deletes any row adds one `org_purged` audit event holding counts only. A second run is a no-op.
 
 ### CHAOS-3916 production graph cutover runbook

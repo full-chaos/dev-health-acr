@@ -89,6 +89,8 @@ func TestLiveDeleteOrganizationGraphsFindsGraphsCreatedUnderAnotherUUIDSpelling(
 	apply(strings.ToUpper(canonical))
 	apply("{" + strings.ToUpper(canonical) + "}")
 	apply(other)
+	apply(strings.ToUpper(other))
+	apply("{" + strings.ToUpper(other) + "}")
 
 	count, err := adapter.CountOrganizationGraphs(ctx, canonical)
 	require.NoError(t, err)
@@ -102,5 +104,5 @@ func TestLiveDeleteOrganizationGraphsFindsGraphsCreatedUnderAnotherUUIDSpelling(
 	require.Zero(t, left)
 	otherCount, err := adapter.CountOrganizationGraphs(ctx, other)
 	require.NoError(t, err)
-	require.Equal(t, 1, otherCount, "a different organization keeps its graph")
+	require.Equal(t, 3, otherCount, "a different organization keeps its graph under every spelling")
 }
