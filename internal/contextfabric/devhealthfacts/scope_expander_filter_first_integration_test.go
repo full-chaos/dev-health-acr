@@ -25,8 +25,9 @@ const scopeStatementCeiling = uint64(32 << 20)
 
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
-// at two threads (33 MB, 100k and 300k unrelated work items) plus the slope.
-const workItemSelectionCeiling = uint64(statementMemorySlope * 33_000_000)
+// at two threads on merged parts (21.8 MB at 100k and 300k unrelated work
+// items; unbounded 36.7-37.2 MB) plus the slope.
+const workItemSelectionCeiling = uint64(statementMemorySlope * 22_000_000)
 
 // scopeExpanderStatements names each scope expander statement that reads work
 // items, link rows or transitions by a fragment only it carries, and a table
