@@ -440,6 +440,10 @@ type FactPrerequisiteLoader interface {
 	LoadPrerequisites(context.Context, storage.Principal, FactQuery) (context.Context, error)
 }
 
+// factReadTimedOutReason is the registry's own wording of a provider read that
+// ran past its deadline; classifyFactReadError turns it into the served sentence.
+const factReadTimedOutReason = "canonical fact capability timed out"
+
 type FactReadFailure struct {
 	State  SourceState
 	Reason string
@@ -1000,6 +1004,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				SupportedKinds: registered.capability.SupportedSubjectKinds,
 			})
 			bundle.recordOutcome(planned.Kind, factReadScopeGap, planned.Subjects, nil, nil)
+			{
+				outcome := bundle.Outcomes[planned.Kind]
+				outcome.Scope = scopeNoteOf(*planned.ScopeGap)
+				bundle.Outcomes[planned.Kind] = outcome
+			}
 			if planned.ScopeGap.ScopeExpansionUnavailable() {
 				outcome := bundle.Outcomes[planned.Kind]
 				outcome.ScopeExpansionUnavailable = true
@@ -1051,13 +1060,14 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				r.recordFactRead(ctx, principal, planned.Kind, factReadCancelled, "", query.Subjects, 0, false)
 				return bundle, context.Canceled
 			}
-			state, reason := classifyFactReadError(err)
+			state, reason := classifyFactReadError(planned.Kind, err)
+			r.logFactReadFailure(ctx, planned.Kind, err)
 			// Codex round-1 F2: a narrowed capability that then FAILS still
 			// had its subject list cut, and the observation has to say both
 			// things. Recording only the failure would silently drop the
 			// record that subjects were dropped -- the unexplained absence
 			// the empty-states rule forbids.
-			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(plannedForFailedRead(planned, registered.capability), reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
 			bundle.recordOutcome(planned.Kind, factReadFailed, planned.Subjects, query.Subjects, nil)
 			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
@@ -1087,6 +1097,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// Coverage.Partial, and it permits facts. Same discipline as the
 		// registry fan-out cap and the R4-2 omission path, which reach this
 		// state for the same reason.
+		gapOnlyTruncation := planned.ScopeGap != nil && !result.Truncated && result.OmittedCount == 0 && result.State != SourceTruncated
 		if planned.ScopeGap != nil {
 			result.Truncated = true
 		}
@@ -1109,8 +1120,9 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			if errors.Is(rejection, ErrFactTableMeasureNotNumeric) {
 				outcome = factReadRejectedNonNumericMeasure
 			}
-			state, reason := classifyFactReadError(rejection)
-			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
+			state, reason := classifyFactReadError(planned.Kind, rejection)
+			r.logFactReadFailure(ctx, planned.Kind, rejection)
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(plannedForFailedRead(planned, registered.capability), reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
 			bundle.recordOutcome(planned.Kind, factReadRejected, planned.Subjects, query.Subjects, nil)
 			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
@@ -1137,6 +1149,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
 		r.recordEvaluationCoverage(ctx, principal, planned.Kind, result.Evaluation, len(result.EvaluatedSubjects))
 		bundle.recordOutcome(planned.Kind, factReadCompleted, planned.Subjects, query.Subjects, &result)
+		if gapOnlyTruncation && mergedState == SourceTruncated && factCountOfKind(bundle.Facts, planned.Kind) == factsReturned {
+			ledgered := bundle.Outcomes[planned.Kind]
+			ledgered.TruncatedOnlyByScopeGap = true
+			bundle.Outcomes[planned.Kind] = ledgered
+		}
 		bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
@@ -1305,7 +1322,7 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	result, err := registered.provider.ReadFacts(providerCtx, principal, query)
 	if err != nil {
 		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
-			return FactProviderResult{}, &FactReadFailure{State: SourceUnavailable, Reason: "canonical fact capability timed out"}
+			return FactProviderResult{}, &FactReadFailure{State: SourceUnavailable, Reason: factReadTimedOutReason}
 		}
 		return FactProviderResult{}, err
 	}
@@ -1752,7 +1769,7 @@ func factCoverageReason(state SourceState, reason string) string {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
 		return "canonical fact capability returned " + string(state)
 	}
-	return reason
+	return withoutProviderPackageLabel(reason)
 }
 
 func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string, spec coverageDetailSpec) {
@@ -1767,14 +1784,14 @@ func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state Source
 	if degrades {
 		bundle.Coverage.Partial = true
 		// Codex round-2 R2-3: clamp the COMPOSED string, not its ingredients.
-		// Clamping reason first and then prefixing "<kind>: " pushed the
+		// Clamping reason first and then prefixing "<kind label>: " pushed the
 		// result back over the bound by exactly the prefix length, producing
 		// a DegradedReasons entry the contract validator rejects -- which
 		// fails the whole investigation, the outcome this clamping exists to
 		// prevent. A narrowed provider that fails with a long reason is the
 		// live path: the narrowing note and the failure reason are
 		// concatenated before they ever reach here.
-		degradedEntry = clampCoverageText(string(kind)+": "+reason, maxCoverageDegradedReasonLength)
+		degradedEntry = clampCoverageText(factKindPrefix(kind)+": "+reason, maxCoverageDegradedReasonLength)
 		bundle.Coverage.DegradedReasons = append(bundle.Coverage.DegradedReasons, degradedEntry)
 	}
 	// CHAOS-4690: the paired structured detail. Minted for every
@@ -1976,15 +1993,42 @@ func FactSubjectKey(subject SubjectRef) string {
 	return canonicalFactSubjectKey(subject)
 }
 
-func classifyFactReadError(err error) (SourceState, string) {
+func classifyFactReadError(kind FactKind, err error) (SourceState, string) {
+	label := contractsv1.ContextFabricFactKindLabel(contractsv1.ContextFabricFactKind(kind))
 	var failure *FactReadFailure
 	if errors.As(err, &failure) && validFactSourceState(failure.State) {
-		return failure.State, failure.Error()
+		switch failure.Reason {
+		case factResultRejectedReason:
+			return failure.State, failure.Error()
+		case factReadTimedOutReason:
+			return failure.State, "The " + label + " read timed out; the facts for it are not shown."
+		}
+		return failure.State, "The " + label + " read failed; the facts for it are not shown."
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return SourceUnavailable, "canonical fact capability timed out"
+		return SourceUnavailable, "The " + label + " read timed out; the facts for it are not shown."
 	}
-	return SourceUnavailable, "canonical fact capability is unavailable"
+	return SourceUnavailable, "The " + label + " read failed; the facts for it are not shown."
+}
+
+// logFactReadFailure keeps the provider's own wording of a failed read in the
+// server log, where it can help an operator, and out of the served coverage.
+func (r *FactCapabilityRegistry) logFactReadFailure(ctx context.Context, kind FactKind, err error) {
+	if r == nil || r.logger == nil || err == nil {
+		return
+	}
+	var failure *FactReadFailure
+	reason := ""
+	if errors.As(err, &failure) {
+		reason = failure.Reason
+	}
+	attrs := []any{
+		"kind", SanitizeLogAttr(string(kind)),
+		"error_type", SanitizeLogAttr(fmt.Sprintf("%T", err)),
+		"provider_reason", SanitizeLogAttr(reason),
+	}
+	attrs = append(attrs, requestIDLogAttrs(ctx)...)
+	r.logger.WarnContext(ctx, "context fabric fact read failed", attrs...)
 }
 
 func sortCanonicalFacts(facts []CanonicalFact) {
@@ -2186,6 +2230,31 @@ func onlyLinkScopedWorkItems(request CanonicalFactRequest, subjects []SubjectRef
 		}
 	}
 	return len(subjects) > 0
+}
+
+func factCountOfKind(facts []CanonicalFact, kind FactKind) int {
+	count := 0
+	for _, fact := range facts {
+		if fact.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+// factKindPrefix names a fact kind in plain words for a degraded-reason entry.
+func factKindPrefix(kind FactKind) string {
+	label := contractsv1.ContextFabricFactKindLabel(contractsv1.ContextFabricFactKind(kind))
+	first, size := utf8.DecodeRuneInString(label)
+	return string(unicode.ToUpper(first)) + label[size:]
+}
+
+// withoutProviderPackageLabel drops the Go package label a provider puts in
+// front of its own sentence ("devhealthfacts: ..."): it names code, not
+// anything a reader can use, and a served reason is a plain sentence.
+func withoutProviderPackageLabel(reason string) string {
+	return strings.ReplaceAll(reason, "devhealthfacts: ", "")
+
 }
 
 // CombineRequestNote joins a request-level note to a kind reason, note first.

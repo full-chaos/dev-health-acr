@@ -150,6 +150,25 @@ func (c *client) call(name string, args doc) (doc, string) {
 	return d, string(raw)
 }
 
+// tryCall is call, but a tool error is returned as isError instead of failing the test.
+func (c *client) tryCall(name string, args doc) (doc, string, bool) {
+	c.t.Helper()
+	res, err := c.session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		c.t.Fatalf("%s: %v", name, err)
+	}
+	raw, _ := json.Marshal(res)
+	if res.IsError {
+		return nil, string(raw), true
+	}
+	body, _ := json.Marshal(res.StructuredContent)
+	var d doc
+	if err := json.Unmarshal(body, &d); err != nil || d == nil {
+		c.t.Fatalf("%s returned no structured document: %s", name, raw)
+	}
+	return d, string(raw), false
+}
+
 func (c *client) interpretContract() doc {
 	c.t.Helper()
 	res, err := c.session.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{Name: "interpret_question", Arguments: map[string]string{"question": "which issues belong to a repository"}})

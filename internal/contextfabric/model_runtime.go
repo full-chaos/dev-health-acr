@@ -3259,7 +3259,8 @@ func MergeCoverage(orgID string, groups ...Coverage) Coverage {
 		sources[i].Label = contractsv1.ContextFabricSourceObservationLabel(sources[i].Source)
 		sources[i].StateLabel = contractsv1.ContextFabricSourceStateLabel(sources[i].State)
 	}
-	// reasons: EXACTLY today's computation (dedupe map + sort.Strings) --
+	// reasons: today's dedupe map ordered by the machine kind key then the
+	// served text (degradedSortKeys), so a label edit never reorders them --
 	// the golden anchor this ticket must never move. Computed independently
 	// of allDetails below, so a defect on the structured half can never
 	// touch the field every existing consumer already parses.
@@ -3267,7 +3268,14 @@ func MergeCoverage(orgID string, groups ...Coverage) Coverage {
 	for reason := range degraded {
 		reasons = append(reasons, reason)
 	}
-	sort.Strings(reasons)
+	sortKeys := degradedSortKeys(allDetails)
+	sort.Slice(reasons, func(i, j int) bool {
+		ki, kj := degradedSortKey(sortKeys, reasons[i]), degradedSortKey(sortKeys, reasons[j])
+		if ki != kj {
+			return ki < kj
+		}
+		return reasons[i] < reasons[j]
+	})
 
 	return Coverage{
 		Sources: sources, Partial: partial || len(reasons) > 0, DegradedReasons: reasons,
@@ -3298,7 +3306,14 @@ func mergeCoverageDetails(all []CoverageDetail, reasons []string, orgID string) 
 			nonDegrading = append(nonDegrading, d)
 		}
 	}
-	sort.SliceStable(degrading, func(i, j int) bool { return degrading[i].Raw < degrading[j].Raw })
+	sortKeys := degradedSortKeys(degrading)
+	sort.SliceStable(degrading, func(i, j int) bool {
+		ki, kj := degradedSortKey(sortKeys, degrading[i].Raw), degradedSortKey(sortKeys, degrading[j].Raw)
+		if ki != kj {
+			return ki < kj
+		}
+		return degrading[i].Raw < degrading[j].Raw
+	})
 	degrading = dedupeCoverageDetailsByRaw(degrading)
 	sort.SliceStable(nonDegrading, func(i, j int) bool {
 		if nonDegrading[i].Source != nonDegrading[j].Source {
@@ -3347,6 +3362,31 @@ func mergeCoverageDetails(all []CoverageDetail, reasons []string, orgID string) 
 		merged[i].DetailID = fmt.Sprintf("cov-%02d", i+1)
 	}
 	return merged
+}
+
+// degradedSortKeys maps a fact detail's served Raw to the order key it has
+// always sorted under: the machine kind key in front of the same sentence. A
+// fact entry is SERVED with the plain kind label in front, so sorting by the
+// served text would reorder served output whenever a label is edited.
+func degradedSortKeys(details []CoverageDetail) map[string]string {
+	keys := map[string]string{}
+	for _, d := range details {
+		if !d.Degrading || d.FactKind == "" {
+			continue
+		}
+		prefix := factKindPrefix(FactKind(d.FactKind)) + ": "
+		if rest, ok := strings.CutPrefix(d.Raw, prefix); ok {
+			keys[d.Raw] = string(d.FactKind) + ": " + rest
+		}
+	}
+	return keys
+}
+
+func degradedSortKey(keys map[string]string, raw string) string {
+	if key, ok := keys[raw]; ok {
+		return key
+	}
+	return raw
 }
 
 func dedupeCoverageDetailsByRaw(details []CoverageDetail) []CoverageDetail {

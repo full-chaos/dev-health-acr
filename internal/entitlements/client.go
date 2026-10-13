@@ -153,6 +153,29 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 	return grants{runtime: parsed.AgentContextRuntime, serviceModel: parsed.ServiceModel}, nil
 }
 
+// AnswersFor reports whether Dev Health answers HTTP 200 for the organization,
+// whatever the body holds. It is for a caller that must know the organization
+// still exists (the organization purge); a transport failure or any other
+// status reports false, never a grant.
+func (c *Client) AnswersFor(ctx context.Context, orgID string) bool {
+	if strings.TrimSpace(orgID) == "" {
+		return false
+	}
+	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, entitlementURL(c.baseURL, orgID), nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode == http.StatusOK
+}
+
 func entitlementURL(baseURL *url.URL, orgID string) string {
 	copy := *baseURL
 	copy.Path = "/api/v1/internal/acr/entitlements/" + url.PathEscape(orgID)

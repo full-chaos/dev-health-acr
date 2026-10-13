@@ -25,3 +25,20 @@ func TestProjectionCarriesTheDriverSourceState(t *testing.T) {
 		t.Errorf("projected source_state of an untouched driver = %q, want empty", served["driver_principal_2"])
 	}
 }
+
+func TestProjectionCarriesTheServerNoteAndFlag(t *testing.T) {
+	result := richResult()
+	for index := range result.Drivers {
+		if result.Drivers[index].DriverID == "driver_principal_1" {
+			result.Drivers[index].SourceState = contractsv1.ContextFabricSourceTruncated
+			result.Drivers[index].SourceStateNote = "The service marks this driver as partial: the source read was truncated."
+			result.Drivers[index].SummaryCorrected = true
+		}
+	}
+	for _, projected := range Project(result, Budget{}).PrincipalDrivers {
+		corrected := projected.DriverID == "driver_principal_1"
+		if projected.SummaryCorrected != corrected || (projected.SourceStateNote != "") != corrected {
+			t.Errorf("%s: note %q corrected %v", projected.DriverID, projected.SourceStateNote, projected.SummaryCorrected)
+		}
+	}
+}

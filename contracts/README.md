@@ -56,6 +56,10 @@ A client that cached `tools/list` validates every later response against the sch
 - The consumer is tolerant: Go response decoders ignore unknown keys (`tolerantUnmarshal`); request decoders stay strict (`strictUnmarshal`).
 - Canonical schemas that an MCP response embeds (`context_packet`, `evidence_ref`, `context_fabric_*`) keep their own closure for the HTTP API; the embedded MCP copy is the same document with `additionalProperties: false` removed, and the `$defs` sync check compares on that basis.
 
+## Renaming a key
+
+Never rename a served key in place. Add the new key, serve both with equal values, mark the old one deprecated in the schema description ("use <new key>; removed only after the ask-dev pin and the cfa client read the new keys"), move internal consumers to the new key (falling back to the old one for results stored before the rename), and remove the old key only after the ask-dev pin and the cfa client have moved. Example: ranking-table rows serve `subject_canonical_id` / `subject_label` and the deprecated `team_canonical_id` / `team_label`.
+
 ## Compatibility
 
 Additive optional fields may ship in a compatible v1 release. Removing fields, changing requiredness, narrowing accepted values, or changing semantics requires a new schema version.

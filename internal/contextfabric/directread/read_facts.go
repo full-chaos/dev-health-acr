@@ -332,7 +332,17 @@ type CoverageRow struct {
 	ProviderState string         `json:"provider_state,omitempty"`
 	KindState     string         `json:"kind_state,omitempty"`
 	Reason        string         `json:"reason,omitempty"`
-	Withheld      []string       `json:"withheld,omitempty"`
+	// Expansion names the scope-expansion decision beside a row whose own
+	// facts were read: facts reachable only through expansion are a separate
+	// part of the answer and never the row outcome.
+	Expansion *RowExpansion `json:"expansion,omitempty"`
+	Withheld  []string      `json:"withheld,omitempty"`
+}
+
+// RowExpansion is a row's scope-expansion decision.
+type RowExpansion struct {
+	Outcome string `json:"outcome"`
+	Policy  string `json:"policy"`
 }
 
 // Truncation describes response-level truncation.
@@ -1087,6 +1097,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+				row.Expansion = rowExpansionOf(outcome.Scope)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && reachedSubjects(derived, kind, subject, served):
 				share, _ := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				row.KindState = string(outcome.State)
@@ -1095,6 +1106,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.Reason = joinReason(outcome.Reason, row.Reason)
 				}
 				row.Outcome = derivedOutcome(outcome, share)
+				row.Expansion = share.note()
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.UnreachedRoot != nil && outcome.UnreachedRoot.Kind == subject.Kind:
 				row.Outcome, row.KindState, row.Reason = OutcomeUnavailable, string(outcome.UnreachedRoot.State), outcome.UnreachedRoot.Reason
 				if outcome.UnreachedRoot.ScopeExpansionUnavailable {
@@ -1103,6 +1115,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if outcome.UnreachedRoot.WindowUnsupported {
 					row.KindState = KindStateWindowUnsupported
 				}
+				row.Expansion = rowExpansionOf(outcome.UnreachedRoot.Scope)
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind):
 				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				if !expanded {
@@ -1113,6 +1126,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.KindState = string(outcome.State)
 				row.Reason = derivedReason(share)
 				row.Outcome = derivedOutcome(outcome, share)
+				row.Expansion = share.note()
 			case !recorded:
 				// A planned kind with no ledger entry is a registry defect;
 				// say unknown loudly rather than claim a state.
@@ -1129,7 +1143,19 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
-				if share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated); expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
+				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
+				notRun := expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable
+				ownCut := expanded && !notRun && (share.shared || expansionCut(share.expansion.outcome))
+				// The kind-level truncated state came from a scope gap alone:
+				// a row whose own expansion did not run, or completed, or was
+				// never asked for is not cut by it.
+				if row.Outcome == OutcomeTruncated && row.ProviderState == "" && outcome.TruncatedOnlyByScopeGap && !ownCut {
+					row.Outcome = OutcomeFactServed
+				}
+				if notRun {
+					row.Expansion = share.note()
+				} else if expanded && (share.targets > 0 || share.shared || expansionCut(share.expansion.outcome)) {
+					row.Expansion = share.note()
 					row.Reason = joinReason(row.Reason, derivedReason(share))
 					lowerBound := share.shared || expansionCut(share.expansion.outcome)
 					switch {
@@ -1146,6 +1172,14 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 		}
 	}
 	return rows
+}
+
+func rowExpansionOf(note *contextfabric.FactScopeNote) *RowExpansion {
+	if note == nil {
+		return nil
+	}
+	return &RowExpansion{Outcome: note.Outcome, Policy: note.Policy}
+
 }
 
 // clampRowReason keeps a joined row reason inside the bound a kind's own
@@ -1185,7 +1219,7 @@ func derivedOutcome(outcome contextfabric.FactKindOutcome, share derivedRow) str
 	switch {
 	case served > 0 && outcome.State == contextfabric.SourceStale:
 		return OutcomeStale
-	case served > 0 && (outcome.State == contextfabric.SourceTruncated || expansionCut(expansion.outcome) || share.shared):
+	case served > 0 && ((outcome.State == contextfabric.SourceTruncated && !outcome.TruncatedOnlyByScopeGap) || expansionCut(expansion.outcome) || share.shared):
 		return OutcomeTruncated
 	case served > 0:
 		return OutcomeFactServed
