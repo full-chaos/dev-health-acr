@@ -119,7 +119,6 @@ func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.
 	}
 }
 
-<<<<<<< HEAD
 type fixedActionFindings struct {
 	result contextpacket.ActionFindingsResult
 }
@@ -149,20 +148,6 @@ func TestOnlyAnActiveBlockersDependencyIsServedAsPressure(t *testing.T) {
 		"ev-dep-open": contractsv1.CategoryPressure, "ev-dep-inv": contractsv1.CategoryPressure,
 		"ev-dep-done": contractsv1.CategoryEvidence, "ev-dep-cancel": contractsv1.CategoryEvidence,
 		"ev-dep-outside": contractsv1.CategoryEvidence, "ev-dep-rel": contractsv1.CategoryEvidence,
-=======
-func TestAFailedDeploymentWithNoPullRequestLinkIsPressureOnlyAndNamesNoCause(t *testing.T) {
-	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	evidence := []contractsv1.EvidenceRef{
-		roleRow("ev-pr-unlinked", "pull_request", "50", "Unrelated change", "merged", at),
-		roleRow("ev-pr-linked", "pull_request", "51", "Linked change", "merged", at),
-		deploymentRow("ev-d-nolink", "dep-a", "failure", "", at),
-		deploymentRow("ev-d-link", "dep-b", "failure", "51", at),
-	}
-	roles, _ := servedRoles(t, evidence)
-	want := map[string]contractsv1.PacketCategory{
-		"ev-d-nolink": contractsv1.CategoryPressure, "ev-d-link": contractsv1.CategoryPressure,
-		"ev-pr-unlinked": contractsv1.CategoryEvidence, "ev-pr-linked": contractsv1.CategoryCause,
->>>>>>> fix/context-packet-role-rules
 	}
 	for id, category := range want {
 		if roles[id] != category {
@@ -170,7 +155,6 @@ func TestAFailedDeploymentWithNoPullRequestLinkIsPressureOnlyAndNamesNoCause(t *
 		}
 	}
 }
-<<<<<<< HEAD
 
 func TestStoredTeamFindingsAreServedAsActionAndCarryNoUnavailableWarning(t *testing.T) {
 	request := fixtureRequest("req-action", "main", "")
@@ -248,5 +232,23 @@ func TestOwningTeamWithNoFiredFindingServesNoActionAndNoWarning(t *testing.T) {
 		}
 	}
 }
-=======
->>>>>>> fix/context-packet-role-rules
+
+func TestAFailedDeploymentWithNoPullRequestLinkIsPressureOnlyAndNamesNoCause(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-unlinked", "pull_request", "50", "Unrelated change", "merged", at),
+		roleRow("ev-pr-linked", "pull_request", "51", "Linked change", "merged", at),
+		deploymentRow("ev-d-nolink", "dep-a", "failure", "", at),
+		deploymentRow("ev-d-link", "dep-b", "failure", "51", at),
+	}
+	roles, _ := servedRoles(t, evidence)
+	want := map[string]contractsv1.PacketCategory{
+		"ev-d-nolink": contractsv1.CategoryPressure, "ev-d-link": contractsv1.CategoryPressure,
+		"ev-pr-unlinked": contractsv1.CategoryEvidence, "ev-pr-linked": contractsv1.CategoryCause,
+	}
+	for id, category := range want {
+		if roles[id] != category {
+			t.Errorf("%s served as %q, want %q", id, roles[id], category)
+		}
+	}
+}
