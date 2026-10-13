@@ -5185,7 +5185,7 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 	if !appended {
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "decision", Subject: candidate.Subject,
-			Outcome: "no_commit", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+			Outcome: "no_commit", CommitGate: contractsv1.CommitGateEvidenceCensus, SearchTruncated: searchTruncated,
 			SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
 			Pass: pass, Index: 1, Total: 1,
 		})
@@ -5199,7 +5199,7 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 		committedIndex, committedTotal = 2, 2
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "decision", Subject: displaced,
-			Outcome: "displaced", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+			Outcome: "displaced", CommitGate: contractsv1.CommitGateEvidenceCensus, SearchTruncated: searchTruncated,
 			SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
 			Pass: pass, Index: 1, Total: 2,
 		})
@@ -5210,7 +5210,7 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 	}
 	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 		RequestID: request.RequestID, Stage: "decision", Subject: candidate.Subject,
-		Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: "evidence_census",
+		Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: contractsv1.CommitGateEvidenceCensus,
 		CommitBasis: string(bases.For(candidate.Subject)), SearchTruncated: searchTruncated,
 		SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
 		Pass: pass, Index: committedIndex, Total: committedTotal,
@@ -5259,7 +5259,7 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 	resolution.Committed = append(resolution.Committed, candidate.Subject)
 	bases.Record(candidate.Subject, contextfabric.CommitBasisStatistical)
 	digests.Record(candidate.Subject, contextfabric.CommitDecisionDigest{
-		CommitGate: "evidence_census", IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+		CommitGate: contractsv1.CommitGateEvidenceCensus, IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
 		SearchTruncated: searchTruncated, AliasLookupComplete: identityLookup == IdentityLookupComplete,
 		IdentityLookup: string(identityLookup),
 	})

@@ -193,7 +193,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		orgUnattributedOnly = unattributedOnly
 	}
 
-	unitsCut := false
+	var cutSubjects []contextfabric.SubjectRef
 	if unitsRequest, wanted := contextfabric.InvestmentUnitsFrom(ctx); wanted {
 		ownOrganization, _ := organizationSubjectsOfCaller(query.Subjects, orgID)
 		for _, subject := range query.Subjects {
@@ -210,7 +210,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 					return contextfabric.FactProviderResult{}, readFailure("query investment units", unitErr)
 				}
 				facts = append(facts, unitFacts...)
-				unitsCut = unitsCut || more
+				if more {
+					cutSubjects = append(cutSubjects, subject)
+				}
 				continue
 			}
 			if subject.Kind == contextfabric.SubjectRepository {
@@ -227,7 +229,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 				return contextfabric.FactProviderResult{}, readFailure("query investment units", unitErr)
 			}
 			facts = append(facts, unitFacts...)
-			unitsCut = unitsCut || more
+			if more {
+				cutSubjects = append(cutSubjects, subject)
+			}
 		}
 	}
 
@@ -272,9 +276,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgRestrictedReason)
 	}
-	if unitsCut {
+	if len(cutSubjects) > 0 {
 		result.Truncated = true
-		mergeFactReadReason(&result, unitFactReasonCut)
+		addScopedReason(&result, query.Subjects, cutSubjects, unitFactReasonCut)
 	}
 	return result, nil
 }

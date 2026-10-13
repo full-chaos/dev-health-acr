@@ -61,10 +61,10 @@ type projectPullRequestRollupRow struct {
 // open now and opened / merged / closed without merging inside the window,
 // each pull request once under its strongest link tier. A project with no
 // linked pull request row has no fact: absent, never zero.
-func (p *PullRequestsProvider) readProjectRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (rejected int, linkRowsUnwindowed bool, err error) {
+func (p *PullRequestsProvider) readProjectRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (rejected int, linkUnwindowed []contextfabric.SubjectRef, err error) {
 	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return rejected, false, nil
+		return rejected, nil, nil
 	}
 	window := resolveRollupWindow(timeBound, evidence, clock())
 	statement := `SELECT lp.project_key, toInt64(lp.link_rank),
@@ -93,7 +93,7 @@ ORDER BY lp.project_key, lp.link_rank`
 		return nil
 	}, window.bindings()...)
 	if err != nil {
-		return rejected, false, err
+		return rejected, nil, err
 	}
 	sort.Strings(ids)
 	for _, key := range ids {
@@ -136,7 +136,7 @@ ORDER BY lp.project_key, lp.link_rank`
 		// Open is a current state: the stored row cannot say which pull
 		// requests were open at a historical read's end, so it is withheld.
 		if timeBound.active {
-			linkRowsUnwindowed = true
+			linkUnwindowed = append(linkUnwindowed, bySubject[key])
 		} else {
 			fields["pull_requests_open_current"] = contextfabric.IntegerFactValue(open)
 			measures = append([]string{"pull_requests_open_current"}, measures...)
@@ -160,7 +160,7 @@ ORDER BY lp.project_key, lp.link_rank`
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, provider+":"+id)},
 		})
 	}
-	return rejected, linkRowsUnwindowed, nil
+	return rejected, linkUnwindowed, nil
 }
 
 // splitProjectKey splits a "<provider>:<id>" project key at its first colon.
