@@ -51,8 +51,17 @@ func TestInvestmentProviderTwoTeamsOneWithoutAMixServesOneAndDisclosesTheOther(t
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) != 1 || !strings.Contains(result.Reason, "investment mix unavailable for 1 of 2 requested teams") {
+	if len(result.Facts) != 1 || !strings.Contains(result.RequestNote, "investment mix unavailable for 1 of 2 requested teams") {
 		t.Fatalf("result = %#v", result)
+	}
+	if strings.Contains(result.Reason, "investment_team_no_owned_repository") || strings.Contains(result.Reason, "owns no repository") {
+		t.Fatalf("kind reason %q carries the no-owned sentence every team row would inherit", result.Reason)
+	}
+	if got, has := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("CHAOS"))]; has {
+		t.Fatalf("the team with a served fact carries own reason %q", got)
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("ghost"))]; !strings.Contains(got, "owns no repository") {
+		t.Fatalf("the team without a mix has own reason %q", got)
 	}
 }
 
@@ -153,7 +162,7 @@ func TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T
 		t.Fatalf("result = %+v", result)
 	}
 	// Missing is not healthy (CHAOS-9195): the absence is NAMED, never silent.
-	if !strings.Contains(result.Reason, "investment_project_no_canonical_mix") {
-		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", result.Reason)
+	if served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote); !strings.Contains(served, "investment_project_no_canonical_mix") {
+		t.Fatalf("reason = %q, want the named investment_project_no_canonical_mix", served)
 	}
 }

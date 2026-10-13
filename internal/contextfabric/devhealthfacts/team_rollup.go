@@ -424,21 +424,6 @@ func ownedNameByKey(repos []teamOwnedRepo) map[string]string {
 	return out
 }
 
-// applyNoOwnedRepositories folds the zero-owned-repositories outcome into a
-// result: with no facts at all the kind is not_applicable for these teams; with
-// other facts present the reason rides along beside them.
-func applyNoOwnedRepositories(result *contextfabric.FactProviderResult, teamsWithoutRepos int) {
-	if teamsWithoutRepos <= 0 {
-		return
-	}
-	if len(result.Facts) == 0 {
-		result.State = contextfabric.SourceNotApplicable
-		result.Reason = teamNoOwnedRepositoriesReason
-		return
-	}
-	mergeFactReadReason(result, teamNoOwnedRepositoriesReason)
-}
-
 // teamsOwningNoRepositoriesReason is the limitation served when some, not all,
 // of the requested teams own no repository: the teams that own one keep their
 // own state.
@@ -449,7 +434,7 @@ func teamsOwningNoRepositoriesReason(without, requested int) string {
 // teamsOwningNothingWithoutData counts the requested teams that own no
 // repository and have no fact served: a team that owns something, or holds a
 // fact, is never counted.
-func teamsOwningNothingWithoutData(ids []string, bySubject map[string]contextfabric.SubjectRef, owned map[string][]teamOwnedRepo, facts []contextfabric.CanonicalFact, evaluated []contextfabric.SubjectRef) int {
+func teamsOwningNothingWithoutData(ids []string, bySubject map[string]contextfabric.SubjectRef, owned map[string][]teamOwnedRepo, facts []contextfabric.CanonicalFact, evaluated []contextfabric.SubjectRef) []contextfabric.SubjectRef {
 	served := make(map[string]struct{}, len(facts)+len(evaluated))
 	for _, fact := range facts {
 		served[contextfabric.FactSubjectKey(fact.Subject)] = struct{}{}
@@ -457,7 +442,7 @@ func teamsOwningNothingWithoutData(ids []string, bySubject map[string]contextfab
 	for _, subject := range evaluated {
 		served[contextfabric.FactSubjectKey(subject)] = struct{}{}
 	}
-	count := 0
+	var without []contextfabric.SubjectRef
 	for _, id := range ids {
 		if len(owned[id]) > 0 {
 			continue
@@ -465,25 +450,76 @@ func teamsOwningNothingWithoutData(ids []string, bySubject map[string]contextfab
 		if _, has := served[contextfabric.FactSubjectKey(bySubject[id])]; has {
 			continue
 		}
-		count++
+		without = append(without, bySubject[id])
 	}
-	return count
+	return without
 }
 
 // applyTeamsOwningNothing decides the state per team: only a read where every
 // requested team owns no repository, and nothing at all was served, is
 // not_applicable. When some requested team owns a repository its state stands
 // and the teams that own none are named beside it.
-func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, requested, without int) {
-	if without <= 0 || requested <= 0 {
+func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, requested int, without []contextfabric.SubjectRef) {
+	if len(without) == 0 || requested <= 0 {
 		return
 	}
-	if without >= requested && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
+	addSubjectReasons(result, without, teamNoOwnedRepositoriesReason)
+	if coversEveryQueriedSubject(queried, without) && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
 		result.State = contextfabric.SourceNotApplicable
 		result.Reason = teamNoOwnedRepositoriesReason
 		return
 	}
-	mergeFactReadReason(result, teamsOwningNoRepositoriesReason(without, requested))
+	addRequestNote(result, teamsOwningNoRepositoriesReason(len(without), requested))
+}
+
+// coversEveryQueriedSubject reports whether every queried subject is in scope:
+// only then is a statement about the scope subjects true of every subject the
+// kind answers for.
+func coversEveryQueriedSubject(queried, scope []contextfabric.SubjectRef) bool {
+	if len(queried) == 0 {
+		return false
+	}
+	in := make(map[string]struct{}, len(scope))
+	for _, subject := range scope {
+		in[contextfabric.FactSubjectKey(subject)] = struct{}{}
+	}
+	for _, subject := range queried {
+		if _, ok := in[contextfabric.FactSubjectKey(subject)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// addScopedReason serves a sentence true of each scope subject. It joins the
+// kind reason only when every queried subject is in scope; otherwise it rides
+// the request note and the scope subjects' own rows.
+func addScopedReason(result *contextfabric.FactProviderResult, queried, scope []contextfabric.SubjectRef, text string) {
+	if text == "" || len(scope) == 0 {
+		return
+	}
+	if coversEveryQueriedSubject(queried, scope) {
+		mergeFactReadReason(result, text)
+		return
+	}
+	addRequestNote(result, text)
+	addSubjectReasons(result, scope, text)
+}
+
+// addSubjectReasons records reason as the own reason of each subject.
+func addSubjectReasons(result *contextfabric.FactProviderResult, subjects []contextfabric.SubjectRef, reason string) {
+	if result.SubjectReasons == nil {
+		result.SubjectReasons = make(map[string]string, len(subjects))
+	}
+	for _, subject := range subjects {
+		key := contextfabric.FactSubjectKey(subject)
+		switch old := result.SubjectReasons[key]; {
+		case old == "":
+			result.SubjectReasons[key] = reason
+		case !strings.Contains(old, reason):
+			result.SubjectReasons[key] = old + "; " + reason
+		}
+	}
 }
 
 // teamRollupOutcome is what one kind's team read reports back to its
@@ -494,7 +530,8 @@ type teamRollupOutcome struct {
 	contributed       int
 	truncated         bool
 	rejected          int
-	teamsWithoutRepos int
+	teamsRequested    int
+	teamsWithoutRepos []contextfabric.SubjectRef
 	// projectReachedWithoutRows counts the repositories reached only through
 	// owned projects that a repo-level kind has no rows for.
 	projectReachedWithoutRows int
@@ -507,3 +544,12 @@ type teamRollupOutcome struct {
 // teamProjectLinksUnwindowedReason is the limitation served beside a
 // historical read that reached work through project links.
 const teamProjectLinksUnwindowedReason = "devhealthfacts: project reach on a historical read uses the issue-to-pull-request links as they stand now; link rows carry no validity window"
+
+// addRequestNote appends a request-level note to the result.
+func addRequestNote(result *contextfabric.FactProviderResult, note string) {
+	if result.RequestNote == "" {
+		result.RequestNote = note
+		return
+	}
+	result.RequestNote += "; " + note
+}

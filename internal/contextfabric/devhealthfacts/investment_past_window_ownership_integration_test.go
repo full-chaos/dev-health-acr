@@ -85,11 +85,11 @@ func TestPastRangeWindowReadsOwnershipAsSyncedAgainstRealClickHouse(t *testing.T
 
 	// Empty windows name their cause.
 	owned := read("team-quiet", end.Add(-60*day), end)
-	if len(owned.Facts) != 0 || !strings.Contains(owned.Reason, "investment_team_no_unit_in_window") {
-		t.Fatalf("owned repo without unit: facts=%d reason=%q, want investment_team_no_unit_in_window", len(owned.Facts), owned.Reason)
+	if served := contextfabric.CombineRequestNote(owned.Reason, owned.RequestNote); len(owned.Facts) != 0 || !strings.Contains(served, "investment_team_no_unit_in_window") {
+		t.Fatalf("owned repo without unit: facts=%d reason=%q, want investment_team_no_unit_in_window", len(owned.Facts), served)
 	}
 	none := read("team-nobody", end.Add(-60*day), end)
-	if len(none.Facts) != 0 || !strings.Contains(none.Reason, "investment_team_no_owned_repository") {
-		t.Fatalf("team without ownership: facts=%d reason=%q, want investment_team_no_owned_repository", len(none.Facts), none.Reason)
+	if served := contextfabric.CombineRequestNote(none.Reason, none.RequestNote); len(none.Facts) != 0 || !strings.Contains(served, "investment_team_no_owned_repository") {
+		t.Fatalf("team without ownership: facts=%d reason=%q, want investment_team_no_owned_repository", len(none.Facts), served)
 	}
 }

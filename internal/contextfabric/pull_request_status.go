@@ -126,14 +126,14 @@ func PullRequestStatusMatches(value, state string, reviews []PullRequestReviewRo
 // apply for frame, or empty. It is set only for a children_of_scope frame over
 // pull_request members whose status qualifier carries a value of the set.
 func PullRequestStatusFilterOf(frame *QuestionFrame) string {
-	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+	if frame == nil {
 		return ""
 	}
-	scoped := frame.SubjectExpression.Scoped
-	if scoped.MemberKind != SubjectPullRequest || scoped.MemberQualifier != MemberQualifierStatus || !InPullRequestStatusVocabulary(scoped.MemberQualifierValue) {
+	kind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+	if !ok || kind != SubjectPullRequest || qualifier != MemberQualifierStatus || !InPullRequestStatusVocabulary(value) {
 		return ""
 	}
-	return scoped.MemberQualifierValue
+	return value
 }
 
 // PullRequestStatusUnappliedOf reports whether frame states a status on pull

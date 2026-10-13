@@ -92,6 +92,62 @@ func ContextFabricMemberStatusOutsideSetAtLeastLimitation(kind string, count int
 	return "At least " + exact
 }
 
+var contextFabricMemberStatusNotAppliedPattern = regexp.MustCompile(`^The status filter (?:("(?:[^"\\]|\\.)*") )?was not applied: (.+) have no status\.$`)
+
+func contextFabricKindPlural(kind string) string {
+	switch kind {
+	case "repository":
+		return "repositories"
+	case "pull_request":
+		return "pull requests"
+	case "work_item":
+		return "work items"
+	case "ci_pipeline_run":
+		return "CI pipeline runs"
+	case "pull_request_review":
+		return "pull request reviews"
+	}
+	return kind + "s"
+}
+
+// ContextFabricMemberStatusNotAppliedLimitation is served beside an answer
+// whose question stated a status for a kind that has no status set to filter
+// by. value is the status the question named, or empty when it named none.
+func ContextFabricMemberStatusNotAppliedLimitation(kind, value string) string {
+	if kind == "" {
+		return ""
+	}
+	quoted := ""
+	if value != "" {
+		quoted = strconv.Quote(value) + " "
+	}
+	return fmt.Sprintf("The status filter %swas not applied: %s have no status.", quoted, contextFabricKindPlural(kind))
+}
+
+// IsContextFabricMemberStatusNotAppliedLimitation reports whether one
+// limitation is exactly a sentence ContextFabricMemberStatusNotAppliedLimitation
+// generates for a subject kind.
+func IsContextFabricMemberStatusNotAppliedLimitation(limitation string) bool {
+	match := contextFabricMemberStatusNotAppliedPattern.FindStringSubmatch(limitation)
+	if match == nil {
+		return false
+	}
+	value := ""
+	if match[1] != "" {
+		unquoted, err := strconv.Unquote(match[1])
+		if err != nil {
+			return false
+		}
+		value = unquoted
+	}
+	for _, kind := range contextFabricSubjectKinds {
+		if limitation == ContextFabricMemberStatusNotAppliedLimitation(string(kind), value) {
+			return true
+		}
+	}
+	return false
+}
+
 // ContextFabricMemberStatusUnappliedLimitation is served beside members of a
 // kind when the question named a state that no read applied.
 func ContextFabricMemberStatusUnappliedLimitation(kind string) string {
@@ -193,6 +249,9 @@ func isContextFabricMemberStatusPoolCutLimitation(limitation string) bool {
 // exactly a sentence this file generates for a kind and status of its closed
 // set, or a count of at least one.
 func IsContextFabricMemberStatusLimitation(limitation string) bool {
+	if IsContextFabricMemberStatusNotAppliedLimitation(limitation) {
+		return true
+	}
 	if isContextFabricMemberStatusPoolCutLimitation(limitation) || isContextFabricMemberStatusAbsenceLimitation(limitation) {
 		return true
 	}
