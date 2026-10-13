@@ -8,7 +8,19 @@ import (
 	"io"
 )
 
+// ValidateSerialized is the tolerant (consumer) check: an object may carry
+// keys its schema does not declare when the schema leaves it open.
 func ValidateSerialized(root, schemaName string, payload []byte) error {
+	return validateSerialized(root, schemaName, payload, false)
+}
+
+// ValidateSerializedStrict is the producer check: every key of a served
+// payload must be declared, even where the schema is open to added fields.
+func ValidateSerializedStrict(root, schemaName string, payload []byte) error {
+	return validateSerialized(root, schemaName, payload, true)
+}
+
+func validateSerialized(root, schemaName string, payload []byte, strict bool) error {
 	resolvedRoot, err := findRoot(root)
 	if err != nil {
 		return err
@@ -32,6 +44,11 @@ func ValidateSerialized(root, schemaName string, payload []byte) error {
 	}
 	if err := check.registry.validate(schemaName, value); err != nil {
 		return fmt.Errorf("validate %s: %w", schemaName, err)
+	}
+	if strict {
+		if err := check.registry.rejectUndeclared(schemaName, value); err != nil {
+			return fmt.Errorf("validate %s: %w", schemaName, err)
+		}
 	}
 	return nil
 }
