@@ -744,12 +744,25 @@
         },
         "effective_access": {
           "type": "string",
-          "description": "What run_operation does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment). Open vocabulary; documented values: data_read, no_data_read, not_servable. A client must tolerate values it does not know.",
+          "description": "What run_operation (only) does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment). See tool_access for the other tools. Open vocabulary; documented values: data_read, no_data_read, not_servable. A client must tolerate values it does not know.",
           "x-documented-values": [
             "data_read",
             "no_data_read",
             "not_servable"
           ]
+        },
+        "tool_access": {
+          "type": "object",
+          "description": "Access per data tool for your credential now, keyed by tool name (run_operation, graphql_query, read_facts, find_subjects, read_relationships). Evaluated at this call: it is not a grant, and every tool call re-checks access. The key set is open: a new data tool adds a key. A client must tolerate keys it does not know.",
+          "additionalProperties": {
+            "type": "string",
+            "description": "available, no_data_read (data:read scope missing) or not_servable (not available in this deployment). Open vocabulary; documented values: available, no_data_read, not_servable. A client must tolerate values it does not know.",
+            "x-documented-values": [
+              "available",
+              "no_data_read",
+              "not_servable"
+            ]
+          }
         }
       }
     },

@@ -561,7 +561,8 @@ func scalarFieldText(field string, value contractsv1.ContextFabricScalarValue) (
 // rankingTableFieldOrder is the FIXED, deterministic key order
 // rankingTableRowLine reads a Rows-panel row in -- ContextFabricClaimedFactRow.Fields
 // is a map (Go iteration order is random), and answerprojection's own
-// buildRankingTable (ranking_table.go) always writes exactly this key set
+// buildRankingTable (ranking_table.go) always writes exactly this visible key set
+// plus the hidden subject_kind, which only picks the noun of the first two
 // (rankingTableTopDrivers=2, so only driver_1_*/driver_2_* ever appear;
 // *_threshold_label is present only when that driver claimed one).
 // Rendering in a fixed order, not map order, keeps this view byte-stable
@@ -572,11 +573,42 @@ var rankingTableFieldOrder = []string{
 	"driver_2_signal", "driver_2_value", "driver_2_weight_contributed", "driver_2_threshold_label",
 }
 
+const rankingRowSubjectKindKey = "subject_kind"
+
+// rankingRowSubjectNouns is the display noun per cohort subject kind. The
+// structured keys keep their team_ names; only the served wording follows
+// the kind.
+var rankingRowSubjectNouns = map[contractsv1.ContextFabricSubjectKind]string{
+	contractsv1.ContextFabricSubjectTeam:        "team",
+	contractsv1.ContextFabricSubjectProject:     "project",
+	contractsv1.ContextFabricSubjectRepository:  "repository",
+	contractsv1.ContextFabricSubjectIncident:    "incident",
+	contractsv1.ContextFabricSubjectPullRequest: "pull request",
+	contractsv1.ContextFabricSubjectDeployment:  "deployment",
+}
+
+// rankingRowNeutralNoun is what a row with no kind, or a kind without a
+// noun, reads as: a wrong specific word on a served sentence is worse than a
+// neutral one.
+const rankingRowNeutralNoun = "subject"
+
+func rankingRowSubjectNoun(row contractsv1.ContextFabricClaimedFactRow) string {
+	kind, ok := row.Fields[rankingRowSubjectKindKey]
+	if !ok || kind.String == nil {
+		return rankingRowNeutralNoun
+	}
+	if noun, known := rankingRowSubjectNouns[contractsv1.ContextFabricSubjectKind(*kind.String)]; known {
+		return noun
+	}
+	return rankingRowNeutralNoun
+}
+
 // rankingTableRowLine renders one Rows-panel row as a single compact line.
 // See the "## Rows" call site's own comment for why every field is
 // untrusted-marked regardless of its scalar variant.
 func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 	parts := make([]string, 0, len(rankingTableFieldOrder))
+	subjectNoun := rankingRowSubjectNoun(row)
 	for _, key := range rankingTableFieldOrder {
 		value, ok := row.Fields[key]
 		if !ok {
@@ -586,11 +618,18 @@ func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
 		if !shown {
 			continue
 		}
-		parts = append(parts, contractsv1.ContextFabricFactFieldNoun(key)+": "+hostedInline(display))
+		noun := contractsv1.ContextFabricFactFieldNoun(key)
+		switch key {
+		case "team_canonical_id":
+			noun = subjectNoun + " canonical id"
+		case "team_label":
+			noun = subjectNoun + " label"
+		}
+		parts = append(parts, noun+": "+hostedInline(display))
 	}
 	var extra []string
 	for key := range row.Fields {
-		if !slices.Contains(rankingTableFieldOrder, key) {
+		if key != rankingRowSubjectKindKey && !slices.Contains(rankingTableFieldOrder, key) {
 			extra = append(extra, key)
 		}
 	}
