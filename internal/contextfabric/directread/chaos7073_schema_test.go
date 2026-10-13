@@ -2,6 +2,7 @@ package directread
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	"os"
 	"reflect"
 	"sort"
@@ -53,6 +54,9 @@ func validateAgainst(t *testing.T, schemaName string, document []byte) {
 			problems = append(problems, problem.String())
 		}
 		t.Fatalf("document does not satisfy %s:\n%s\n%s", schemaName, strings.Join(problems, "\n"), document)
+	}
+	if err := contractcheck.ValidateSerializedStrict("", schemaName, document); err != nil {
+		t.Fatalf("served document carries a key %s does not declare: %v", schemaName, err)
 	}
 }
 

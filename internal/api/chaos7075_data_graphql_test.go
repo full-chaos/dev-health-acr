@@ -301,9 +301,10 @@ func TestChaos7075RealGraphQLAnswersValidateAgainstThePublishedSchemas(t *testin
 	_ = auth.ScopeDataRead
 }
 
-// pr2 r2: the OpenAPI graphql_query response is as closed as the JSON
-// Schema: every object the schema closes (additionalProperties:false) is
-// closed at the same path in the OpenAPI component.
+// pr2 r2, CHAOS-9481: the OpenAPI graphql_query response is as open as the
+// JSON Schema: no object of the schema sets additionalProperties:false, and
+// neither does any object of the OpenAPI component (a client that cached either
+// copy must tolerate a field added later).
 func TestChaos7075OpenAPIGraphQLResponseIsAsClosedAsTheSchema(t *testing.T) {
 	read := func(parts ...string) map[string]any {
 		t.Helper()
@@ -320,15 +321,18 @@ func TestChaos7075OpenAPIGraphQLResponseIsAsClosedAsTheSchema(t *testing.T) {
 	schema := read("contracts", "jsonschema", "v1", "mcp_graphql_query_response.v1.schema.json")
 	openapi := read("contracts", "openapi", "acr-v1.json")
 	component := openapi["components"].(map[string]any)["schemas"].(map[string]any)["DataGraphQLResponse"].(map[string]any)
-	closed := 0
+	closed, compared := 0, 0
 	var walk func(s, o map[string]any, path string)
 	walk = func(s, o map[string]any, path string) {
 		if s["additionalProperties"] == false {
 			closed++
-			if o == nil || o["additionalProperties"] != false {
-				t.Errorf("%s: closed in the JSON Schema, open in the OpenAPI", path)
-			}
+			t.Errorf("%s: closed in the JSON Schema", path)
 		}
+		if o["additionalProperties"] == false {
+			closed++
+			t.Errorf("%s: closed in the OpenAPI", path)
+		}
+		compared++
 		sp, _ := s["properties"].(map[string]any)
 		op, _ := o["properties"].(map[string]any)
 		for name, child := range sp {
@@ -342,7 +346,10 @@ func TestChaos7075OpenAPIGraphQLResponseIsAsClosedAsTheSchema(t *testing.T) {
 		}
 	}
 	walk(schema, component, "response")
-	if closed < 5 {
-		t.Fatalf("only %d closed objects compared", closed)
+	if closed != 0 {
+		t.Fatalf("%d closed output objects", closed)
+	}
+	if compared < 5 {
+		t.Fatalf("only %d objects compared", compared)
 	}
 }
