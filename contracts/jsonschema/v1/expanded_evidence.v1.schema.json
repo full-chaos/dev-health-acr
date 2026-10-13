@@ -22,7 +22,9 @@
       "format": "date-time"
     },
     "availability": {
-      "enum": [
+      "type": "string",
+      "description": "Open vocabulary; documented values: available, stale, redacted, deleted, unauthorized. A client must tolerate values it does not know.",
+      "x-documented-values": [
         "available",
         "stale",
         "redacted",

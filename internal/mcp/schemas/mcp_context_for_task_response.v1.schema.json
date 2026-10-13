@@ -205,7 +205,9 @@
               "maxLength": 64
             },
             "resolution": {
-              "enum": [
+              "type": "string",
+              "description": "Open vocabulary; documented values: exact_commit, branch_filtered, repo_fallback, unresolved. A client must tolerate values it does not know.",
+              "x-documented-values": [
                 "exact_commit",
                 "branch_filtered",
                 "repo_fallback",
@@ -351,7 +353,9 @@
                     "format": "date-time"
                   },
                   "status": {
-                    "enum": [
+                    "type": "string",
+                    "description": "Open vocabulary; documented values: fresh, stale, missing, unavailable. A client must tolerate values it does not know.",
+                    "x-documented-values": [
                       "fresh",
                       "stale",
                       "missing",
@@ -534,7 +538,9 @@
           "maxLength": 256
         },
         "category": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: state, pressure, cause, evidence, action. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "state",
             "pressure",
             "cause",
@@ -543,7 +549,9 @@
           ]
         },
         "claim_kind": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: observed, inferred, recommendation. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "observed",
             "inferred",
             "recommendation"
@@ -575,7 +583,9 @@
           "maximum": 1
         },
         "severity": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: info, warning, high, critical. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "info",
             "warning",
             "high",
@@ -718,7 +728,9 @@
           "maxLength": 100
         },
         "status": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: available, degraded, unavailable. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "available",
             "degraded",
             "unavailable"
@@ -747,7 +759,9 @@
           "pattern": "^[0-9a-fA-F]{7,64}$"
         },
         "freshness": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: fresh, stale, unknown. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "fresh",
             "stale",
             "unknown"
@@ -923,7 +937,9 @@
           }
         },
         "provenance": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: native, explicit_text, heuristic, derived. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "native",
             "explicit_text",
             "heuristic",
@@ -961,7 +977,9 @@
           "maxLength": 256
         },
         "availability": {
-          "enum": [
+          "type": "string",
+          "description": "Open vocabulary; documented values: available, stale, redacted, deleted, unauthorized. A client must tolerate values it does not know.",
+          "x-documented-values": [
             "available",
             "stale",
             "redacted",

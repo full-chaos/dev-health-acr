@@ -91,6 +91,12 @@ func TestCommitDecisionDigestSchemaAgreesWithTheGoValidator(t *testing.T) {
 				t.Fatal(err)
 			}
 			goErr := d.Validate()
+			if name == "unknown token" {
+				if !result.Valid() || goErr == nil {
+					t.Errorf("%s / %s: an additive vocabulary value must pass the schema (valid=%t) and fail Go Validate (%v)", copyOf.file, name, result.Valid(), goErr)
+				}
+				continue
+			}
 			if result.Valid() != (goErr == nil) {
 				t.Errorf("%s / %s: schema valid=%t (%v), Go Validate = %v", copyOf.file, name, result.Valid(), result.Errors(), goErr)
 			}
