@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -593,4 +594,35 @@ func addRequestNote(result *contextfabric.FactProviderResult, note string) {
 		return
 	}
 	result.RequestNote += "; " + note
+}
+
+// teamOwnershipReader is the ownership read a kind's success path uses to
+// decide which requested teams own no repository.
+type teamOwnershipReader func(context.Context, contextpacket.ClickHouseQueryClient, string, []string, factTimeBound) (map[string][]teamOwnedRepo, error)
+
+// attachOwnershipNoteToFailure gives a failed read the request-level note its
+// success path would have served: which requested teams own no repository is
+// a fact of ownership, not of the failed read. It runs only on a failure, and
+// when the ownership read cannot be made either the failure stays as it is.
+func attachOwnershipNoteToFailure(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, subjects []contextfabric.SubjectRef, read teamOwnershipReader, bound factTimeBound, err error) {
+	var failure *contextfabric.FactReadFailure
+	if err == nil || !errors.As(err, &failure) {
+		return
+	}
+	teamIDs, bySubject, _ := subjectIndex(subjectsOfKind(subjects, contextfabric.SubjectTeam), teamPrefix)
+	if len(teamIDs) == 0 {
+		return
+	}
+	owned, readErr := read(ctx, client, orgID, teamIDs, bound)
+	if readErr != nil {
+		return
+	}
+	without := teamsOwningNothingWithoutData(teamIDs, bySubject, owned, nil, nil)
+	if len(without) == 0 {
+		return
+	}
+	note := teamsOwningNoRepositoriesReason(len(without), len(teamIDs))
+	if failure.RequestNote == "" {
+		failure.RequestNote = note
+	}
 }

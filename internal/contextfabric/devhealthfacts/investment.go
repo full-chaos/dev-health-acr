@@ -102,6 +102,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	truncated := false
 	omittedUnrepresentableCount := 0
 	rejectedCount := 0
+	defer func() {
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedOrReachedRepositories, timeBound, err)
+	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note. A team/project subject
 	// named without its "team:"/project v2 shape reads no differently from
