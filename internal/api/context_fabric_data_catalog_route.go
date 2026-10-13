@@ -14,8 +14,9 @@ var catalogScopeTokens = []string{auth.ScopeContextRead, auth.ScopeEvidenceRead,
 // contextFabricDataCatalogHandler serves data_catalog (CHAOS-7072, S1a;
 // design C.3). The catalogue is built for THIS caller: its grant class
 // decides the operation list, its scopes decide availability, and the
-// caller section carries scopes, the repository grant class and effective_access only -- never a repository name
-// or a grant count. The sections query parameter (comma list) filters; an
+// caller section carries scopes, the repository grant class, effective_access
+// (run_operation only) and tool_access (per tool, evaluated at this call, not a
+// grant) -- never a repository name or a grant count. The sections query parameter (comma list) filters; an
 // unknown section is 400 invalid_request.
 func (a *App) contextFabricDataCatalogHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -48,15 +49,17 @@ func (a *App) contextFabricDataCatalogHandler() http.HandlerFunc {
 			graphqlPolicy = nil
 		}
 		catalog := directread.BuildDataCatalog(a.dataCatalogue(), directread.CatalogCaller{
-			GraphQL:            graphqlPolicy,
-			GraphQLServable:    a.dataGraphQL() != nil,
-			GateComposed:       a.dataGateComposed(),
-			PrincipalClass:     directread.ClassifyPrincipal(principal),
-			Scopes:             scopes,
-			DataRead:           auth.HasScope(principal.Permissions, auth.ScopeDataRead),
-			OperationsServable: a.dataOperations() != nil,
-			FactsServable:      facts != nil,
-			FactCapabilities:   factCapabilities,
+			GraphQL:               graphqlPolicy,
+			GraphQLServable:       a.dataGraphQL() != nil,
+			GateComposed:          a.dataGateComposed(),
+			PrincipalClass:        directread.ClassifyPrincipal(principal),
+			Scopes:                scopes,
+			DataRead:              auth.HasScope(principal.Permissions, auth.ScopeDataRead),
+			OperationsServable:    a.dataOperations() != nil,
+			FactsServable:         facts != nil,
+			SubjectsServable:      a.dataSubjects() != nil,
+			RelationshipsServable: a.directRelationships() != nil,
+			FactCapabilities:      factCapabilities,
 		}, sections)
 		encoded, err := encodeBounded(catalog, contextFabricDataResponseBytes)
 		if err != nil {

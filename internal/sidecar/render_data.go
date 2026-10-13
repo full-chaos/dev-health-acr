@@ -175,9 +175,10 @@ func RenderDataCatalogSummary(raw json.RawMessage, max int) string {
 			FindPageMax     int `json:"find_page_max"`
 		} `json:"limits"`
 		Caller struct {
-			Scopes          []string `json:"scopes"`
-			GrantClass      string   `json:"grant_class"`
-			EffectiveAccess string   `json:"effective_access"`
+			Scopes          []string          `json:"scopes"`
+			GrantClass      string            `json:"grant_class"`
+			EffectiveAccess string            `json:"effective_access"`
+			ToolAccess      map[string]string `json:"tool_access"`
 		} `json:"caller"`
 	}
 	if err := json.Unmarshal(raw, &view); err != nil {
@@ -190,6 +191,18 @@ func RenderDataCatalogSummary(raw json.RawMessage, max int) string {
 		scopes = append(scopes, plainToken(scope))
 	}
 	t.line(fmt.Sprintf("Repository grant: %s. Scopes: %s. run_operation: %s.", plainToken(view.Caller.GrantClass), strings.Join(scopes, ", "), runOperationState(view.Caller.EffectiveAccess)))
+	if len(view.Caller.ToolAccess) > 0 {
+		tools := make([]string, 0, len(view.Caller.ToolAccess))
+		for tool := range view.Caller.ToolAccess {
+			tools = append(tools, tool)
+		}
+		sort.Strings(tools)
+		states := make([]string, 0, len(tools))
+		for _, tool := range tools {
+			states = append(states, plainToken(tool)+" "+plainToken(view.Caller.ToolAccess[tool]))
+		}
+		t.line("Tool access: " + strings.Join(states, "; ") + ".")
+	}
 	if ops := view.Operations; ops != nil {
 		state := "yes"
 		if !ops.Available {
