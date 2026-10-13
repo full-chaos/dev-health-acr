@@ -106,6 +106,42 @@ func ContextFabricMemberStatusUnappliedLimitation(kind string) string {
 	return fmt.Sprintf("Members are not filtered by state: the state the question names is not one the %s read applies (%s or %s).", kind, strings.Join(nouns.statuses[:last], ", "), nouns.statuses[last])
 }
 
+var contextFabricMemberStatusReachBasis = map[string]string{
+	"team":       "the repositories and services it owns",
+	"project":    "the repositories of its linked pull requests",
+	"repository": "its linked pull requests and issues",
+}
+
+const contextFabricMemberStatusReachDefault = "the relationships stored for it"
+
+// ContextFabricMemberStatusNoneReachedLimitation is served when the status
+// filter ran and the anchor reached no member of the kind at all, so an empty
+// set is not read as every member holding another status. The reach basis
+// follows the anchor kind.
+func ContextFabricMemberStatusNoneReachedLimitation(kind, anchorKind string) string {
+	nouns, ok := contextFabricMemberStatusKinds[kind]
+	if !ok {
+		return ""
+	}
+	basis, known := contextFabricMemberStatusReachBasis[anchorKind]
+	subject := anchorKind
+	if !known {
+		basis, subject = contextFabricMemberStatusReachDefault, "named subject"
+	}
+	return fmt.Sprintf("No %s were reached from the %s through %s, so the status was matched against none.", nouns.plural, subject, basis)
+}
+
+// ContextFabricMemberStatusNotComputedLimitation is served when a status
+// question named a kind and no read applied the status, so whether any member
+// holds it is unknown. reason is a fixed coverage label.
+func ContextFabricMemberStatusNotComputedLimitation(kind, reason string) string {
+	nouns, ok := contextFabricMemberStatusKinds[kind]
+	if !ok || !containsReason(reason) {
+		return ""
+	}
+	return fmt.Sprintf("The %s were not read by status, so whether any holds it is unknown: %s.", nouns.plural, reason)
+}
+
 // ContextFabricMemberStatusPoolCutLimitation states that a status filter was
 // decided within a cut read: within the first read members it reached, of
 // pool when pool is known (counted under the caller's authorization), or over
@@ -151,7 +187,7 @@ func isContextFabricMemberStatusPoolCutLimitation(limitation string) bool {
 // exactly a sentence this file generates for a kind and status of its closed
 // set, or a count of at least one.
 func IsContextFabricMemberStatusLimitation(limitation string) bool {
-	if isContextFabricMemberStatusPoolCutLimitation(limitation) {
+	if isContextFabricMemberStatusPoolCutLimitation(limitation) || isContextFabricMemberStatusAbsenceLimitation(limitation) {
 		return true
 	}
 	for kind, nouns := range contextFabricMemberStatusKinds {
@@ -181,6 +217,22 @@ func containsString(values []string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {
 			return true
+		}
+	}
+	return false
+}
+
+func isContextFabricMemberStatusAbsenceLimitation(limitation string) bool {
+	for kind := range contextFabricMemberStatusKinds {
+		for _, anchor := range []string{"team", "project", "repository", ""} {
+			if limitation == ContextFabricMemberStatusNoneReachedLimitation(kind, anchor) {
+				return true
+			}
+		}
+		for _, reason := range contextFabricCoverageCauseReasons() {
+			if limitation == ContextFabricMemberStatusNotComputedLimitation(kind, reason) {
+				return true
+			}
 		}
 	}
 	return false
