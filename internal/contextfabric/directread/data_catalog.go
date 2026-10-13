@@ -66,7 +66,7 @@ const CatalogFactsNote = "facts: read_facts is not available in this deployment"
 
 // CatalogFactsServedNote is the fixed note when read_facts serves the kinds
 // listed in the facts section.
-const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are the ones it accepts, each with max_window_days, the widest range or trailing window one read takes for it (read it before choosing a window); kind investment with one team or repository also takes units to list the work units behind the allocation, weighted by share_in_scope, at most 25 pull request references per row"
+const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are the ones it accepts, each with max_window_days, the widest range or trailing window one read takes for it (read it before choosing a window); kind investment with one team or repository also takes units to list the work units behind the allocation, weighted by share_in_scope, at most 25 pull request references per row; kinds pull_requests and blockers with project subjects serve a project's open pull request and blocked work item counts; a project's pull request counts cover the pull requests linked to its issues (linked pull request rows, in any repository), and the weakest link tier counted is named"
 
 // Reasons an operation entry is not available to this caller now.
 const (
