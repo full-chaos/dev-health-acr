@@ -61,6 +61,9 @@ const teamAnchorCohortRationale = "Projects were reached from the team the quest
 const teamAnchorRepositoryCohortRationale = "Repositories were reached from the team the question names in the authorized Context Fabric graph."
 
 func teamAnchorInclusionReasonFor(anchorKind, kind contextfabric.SubjectKind) string {
+	if anchorKind == contextfabric.SubjectOrganization {
+		return organizationStatusInclusionReason
+	}
 	if anchorKind != contextfabric.SubjectTeam || kind == contextfabric.SubjectPullRequest {
 		return "Member reached from the " + string(anchorKind) + " the question names over the entity tree in the authorized Context Fabric graph."
 	}
@@ -71,6 +74,9 @@ func teamAnchorInclusionReasonFor(anchorKind, kind contextfabric.SubjectKind) st
 }
 
 func teamAnchorCohortRationaleFor(anchorKind, kind contextfabric.SubjectKind) string {
+	if anchorKind == contextfabric.SubjectOrganization {
+		return organizationStatusRationale
+	}
 	if anchorKind != contextfabric.SubjectTeam || kind == contextfabric.SubjectPullRequest {
 		return "Members were reached from the " + string(anchorKind) + " the question names over the entity tree in the authorized Context Fabric graph."
 	}
