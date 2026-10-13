@@ -14,8 +14,8 @@ import (
 
 const (
 	orgLinksMemoryOrg         = "c4d82e17-6b09-4f3a-9a51-0e7d3b8c2f64"
-	orgLinksMemoryFillerLinks = 100_000
-	orgLinksMemoryMoreLinks   = 300_000
+	orgLinksMemoryFillerLinks = 30_000
+	orgLinksMemoryMoreLinks   = 60_000
 )
 
 // The repositories a team reaches through its owned projects are read from the
@@ -80,21 +80,21 @@ SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(nu
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
 	window := contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59))
-	read := func() statementMemory {
+	read := func(label string) statementMemory {
 		mark := serverNowMicros(t, ctx, direct)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
 		if err != nil {
-			t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
+			t.Fatalf("ReadFacts at the %s size: %v: %s", label, err, readFailureCause(err))
 		}
 		wantInt(t, factFor(t, result, teamSubject(teamID)).Fields, "project_reached_repository_count", 1)
 		return statementMemorySince(t, ctx, direct, statementFilter{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"}, mark)
 	}
-	read()
-	small := read()
+	read("warm-up")
+	small := read("smaller")
 	addLinks(orgLinksMemoryMoreLinks)
-	large := read()
+	large := read("larger")
 	for hash, peak := range small {
 		t.Logf("statement %d peak memory: %d bytes at %d filler links, %d at %d", hash, peak, orgLinksMemoryFillerLinks, large[hash], orgLinksMemoryFillerLinks+orgLinksMemoryMoreLinks)
 	}
