@@ -1732,8 +1732,13 @@ type ContextFabricDriverJudgment struct {
 	Qualification   string                        `json:"qualification,omitempty"`
 	// Rank is the order the engine states among drivers of one standing,
 	// 1 first. Zero means the engine stated none. It is not a score.
-	Rank    int  `json:"rank,omitempty"`
-	Current bool `json:"current"`
+	Rank int `json:"rank,omitempty"`
+	// SourceState is the state of the fact read this driver rests on, set
+	// only when the read is usable but not complete (truncated or stale).
+	// Absent means available.
+	// Additive v1 optional field.
+	SourceState ContextFabricSourceState `json:"source_state,omitempty"`
+	Current     bool                     `json:"current"`
 }
 
 type ContextFabricFinding struct {

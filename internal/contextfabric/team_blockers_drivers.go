@@ -181,6 +181,7 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.95, Current: true,
 		}
 		if observation.partial {
+			driver.SourceState = observation.fact.SourceState
 			driver.Qualification = "The read was cut short, so the real count may be higher."
 			event.TruncatedServed++
 		}

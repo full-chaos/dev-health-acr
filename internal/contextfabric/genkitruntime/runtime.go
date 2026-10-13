@@ -3844,6 +3844,7 @@ type synthesisDriverOutput struct {
 	EpistemicStatus  contextfabric.EpistemicStatus  `json:"epistemic_status"`
 	Confidence       float64                        `json:"confidence"`
 	Qualification    string                         `json:"qualification,omitempty"`
+	SourceState      contextfabric.SourceState      `json:"source_state,omitempty"`
 	Current          bool                           `json:"current"`
 }
 
@@ -3856,7 +3857,7 @@ func synthesisDriversToDomain(in []synthesisDriverOutput) []contextfabric.Driver
 		out = append(out, contextfabric.DriverJudgment{
 			DriverID: d.DriverID, Standing: d.Standing, Category: d.Category, Title: d.Title, Summary: d.Summary,
 			AffectedSubjects: d.AffectedSubjects, PathIDs: d.PathIDs, EvidenceRefIDs: d.EvidenceRefIDs, ClaimedFactIDs: d.ClaimedFactIDs,
-			Derivation: d.Derivation, EpistemicStatus: d.EpistemicStatus, Confidence: d.Confidence, Qualification: d.Qualification, Current: d.Current,
+			Derivation: d.Derivation, EpistemicStatus: d.EpistemicStatus, Confidence: d.Confidence, Qualification: d.Qualification, SourceState: d.SourceState, Current: d.Current,
 		})
 	}
 	return out

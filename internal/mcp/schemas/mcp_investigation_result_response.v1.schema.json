@@ -3242,6 +3242,21 @@
               "minimum": 1,
               "maximum": 10000
             },
+            "source_state": {
+              "enum": [
+                "available",
+                "stale",
+                "unavailable",
+                "unconfigured",
+                "unauthorized",
+                "no_data",
+                "truncated",
+                "conflicted",
+                "not_applicable",
+                "pruned"
+              ],
+              "type": "string"
+            },
             "standing": {
               "enum": [
                 "principal",

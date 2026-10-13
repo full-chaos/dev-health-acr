@@ -664,8 +664,8 @@ func TestQueryVersionMovedPastTheTeamBlockersDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 198 {
-		t.Fatalf("QueryVersion = %q, want v198 or later -- an answer saved before a team blockers answer carried drivers must not be reused", devhealthfacts.QueryVersion)
+	if number < 199 {
+		t.Fatalf("QueryVersion = %q, want v199 or later -- an answer saved before a team blockers answer carried drivers must not be reused", devhealthfacts.QueryVersion)
 	}
 }
 

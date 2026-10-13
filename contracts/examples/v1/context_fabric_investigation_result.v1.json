@@ -126,6 +126,7 @@
       "confidence": 0.96,
       "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
       "rank": 1,
+      "source_state": "truncated",
       "current": true
     },
     {

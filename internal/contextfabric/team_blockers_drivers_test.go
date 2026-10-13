@@ -119,7 +119,7 @@ func TestTeamCohortTruncatedBlockersAreServedAsALabelledLowerBound(t *testing.T)
 	if got, want := driverTitles(result.Drivers), "At least 12 blocked work items (partial read)"; got != want {
 		t.Fatalf("drivers = %q, want %q", got, want)
 	}
-	if len(result.ClaimedFacts) != 1 || result.Drivers[0].Qualification == "" || result.Drivers[0].Confidence != 0.95 {
+	if len(result.ClaimedFacts) != 1 || result.Drivers[0].Qualification == "" || result.Drivers[0].Confidence != 0.95 || result.Drivers[0].SourceState != SourceTruncated {
 		t.Fatalf("claims=%d driver=%+v, want one claim and a qualified driver with the ordinary confidence", len(result.ClaimedFacts), result.Drivers[0])
 	}
 }

@@ -726,6 +726,13 @@ func (t SlogEngineTelemetry) RecordModelRowsStripped(ctx context.Context, princi
 	t.logger.InfoContext(ctx, "context fabric model-authored claimed fact rows stripped before validation", args...)
 }
 
+// RecordDriverSourceStateCorrected reports drivers whose supplied source_state
+// disagreed with the facts their claims ground to. Content-safe: an org id and a count.
+func (t SlogEngineTelemetry) RecordDriverSourceStateCorrected(ctx context.Context, principal storage.Principal, corrected int) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "cf_driver_source_state_corrected", corrected}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric driver source state corrected from grounded facts", args...)
+}
+
 // RecordDriverIdentityCollisions implements EngineTelemetry (CHAOS-5364).
 // See the interface's own doc comment for why every field is logged on every
 // call, zeros included. Content-safe: an org id and three counts.
@@ -995,12 +1002,23 @@ func (t SlogEngineTelemetry) RecordProjectStatusDrivers(ctx context.Context, pri
 	for _, kind := range event.Missing {
 		missing = append(missing, string(kind))
 	}
+	partial := make([]string, 0, len(event.Partial))
+	for _, kind := range event.Partial {
+		partial = append(partial, string(kind))
+	}
+	partialStates := make([]string, 0, len(event.PartialStates))
+	for _, state := range event.PartialStates {
+		partialStates = append(partialStates, string(state))
+	}
 	t.logger.InfoContext(ctx, "context fabric project status drivers", append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"emitted", event.Emitted,
 		"skipped_budget", event.SkippedBudget,
 		"skipped_id_clash", event.SkippedIDClash,
 		"missing_kinds", SanitizeLogStrings(missing),
+		"missing_states", SanitizeLogStrings(event.MissingStates),
+		"partial_kinds", SanitizeLogStrings(partial),
+		"partial_states", SanitizeLogStrings(partialStates),
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
