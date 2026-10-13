@@ -17,7 +17,7 @@ import (
 
 const QueryVersionV1 = "context-query.v1"
 
-var clickHouseEvidenceQueryV1 = `SELECT concat('acr:v1:` + string(contractsv1.ContextFabricEvidenceEntityCommit) + `:', hash) AS evidence_ref_id, 'dev_health' AS system, 'commit' AS entity_type, hash AS entity_id, ifNull(message, hash) AS display_label, '' AS safe_uri, 'native' AS provenance, 1.0 AS confidence, ifNull(message, '') AS citation, committer_when AS observed_at FROM git_commits FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({commit_sha:String} = '' OR hash = {commit_sha:String}) AND ({as_of:Nullable(DateTime)} IS NULL OR committer_when <= {as_of:Nullable(DateTime)}) AND ({time_window_days:UInt16} = 0 OR committer_when >= coalesce({as_of:Nullable(DateTime)}, now()) - INTERVAL {time_window_days:UInt16} DAY)`
+var clickHouseEvidenceQueryV1 = `SELECT concat('acr:v1:` + string(contractsv1.ContextFabricEvidenceEntityCommit) + `:', hash) AS evidence_ref_id, 'dev_health' AS system, 'commit' AS entity_type, hash AS entity_id, ifNull(message, hash) AS display_label, '' AS safe_uri, ` + sqlProvenanceNative + ` AS provenance, 1.0 AS confidence, ifNull(message, '') AS citation, committer_when AS observed_at FROM git_commits FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({commit_sha:String} = '' OR hash = {commit_sha:String}) AND ({as_of:Nullable(DateTime)} IS NULL OR committer_when <= {as_of:Nullable(DateTime)}) AND ({time_window_days:UInt16} = 0 OR committer_when >= coalesce({as_of:Nullable(DateTime)}, now()) - INTERVAL {time_window_days:UInt16} DAY)`
 
 var ErrPrincipalOrganization = errors.New("contextpacket: principal organization is required")
 
@@ -251,7 +251,7 @@ func evidenceRef(record evalfixture.EvidenceRecord) (contractsv1.EvidenceRef, er
 	if err != nil {
 		return contractsv1.EvidenceRef{}, fmt.Errorf("parse evidence %q observed_at: %w", record.EvidenceID, err)
 	}
-	ref := contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: record.EvidenceID, Source: contractsv1.EvidenceSource{System: record.System, EntityType: record.EntityType, EntityID: record.EntityID, DisplayLabel: record.DisplayLabel, SafeURI: record.SafeURI}, Provenance: "native", Confidence: 1, Citation: record.Summary, ObservedAt: observedAt, Availability: contractsv1.EvidenceAvailable}
+	ref := contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: record.EvidenceID, Source: contractsv1.EvidenceSource{System: record.System, EntityType: record.EntityType, EntityID: record.EntityID, DisplayLabel: record.DisplayLabel, SafeURI: record.SafeURI}, Provenance: contractsv1.EvidenceProvenanceNative, Confidence: 1, Citation: record.Summary, ObservedAt: observedAt, Availability: contractsv1.EvidenceAvailable}
 	if err := validateEvidence(ref); err != nil {
 		return contractsv1.EvidenceRef{}, err
 	}
@@ -273,7 +273,7 @@ func sourceWatermarks(evidence []contractsv1.EvidenceRef) []contractsv1.SourceWa
 	watermarks := make([]contractsv1.SourceWatermark, 0, len(sources))
 	for _, source := range sources {
 		observed := latest[source]
-		watermarks = append(watermarks, contractsv1.SourceWatermark{Source: source, LastIngestedAt: &observed, Status: "fresh"})
+		watermarks = append(watermarks, contractsv1.SourceWatermark{Source: source, LastIngestedAt: &observed, Status: contractsv1.SourceWatermarkStatusFresh})
 	}
 	return watermarks
 }

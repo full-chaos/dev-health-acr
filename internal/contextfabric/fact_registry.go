@@ -348,13 +348,16 @@ type FactProviderResult struct {
 	RequestNote string
 	// SubjectReasons are reasons true of one subject, keyed by FactSubjectKey.
 	SubjectReasons map[string]string
-	Facts          []CanonicalFact
-	State          SourceState
-	ObservedAt     *time.Time
-	Watermark      string
-	Reason         string
-	Version        string
-	Truncated      bool
+	// NotApplicableSubjects are subjects the kind does not apply to for a
+	// reason that holds of that subject alone, keyed by FactSubjectKey.
+	NotApplicableSubjects map[string]struct{}
+	Facts                 []CanonicalFact
+	State                 SourceState
+	ObservedAt            *time.Time
+	Watermark             string
+	Reason                string
+	Version               string
+	Truncated             bool
 	// Grain is the temporal precision THIS provider answered at
 	// (CHAOS-3781 round-1 F1). It exists because the providers are not
 	// uniform: a daily rollup can only speak for a day, while a provider

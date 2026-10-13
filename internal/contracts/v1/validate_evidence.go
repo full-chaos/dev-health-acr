@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 	"math"
+	"slices"
 )
 
 // Validate enforces evidence_ref.v1.schema.json's nested "source" object
@@ -70,12 +71,7 @@ func (r EvidenceRef) validate(open bool) error {
 }
 
 func validEvidenceProvenance(value string) bool {
-	switch value {
-	case "native", "explicit_text", "heuristic", "derived":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(EvidenceProvenanceVocabulary(), value)
 }
 
 func validEvidenceAvailability(value EvidenceAvailability) bool {
