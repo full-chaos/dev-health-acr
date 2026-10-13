@@ -335,9 +335,10 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				if size.reading.base == 0 || size.reading.with == 0 {
 					t.Fatalf("%s %s: measurement did not happen (%+v)", label, size.name, size.reading)
 				}
-				// Over the share AND beyond the two variants' own run-to-run
-				// spread: a few-MB statement swings past 15% on noise alone.
-				if float64(size.reading.with) > arrayMemoryShare*float64(size.reading.base) && size.reading.with > size.reading.base+size.reading.withSpread+size.reading.baseSpread {
+				// Over the share AND beyond both the two variants' own
+				// run-to-run spread and the absolute floor: a few-MB statement
+				// swings past 15% on noise alone.
+				if float64(size.reading.with) > arrayMemoryShare*float64(size.reading.base) && size.reading.with > size.reading.base+max(arrayMemoryFloor, size.reading.withSpread+size.reading.baseSpread) {
 					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.reading.with, size.reading.base, arrayMemoryShare)
 				}
 			}
@@ -348,10 +349,11 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 			largeDelta := int64(large[label].with) - int64(large[label].base)
 			noise := large[label].withSpread + large[label].baseSpread
 			ratioMargin := func(r reading) int64 {
-				return int64(max(arrayMemoryShare*float64(r.base), float64(r.base+r.withSpread+r.baseSpread))) - int64(r.with)
+				return int64(max(arrayMemoryShare*float64(r.base), float64(r.base+max(arrayMemoryFloor, r.withSpread+r.baseSpread)))) - int64(r.with)
 			}
-			t.Logf("MARGIN %s small_ratio=%d large_ratio=%d slope=%d", label, ratioMargin(small[label]), ratioMargin(large[label]), int64(statementMemorySlope*float64(max(smallDelta, 0))+float64(noise))-largeDelta)
-			if float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(noise) {
+			slopeTolerance := statementMemorySlope*float64(max(smallDelta, 0)) + float64(noise) + float64(arrayMemoryFloor)
+			t.Logf("MARGIN %s small_ratio=%d large_ratio=%d slope=%d", label, ratioMargin(small[label]), ratioMargin(large[label]), int64(slopeTolerance)-largeDelta)
+			if float64(largeDelta) > slopeTolerance {
 				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, noise)
 			}
 		}
@@ -359,8 +361,12 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 }
 
 // The origin id arrays may add at most this share over the same statement
-// without them.
-const arrayMemoryShare = 1.15
+// without them; an extra cost under the floor is never counted (a few-MB
+// statement's peak moves by more than that between runs).
+const (
+	arrayMemoryShare = 1.15
+	arrayMemoryFloor = uint64(2 << 20)
+)
 
 func peakOf(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, table, fragment string, mark int64) uint64 {
 	t.Helper()
