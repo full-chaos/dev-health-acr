@@ -195,6 +195,7 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
 	// links whose pull request does not exist), 2 it has one. Only state 2
 	// names a repository; a stale link is skipped by the canonical link
 	// projection too.
+	workItemIDs := requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate)
 	statement := `SELECT multiIf(ifNull(l.work_item_id, '') = '', 0, 2) AS link_state,
        if(link_state = 2, toString(l.pr_repo_id), '') AS repo_id_str,
        if(link_state = 2, ifNull(r.repo, ''), '') AS repo_slug,
@@ -205,9 +206,9 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
        arraySort(groupUniqArray(p.id))
 FROM work_items AS w FINAL
 INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
-LEFT JOIN ` + issueLinkRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+LEFT JOIN ` + issueLinkRowsAmongSQL(workItemIDs) + ` AS l ON l.work_item_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
   AND ` + workItemIsIssueSQL("w") + `
 GROUP BY link_state, repo_id_str, repo_slug
 ORDER BY link_state DESC, repo_id_str

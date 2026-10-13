@@ -457,12 +457,13 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	// "first origin in the caller's slice order" because origins order is
 	// not part of any documented contract and SQL has no visibility into it
 	// anyway.
+	workItemIDs := requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate)
 	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank), arraySort(groupUniqArray(p.id))
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
-INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
+INNER JOIN ` + admittedIssueLinksAmongSQL(workItemIDs) + ` AS l ON l.work_item_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
 GROUP BY toString(l.pr_repo_id), ifNull(r.repo, '')
 ORDER BY toString(l.pr_repo_id)
 LIMIT ` + strconv.Itoa(limitPlusOne)
@@ -538,7 +539,7 @@ func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, er
 	}
 }
 
-// membershipTouchesAsOfSQL renders the work_item-scoped touch/interval
+// membershipTouchesAsOfAmongSQL renders the work_item-scoped touch/interval
 // derivation project_membership_transitions' full history supports
 // (CHAOS-4109). MIRRORS devhealthsource/teams_projects_edges.go's
 // membershipIntervalsSubquery exactly (same touch polarization, same
@@ -562,7 +563,7 @@ func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, er
 // MalformedTouchCount, and the scope-expansion telemetry silently dropped
 // exactly the same signal devhealthsource's own presenceTelemetryLedger
 // already surfaces for the producer path.
-// membershipTouchesAsOfSQL mirrors devhealthsource/teams_projects_edges.go's
+// membershipTouchesAsOfAmongSQL mirrors devhealthsource/teams_projects_edges.go's
 // membershipIntervalsSubquery exactly -- same two-stage classify-then-close
 // window-function state machine, same interval rule (CHAOS-4109, team-lead
 // ruling 2026-08-25): a duplicate ADD (immediately preceded by another ADD,
@@ -583,14 +584,24 @@ func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, er
 // interval of their own (valid_to is always NULL) and callers must
 // exclude them from admission the same way they already exclude
 // is_malformed rows, but still count them.
-const membershipTouchesAsOfSQL = `(
+//
+// The touches are read for the subjects candidates names only (a superset
+// of the requested projects' subjects): a subject is kept or dropped whole,
+// so its dedupe and every window partition (one subject, one project) are
+// unchanged. "" reads every subject of the organization.
+func membershipTouchesAsOfAmongSQL(candidates string) string {
+	transitions := devhealthschema.DedupedMembershipTransitionsLastSynced
+	if candidates != "" {
+		transitions = devhealthschema.DedupedMembershipTransitionsFiltered(false, transitionSubjectsAmongSQL(candidates))
+	}
+	return `(
   WITH touches AS (
     SELECT repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
-    FROM ` + devhealthschema.DedupedMembershipTransitionsLastSynced + `
+    FROM ` + transitions + `
     WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND to_project_id != '' AND to_project_id != from_project_id
     UNION ALL
     SELECT repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
-    FROM ` + devhealthschema.DedupedMembershipTransitionsLastSynced + `
+    FROM ` + transitions + `
     WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND from_project_id != '' AND from_project_id != to_project_id
   ),
   classified AS (
@@ -628,12 +639,13 @@ const membershipTouchesAsOfSQL = `(
   FROM classified
   WHERE dup_flag
 )`
+}
 
 // projectRepositoriesAsOf binds projectRepositories' first hop to
 // asOfWindow(timeContext) instead of reading work_items.project_id
 // unconditionally, using project_membership_transitions' full touch
 // history the same way devhealthsource's producer derives edge validity
-// intervals (membershipTouchesAsOfSQL above).
+// intervals (membershipTouchesAsOfAmongSQL above).
 //
 // TWO ARMS, mirroring project_membership_presence's own column-arm/
 // transition-arm split (ops migration 077):
@@ -683,7 +695,7 @@ func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID strin
 	// own identical comment for why "smallest id" is the tiebreak.
 	statement := `SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, max(a.via_history) AS via_history, min(a.origin_project_id) AS origin_project_id, argMax(l.provenance, l.link_rank) AS tier, arraySort(groupUniqArray(a.origin_project_id)) AS origin_project_ids
 FROM (` + projectIssueArmsAsOfSQL + `) AS a
-INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = a.work_item_id
+INNER JOIN ` + admittedIssueLinksAmongSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)) + ` AS l ON l.work_item_id = a.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
 GROUP BY repo_id_str, repo_slug
 ORDER BY repo_id_str
@@ -764,7 +776,7 @@ const resolvedProjectsSQL = `(
 //     difference is exactly the repositories whose history-derived
 //     membership existed but not during this question's window.
 //   - MalformedTouchCount (codex xhigh review R1, MEDIUM, confirmed real):
-//     how many touches membershipTouchesAsOfSQL flagged is_malformed (a
+//     how many touches membershipTouchesAsOfAmongSQL flagged is_malformed (a
 //     REMOVE touch with no prior ADD to close -- team-lead ruling
 //     2026-08-25; see that constant's own doc comment). The main answer
 //     query excludes malformed rows from
@@ -795,14 +807,15 @@ func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, p
 	// here would let a redundant touch masquerade as independent evidence
 	// of a match/miss the ORIGINAL (first-add) interval already decides on
 	// its own.
+	candidates := requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)
 	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed AND NOT is_duplicate_add) AS ever_matched,
   uniqExactIf(repo_id_str, in_window AND NOT is_malformed AND NOT is_duplicate_add) AS window_matched
 FROM (
   SELECT toString(l.pr_repo_id) AS repo_id_str, iv.is_malformed AS is_malformed, iv.is_duplicate_add AS is_duplicate_add,
     (iv.observed_at <= {window_end:DateTime64(6,'UTC')} AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})) AS in_window
-  FROM ` + membershipTouchesAsOfSQL + ` AS iv
+  FROM ` + membershipTouchesAsOfAmongSQL(candidates) + ` AS iv
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
-  INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = iv.subject_id
+  INNER JOIN ` + admittedIssueLinksAmongSQL(candidates) + ` AS l ON l.work_item_id = iv.subject_id
   LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
   WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
     AND toString(l.pr_repo_id) != {zero_repository_id:String} AND ifNull(r.repo, '') != ''
@@ -817,8 +830,8 @@ FROM (
 	// The malformed/duplicate-add counts are about the TOUCHES, never about
 	// which repository a link reaches: read them without the link join so an
 	// issue with several link rows cannot multiply them.
-	const touchCountsStatement = `SELECT countIf(iv.is_malformed) AS malformed_touches, countIf(iv.is_duplicate_add) AS duplicate_add_touches
-FROM ` + membershipTouchesAsOfSQL + ` AS iv
+	touchCountsStatement := `SELECT countIf(iv.is_malformed) AS malformed_touches, countIf(iv.is_duplicate_add) AS duplicate_add_touches
+FROM ` + membershipTouchesAsOfAmongSQL(candidates) + ` AS iv
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
 WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}`
 	touchRows, touchErr := e.client.Query(ctx, touchCountsStatement, []contextpacket.ClickHouseBinding{
@@ -1533,7 +1546,7 @@ func (e *ScopeExpander) teamWorkItems(ctx context.Context, principal storage.Pri
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,
     toUInt8(toString(w.repo_id) != '`+zeroRepositoryID+`' AND ifNull(r.repo, '') = '') AS orphaned
 FROM work_item_team_attributions AS a FINAL
-INNER JOIN (SELECT work_item_id, repo_id, org_id, provider, project_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
+INNER JOIN (SELECT work_item_id, repo_id, org_id, provider, project_id FROM work_items FINAL WHERE org_id = {org_id:String} AND (repo_id, work_item_id) IN `+teamAttributedWorkItemKeysSQL+`) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
 `+rendered.JoinSQL+`
 WHERE a.org_id = {org_id:String} AND `+devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam)+` AND a.team_id IN {team_ids:Array(String)}
 GROUP BY toString(w.repo_id), w.work_item_id, ifNull(r.repo, '')`, limit)
@@ -1697,7 +1710,7 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 	// reads the organization-wide authorization aggregates, and its result
 	// LIMIT bounds only what comes back, not what is read. A ceiling hit is
 	// reported as a read-limit failure, never as a generic backend fault.
-	statement = readers.WithSettings(statement, readers.Settings{MaxRowsToRead: workItemScopeSelectionMaxRowsToRead})
+	statement = readers.WithSettings(statement, readers.Settings{MaxRowsToRead: workItemScopeSelectionMaxRowsToRead, MaxThreads: workItemScopeSelectionMaxThreads})
 	rows, err := e.client.Query(ctx, statement, bindings)
 	if err != nil {
 		return nil, counts, workItemScopeReadError(err)
@@ -1945,6 +1958,12 @@ func refuseNonCurrentWorkItemAxis(request contextfabric.FactScopeExpansionReques
 // read-limit classification.
 var workItemScopeSelectionMaxRowsToRead = workItemReaderMaxRowsToRead
 
+// workItemScopeSelectionMaxThreads bounds the selection's parallelism. The
+// authorization relations it joins (readers.WorkItemScopeSQL's JoinSQL) cost
+// a fixed amount per thread: 58 MB served, 33 MB at two threads, measured on
+// real ClickHouse at 100k and 300k unrelated work items.
+const workItemScopeSelectionMaxThreads = uint64(2)
+
 // workItemScopeReadError marks a physical read-limit failure of a work-item
 // selection so the resolver classifies it as such; any other error passes
 // through unchanged.
@@ -2028,7 +2047,7 @@ INNER JOIN (
 -- The requested origins are bound PROVIDER-QUALIFIED for the same reason (see
 -- decodeProjectOriginKeys): the caller named a canonical project, and its
 -- provider is half of that name.
-WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND concat(p.provider, '`+projectOriginKeySeparator+`', p.id) IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN `+requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate)+` AND p.key_resolution_count = 1 AND concat(p.provider, '`+projectOriginKeySeparator+`', p.id) IN {project_ids:Array(String)}
 GROUP BY toString(w.repo_id), w.work_item_id, ifNull(r.repo, '')`, limit)
 }
 

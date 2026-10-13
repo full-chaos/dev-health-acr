@@ -87,7 +87,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v22 -> v23: the investment line of the fact-kind glossary names organization among its subject kinds.
 			// v23 -> v24: the reachability sentences: continuous_integration and deployments are reached through a team's or project's repositories, incidents through those repositories' deployments, and operational_deficiencies through a project's owning teams.
 			// v24 -> v25: a pull_request member's status value is one of a closed set, with the review phrases mapped onto it, and two worked examples.
-			digest: "6d6432fcec19dd08266634326a7c0e66ac03baf3c048463301c56a2e00b83d70",
+			digest: "bc319314a7ee02b93c2404627817ecfc9e2c7a1403b2a249ae5b51814473c654",
 		},
 		{
 			name:    "synthesis system prompt",
@@ -104,7 +104,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// superlative. See DefaultSynthesisPromptVersion's own doc comment.
 			// v16 -> v17: the instruction to restate relevant supplied facts as
 			// claimed_facts. See DefaultSynthesisPromptVersion's own doc comment.
-			digest: "b199f0b2c49114c8c40dc4342513f3deab9602b66ac50b0dc25f0f4c9828733d",
+			digest: "ed83ed46c7bd8d07c7dcbd85e8b02cc859330f96990f2b45dc79ad9b6824a93b",
 		},
 		{
 			name:    "interpretation model-output schema",
@@ -114,7 +114,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// own doc comment.
 			// v6 -> v7: fact_requirements[].kind is an enum over the fact-kind
 			// vocabulary. See DefaultSchemaVersion's own doc comment.
-			digest: "c046c9119dba32700b6b7fdd57756da85fa6db2d74e59a3291947418bc2ee325",
+			// v9 -> v10: the enum gained security_alerts. See DefaultSchemaVersion's
+			// own doc comment.
+			digest: "e6eac00357ba70574484522e70bb56acbd1e8e49e41c828ec6cd00f1d03417e8",
 		},
 	} {
 		t.Run(binding.name, func(t *testing.T) {
