@@ -391,7 +391,7 @@ func unexpandedReason(capability FactCapability, gap FactScopeGap) string {
 	}
 	if gap.ScopeExpansionUnavailable() {
 		return fmt.Sprintf(
-			"%s:%s: no resolved subject holds this capability's facts directly and scope expansion is not available on this read path (origin: %s; supported: %s; policy: %s; basis: %s)",
+			"%s:%s: no resolved subject holds this capability's facts directly and no scope expander is wired on this server (origin: %s; supported: %s; policy: %s; basis: %s)",
 			FactScopeReasonUnexpanded, gap.Outcome, gap.OriginKind,
 			joinSubjectKinds(capability.SupportedSubjectKinds), gap.Policy, gap.Basis,
 		)
