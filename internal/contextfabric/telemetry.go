@@ -1015,6 +1015,8 @@ func (t SlogEngineTelemetry) RecordTeamBlockersDrivers(ctx context.Context, prin
 		"skipped_zero", event.SkippedZero,
 		"skipped_budget", event.SkippedBudget,
 		"skipped_id_clash", event.SkippedIDClash,
+		"skipped_stale", event.SkippedStale,
+		"skipped_duplicate", event.SkippedDuplicate,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 

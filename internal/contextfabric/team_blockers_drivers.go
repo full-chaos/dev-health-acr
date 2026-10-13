@@ -20,12 +20,14 @@ type teamBlockersObservation struct {
 }
 
 type TeamBlockersDriverEvent struct {
-	Emitted         int
-	TruncatedServed int
-	SkippedMissing  int
-	SkippedZero     int
-	SkippedBudget   int
-	SkippedIDClash  int
+	Emitted          int
+	TruncatedServed  int
+	SkippedMissing   int
+	SkippedZero      int
+	SkippedBudget    int
+	SkippedIDClash   int
+	SkippedStale     int
+	SkippedDuplicate int
 }
 
 type TeamBlockersDriverResult struct {
@@ -59,10 +61,10 @@ func teamBlockersTitle(observation teamBlockersObservation) string {
 	if observation.partial {
 		title = fmt.Sprintf("At least %d blocked work items (partial read)", observation.count)
 	}
-	if projectReached, ok := factInteger(observation.fact.Fields, "project_blocked_work_items_current"); ok && projectReached > 0 {
+	if projectReached, ok := factInteger(observation.fact.Fields, "project_blocked_work_items_current"); ok && projectReached > 0 && !observation.partial {
 		title += fmt.Sprintf(", %d of them reached through project-linked repositories", projectReached)
 		if basis, has := observation.fact.Fields["repository_link_basis"]; has && basis.String != nil && *basis.String != "" {
-			title += " (weakest link tier: " + *basis.String + ")"
+			title += " (weakest link tier over its counted links: " + *basis.String + ")"
 		}
 	}
 	return title
@@ -77,11 +79,17 @@ func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact, event *Team
 		if member.Subject.Kind != SubjectTeam {
 			continue
 		}
-		found := false
+		found, stale := false, false
 		for index := range facts {
 			fact := &facts[index]
-			if fact.Kind != FactBlockers || fact.Subject.Kind != SubjectTeam || fact.Subject.CanonicalID != member.Subject.CanonicalID ||
-				len(fact.EvidenceRefIDs) == 0 || (fact.SourceState != SourceAvailable && fact.SourceState != SourceTruncated) {
+			if fact.Kind != FactBlockers || fact.Subject.Kind != SubjectTeam || fact.Subject.CanonicalID != member.Subject.CanonicalID {
+				continue
+			}
+			if fact.SourceState == SourceStale {
+				stale = true
+				continue
+			}
+			if len(fact.EvidenceRefIDs) == 0 || (fact.SourceState != SourceAvailable && fact.SourceState != SourceTruncated) {
 				continue
 			}
 			found = true
@@ -96,7 +104,11 @@ func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact, event *Team
 			}
 			break
 		}
-		if !found {
+		switch {
+		case found:
+		case stale:
+			event.SkippedStale++
+		default:
 			event.SkippedMissing++
 		}
 	}
@@ -109,7 +121,7 @@ func teamBlockersObservations(cohort *Cohort, facts []CanonicalFact, event *Team
 	return observations
 }
 
-func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation) TeamBlockersDriverResult {
+func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, facts []CanonicalFact, existingDrivers []DriverJudgment, existingClaims []ClaimedFact, allocation ItemAllocation, narrationItemsSpent int) TeamBlockersDriverResult {
 	if !teamBlockersIntent(interpretation) || cohort == nil || cohort.Kind != SubjectTeam {
 		return TeamBlockersDriverResult{}
 	}
@@ -124,13 +136,22 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		allowed = claimRoom
 	}
 	if allocation.InForce() {
-		if grant := allocation.NarrationGrant / 2; grant < allowed {
+		if grant := (allocation.NarrationGrant - narrationItemsSpent) / 2; grant < allowed {
 			allowed = grant
+		}
+		if allowed < 0 {
+			allowed = 0
 		}
 	}
 	taken := make(map[string]struct{}, len(existingDrivers))
+	covered := make(map[string]struct{})
 	for _, driver := range existingDrivers {
 		taken[driver.DriverID] = struct{}{}
+		if driver.Category == "blockers" {
+			for _, subject := range driver.AffectedSubjects {
+				covered[subject.CanonicalID] = struct{}{}
+			}
+		}
 	}
 	takenClaims := make(map[string]struct{}, len(existingClaims))
 	for _, claim := range existingClaims {
@@ -139,6 +160,10 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 	for _, observation := range observations {
 		if len(result.Drivers) >= allowed {
 			event.SkippedBudget++
+			continue
+		}
+		if _, done := covered[observation.team.CanonicalID]; done {
+			event.SkippedDuplicate++
 			continue
 		}
 		driverID, claimID := teamBlockersDriverID(observation.team), teamBlockersClaimID(observation.team)

@@ -358,7 +358,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 	}
 	if graphContext.Cohort != nil && clientSynthesisRequested(request) {
-		if blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, nil, nil, synthesisAllocation); len(blockers.Drivers) > 0 {
+		if blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, nil, nil, synthesisAllocation, 0); len(blockers.Drivers) > 0 {
 			inputGraph.DriverCandidates = append(append([]DriverJudgment(nil), graphContext.DriverCandidates...), teamBlockersDriverCandidates(blockers.Drivers)...)
 		}
 	}
@@ -708,7 +708,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 	}
 	if graphContext.Cohort != nil {
-		blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation)
+		narrationSpent := 0
+		if pending.CohortNarration != nil {
+			narrationSpent = 2 * pending.CohortNarration.JudgmentsEmitted
+		}
+		blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation, narrationSpent)
 		pending.TeamBlockersDrivers = blockers.Event
 		if len(blockers.Drivers) > 0 || blockers.Limitation != "" {
 			if err := validateMintedClaimsGrounded(blockers.Claims, facts.Facts); err != nil {

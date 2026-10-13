@@ -86,7 +86,7 @@ func TestTeamCohortServesBlockersAsKeyFactAndDriver(t *testing.T) {
 		blockersFact(b, SourceAvailable, intp(30), map[string]FactValue{"project_blocked_work_items_current": IntegerFactValue(4), "repository_link_basis": StringFactValue("explicit_text")}),
 		blockersFact(c, SourceAvailable, intp(0), nil),
 	})
-	if got, want := driverTitles(result.Drivers), "Blocked work items: 30, 4 of them reached through project-linked repositories (weakest link tier: explicit_text)|Blocked work items: 3"; got != want {
+	if got, want := driverTitles(result.Drivers), "Blocked work items: 30, 4 of them reached through project-linked repositories (weakest link tier over its counted links: explicit_text)|Blocked work items: 3"; got != want {
 		t.Fatalf("drivers = %q, want %q", got, want)
 	}
 	if len(result.ClaimedFacts) != 2 {
@@ -126,15 +126,17 @@ func TestTeamBlockersDecisionTelemetryCountsEachReason(t *testing.T) {
 	a, b, c := teamsAB()
 	d := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:D", Label: "Delta"}
 	e := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:E", Label: "Eps"}
-	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}, {Subject: c}, {Subject: d}, {Subject: e}}}
+	f := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:F", Label: "Zeta"}
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}, {Subject: c}, {Subject: d}, {Subject: e}, {Subject: f}}}
 	facts := []CanonicalFact{
 		blockersFact(a, SourceAvailable, intp(4), nil),
 		blockersFact(b, SourceTruncated, intp(6), nil),
 		blockersFact(c, SourceAvailable, intp(0), nil),
 		blockersFact(d, SourceAvailable, nil, nil),
+		blockersFact(e, SourceStale, intp(8), nil),
 	}
-	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, nil, nil, ItemAllocation{})
-	want := TeamBlockersDriverEvent{Emitted: 2, TruncatedServed: 1, SkippedMissing: 2, SkippedZero: 1}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, nil, nil, ItemAllocation{}, 0)
+	want := TeamBlockersDriverEvent{Emitted: 2, TruncatedServed: 1, SkippedMissing: 2, SkippedStale: 1, SkippedZero: 1}
 	if got.Event == nil || *got.Event != want {
 		t.Fatalf("event = %+v, want %+v", got.Event, want)
 	}
@@ -149,7 +151,7 @@ func TestTeamCohortBlockersOrderByCountThenLabelAndDiscloseTheCut(t *testing.T) 
 	for i := 0; i < 48; i++ {
 		existing = append(existing, DriverJudgment{DriverID: fmt.Sprintf("existing-%d", i)})
 	}
-	got := teamBlockersDrivers(interpretation, cohort, facts, existing, nil, ItemAllocation{})
+	got := teamBlockersDrivers(interpretation, cohort, facts, existing, nil, ItemAllocation{}, 0)
 	if len(got.Drivers) != 2 || got.Drivers[0].AffectedSubjects[0].Label != "Gamma" || got.Drivers[1].AffectedSubjects[0].Label != "Alpha" {
 		t.Fatalf("drivers = %+v", got.Drivers)
 	}
@@ -161,7 +163,7 @@ func TestTeamCohortBlockersOrderByCountThenLabelAndDiscloseTheCut(t *testing.T) 
 func TestTeamCohortBlockersClientModeCarriesCandidates(t *testing.T) {
 	a, _, _ := teamsAB()
 	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}}}
-	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, []CanonicalFact{blockersFact(a, SourceAvailable, intp(7), nil)}, nil, nil, ItemAllocation{})
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, []CanonicalFact{blockersFact(a, SourceAvailable, intp(7), nil)}, nil, nil, ItemAllocation{}, 0)
 	candidates := teamBlockersDriverCandidates(got.Drivers)
 	if len(candidates) != 1 || !strings.HasSuffix(candidates[0].DriverID, "-candidate") || len(candidates[0].ClaimedFactIDs) != 0 {
 		t.Fatalf("candidates = %+v", candidates)
@@ -171,8 +173,49 @@ func TestTeamCohortBlockersClientModeCarriesCandidates(t *testing.T) {
 func TestNonBlockersQuestionServesNoTeamBlockersDrivers(t *testing.T) {
 	a, _, _ := teamsAB()
 	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}}}
-	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactHealth}}}, cohort, []CanonicalFact{blockersFact(a, SourceAvailable, intp(7), nil)}, nil, nil, ItemAllocation{})
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactHealth}}}, cohort, []CanonicalFact{blockersFact(a, SourceAvailable, intp(7), nil)}, nil, nil, ItemAllocation{}, 0)
 	if len(got.Drivers) != 0 {
 		t.Fatalf("drivers = %+v", got.Drivers)
+	}
+}
+
+func TestTeamBlockersDriversSpendOnlyWhatNarrationLeftOfTheGrant(t *testing.T) {
+	a, b, c := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}, {Subject: c}}}
+	facts := []CanonicalFact{blockersFact(a, SourceAvailable, intp(5), nil), blockersFact(b, SourceAvailable, intp(6), nil), blockersFact(c, SourceAvailable, intp(7), nil)}
+	interpretation := InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}
+	allocation := AllocateItems(AnswerPlan{Budget: AnswerPlanBudget{MaxItems: 30}}, 0, 0)
+	if !allocation.InForce() || allocation.NarrationGrant < 4 {
+		t.Fatalf("allocation = %+v, want a grant of at least 4", allocation)
+	}
+	free := teamBlockersDrivers(interpretation, cohort, facts, nil, nil, allocation, 0)
+	spent := allocation.NarrationGrant - 2
+	tight := teamBlockersDrivers(interpretation, cohort, facts, nil, nil, allocation, spent)
+	if got := (len(tight.Drivers) + len(tight.Claims)) + spent; got > allocation.NarrationGrant {
+		t.Fatalf("items %d (narration %d + blockers %d) exceed the grant %d", got, spent, len(tight.Drivers)+len(tight.Claims), allocation.NarrationGrant)
+	}
+	if len(tight.Drivers) >= len(free.Drivers) && len(free.Drivers) > 1 {
+		t.Fatalf("tight=%d free=%d, want the narration spend to reduce the blockers drivers", len(tight.Drivers), len(free.Drivers))
+	}
+}
+
+func TestTeamBlockersDriversSkipATeamAlreadyExplainedByABlockersDriver(t *testing.T) {
+	a, b, _ := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}}}
+	facts := []CanonicalFact{blockersFact(a, SourceAvailable, intp(5), nil), blockersFact(b, SourceAvailable, intp(6), nil)}
+	existing := []DriverJudgment{{DriverID: "model-minted-driver", Category: "blockers", AffectedSubjects: []SubjectRef{a}}}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, existing, nil, ItemAllocation{}, 0)
+	if len(got.Drivers) != 1 || got.Drivers[0].AffectedSubjects[0].Label != "Beta" || got.Event.SkippedDuplicate != 1 {
+		t.Fatalf("drivers=%+v event=%+v", got.Drivers, got.Event)
+	}
+}
+
+func TestTeamBlockersPartialTitleDoesNotRestateTheProjectSubcountAsExact(t *testing.T) {
+	a, _, _ := teamsAB()
+	extra := map[string]FactValue{"project_blocked_work_items_current": IntegerFactValue(4), "repository_link_basis": StringFactValue("heuristic")}
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}}}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, []CanonicalFact{blockersFact(a, SourceTruncated, intp(12), extra)}, nil, nil, ItemAllocation{}, 0)
+	if title := got.Drivers[0].Title; title != "At least 12 blocked work items (partial read)" {
+		t.Fatalf("title = %q", title)
 	}
 }
