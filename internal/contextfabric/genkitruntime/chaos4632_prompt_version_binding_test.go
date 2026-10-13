@@ -87,7 +87,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v22 -> v23: the investment line of the fact-kind glossary names organization among its subject kinds.
 			// v23 -> v24: the reachability sentences: continuous_integration and deployments are reached through a team's or project's repositories, incidents through those repositories' deployments, and operational_deficiencies through a project's owning teams.
 			// v24 -> v25: a pull_request member's status value is one of a closed set, with the review phrases mapped onto it, and two worked examples.
-			digest: "136ac9aa8eed1b034a2a441cd695a13d519830881ed17e961fdc8c27302d3e5d",
+			digest: "63e612d9183f46c69774411d265aa0f9dd85b5e8a5d6f1190a4690701d3096a2",
 		},
 		{
 			name:    "synthesis system prompt",
