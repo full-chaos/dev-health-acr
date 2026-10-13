@@ -46,16 +46,19 @@ SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(nu
 	}
 	var lines []string
 	report := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	setIn := `work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 	components := map[string]string{
-		"c1_linked_ids_set_only":           `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`,
-		"c2_issues_by_set_project":         `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String}) AND project_id = 'proj-owner'`,
-		"c3_work_items_final_project_only": `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND project_id = 'proj-owner'`,
-		"c4_links_final_scan":              `SELECT count() FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String}`,
-		"c5_prs_final_scan":                `SELECT count() FROM git_pull_requests FINAL WHERE org_id = {org_id:String}`,
-		"c6_links_x_small_hash":            `SELECT count() FROM work_graph_issue_pr AS l FINAL INNER JOIN (SELECT 'i-reached' AS work_item_id) AS o ON o.work_item_id = l.work_item_id WHERE l.org_id = {org_id:String}`,
-		"c7_prs_x_small_hash":              `SELECT count() FROM git_pull_requests AS pr FINAL INNER JOIN (SELECT 1 AS number) AS lw ON pr.number = lw.number WHERE pr.org_id = {org_id:String}`,
-		"c8_new_statement":                 `SELECT count() FROM ` + devhealthfacts.TeamProjectLinkRowsSQLForTest(),
-		"c9_old_statement":                 `SELECT count() FROM ` + devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest(),
+		"v01_current_set_final_project":      `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND ` + setIn + ` AND project_id = 'proj-owner'`,
+		"v02_distinct_set":                   `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT DISTINCT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String}) AND project_id = 'proj-owner'`,
+		"v03_two_pass_nonfinal_then_final":   `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND ` + setIn + ` AND project_id = 'proj-owner') AND project_id = 'proj-owner'`,
+		"v04_nonfinal_set_project_only":      `SELECT count() FROM work_items WHERE org_id = {org_id:String} AND ` + setIn + ` AND project_id = 'proj-owner'`,
+		"v05_hashed_set_no_pk_prune":         `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND cityHash64(work_item_id) IN (SELECT cityHash64(work_item_id) FROM work_graph_issue_pr WHERE org_id = {org_id:String}) AND project_id = 'proj-owner'`,
+		"v06_set_without_index_use":          `SELECT count() FROM work_items FINAL WHERE org_id = {org_id:String} AND ` + setIn + ` AND project_id = 'proj-owner' SETTINGS use_index_for_in_with_subqueries = 0`,
+		"v07_project_prewhere_nonfinal_only": `SELECT count() FROM work_items PREWHERE project_id = 'proj-owner' WHERE org_id = {org_id:String}`,
+		"v08_links_final_distinct_ids":       `SELECT count() FROM (SELECT DISTINCT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String})`,
+		"v09_semi_join_set_side_right":       `SELECT count() FROM work_items FINAL LEFT SEMI JOIN (SELECT DISTINCT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String}) AS k ON k.work_item_id = work_items.work_item_id WHERE work_items.org_id = {org_id:String} AND work_items.project_id = 'proj-owner'`,
+		"v10_new_statement":                  `SELECT count() FROM ` + devhealthfacts.TeamProjectLinkRowsSQLForTest(),
+		"v11_old_statement":                  `SELECT count() FROM ` + devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest(),
 	}
 	measure := func(size int) {
 		for name, q := range components {
@@ -81,6 +84,10 @@ SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(nu
 	measure(30_000)
 	grow(60_000)
 	measure(90_000)
+	for _, table := range []string{"work_items", "work_graph_issue_pr", "git_pull_requests"} {
+		exec(`OPTIMIZE TABLE ` + table + ` FINAL`)
+	}
+	measure(-90_000)
 	sort.Strings(lines)
 	t.Errorf("diagnostic table (failing on purpose so the log shows it):\n%s", strings.Join(lines, "\n"))
 }
