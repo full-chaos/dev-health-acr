@@ -1,6 +1,10 @@
 package relationcurrent
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+)
 
 // A relation the provider removed leaves its work_item_dependencies row behind
 // (the table is insert-only). A sync of an item writes again only the relations
@@ -106,6 +110,13 @@ func CurrentSQL(d string) string {
 // returns the total beside the kept keys).
 const MaxEndedLinks = 20000
 
+// A relation the end rule ends is retracted from the graph only when nothing
+// else states it. Two spellings of one relation share one graph edge: a blocks
+// row (a, b) and an inverse-spelling row (b, a) are the same edge, and a row
+// of the same pair under another letter case too. The rule covers the exact
+// type "blocks" alone, so such a twin is never ended and keeps the edge; the
+// ended row is then left out of the set.
+//
 // EndedLinksSQL is, for the organization, ONE row: an array with one element
 // per relation the provider no longer reports (at most MaxEndedLinks) and the
 // total number of such relations. An element is hex(source), hex(target),
@@ -115,5 +126,8 @@ const MaxEndedLinks = 20000
 // many links were removed. The first column is aliased ended_links, the
 // marker a statement carries so a test client can route it.
 func EndedLinksSQL() string {
-	return fmt.Sprintf(`SELECT groupArray(%d)(concat(hex(s), '.', hex(t), '.', hex(rt), '.', toString(toInt64(toUnixTimestamp64Micro(ended_at))))) AS ended_links, count() AS ended_total FROM `, MaxEndedLinks) + RowsSQL() + ` WHERE ended`
+	return fmt.Sprintf(`SELECT groupArray(%d)(concat(hex(s), '.', hex(t), '.', hex(rt), '.', toString(toInt64(toUnixTimestamp64Micro(ended_at))))) AS ended_links, count() AS ended_total
+FROM (SELECT s, t, rt, ended, ended_at, sum(toUInt8(NOT ended)) OVER (PARTITION BY s, t) AS live_same_pair FROM `, MaxEndedLinks) + RowsSQL() + `)
+WHERE ended AND live_same_pair = 0
+  AND (t, s) NOT IN (SELECT source_work_item_id, target_work_item_id FROM work_item_dependencies FINAL WHERE org_id = {org_id:String} AND ` + dependencyrelation.KeySQL("relationship_type") + ` = 'blocks:inv')`
 }
