@@ -328,7 +328,11 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 		}
 	}
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		b.WriteString("- investigate_question (callers with no model of their own; spends the service's or your organization's model budget): you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words. To write the answer on your own model, pass synthesis \"client\": the service skips its own answer writing and returns synthesis_input; fetch the prompt synthesize_answer with prompts/get and run it with synthesis_input.input as the user message. The stored result then carries facts and evidence only. This tool runs on the service's model, or on the organization's own model configuration when it has one; an organization with neither the plan feature for the service's model nor its own configuration gets reason service_model_not_entitled; then use investigate_with_interpretation with synthesis \"client\".\n")
+		b.WriteString("- investigate_question (callers with no model of their own; spends the service's or your organization's model budget): you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words. To write the answer on your own model, pass synthesis \"client\": the service skips its own answer writing and returns synthesis_input; fetch the prompt synthesize_answer with prompts/get and run it with synthesis_input.input as the user message. The stored result then carries facts and evidence only. This tool runs on the service's model, or on the organization's own model configuration when it has one; an organization with neither the plan feature for the service's model nor its own configuration gets reason service_model_not_entitled.")
+		if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+			b.WriteString(" Then use investigate_with_interpretation with synthesis \"client\".")
+		}
+		b.WriteString("\n")
 	}
 	if recordEpisodeEnabled(cfg, caller) {
 		b.WriteString("- record_episode: only to leave append-only evidence about your own run.\n")

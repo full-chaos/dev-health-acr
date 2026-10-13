@@ -78,7 +78,9 @@ func dataToolsInstructions(caller *CallerContext) string {
 	find := hostedToolEnabled(caller, toolFindSubjects)
 	run := hostedToolEnabled(caller, toolRunOperation)
 	gql := hostedToolEnabled(caller, toolGraphQLQuery)
-	if !catalog && !find && !run && !gql {
+	facts := hostedToolEnabled(caller, toolReadFacts)
+	rels := hostedToolEnabled(caller, toolReadRelationships)
+	if !catalog && !find && !run && !gql && !facts && !rels {
 		return ""
 	}
 	var b strings.Builder
@@ -90,6 +92,12 @@ func dataToolsInstructions(caller *CallerContext) string {
 	if find {
 		b.WriteString("- find_subjects: names to ids, and lists of subjects.\n")
 	}
+	if facts {
+		b.WriteString("- read_facts: stored facts for subject ids you hold, with a coverage row for each.\n")
+	}
+	if rels {
+		b.WriteString("- read_relationships: the edges of one subject id.\n")
+	}
 	if run {
 		b.WriteString("- run_operation: product analytics and lists, by allowlisted operation name.\n")
 	}
@@ -98,7 +106,13 @@ func dataToolsInstructions(caller *CallerContext) string {
 	}
 	b.WriteString("More data tools are planned.\n")
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		b.WriteString("B. You want our engine's narrative answer and have no model of your own: investigate_question. If you are a model, prefer A, or investigate_with_interpretation with synthesis \"client\". investigate_question spends model budget: it runs on the service's model, which needs a plan feature, or on the organization's own model configuration when it has one.\n")
+		b.WriteString("B. You want our engine's narrative answer and have no model of your own: investigate_question. If you are a model, prefer A")
+		if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+			b.WriteString(", or investigate_with_interpretation with synthesis \"client\"")
+		}
+		b.WriteString(". investigate_question spends model budget: it runs on the service's model, which needs a plan feature, or on the organization's own model configuration when it has one.\n")
+	} else if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+		b.WriteString("B. You want our engine's narrative answer from an interpretation you ran on your own model: investigate_with_interpretation with synthesis \"client\".\n")
 	}
 	b.WriteString("Rules for A:\n")
 	b.WriteString("- Read call, completeness, result and coverage first. Missing is not healthy and not zero.\n")

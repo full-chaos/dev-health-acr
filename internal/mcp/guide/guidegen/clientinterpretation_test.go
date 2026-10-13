@@ -20,7 +20,7 @@ import (
 var backtickToken = regexp.MustCompile("`([^`]+)`")
 
 // plainWords are English or protocol words the guide quotes that no registry owns.
-var plainWords = []string{"user", "validation", "prompts/get", "role"}
+var plainWords = []string{"user", "validation", "prompts/get", "tools/list", "role"}
 
 func jsonNames(typ reflect.Type) []string {
 	var names []string
