@@ -189,7 +189,7 @@ func splitProjectKey(key string) (provider, id string) {
 func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
 	return `SELECT t.project_key AS project_key, d.blocked_id AS tgt, d.blocker_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open` + startOutput + `
-  FROM ` + blockerDependenciesSQL("d") + startJoin + `
+  FROM ` + blockerDependenciesSQL("d", authorized) + startJoin + `
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
     FROM work_items AS w FINAL
@@ -198,7 +198,6 @@ func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
   ) AS t ON t.work_item_id = d.blocked_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = {org_id:String} AND s.work_item_id = d.blocker_id
   WHERE true
-    AND d.blocked_id IN ` + authorized + ` AND d.blocker_id IN ` + authorized + `
   GROUP BY project_key, tgt, src, is_open`
 }
 
