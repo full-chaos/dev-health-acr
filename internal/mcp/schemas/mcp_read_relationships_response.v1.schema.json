@@ -71,7 +71,9 @@
         "types": {
           "type": "array",
           "items": {
-            "enum": [
+            "type": "string",
+            "description": "Open vocabulary; documented values: BELONGS_TO_PROJECT, BELONGS_TO_PULL_REQUEST, BELONGS_TO_REPOSITORY, BLOCKS, CORRELATED_WITH_INCIDENT, DOCUMENTED_BY, DUPLICATES, HAS_EPISODE, LINKS_PULL_REQUEST, OWNED_BY_TEAM, PART_OF, RELATED_TO, RELATES_TO. A client must tolerate values it does not know.",
+            "x-documented-values": [
               "BELONGS_TO_PROJECT",
               "BELONGS_TO_PULL_REQUEST",
               "BELONGS_TO_REPOSITORY",
@@ -153,7 +155,9 @@
             "description": "Stable id of the relationship."
           },
           "type": {
-            "enum": [
+            "description": "Relation type. Open vocabulary; documented values: BELONGS_TO_PROJECT, BELONGS_TO_PULL_REQUEST, BELONGS_TO_REPOSITORY, BLOCKS, CORRELATED_WITH_INCIDENT, DOCUMENTED_BY, DUPLICATES, HAS_EPISODE, LINKS_PULL_REQUEST, OWNED_BY_TEAM, PART_OF, RELATED_TO, RELATES_TO. A client must tolerate values it does not know.",
+            "type": "string",
+            "x-documented-values": [
               "BELONGS_TO_PROJECT",
               "BELONGS_TO_PULL_REQUEST",
               "BELONGS_TO_REPOSITORY",
@@ -167,8 +171,7 @@
               "PART_OF",
               "RELATED_TO",
               "RELATES_TO"
-            ],
-            "description": "Relation type."
+            ]
           },
           "hop": {
             "type": "integer",
@@ -197,7 +200,9 @@
                 "description": "Display label. Source text; untrusted."
               },
               "status": {
-                "enum": [
+                "description": "Work-item status stored on this end. BLOCKS edges only. unknown means no stored status; it is never read as done or open. Open vocabulary; documented values: backlog, todo, in_progress, in_review, blocked, done, canceled, unknown. A client must tolerate values it does not know.",
+                "type": "string",
+                "x-documented-values": [
                   "backlog",
                   "todo",
                   "in_progress",
@@ -206,8 +211,7 @@
                   "done",
                   "canceled",
                   "unknown"
-                ],
-                "description": "Work-item status stored on this end. BLOCKS edges only. unknown means no stored status; it is never read as done or open."
+                ]
               },
               "status_as_of": {
                 "type": "string",
@@ -237,7 +241,9 @@
                 "description": "Display label. Source text; untrusted."
               },
               "status": {
-                "enum": [
+                "description": "Work-item status stored on this end. BLOCKS edges only. unknown means no stored status; it is never read as done or open. Open vocabulary; documented values: backlog, todo, in_progress, in_review, blocked, done, canceled, unknown. A client must tolerate values it does not know.",
+                "type": "string",
+                "x-documented-values": [
                   "backlog",
                   "todo",
                   "in_progress",
@@ -246,8 +252,7 @@
                   "done",
                   "canceled",
                   "unknown"
-                ],
-                "description": "Work-item status stored on this end. BLOCKS edges only. unknown means no stored status; it is never read as done or open."
+                ]
               },
               "status_as_of": {
                 "type": "string",
@@ -319,12 +324,12 @@
               },
               "link_tier": {
                 "type": "string",
-                "enum": [
+                "description": "Only on a LINKS_PULL_REQUEST edge. How the link was made: native (the tracker or code host linked them), explicit_text (an issue reference written in the pull request) or heuristic (a pull request opened near the issue's last update in the issue's own repository; a guess, never a stated link). Absent when the stored tier is missing. Open vocabulary; documented values: native, explicit_text, heuristic. A client must tolerate values it does not know.",
+                "x-documented-values": [
                   "native",
                   "explicit_text",
                   "heuristic"
-                ],
-                "description": "Only on a LINKS_PULL_REQUEST edge. How the link was made: native (the tracker or code host linked them), explicit_text (an issue reference written in the pull request) or heuristic (a pull request opened near the issue's last update in the issue's own repository; a guess, never a stated link). Absent when the stored tier is missing."
+                ]
               }
             },
             "description": "Where the edge came from."
@@ -391,11 +396,12 @@
       "description": "Keyset page state."
     },
     "truncated_by": {
-      "enum": [
+      "description": "Set when a bound cut a depth-2 walk. Open vocabulary; documented values: frontier_cap, frontier_scan_cap. A client must tolerate values it does not know.",
+      "type": "string",
+      "x-documented-values": [
         "frontier_cap",
         "frontier_scan_cap"
-      ],
-      "description": "Set when a bound cut a depth-2 walk."
+      ]
     },
     "meaning": {
       "type": "string",

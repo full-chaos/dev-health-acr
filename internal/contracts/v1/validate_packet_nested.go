@@ -7,6 +7,10 @@ import "fmt"
 // be present (a nil slice marshals to JSON null, which the schema's
 // "type": "array" rejects) even when empty.
 func (s ResolvedScope) Validate() error {
+	return s.validate(false)
+}
+
+func (s ResolvedScope) validate(open bool) error {
 	if !stringLengthBetween(s.RepoID, 1, 128) {
 		return fmt.Errorf("repo_id violates v1 bounds")
 	}
@@ -16,7 +20,7 @@ func (s ResolvedScope) Validate() error {
 	if !stringLengthBetween(s.Branch, 0, 512) || !stringLengthBetween(s.CommitSHA, 0, 64) {
 		return fmt.Errorf("resolved_scope string violates v1 bounds")
 	}
-	if !validScopeResolution(s.Resolution) {
+	if !validScopeResolution(s.Resolution) && !(open && openVocabularyToken(string(s.Resolution))) {
 		return fmt.Errorf("resolution violates v1 bounds")
 	}
 	if s.FallbackReasons == nil {
@@ -70,6 +74,10 @@ func validateRecommendedSteps(steps []RecommendedStep) error {
 // non-negative, and watermarks must be present (possibly empty) with
 // every entry independently valid.
 func (f Freshness) Validate() error {
+	return f.validate(false)
+}
+
+func (f Freshness) validate(open bool) error {
 	if f.AsOf.IsZero() {
 		return fmt.Errorf("as_of is required")
 	}
@@ -80,7 +88,7 @@ func (f Freshness) Validate() error {
 		return fmt.Errorf("watermarks is required")
 	}
 	for i, watermark := range f.Watermarks {
-		if err := watermark.Validate(); err != nil {
+		if err := watermark.validate(open); err != nil {
 			return fmt.Errorf("watermarks[%d]: %w", i, err)
 		}
 	}
@@ -88,13 +96,19 @@ func (f Freshness) Validate() error {
 }
 
 func (w SourceWatermark) Validate() error {
+	return w.validate(false)
+}
+
+func (w SourceWatermark) validate(open bool) error {
 	if !stringLengthBetween(w.Source, 1, 100) {
 		return fmt.Errorf("source violates v1 bounds")
 	}
 	switch w.Status {
 	case "fresh", "stale", "missing", "unavailable":
 	default:
-		return fmt.Errorf("status violates v1 bounds")
+		if !open || !openVocabularyToken(w.Status) {
+			return fmt.Errorf("status violates v1 bounds")
+		}
 	}
 	return nil
 }

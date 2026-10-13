@@ -93,7 +93,7 @@ func (r MCPContextForTaskResponse) Validate() error {
 	if r.SchemaVersion != MCPContextForTaskResponseSchema {
 		return fmt.Errorf("schema_version must be %q", MCPContextForTaskResponseSchema)
 	}
-	if err := r.Structured.Validate(); err != nil {
+	if err := r.Structured.ValidateRead(); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}
 	if err := r.RenderedMarkdown.Validate(); err != nil {
@@ -167,7 +167,7 @@ func (r MCPSourceEvidenceResponse) Validate() error {
 	if r.Structured == nil || r.RenderedMarkdown == nil {
 		return fmt.Errorf("structured and rendered_markdown are required")
 	}
-	if err := r.Structured.Validate(); err != nil {
+	if err := r.Structured.ValidateRead(); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}
 	if err := r.RenderedMarkdown.Validate(); err != nil {
@@ -185,7 +185,7 @@ func (e MCPSourceEvidenceEntry) Validate() error {
 		if e.Structured == nil || e.RenderedMarkdown == nil || e.Reason != "" || e.Message != "" {
 			return fmt.Errorf("a served entry carries structured and rendered_markdown only")
 		}
-		if err := e.Structured.Validate(); err != nil {
+		if err := e.Structured.ValidateRead(); err != nil {
 			return fmt.Errorf("structured: %w", err)
 		}
 		if err := e.RenderedMarkdown.Validate(); err != nil {
@@ -235,6 +235,17 @@ func (r MCPRecordEpisodeRequest) Validate() error {
 }
 
 func (r MCPRecordEpisodeResponse) Validate() error {
+	return r.validate(false)
+}
+
+// ValidateRead is Validate for a receipt that carries a hosted episode's
+// redaction_state: an added token passes. Status and transcript_disposition
+// stay closed.
+func (r MCPRecordEpisodeResponse) ValidateRead() error {
+	return r.validate(true)
+}
+
+func (r MCPRecordEpisodeResponse) validate(open bool) error {
 	if r.SchemaVersion != MCPRecordEpisodeResponseSchema {
 		return fmt.Errorf("schema_version must be %q", MCPRecordEpisodeResponseSchema)
 	}
@@ -251,7 +262,7 @@ func (r MCPRecordEpisodeResponse) Validate() error {
 	}
 	switch r.Status {
 	case "recorded":
-		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil || !validAgentEpisodeRedactionState(r.RedactionState) {
+		if !stringLengthBetween(r.EpisodeID, 8, 256) || r.CreatedAt == nil || r.CreatedAt.IsZero() || r.Duplicate == nil || (!validAgentEpisodeRedactionState(r.RedactionState) && !(open && openVocabularyToken(r.RedactionState))) {
 			return fmt.Errorf("recorded receipt violates v1 bounds")
 		}
 	case "no_persist":
