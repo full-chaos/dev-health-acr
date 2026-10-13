@@ -30,10 +30,11 @@ type TeamBlockersDriverEvent struct {
 }
 
 type TeamBlockersDriverResult struct {
-	Drivers    []DriverJudgment
-	Claims     []ClaimedFact
-	Limitation string
-	Event      *TeamBlockersDriverEvent
+	Drivers      []DriverJudgment
+	Claims       []ClaimedFact
+	Limitation   string
+	Event        *TeamBlockersDriverEvent
+	CoveredRanks map[string]int
 }
 
 func teamBlockersIntent(interpretation InterpretedQuestion) bool {
@@ -143,26 +144,33 @@ func teamBlockersDrivers(interpretation InterpretedQuestion, cohort *Cohort, fac
 		}
 	}
 	taken := make(map[string]struct{}, len(existingDrivers))
-	covered := make(map[SubjectRef]struct{})
+	covered := make(map[SubjectRef][]string)
 	for _, driver := range existingDrivers {
 		taken[driver.DriverID] = struct{}{}
 		if driver.Category == "blockers" {
 			for _, subject := range driver.AffectedSubjects {
-				covered[SubjectRef{Kind: subject.Kind, CanonicalID: subject.CanonicalID}] = struct{}{}
+				key := SubjectRef{Kind: subject.Kind, CanonicalID: subject.CanonicalID}
+				covered[key] = append(covered[key], driver.DriverID)
 			}
 		}
 	}
+	result.CoveredRanks = map[string]int{}
 	takenClaims := make(map[string]struct{}, len(existingClaims))
 	for _, claim := range existingClaims {
 		takenClaims[claim.ClaimID] = struct{}{}
 	}
 	for rank, observation := range observations {
-		if len(result.Drivers) >= allowed {
-			event.SkippedBudget++
+		if ids, done := covered[SubjectRef{Kind: observation.team.Kind, CanonicalID: observation.team.CanonicalID}]; done {
+			event.SkippedDuplicate++
+			for _, id := range ids {
+				if existing, has := result.CoveredRanks[id]; !has || rank+1 < existing {
+					result.CoveredRanks[id] = rank + 1
+				}
+			}
 			continue
 		}
-		if _, done := covered[SubjectRef{Kind: observation.team.Kind, CanonicalID: observation.team.CanonicalID}]; done {
-			event.SkippedDuplicate++
+		if len(result.Drivers) >= allowed {
+			event.SkippedBudget++
 			continue
 		}
 		driverID, claimID := teamBlockersDriverID(observation.team), teamBlockersClaimID(observation.team)

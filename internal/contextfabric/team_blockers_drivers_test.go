@@ -27,6 +27,11 @@ func intp(n int64) *int64 { return &n }
 
 func investigateTeamBlockers(t *testing.T, teams []SubjectRef, facts []CanonicalFact) InvestigationResult {
 	t.Helper()
+	return investigateTeamBlockersWithDraft(t, teams, facts, []DriverJudgment{}, []ClaimedFact{})
+}
+
+func investigateTeamBlockersWithDraft(t *testing.T, teams []SubjectRef, facts []CanonicalFact, draftDrivers []DriverJudgment, draftClaims []ClaimedFact) InvestigationResult {
+	t.Helper()
 	members := make([]CohortMember, 0, len(teams))
 	for i, team := range teams {
 		members = append(members, CohortMember{Subject: team, Rank: i + 1, InclusionReasons: []string{"matched"}, EvidenceRefIDs: []string{"evidence_team_roster"}})
@@ -55,9 +60,9 @@ func investigateTeamBlockers(t *testing.T, teams []SubjectRef, facts []Canonical
 		}),
 		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, _ SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{Status: InvestigationPartial, DirectJudgment: "This investigation is partial: some canonical or graph coverage was unavailable.",
-				CurrentState: "x", DeterministicAnswer: "x", StrongestPressures: []string{}, Drivers: []DriverJudgment{},
+				CurrentState: "x", DeterministicAnswer: "x", StrongestPressures: []string{}, Drivers: draftDrivers,
 				RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{},
-				EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Warnings: []string{},
+				EvidenceRefIDs: []string{}, ClaimedFacts: draftClaims, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Warnings: []string{},
 				Versions: VersionSet{Backend: "test", ProjectionVersion: "p", QueryVersion: "q", InterpretationVersion: "i", SynthesisVersion: "s"}}, nil
 		}),
 		Results: store, Telemetry: &recordingTelemetry{},
@@ -386,5 +391,54 @@ func TestServedDriverRankIsTheServersEvenWhenASynthesizerStatesOne(t *testing.T)
 		case driver.Category == "blockers" && driver.Rank != 1:
 			t.Errorf("the server's blockers driver rank = %d, want 1", driver.Rank)
 		}
+	}
+}
+
+func TestTeamCohortKeepsADraftBlockersDriverInCountOrderThroughProjection(t *testing.T) {
+	teams := make([]SubjectRef, 0, 13)
+	facts := make([]CanonicalFact, 0, 13)
+	for i := 0; i < 13; i++ {
+		team := SubjectRef{Kind: SubjectTeam, CanonicalID: fmt.Sprintf("team:%02d", i), Label: fmt.Sprintf("Team %02d", i)}
+		teams = append(teams, team)
+		facts = append(facts, blockersFact(team, SourceAvailable, intp(int64(100-i)), nil))
+	}
+	top := teams[0]
+	claim := ClaimedFact{ClaimID: "claim_draft_top_0001", Kind: FactBlockers, Subject: top, Field: teamBlockersField, Value: convertFactValueScalar(IntegerFactValue(100))}
+	draft := DriverJudgment{
+		DriverID: "draft_blockers_top_0001", Standing: DriverContributing, Category: "blockers", Title: "Blocked work items: 100", Summary: "Blocked work items: 100.",
+		AffectedSubjects: []SubjectRef{top}, EvidenceRefIDs: []string{"evidence_blk_" + top.Label}, ClaimedFactIDs: []string{claim.ClaimID},
+		Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true,
+	}
+	result := investigateTeamBlockersWithDraft(t, teams, facts, []DriverJudgment{draft}, []ClaimedFact{claim})
+	projection := answerprojection.Project(result, answerprojection.DefaultBudget)
+	var titles []string
+	for _, driver := range projection.PrincipalDrivers {
+		titles = append(titles, driver.Title)
+	}
+	if len(titles) != answerprojection.DefaultBudget.MaxDrivers {
+		t.Fatalf("projected drivers = %d (%q)", len(titles), titles)
+	}
+	for i, title := range titles {
+		if want := fmt.Sprintf("Blocked work items: %d", 100-i); title != want {
+			t.Fatalf("projected driver %d = %q, want %q (all: %q)", i, title, want, titles)
+		}
+	}
+}
+
+func TestTeamBlockersCutNoteIsSilentWhenEveryTeamIsAlreadyCoveredAtFullCapacity(t *testing.T) {
+	a, b, _ := teamsAB()
+	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{{Subject: a}, {Subject: b}}}
+	facts := []CanonicalFact{blockersFact(a, SourceAvailable, intp(5), nil), blockersFact(b, SourceAvailable, intp(6), nil)}
+	existing := make([]DriverJudgment, 0, 50)
+	existing = append(existing, DriverJudgment{DriverID: "draft-a", Category: "blockers", AffectedSubjects: []SubjectRef{a}}, DriverJudgment{DriverID: "draft-b", Category: "blockers", AffectedSubjects: []SubjectRef{b}})
+	for i := 0; i < 48; i++ {
+		existing = append(existing, DriverJudgment{DriverID: fmt.Sprintf("existing-%d", i)})
+	}
+	got := teamBlockersDrivers(InterpretedQuestion{FactRequirements: []FactRequirement{{Kind: FactBlockers}}}, cohort, facts, existing, nil, ItemAllocation{}, 0)
+	if got.Limitation != "" || got.Event.SkippedBudget != 0 || got.Event.SkippedDuplicate != 2 {
+		t.Fatalf("limitation=%q event=%+v, want no cut note and two covered teams", got.Limitation, got.Event)
+	}
+	if got.CoveredRanks["draft-b"] != 1 || got.CoveredRanks["draft-a"] != 2 {
+		t.Fatalf("covered ranks = %v, want draft-b 1 and draft-a 2", got.CoveredRanks)
 	}
 }

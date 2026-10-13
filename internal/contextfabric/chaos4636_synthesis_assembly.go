@@ -726,9 +726,14 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		blockers := teamBlockersDrivers(interpretation, graphContext.Cohort, facts.Facts, result.Drivers, result.ClaimedFacts, synthesisAllocation, narrationSpent)
 		pending.TeamBlockersDrivers = blockers.Event
-		if len(blockers.Drivers) > 0 || blockers.Limitation != "" {
+		if len(blockers.Drivers) > 0 || len(blockers.CoveredRanks) > 0 || blockers.Limitation != "" {
 			if err := validateMintedClaimsGrounded(blockers.Claims, facts.Facts); err != nil {
 				return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			}
+			for index := range result.Drivers {
+				if rank, ranked := blockers.CoveredRanks[result.Drivers[index].DriverID]; ranked {
+					result.Drivers[index].Rank = rank
+				}
 			}
 			result.Drivers = append(result.Drivers, blockers.Drivers...)
 			result.ClaimedFacts = append(result.ClaimedFacts, blockers.Claims...)
