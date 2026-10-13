@@ -236,9 +236,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		retentionReason = unrepresentableValueReason
 	}
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
-	applyTeamsOwningNothing(&result, teamsRequested, teamsOwningNothing)
+	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
 	if mixUnavailable != "" {
-		if len(teamsOwningNothing)+len(teamsNoUnit) >= teamsRequested {
+		if onlyTeamSubjects(query.Subjects) && len(teamsOwningNothing)+len(teamsNoUnit) >= teamsRequested {
 			mergeFactReadReason(&result, mixUnavailable)
 		} else {
 			addRequestNote(&result, mixUnavailable)

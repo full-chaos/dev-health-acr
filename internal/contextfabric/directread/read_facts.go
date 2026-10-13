@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -1078,7 +1079,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if own := outcome.MemberReasons[key]; own != "" {
 					row.Reason = own
 					if outcome.Reason != "" {
-						row.Reason = own + "; " + outcome.Reason
+						row.Reason = clampRowReason(own + "; " + outcome.Reason)
 					}
 				}
 				if state, ok := outcome.Members[key]; ok && providerMemberStates[state] {
@@ -1090,6 +1091,16 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 		}
 	}
 	return rows
+}
+
+// clampRowReason keeps a joined row reason inside the bound a kind's own
+// coverage reason has.
+func clampRowReason(reason string) string {
+	runes := []rune(reason)
+	if len(runes) <= contractsv1.ContextFabricSourceObservationReasonMaxLength {
+		return reason
+	}
+	return strings.TrimRightFunc(string(runes[:contractsv1.ContextFabricSourceObservationReasonMaxLength]), unicode.IsSpace)
 }
 
 func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bool, providerState string, subject contextfabric.SubjectRef, capability contextfabric.FactCapability) string {

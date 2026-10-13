@@ -156,3 +156,25 @@ func TestMixedOwnershipDecidesTheStatePerTeam(t *testing.T) {
 		})
 	}
 }
+
+func TestInvestmentMixNoteStaysOffTheRepositoryRow(t *testing.T) {
+	t.Parallel()
+	provider := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), contextfabric.FactInvestment)
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r"}
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("NOTHING"), repo},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if strings.Contains(result.Reason, "requested teams") || strings.Contains(result.Reason, "owns no repository") {
+		t.Fatalf("kind reason %q carries a statement about teams, which every subject of the kind inherits", result.Reason)
+	}
+	if !strings.Contains(result.RequestNote, "investment mix unavailable for 1 of 1 requested teams") {
+		t.Fatalf("request note = %q", result.RequestNote)
+	}
+	if result.State == contextfabric.SourceNotApplicable {
+		t.Fatal("a team's state was promoted to the kind")
+	}
+}

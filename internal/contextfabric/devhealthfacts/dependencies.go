@@ -118,7 +118,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if len(ids) == 0 {
 		state, emptyReason := currentAxisReadState(teamFactCount)
 		result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: teamOutcome.truncated}
-		applyNoOwnedRepositories(&result, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+		applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 		return result, nil
 	}
 	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
@@ -198,7 +198,7 @@ LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), 
 	budget.observe(rowCount)
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
-	applyNoOwnedRepositories(&result, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 	return result, nil
 }
 

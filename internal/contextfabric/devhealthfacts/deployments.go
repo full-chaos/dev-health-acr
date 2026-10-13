@@ -110,7 +110,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
-	applyNoOwnedRepositories(&result, teamsRequested, teamsWithoutRepos)
+	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
 	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
 	return result, nil
 }

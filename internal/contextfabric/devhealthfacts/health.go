@@ -198,7 +198,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	// read that came back empty says something more specific than "no rows".
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
-	applyTeamsOwningNothing(&result, len(teamIDs), teamsOwningNothingWithoutData(teamIDs, teamBySubject, teamOwned, facts, nil))
+	applyTeamsOwningNothing(&result, query.Subjects, len(teamIDs), teamsOwningNothingWithoutData(teamIDs, teamBySubject, teamOwned, facts, nil))
 	return result, nil
 }
 

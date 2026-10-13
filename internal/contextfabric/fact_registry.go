@@ -1638,7 +1638,7 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	if bundle.kindReasons == nil {
 		bundle.kindReasons = map[FactKind]string{}
 	}
-	bundle.kindReasons[capability.Kind] = clampCoverageText(result.Reason, maxCoverageReasonLength)
+	bundle.kindReasons[capability.Kind] = clampCoverageText(factCoverageReason(result.State, result.Reason), maxCoverageReasonLength)
 	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, CombineRequestNote(result.Reason, result.RequestNote), detailSpec)
 	// F1: only a provider that actually CONTRIBUTED counts toward the
 	// composed grain. A degraded or empty provider reporting a grain
@@ -1743,10 +1743,17 @@ func factDetailSpecForRead(planned factPlanEntry, capability FactCapability, fai
 	return spec
 }
 
-func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string, spec coverageDetailSpec) {
+// factCoverageReason is the reason a kind's coverage observation carries: the
+// provider's own, or the state sentence when a non-available result gave none.
+func factCoverageReason(state SourceState, reason string) string {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
-		reason = "canonical fact capability returned " + string(state)
+		return "canonical fact capability returned " + string(state)
 	}
+	return reason
+}
+
+func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string, spec coverageDetailSpec) {
+	reason = factCoverageReason(state, reason)
 	clampedReason := clampCoverageText(reason, maxCoverageReasonLength)
 	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
 		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark,

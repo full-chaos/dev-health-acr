@@ -424,26 +424,6 @@ func ownedNameByKey(repos []teamOwnedRepo) map[string]string {
 	return out
 }
 
-// applyNoOwnedRepositories folds the zero-owned-repositories outcome into a
-// result: with no facts at all the kind is not_applicable for these teams; with
-// other facts present the reason rides along beside them.
-func applyNoOwnedRepositories(result *contextfabric.FactProviderResult, requested int, without []contextfabric.SubjectRef) {
-	if len(without) == 0 || requested <= 0 {
-		return
-	}
-	if len(result.Facts) > 0 {
-		applyTeamsOwningNothing(result, requested, without)
-		return
-	}
-	result.State = contextfabric.SourceNotApplicable
-	addSubjectReasons(result, without, teamNoOwnedRepositoriesReason)
-	if len(without) >= requested {
-		result.Reason = teamNoOwnedRepositoriesReason
-		return
-	}
-	addRequestNote(result, teamsOwningNoRepositoriesReason(len(without), requested))
-}
-
 // teamsOwningNoRepositoriesReason is the limitation served when some, not all,
 // of the requested teams own no repository: the teams that own one keep their
 // own state.
@@ -479,17 +459,28 @@ func teamsOwningNothingWithoutData(ids []string, bySubject map[string]contextfab
 // requested team owns no repository, and nothing at all was served, is
 // not_applicable. When some requested team owns a repository its state stands
 // and the teams that own none are named beside it.
-func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, requested int, without []contextfabric.SubjectRef) {
+func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, requested int, without []contextfabric.SubjectRef) {
 	if len(without) == 0 || requested <= 0 {
 		return
 	}
-	if len(without) >= requested && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
+	addSubjectReasons(result, without, teamNoOwnedRepositoriesReason)
+	if onlyTeamSubjects(queried) && len(without) >= requested && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
 		result.State = contextfabric.SourceNotApplicable
 		result.Reason = teamNoOwnedRepositoriesReason
 		return
 	}
-	addSubjectReasons(result, without, teamNoOwnedRepositoriesReason)
 	addRequestNote(result, teamsOwningNoRepositoriesReason(len(without), requested))
+}
+
+// onlyTeamSubjects reports whether every queried subject is a team: only then
+// is a statement about the teams true of every subject the kind answers for.
+func onlyTeamSubjects(subjects []contextfabric.SubjectRef) bool {
+	for _, subject := range subjects {
+		if subject.Kind != contextfabric.SubjectTeam {
+			return false
+		}
+	}
+	return len(subjects) > 0
 }
 
 // addSubjectReasons records reason as the own reason of each subject.

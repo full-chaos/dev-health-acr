@@ -228,7 +228,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
-	applyNoOwnedRepositories(&result, teamsRequested, teamsWithoutRepos)
+	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
 	applyProjectReachedWithoutRows(&result, projectReachedWithoutRows)
 	if reason := revertCoverage.reason(); reason != "" {
 		mergeFactReadReason(&result, reason)
@@ -594,7 +594,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		// per-repository or per-day medians; absent when none merged.
 		// A team that owns no repository has no repository keys, so the
 		// readers return empty and no window field is served for it; the
-		// caller names the reason through applyNoOwnedRepositories.
+		// caller names the reason through applyTeamsOwningNothing.
 		if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields); err != nil {
 			return 0, rejected, nil, 0, err
 		}

@@ -135,7 +135,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	}
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
-	applyNoOwnedRepositories(&result, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
 	if teamOutcome.linkRowsUnwindowed || projectLinksUnwindowed {
 		mergeFactReadReason(&result, teamProjectLinksUnwindowedReason)
 	}

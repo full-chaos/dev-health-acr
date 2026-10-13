@@ -178,7 +178,7 @@ ORDER BY team_id, rule_id`)
 		if ownedErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
 		}
-		applyTeamsOwningNothing(&result, len(ids), teamsOwningNothingWithoutData(ids, bySubject, owned, facts, evaluated))
+		applyTeamsOwningNothing(&result, query.Subjects, len(ids), teamsOwningNothingWithoutData(ids, bySubject, owned, facts, evaluated))
 	}
 	return result, nil
 }

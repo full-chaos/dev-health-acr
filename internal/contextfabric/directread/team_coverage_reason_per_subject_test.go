@@ -69,7 +69,32 @@ func TestOverlongKindReasonStillLeavesTheOwnerRowFreeOfTheRequestNote(t *testing
 	if strings.Contains(row.Reason, "own no repository") || strings.Contains(row.Reason, "owns no repository") {
 		t.Errorf("owner row carries an ownership sentence: %q", row.Reason)
 	}
-	if len(row.Reason) > contractsv1.ContextFabricSourceObservationReasonMaxLength {
-		t.Errorf("owner row reason length %d exceeds the bound", len(row.Reason))
+	if n := len([]rune(row.Reason)); n > contractsv1.ContextFabricSourceObservationReasonMaxLength {
+		t.Errorf("owner row reason length %d exceeds the bound", n)
+	}
+	emptyRow := coverageOf(t, response, "operational_deficiencies", empty)
+	if !strings.Contains(emptyRow.Reason, "owns no repository") {
+		t.Errorf("empty team row = %q, want its own reason", emptyRow.Reason)
+	}
+	if n := len([]rune(emptyRow.Reason)); n > contractsv1.ContextFabricSourceObservationReasonMaxLength {
+		t.Errorf("joined row reason length %d exceeds the bound", n)
+	}
+}
+
+func TestResultWithoutAReasonKeepsTheStateSentenceOnTheSubjectRow(t *testing.T) {
+	owner := subject(contractsv1.ContextFabricSubjectTeam, "team:owner")
+	provider := &stubProvider{capability: deficiencyLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{State: contextfabric.SourceNoData}, nil
+	}}
+	response, err := newTestFactsReader(t, teamGraph(owner), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
+		Kinds:    []string{"operational_deficiencies"},
+		Subjects: []RequestSubject{{Kind: "team", CanonicalID: owner.CanonicalID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := coverageOf(t, response, "operational_deficiencies", owner)
+	if !strings.Contains(row.Reason, "no_data") {
+		t.Errorf("row reason = %q, want the state sentence the kind's coverage carries", row.Reason)
 	}
 }
