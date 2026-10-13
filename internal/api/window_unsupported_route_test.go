@@ -40,7 +40,7 @@ func TestFactsRouteNamesUnsupportedWindowOfCurrentOnlyPolicy(t *testing.T) {
 		wantReason            string
 	}{
 		{"trailing window", `{"kinds":["deployments"],` + subject + `,"window":{"mode":"trailing","days":30}}`, "window_unsupported", "supports the current window only; ask without a window to read it"},
-		{"current window", `{"kinds":["deployments"],` + subject + `}`, directread.KindStateScopeExpansionUnavailable, "scope expansion is not available on this read path"},
+		{"current window", `{"kinds":["deployments"],` + subject + `}`, directread.KindStateScopeExpansionUnavailable, "no scope expander is wired on this server"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
