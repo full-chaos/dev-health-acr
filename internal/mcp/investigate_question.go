@@ -44,7 +44,7 @@ const (
 
 // writeBackNotHereMessage is the fixed refusal of a write-back argument sent to
 // the tool that cannot take it.
-const writeBackNotHereMessage = "investigate_question does not take synthesis_output or synthesis_contract; send the draft with investigate_with_interpretation, together with your interpretation"
+const writeBackNotHereMessage = "investigate_question does not take synthesis_output or synthesis_contract; send the draft with investigate_with_interpretation (if listed), together with your interpretation"
 
 // handleInvestigateQuestion implements the investigate_question tool:
 // decode and validate the arguments, map them onto the hosted investigation
