@@ -590,19 +590,22 @@ func landscapeAreaColumns() []columnDecl {
 }
 
 func landscapeFields() []fieldDecl {
-	areaCols := append([]columnDecl{cStr("map_name"), cStr("as_of_day")}, landscapeAreaColumns()...)
-	teamCols := append([]columnDecl{cRef(declTeamRef, cStr("team_id")), cStr("map_name"), cStr("as_of_day")}, landscapeAreaColumns()...)
+	coordCols := []columnDecl{cStr("map_name"), cStr("as_of_day"), cNum("x_raw_mean", "axis"), cNum("y_raw_mean", "axis")}
+	teamCoordCols := []columnDecl{cRef(declTeamRef, cStr("team_id")), cStr("map_name"), cStr("as_of_day"), cNum("x_raw_mean", "axis"), cNum("y_raw_mean", "axis")}
+	areaCols := append([]columnDecl{cStr("as_of_day")}, landscapeAreaColumns()...)
+	teamCols := append([]columnDecl{cRef(declTeamRef, cStr("team_id")), cStr("as_of_day")}, landscapeAreaColumns()...)
 	return declJoin(
 		declOn(declTeamOnly,
-			fInt("area_count", "count"),
 			fTable("area_breakdown", areaCols...),
-			fInt("area_breakdown_omitted_count", "count"),
+			fTable("map_coordinates", coordCols...),
 		),
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),
 			declAggregate(fInt("team_count", "count")),
 			fTable("team_breakdown", teamCols...),
 			fInt("team_breakdown_omitted_count", "count"),
+			fTable("map_coordinates", teamCoordCols...),
+			fInt("map_coordinates_omitted_count", "count"),
 		),
 	)
 }
@@ -661,6 +664,7 @@ func readinessFields() []fieldDecl {
 func workloadFields() []fieldDecl {
 	daily := fDaily("daily_workload",
 		cStr("day"), cNon(cInt("backlog_size", "count")), cNon(cNum("throughput_mean", "")), cNon(cNum("throughput_stddev", "")))
+	daily.Aggregate = true
 	teamBreakdown := fTable("team_breakdown",
 		cNullable(cRef(declTeamRef, cStr("team_id"))),
 		cNullable(cStr("team_name")),
@@ -676,14 +680,14 @@ func workloadFields() []fieldDecl {
 	return declJoin(
 		[]fieldDecl{fStr("basis"), daily, fInt("daily_workload_omitted_count", "count")},
 		declOn(declTeamOnly,
-			fNum("throughput_mean", ""),
-			fNum("throughput_stddev", ""),
-			fBool("insufficient_history"),
-			fBool("high_variance"),
-			fInt("backlog_size", "count"),
+			declAggregate(fNum("throughput_mean", "")),
+			declAggregate(fNum("throughput_stddev", "")),
+			declAggregate(fBool("insufficient_history")),
+			declAggregate(fBool("high_variance")),
+			declAggregate(fInt("backlog_size", "count")),
 			declFresh(fStr("computed_at")),
 			declRef(declWorkScopeRef, fStr("work_scope_id")),
-			fInt("forecast_p50_days", "days"),
+			declAggregate(fInt("forecast_p50_days", "days")),
 		),
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),

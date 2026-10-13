@@ -183,6 +183,7 @@ type FactsResponse struct {
 	Request         EffectiveRead   `json:"request"`
 	Facts           []ServedFact    `json:"facts"`
 	Coverage        []CoverageRow   `json:"coverage"`
+	RequestNotes    []RequestNote   `json:"request_notes,omitempty"`
 	Truncation      *Truncation     `json:"truncation,omitempty"`
 	Versions        ResponseVersion `json:"versions"`
 	Untrusted       UntrustedLabel  `json:"untrusted_content"`
@@ -343,6 +344,14 @@ type CoverageRow struct {
 type RowExpansion struct {
 	Outcome string `json:"outcome"`
 	Policy  string `json:"policy"`
+}
+
+// RequestNote is a sentence true of one fact kind's read as a whole (for
+// example "2 of 5 requested teams own no repository"), served beside the
+// per-subject coverage rows that never carry it.
+type RequestNote struct {
+	Kind string `json:"kind"`
+	Note string `json:"note"`
 }
 
 // Truncation describes response-level truncation.
@@ -588,6 +597,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Facts = append(response.Facts, served)
 	}
 	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject, derived)
+	response.RequestNotes = requestNotes(plan, bundle)
 	if plan.units != nil {
 		noteUnitsCoverage(response.Coverage, response.Facts, unitsNotVisible)
 	}
@@ -834,6 +844,9 @@ func serveFact(item GatedFact, capability contextfabric.FactCapability, plan rea
 		}
 		served.Tables[name] = table
 		driversServed[name] = true
+		if declaration.Aggregate && (fact.Subject.Kind == contractsv1.ContextFabricSubjectTeam || fact.Subject.Kind == contractsv1.ContextFabricSubjectProject) {
+			served.AggregateFields = append(served.AggregateFields, name)
+		}
 		if table.RowsWithheld > 0 {
 			served.Withheld = append(served.Withheld, WithheldItem{Field: name, Reason: "rows_subject_not_visible", Count: table.RowsWithheld})
 		}
@@ -1068,6 +1081,25 @@ func naturalKeys(ids []string) []NaturalKey {
 }
 
 // coverageRows builds one row per (kind, admitted subject) from the ledger.
+func servedFactKind(kind string) bool {
+	for _, known := range contractsv1.ContextFabricFactKindVocabulary() {
+		if string(known) == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func requestNotes(plan readPlan, bundle contextfabric.CanonicalFactBundle) []RequestNote {
+	var notes []RequestNote
+	for _, kind := range plan.kinds {
+		if note := bundle.Outcomes[kind].RequestNote; note != "" && servedFactKind(string(kind)) {
+			notes = append(notes, RequestNote{Kind: string(kind), Note: note})
+		}
+	}
+	return notes
+}
+
 func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle contextfabric.CanonicalFactBundle, capabilities map[contextfabric.FactKind]contextfabric.FactCapability, facts []ServedFact, withheld map[string][]string, derived derivedIndex) []CoverageRow {
 	served := map[string]bool{}
 	for _, fact := range facts {

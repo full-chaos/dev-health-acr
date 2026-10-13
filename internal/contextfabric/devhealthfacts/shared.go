@@ -1060,7 +1060,23 @@ import (
 // read-wide count only the request note), and owning_teams_truncated rides only
 // the repositories whose owner table was cut. An answer saved under v209
 // carries both on repositories they are false for.
-const QueryVersion = "devhealthfacts.clickhouse.v210"
+//
+// v210 -> v211: a team's workload forecast scalars are declared aggregate, so a
+// repository-restricted caller admitted to the team gets them labelled
+// all_owned_repositories. An answer saved under v210 carries them unlabelled.
+//
+// v211 -> v212: the repository and team investment mix, the repository and
+// team unit listing and the team linked pull request mix fold each kept work
+// unit's references once and expand only the requested repositories (or
+// linked pull requests). The rows are the same; a sum may differ from a v211
+// answer in its last digits (another summation order), and on two versions of
+// one unit with equal computed_at the version kept can differ.
+//
+// v212 -> v213: a team or project landscape fact reads one copy of each
+// identity's stats instead of the three per-map copies Ops writes, and its
+// rows no longer carry map_name. An answer saved under v212 holds every
+// churn, delivery and identity count three times.
+const QueryVersion = "devhealthfacts.clickhouse.v213"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
