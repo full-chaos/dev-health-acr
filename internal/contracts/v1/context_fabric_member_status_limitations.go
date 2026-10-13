@@ -160,6 +160,12 @@ func ContextFabricMemberStatusPoolCutLimitation(kind string, read, pool int) str
 	return fmt.Sprintf("The %s filter ran within the first %d %s the read reached; %s past that bound were not checked.", nouns.field, read, nouns.plural, nouns.plural)
 }
 
+// IsContextFabricMemberStatusPoolCutLimitation reports whether one limitation
+// is exactly a pool cut sentence: a status decided within a cut read.
+func IsContextFabricMemberStatusPoolCutLimitation(limitation string) bool {
+	return isContextFabricMemberStatusPoolCutLimitation(limitation)
+}
+
 // isContextFabricMemberStatusPoolCutLimitation reports whether one limitation
 // is exactly a pool cut sentence ContextFabricMemberStatusPoolCutLimitation
 // generates.
