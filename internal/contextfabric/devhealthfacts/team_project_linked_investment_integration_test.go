@@ -158,8 +158,9 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 	})
 
 	t.Run("a historical window says the project links are read as they stand now", func(t *testing.T) {
+		start, stop := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-			Time: contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59)), Kind: contextfabric.FactInvestment,
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &stop}, Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{teamSubject("team-project-only")},
 		})
 		if err != nil {
