@@ -38,6 +38,9 @@ type FactKindOutcome struct {
 	Members map[string]string
 	// MemberReasons are reasons true of one subject, keyed by FactSubjectKey.
 	MemberReasons map[string]string
+	// NotApplicable are subjects the provider marked not applicable, keyed by
+	// FactSubjectKey.
+	NotApplicable map[string]struct{}
 	// Evaluated are subjects the provider showed it evaluated with no fact
 	// (a measured zero), keyed by FactSubjectKey.
 	Evaluated map[string]struct{}
@@ -110,6 +113,9 @@ func (bundle *CanonicalFactBundle) recordOutcome(kind FactKind, branch factReadO
 		}
 		if len(result.SubjectReasons) > 0 {
 			outcome.MemberReasons = maps.Clone(result.SubjectReasons)
+		}
+		if len(result.NotApplicableSubjects) > 0 {
+			outcome.NotApplicable = maps.Clone(result.NotApplicableSubjects)
 		}
 		if result.Evaluation != nil && len(result.Evaluation.Members) > 0 {
 			outcome.Members = make(map[string]string, len(result.Evaluation.Members))

@@ -464,6 +464,12 @@ func applyTeamsOwningNothing(result *contextfabric.FactProviderResult, queried [
 		return
 	}
 	addSubjectReasons(result, without, teamNoOwnedRepositoriesReason)
+	if result.NotApplicableSubjects == nil {
+		result.NotApplicableSubjects = make(map[string]struct{}, len(without))
+	}
+	for _, subject := range without {
+		result.NotApplicableSubjects[contextfabric.FactSubjectKey(subject)] = struct{}{}
+	}
 	if coversEveryQueriedSubject(queried, without) && len(result.Facts) == 0 && len(result.EvaluatedSubjects) == 0 {
 		result.State = contextfabric.SourceNotApplicable
 		result.Reason = teamNoOwnedRepositoriesReason

@@ -1229,6 +1229,9 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 		// this subject.
 		return OutcomeNotApplicable
 	}
+	if _, ok := outcome.NotApplicable[key]; ok {
+		return OutcomeNotApplicable
+	}
 	switch {
 	case providerState != "":
 		return providerStateOutcome(providerState)
