@@ -3,6 +3,7 @@ package v1
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 func (e AgentEpisodeCreate) Validate() error {
@@ -143,12 +144,7 @@ func validAgentEpisodeRetentionClass(value string) bool {
 }
 
 func validAgentEpisodeRedactionState(value string) bool {
-	switch value {
-	case AgentEpisodeRedactionActive, AgentEpisodeRedactionRedacted, AgentEpisodeRedactionPurgedTombstone:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(AgentEpisodeRedactionStateVocabulary(), value)
 }
 
 // validateEpisodeArtifacts enforces agent_episode_create.v1.schema.json's

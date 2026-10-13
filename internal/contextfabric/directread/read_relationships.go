@@ -413,6 +413,13 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 			r.recorder.RecordDirectRelationshipsRead(ctx, principal, record)
 		}
 	}()
+	defer func() {
+		if err == nil {
+			if vocabErr := validateServedRelationshipsVocabulary(response); vocabErr != nil {
+				response, err = RelationshipsResponse{}, fmt.Errorf("%w: %w", ErrRelationshipsInternal, vocabErr)
+			}
+		}
+	}()
 
 	plan, err := planRelationships(request)
 	if err != nil {
