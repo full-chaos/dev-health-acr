@@ -156,16 +156,40 @@ type MCPFederatedBudget struct {
 // MCP call itself. A Context Fabric reference is keyed by its subject and many
 // results cite it, so it expands only in the scope of one result (CHAOS-6563).
 type MCPSourceEvidenceRequest struct {
-	EvidenceRefID string `json:"evidence_ref_id"`
-	ResultID      string `json:"result_id,omitempty"`
+	EvidenceRefID  string   `json:"evidence_ref_id,omitempty"`
+	EvidenceRefIDs []string `json:"evidence_ref_ids,omitempty"`
+	ResultID       string   `json:"result_id,omitempty"`
 }
 
-// MCPSourceEvidenceResponse wraps the structured ExpandedEvidence contract
-// together with a bounded, explicitly untrusted markdown rendering.
+// MCPSourceEvidenceMaxRefs bounds evidence_ref_ids.
+const MCPSourceEvidenceMaxRefs = 10
+
+// Per-reference outcomes of a batch source_evidence call.
+const (
+	MCPSourceEvidenceEntryServed  = "served"
+	MCPSourceEvidenceEntryRefused = "refused"
+)
+
+// MCPSourceEvidenceEntry is one reference's outcome in a batch call. A
+// refused entry carries Reason (an open string: the tool error category) and
+// Message; a served entry carries Structured and RenderedMarkdown.
+type MCPSourceEvidenceEntry struct {
+	EvidenceRefID    string               `json:"evidence_ref_id"`
+	Status           string               `json:"status"`
+	Structured       *ExpandedEvidence    `json:"structured,omitempty"`
+	RenderedMarkdown *MCPRenderedMarkdown `json:"rendered_markdown,omitempty"`
+	Reason           string               `json:"reason,omitempty"`
+	Message          string               `json:"message,omitempty"`
+}
+
+// MCPSourceEvidenceResponse is either the single-reference answer
+// (Structured + RenderedMarkdown) or the batch answer (Entries, one per
+// requested reference, in request order); never both.
 type MCPSourceEvidenceResponse struct {
-	SchemaVersion    string              `json:"schema_version"`
-	Structured       ExpandedEvidence    `json:"structured"`
-	RenderedMarkdown MCPRenderedMarkdown `json:"rendered_markdown"`
+	SchemaVersion    string                   `json:"schema_version"`
+	Structured       *ExpandedEvidence        `json:"structured,omitempty"`
+	RenderedMarkdown *MCPRenderedMarkdown     `json:"rendered_markdown,omitempty"`
+	Entries          []MCPSourceEvidenceEntry `json:"entries,omitempty"`
 }
 
 // MCPRecordEpisodeRequest is the writeback-specific MCP input. It deliberately
