@@ -231,7 +231,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
 	applyProjectReachedWithoutRows(&result, query.Subjects, projectReachedTeams)
-	addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), revertCoverage.reason())
+	revertCoverage.apply(&result, query.Subjects)
 	return result, nil
 }
 
@@ -241,18 +241,45 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 // days were not, so a partial window is never read as a complete one.
 type revertRateCoverage struct {
 	days, present int64
+	gapped        []revertRateGap
 }
 
-func (c *revertRateCoverage) add(days, present int64) {
+// revertRateGap is one repository whose series has days without a revert_rate.
+type revertRateGap struct {
+	subject       contextfabric.SubjectRef
+	days, present int64
+}
+
+func (c *revertRateCoverage) add(subject contextfabric.SubjectRef, days, present int64) {
 	c.days += days
 	c.present += present
+	if days > 0 && present < days {
+		c.gapped = append(c.gapped, revertRateGap{subject: subject, days: days, present: present})
+	}
 }
 
-func (c *revertRateCoverage) reason() string {
-	if c.days == 0 || c.present >= c.days {
+func revertRateReason(days, present int64) string {
+	if days == 0 || present >= days {
 		return ""
 	}
-	return fmt.Sprintf("revert_rate not applicable on %d of %d days", c.days-c.present, c.days)
+	return fmt.Sprintf("revert_rate not applicable on %d of %d days", days-present, days)
+}
+
+// apply serves each gapped repository its own day count; the read-wide count
+// rides the request note when more than one repository has a gap.
+func (c *revertRateCoverage) apply(result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef) {
+	switch len(c.gapped) {
+	case 0:
+		return
+	case 1:
+		gap := c.gapped[0]
+		addScopedReason(result, queried, []contextfabric.SubjectRef{gap.subject}, revertRateReason(gap.days, gap.present))
+		return
+	}
+	addRequestNote(result, revertRateReason(c.days, c.present))
+	for _, gap := range c.gapped {
+		addSubjectReasons(result, []contextfabric.SubjectRef{gap.subject}, revertRateReason(gap.days, gap.present))
+	}
 }
 
 // repositoryMetricsDayRow is one repo_metrics_daily row within the series
@@ -514,7 +541,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		// same "latest day per repository" instant the reader this
 		// widened already did, and an unrecorded mttr_hours stays absent
 		// here exactly as it is absent from its own row.
-		revertCover.add(days[0].totalDays, days[0].revertDays)
+		revertCover.add(subject, days[0].totalDays, days[0].revertDays)
 		for name, value := range dayRows[0].Fields {
 			fields[name] = value
 		}
