@@ -126,8 +126,19 @@ func (r MCPContextForTaskResponse) Validate() error {
 }
 
 func (r MCPSourceEvidenceRequest) Validate() error {
-	if !stringLengthBetween(r.EvidenceRefID, 1, 256) {
+	if (r.EvidenceRefID == "") == (len(r.EvidenceRefIDs) == 0) || (r.EvidenceRefID != "" && r.EvidenceRefIDs != nil) {
+		return fmt.Errorf("exactly one of evidence_ref_id and evidence_ref_ids is required")
+	}
+	if r.EvidenceRefID != "" && !stringLengthBetween(r.EvidenceRefID, 1, 256) {
 		return fmt.Errorf("evidence_ref_id violates v1 bounds")
+	}
+	if len(r.EvidenceRefIDs) > MCPSourceEvidenceMaxRefs {
+		return fmt.Errorf("evidence_ref_ids holds more than %d references", MCPSourceEvidenceMaxRefs)
+	}
+	for _, id := range r.EvidenceRefIDs {
+		if !stringLengthBetween(id, 1, 256) {
+			return fmt.Errorf("evidence_ref_ids entry violates v1 bounds")
+		}
 	}
 	if r.ResultID != "" && !stringLengthBetween(r.ResultID, 8, 256) {
 		return fmt.Errorf("result_id violates v1 bounds")
@@ -139,11 +150,53 @@ func (r MCPSourceEvidenceResponse) Validate() error {
 	if r.SchemaVersion != MCPSourceEvidenceResponseSchema {
 		return fmt.Errorf("schema_version must be %q", MCPSourceEvidenceResponseSchema)
 	}
+	if len(r.Entries) > 0 {
+		if r.Structured != nil || r.RenderedMarkdown != nil {
+			return fmt.Errorf("a batch response carries entries only")
+		}
+		if len(r.Entries) > MCPSourceEvidenceMaxRefs {
+			return fmt.Errorf("entries holds more than %d references", MCPSourceEvidenceMaxRefs)
+		}
+		for i, entry := range r.Entries {
+			if err := entry.Validate(); err != nil {
+				return fmt.Errorf("entries[%d]: %w", i, err)
+			}
+		}
+		return nil
+	}
+	if r.Structured == nil || r.RenderedMarkdown == nil {
+		return fmt.Errorf("structured and rendered_markdown are required")
+	}
 	if err := r.Structured.ValidateRead(); err != nil {
 		return fmt.Errorf("structured: %w", err)
 	}
 	if err := r.RenderedMarkdown.Validate(); err != nil {
 		return fmt.Errorf("rendered_markdown: %w", err)
+	}
+	return nil
+}
+
+func (e MCPSourceEvidenceEntry) Validate() error {
+	if !stringLengthBetween(e.EvidenceRefID, 1, 256) {
+		return fmt.Errorf("evidence_ref_id violates v1 bounds")
+	}
+	switch e.Status {
+	case MCPSourceEvidenceEntryServed:
+		if e.Structured == nil || e.RenderedMarkdown == nil || e.Reason != "" || e.Message != "" {
+			return fmt.Errorf("a served entry carries structured and rendered_markdown only")
+		}
+		if err := e.Structured.ValidateRead(); err != nil {
+			return fmt.Errorf("structured: %w", err)
+		}
+		if err := e.RenderedMarkdown.Validate(); err != nil {
+			return fmt.Errorf("rendered_markdown: %w", err)
+		}
+	case MCPSourceEvidenceEntryRefused:
+		if e.Structured != nil || e.RenderedMarkdown != nil || !stringLengthBetween(e.Reason, 1, 100) || !stringLengthBetween(e.Message, 1, 1000) {
+			return fmt.Errorf("a refused entry carries reason and message only")
+		}
+	default:
+		return fmt.Errorf("status must be served or refused")
 	}
 	return nil
 }

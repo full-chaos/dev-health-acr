@@ -7,6 +7,15 @@ import (
 func init() {
 	registerOutputVocabularies(
 		outputVocabulary{
+			name:  "entries.status",
+			kind:  vocabFrozen,
+			why:   "state-machine",
+			sites: []string{"source_evidence:entries.items.status"},
+			// schema: "served", "refused"
+			goSet:      strs(contractsv1.MCPSourceEvidenceEntryServed, contractsv1.MCPSourceEvidenceEntryRefused),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:  "v1.status",
 			kind:  vocabFrozen,
 			why:   "state-machine",
