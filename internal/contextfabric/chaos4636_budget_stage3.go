@@ -1215,7 +1215,7 @@ func (e *Engine) refusalPlan(plan *AnswerPlan, measurement ResponseMeasurement, 
 func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, stage string, doc, measurementInput InvestigationResult, finalize bool, allocation ItemAllocation, facts CanonicalFactBundle, pending *assemblyTelemetry, planPass, recordPass int, cardinality MembershipCardinality, budget ResponseBudget, overrun contractsv1.ContextFabricBudgetOverrun) (served InvestigationResult, ok bool, err error) {
 	// A zero service ceiling means unbounded, as everywhere else the engine
 	// reads it; a ceiling at or below the target leaves nothing to widen to.
-	if clientSynthesisWithoutDraft(params.Request) && params.Request.Options.MaxSerializedBytes > 0 {
+	if clientSynthesisWithoutDraft(params.Request) && effectiveCallerBudget(params.Request.Options) > 0 {
 		// The body carries the synthesis input, so the caller's byte budget is
 		// the line: the answer is not widened to the service ceiling.
 		return InvestigationResult{}, false, nil
