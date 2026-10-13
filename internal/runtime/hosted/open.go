@@ -101,6 +101,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	runtime.usageTelemetry = usageTelemetry
 	clickhouse, err := request.factories.openClickHouse(ctx, clickHouseOpenRequest{
 		config: request.config, assemblyObserver: assemblyObserver, expansionObserver: expansionObserver,
+		logger: request.options.Logger, metrics: request.options.Metrics,
 	})
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize ClickHouse runtime: %w", err))

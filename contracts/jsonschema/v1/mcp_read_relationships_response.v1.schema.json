@@ -4,7 +4,6 @@
   "title": "ACR MCP read_relationships Response v1",
   "description": "Result of the read_relationships tool: one keyset page of visible edges for one subject, what was withheld, and untrusted-content labels. It is the hosted acr-data.v1 document, published unchanged.",
   "type": "object",
-  "additionalProperties": false,
   "required": [
     "contract_version",
     "status",
@@ -37,7 +36,6 @@
     },
     "effective": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "subject",
         "types",
@@ -51,7 +49,6 @@
       "properties": {
         "subject": {
           "type": "object",
-          "additionalProperties": false,
           "required": [
             "kind",
             "canonical_id"
@@ -140,7 +137,6 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "relationship_id",
           "type",
@@ -181,7 +177,6 @@
           },
           "from": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "kind",
               "canonical_id"
@@ -222,7 +217,6 @@
           },
           "to": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "kind",
               "canonical_id"
@@ -271,7 +265,6 @@
           },
           "provenance": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "source",
               "valid_from",
@@ -341,7 +334,6 @@
     },
     "withheld": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "edges_not_visible",
         "evidence_refs"
@@ -362,7 +354,6 @@
     },
     "page": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "returned",
         "examined",
@@ -413,7 +404,6 @@
     },
     "untrusted_content": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "fields",
         "note"

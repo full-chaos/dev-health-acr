@@ -1017,7 +1017,11 @@ import (
 // repository", and its investment mix adds the work units of those linked
 // pull requests (never the whole mix of a repository it does not own). A
 // stored answer can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v201"
+//
+// v201 -> v202: team and project blockers facts serve the age of the oldest
+// open blocker (oldest_blocked_age_days, with its basis or an unavailable
+// reason). An answer saved under v201 carries no age.
+const QueryVersion = "devhealthfacts.clickhouse.v202"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

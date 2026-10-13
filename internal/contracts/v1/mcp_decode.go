@@ -83,7 +83,7 @@ func mcpJoinPath(parent, key string) string {
 	return parent + "." + key
 }
 
-// strictUnmarshal decodes data into v with two guarantees plain
+// strictUnmarshal decodes a request into v with two guarantees plain
 // json.Unmarshal does not give a type alias decode: (1) an object key
 // this Go type does not declare, at any nesting depth, is rejected rather
 // than silently dropped -- the runtime tool-call decode boundary must
@@ -96,6 +96,21 @@ func mcpJoinPath(parent, key string) string {
 func strictUnmarshal(data []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if dec.More() {
+		return fmt.Errorf("unexpected data after the JSON value")
+	}
+	return nil
+}
+
+// tolerantUnmarshal is the response-side decode: a key this Go type does not
+// declare is ignored, because output schemas are open to added fields and a
+// client older than the server must still read the response. Trailing content
+// after the single JSON value is still rejected.
+func tolerantUnmarshal(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
@@ -202,7 +217,7 @@ func (r *MCPContextForTaskResponse) UnmarshalJSON(data []byte) error {
 	}
 	type mcpContextForTaskResponseAlias MCPContextForTaskResponse
 	var decoded mcpContextForTaskResponseAlias
-	if err := strictUnmarshal(data, &decoded); err != nil {
+	if err := tolerantUnmarshal(data, &decoded); err != nil {
 		return err
 	}
 	*r = MCPContextForTaskResponse(decoded)
@@ -219,7 +234,7 @@ func (r *MCPSourceEvidenceResponse) UnmarshalJSON(data []byte) error {
 	}
 	type mcpSourceEvidenceResponseAlias MCPSourceEvidenceResponse
 	var decoded mcpSourceEvidenceResponseAlias
-	if err := strictUnmarshal(data, &decoded); err != nil {
+	if err := tolerantUnmarshal(data, &decoded); err != nil {
 		return err
 	}
 	*r = MCPSourceEvidenceResponse(decoded)

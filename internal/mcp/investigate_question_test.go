@@ -750,7 +750,7 @@ func assertMatchesToolSchema(t *testing.T, response any, schemaFile string) {
 		t.Fatalf("marshal response: %v", err)
 	}
 	name := strings.TrimPrefix(schemaFile, "schemas/")
-	if err := contractcheck.ValidateSerialized("", name, encoded); err != nil {
+	if err := contractcheck.ValidateSerializedStrict("", name, encoded); err != nil {
 		t.Fatalf("emitted JSON violates the published tool schema %s: %v", name, err)
 	}
 }
