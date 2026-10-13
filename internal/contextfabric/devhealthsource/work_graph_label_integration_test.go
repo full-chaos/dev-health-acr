@@ -146,7 +146,7 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 	}
 }
 
-type workGraphCost struct{ memory, readBytes, gateMemory, gateReadBytes uint64 }
+type workGraphCost struct{ memory, readBytes, freshnessMemory, freshnessReadBytes, gateMemory, gateReadBytes uint64 }
 
 // workGraphStatementCost seeds one isolated database with the label rows plus
 // the requested extra rows, runs work_graph.v1 for a restricted caller (the
@@ -198,12 +198,20 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo int, noise bool) workGra
 	}
 	var c workGraphCost
 	var statements uint64
-	row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0`, database)
+	row := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database)
 	if err := row.Scan(&c.memory, &c.readBytes, &statements); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	if statements < 2 || c.memory == 0 || c.readBytes == 0 {
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
+	}
+	var freshness uint64
+	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database)
+	if err := row.Scan(&c.freshnessMemory, &c.freshnessReadBytes, &freshness); err != nil {
+		t.Fatalf("read query_log for the freshness read: %v", err)
+	}
+	if freshness < 2 || c.freshnessMemory == 0 {
+		t.Fatalf("freshness measurement did not happen: %d statements, %+v", freshness, c)
 	}
 	var gates uint64
 	row = direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database)
@@ -233,8 +241,8 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 		}
 		// The statement alone peaks near 2.5 MB without titles and 3.5 MB with
 		// them; a title join per endpoint held 38 MB.
-		if stage.memory >= statementCeiling {
-			t.Errorf("%s: work_graph.v1 peaked at %d bytes, want under %d", name, stage.memory, statementCeiling)
+		if stage.memory >= statementCeiling || stage.freshnessMemory >= statementCeiling {
+			t.Errorf("%s: work_graph.v1 peaked at %d bytes (freshness read %d), want under %d", name, stage.memory, stage.freshnessMemory, statementCeiling)
 		}
 	}
 	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise} {
