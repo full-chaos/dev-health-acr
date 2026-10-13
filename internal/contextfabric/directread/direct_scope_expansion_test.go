@@ -105,7 +105,7 @@ func TestDirectReadExpandsWithTheCallersPrincipal(t *testing.T) {
 				t.Fatalf("derived fact not served with its root: %s", mustJSON(t, response))
 			}
 			row := coverageOf(t, response, "blockers", teamT)
-			if row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "scope expansion reached 1 work items; their facts name this subject in reached_from") {
+			if row.Outcome != OutcomeFactServed || !strings.Contains(row.Reason, "scope expansion reached 1 work items; their facts say they were reached from this subject") {
 				t.Fatalf("root row %+v", row)
 			}
 			validateAgainst(t, "mcp_read_facts_response.v1.schema.json", []byte(mustJSON(t, response)))
@@ -572,7 +572,7 @@ func TestDirectReadProjectRollupRootCountsItsDerivedPullRequests(t *testing.T) {
 			t.Fatalf("project row %+v reads as an unexpanded gap", row)
 		}
 	}
-	if received.Outcome != OutcomeFactServed || !strings.Contains(received.Reason, "scope expansion reached 1 pull requests; their facts name this subject in reached_from") {
+	if received.Outcome != OutcomeFactServed || !strings.Contains(received.Reason, "scope expansion reached 1 pull requests; their facts say they were reached from this subject") {
 		t.Fatalf("receiving project row %+v", received)
 	}
 	if other.Outcome != OutcomeTruncated || !strings.Contains(other.Reason, "is counted under only one of them") {

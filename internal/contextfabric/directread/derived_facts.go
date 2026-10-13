@@ -184,7 +184,7 @@ func derivedReason(row derivedRow) string {
 	case row.targets == 0:
 		reason = fmt.Sprintf("scope expansion reached no %s from this subject", plural)
 	default:
-		reason = fmt.Sprintf("scope expansion reached %d %s; their facts name this subject in reached_from", row.targets, plural)
+		reason = fmt.Sprintf("scope expansion reached %d %s; their facts say they were reached from this subject", row.targets, plural)
 	}
 	if row.shared {
 		reason += fmt.Sprintf("; a %s that several requested subjects reach is counted under only one of them, so this count may leave out %s that another requested subject's count holds", subjectKindNoun(row.expansion.targetKind), plural)
