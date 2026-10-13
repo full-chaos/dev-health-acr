@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -613,8 +614,11 @@ func attachOwnershipNoteToFailure(ctx context.Context, client contextpacket.Clic
 	if len(teamIDs) == 0 {
 		return
 	}
-	owned, readErr := read(ctx, client, orgID, teamIDs, bound)
+	readCtx, cancel := ownershipNoteContext(ctx)
+	defer cancel()
+	owned, readErr := read(readCtx, client, orgID, teamIDs, bound)
 	if readErr != nil {
+		slog.Warn("devhealthfacts.ownership_note_omitted", "reason", "ownership_read_failed", "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", readErr)))
 		return
 	}
 	without := teamsOwningNothingWithoutData(teamIDs, bySubject, owned, nil, nil)
@@ -625,4 +629,22 @@ func attachOwnershipNoteToFailure(ctx context.Context, client contextpacket.Clic
 	if failure.RequestNote == "" {
 		failure.RequestNote = note
 	}
+}
+
+const ownershipNoteReadBudget = 2 * time.Second
+
+// ownershipNoteContext bounds the extra ownership read to a quarter of the time
+// the provider has left, so it cannot run the deadline out and turn the
+// original failure into a timeout.
+func ownershipNoteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	budget := ownershipNoteReadBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		if quarter := time.Until(deadline) / 4; quarter < budget {
+			budget = quarter
+		}
+	}
+	if budget <= 0 {
+		budget = time.Nanosecond
+	}
+	return context.WithTimeout(ctx, budget)
 }
