@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -94,3 +95,47 @@ func (emptyScanner) Next() bool        { return false }
 func (emptyScanner) Scan(...any) error { return nil }
 func (emptyScanner) Err() error        { return nil }
 func (emptyScanner) Close() error      { return nil }
+
+// A statement with its own lower cap is judged against that cap, not the
+// client default: 60% of its own 64 MiB limit warns although it is 15% of the
+// 256 MiB default.
+func TestNearCapComparesAgainstTheStatementsOwnCap(t *testing.T) {
+	t.Parallel()
+	statement := "SELECT 1\nSETTINGS max_memory_usage = 67108864"
+	var seen []MemoryNearCap
+	client := memoryCappedQueryClient{
+		inner: &scannerClient{}, capBytes: APIStatementMaxMemoryUsage, ratio: NearCapRatio,
+		observer: func(_ context.Context, near MemoryNearCap) { seen = append(seen, near) },
+	}
+	var peak atomic.Uint64
+	peak.Store(64 << 20 * 6 / 10)
+	rows := &memoryObservedRows{ClickHouseRowScanner: emptyScanner{}, ctx: context.Background(), statement: statement, client: client, peak: &peak}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0].CapBytes != 64<<20 {
+		t.Fatalf("observer saw %+v, want one call against the statement's own 64 MiB cap", seen)
+	}
+
+	seen = nil
+	peak.Store(64 << 20 * 6 / 10)
+	plain := &memoryObservedRows{ClickHouseRowScanner: emptyScanner{}, ctx: context.Background(), statement: "SELECT 1", client: client, peak: &peak}
+	if err := plain.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("a statement on the 256 MiB default at 38 MiB must not warn, saw %+v", seen)
+	}
+}
+
+func TestEffectiveStatementCapTakesTheStatementsLastLimit(t *testing.T) {
+	t.Parallel()
+	for statement, want := range map[string]uint64{
+		"SELECT 1": 7, "SELECT 1 SETTINGS max_memory_usage = 100": 100,
+		"SELECT 1 SETTINGS MAX_MEMORY_USAGE=5 , max_memory_usage = 9": 9, "SELECT 1 SETTINGS max_memory_usage = 0": 7,
+	} {
+		if got := effectiveStatementCap(statement, 7); got != want {
+			t.Errorf("effectiveStatementCap(%q) = %d, want %d", statement, got, want)
+		}
+	}
+}

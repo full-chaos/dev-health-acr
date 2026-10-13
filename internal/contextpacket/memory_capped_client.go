@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,6 +121,23 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 	return &memoryObservedRows{ClickHouseRowScanner: rows, ctx: ctx, statement: statement, client: c, peak: &peak}, nil
 }
 
+var statementMemorySetting = regexp.MustCompile(`(?i)\bmax_memory_usage\s*=\s*([0-9]+)`)
+
+// effectiveStatementCap is the cap the server enforces for statement: its own
+// SETTINGS max_memory_usage when present (it wins over the client default),
+// otherwise fallback.
+func effectiveStatementCap(statement string, fallback uint64) uint64 {
+	matches := statementMemorySetting.FindAllStringSubmatch(statement, -1)
+	if len(matches) == 0 {
+		return fallback
+	}
+	value, err := strconv.ParseUint(matches[len(matches)-1][1], 10, 64)
+	if err != nil || value == 0 {
+		return fallback
+	}
+	return value
+}
+
 type memoryObservedRows struct {
 	ClickHouseRowScanner
 	ctx       context.Context
@@ -135,8 +154,9 @@ func (r *memoryObservedRows) Close() error {
 		if peak == 0 && r.client.unobserved != nil {
 			r.client.unobserved(r.ctx, r.statement)
 		}
-		if r.client.observer != nil && float64(peak) > r.client.ratio*float64(r.client.capBytes) {
-			r.client.observer(r.ctx, MemoryNearCap{Statement: r.statement, PeakBytes: peak, CapBytes: r.client.capBytes})
+		capBytes := effectiveStatementCap(r.statement, r.client.capBytes)
+		if r.client.observer != nil && float64(peak) > r.client.ratio*float64(capBytes) {
+			r.client.observer(r.ctx, MemoryNearCap{Statement: r.statement, PeakBytes: peak, CapBytes: capBytes})
 		}
 	}
 	return err
