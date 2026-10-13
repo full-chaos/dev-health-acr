@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -91,9 +92,10 @@ func TestTeamInvestmentOwningNoRepositoryIsNotApplicable(t *testing.T) {
 	if len(result.Facts) != 0 || result.State != contextfabric.SourceNotApplicable {
 		t.Fatalf("state = %q facts = %d, want not_applicable and no fact", result.State, len(result.Facts))
 	}
+	served := contextfabric.CombineRequestNote(result.Reason, result.RequestNote)
 	for _, want := range []string{"owns no repository", "investment_team_no_owned_repository"} {
-		if !strings.Contains(result.Reason, want) {
-			t.Errorf("reason = %q, want %q", result.Reason, want)
+		if !strings.Contains(served, want) {
+			t.Errorf("reason = %q, want %q", served, want)
 		}
 	}
 }
@@ -137,13 +139,103 @@ func TestMixedOwnershipDecidesTheStatePerTeam(t *testing.T) {
 			if mixed.State != contextfabric.SourceNoData || len(mixed.Facts) != 0 {
 				t.Fatalf("owner without rows beside a team that owns nothing: state = %q facts = %d, want no_data", mixed.State, len(mixed.Facts))
 			}
-			if !strings.Contains(mixed.Reason, "1 of 2 requested teams own no repository") {
-				t.Fatalf("reason = %q, want the team that owns nothing named beside the owner's state", mixed.Reason)
+			if !strings.Contains(mixed.RequestNote, "1 of 2 requested teams own no repository") {
+				t.Fatalf("request note = %q, want the team that owns nothing named beside the owner's state", mixed.RequestNote)
+			}
+			if strings.Contains(mixed.Reason, "own no repository") {
+				t.Fatalf("reason = %q, a kind reason true of one team only must not ride on every subject", mixed.Reason)
+			}
+			if got := mixed.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("NOTHING"))]; !strings.Contains(got, "team owns no repository") {
+				t.Fatalf("own reason of the team that owns nothing = %q", got)
+			}
+			if got, has := mixed.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("OWNER"))]; has && strings.Contains(got, "owns no repository") {
+				t.Fatalf("the owner carries an own reason %q", got)
 			}
 			none := readTeamsKind(t, &fakeClient{}, kind, "NOTHING", "ALSO-NOTHING")
 			if none.State != contextfabric.SourceNotApplicable || !strings.Contains(none.Reason, "owns no repository") {
 				t.Fatalf("every team owns nothing: state = %q reason = %q, want not_applicable with the cause", none.State, none.Reason)
 			}
 		})
+	}
+}
+
+func TestInvestmentMixNoteStaysOffTheRepositoryRow(t *testing.T) {
+	t.Parallel()
+	provider := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), contextfabric.FactInvestment)
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r"}
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("NOTHING"), repo},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if strings.Contains(result.Reason, "requested teams") || strings.Contains(result.Reason, "owns no repository") {
+		t.Fatalf("kind reason %q carries a statement about teams, which every subject of the kind inherits", result.Reason)
+	}
+	if !strings.Contains(result.RequestNote, "investment mix unavailable for 1 of 1 requested teams") {
+		t.Fatalf("request note = %q", result.RequestNote)
+	}
+	if result.State == contextfabric.SourceNotApplicable {
+		t.Fatal("a team's state was promoted to the kind")
+	}
+}
+
+func TestInvestmentTeamClassesStayOnTheirOwnRows(t *testing.T) {
+	t.Parallel()
+	result := readTeamsKind(t, teamOwningClient(contextfabric.FactInvestment, "OWNER"), contextfabric.FactInvestment, "OWNER", "NOTHING")
+	for _, leaked := range []string{"owns no repository", "none of them has persisted", "no repository the team owns"} {
+		if strings.Contains(result.Reason, leaked) {
+			t.Fatalf("kind reason %q carries %q, which holds for one of the two teams only", result.Reason, leaked)
+		}
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("OWNER"))]; !strings.Contains(got, "none of them has persisted") || strings.Contains(got, "owns no repository") {
+		t.Fatalf("owner own reason = %q", got)
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("NOTHING"))]; !strings.Contains(got, "owns no repository") || strings.Contains(got, "none of them has persisted") {
+		t.Fatalf("empty team own reason = %q", got)
+	}
+}
+
+func TestInvestmentOwnershipNoteStaysOffTheRepositoryRow(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(60 * 24 * time.Hour)
+	provider := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), contextfabric.FactInvestment)
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r"}
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("NOTHING"), repo},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if strings.Contains(result.Reason, "investment_ownership_as_synced") {
+		t.Fatalf("kind reason %q carries the team ownership note every subject of the kind would inherit", result.Reason)
+	}
+	if !strings.Contains(result.RequestNote, "investment_ownership_as_synced") {
+		t.Fatalf("request note = %q", result.RequestNote)
+	}
+	if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("NOTHING"))]; !strings.Contains(got, "investment_ownership_as_synced") {
+		t.Fatalf("team own reason = %q", got)
+	}
+	if _, has := result.SubjectReasons[contextfabric.FactSubjectKey(repo)]; has {
+		t.Fatal("the repository carries a team reason")
+	}
+}
+
+func TestShapeRejectedTeamBlocksTheAllTeamsOwnershipClaim(t *testing.T) {
+	t.Parallel()
+	rejected := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "not-a-team-id"}
+	provider := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("NOTHING"), rejected},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if result.State == contextfabric.SourceNotApplicable || strings.Contains(result.Reason, "owns no repository") {
+		t.Fatalf("state %q reason %q: the all-teams claim covers a team that was never checked", result.State, result.Reason)
 	}
 }
