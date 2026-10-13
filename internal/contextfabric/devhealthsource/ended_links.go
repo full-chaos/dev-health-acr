@@ -2,8 +2,6 @@ package devhealthsource
 
 import (
 	"context"
-	"encoding/hex"
-	"strconv"
 	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
@@ -16,10 +14,10 @@ import (
 // and the page statements receive only its result (the removed links), never
 // the endpoint tables.
 type endedLinks struct {
-	// keys holds one element per ended link: hex(source) hex(target)
-	// hex(type) and the end time in unix microseconds, dot separated. Hex
-	// keeps any work item id (a backslash included) inside the binding
-	// encoding the client accepts.
+	// keys holds one element per ended link as relationcurrent.EndedLinksSQL
+	// builds it: hex(source), hex(target), hex(type) and the end time in unix
+	// microseconds, dot separated. Hex keeps any work item id (a backslash
+	// included) inside the binding encoding the client accepts.
 	keys []string
 }
 
@@ -62,12 +60,12 @@ func readEndedLinks(ctx context.Context, client contextpacket.ClickHouseQueryCli
 	defer rows.Close()
 	links := &endedLinks{keys: []string{}}
 	for rows.Next() {
-		var source, target, relationshipType string
-		var at int64
-		if err := rows.Scan(&source, &target, &relationshipType, &at); err != nil {
+		if err := rows.Scan(&links.keys); err != nil {
 			return nil, err
 		}
-		links.keys = append(links.keys, hex.EncodeToString([]byte(source))+"."+hex.EncodeToString([]byte(target))+"."+hex.EncodeToString([]byte(relationshipType))+"."+strconv.FormatInt(at, 10))
+	}
+	if links.keys == nil {
+		links.keys = []string{}
 	}
 	return links, rows.Err()
 }

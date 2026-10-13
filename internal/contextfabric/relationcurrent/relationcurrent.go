@@ -98,10 +98,13 @@ func CurrentSQL(d string) string {
 	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + EndedKeysSQL()
 }
 
-// EndedLinksSQL is, for the organization, one row per relation the provider no
-// longer reports: source, target, relationship_type and the time it ended in
-// unix microseconds. The last column is aliased ended_links, the marker a
+// EndedLinksSQL is, for the organization, ONE row holding one element per
+// relation the provider no longer reports: hex(source), hex(target),
+// hex(relationship_type) and the end time in unix microseconds, dot
+// separated. Hex keeps any work item id inside the client's array binding
+// encoding, and one row keeps the read inside the result-row budget however
+// many links were removed. The column is aliased ended_links, the marker a
 // statement carries so a test client can route it.
 func EndedLinksSQL() string {
-	return `SELECT s, t, rt, toInt64(toUnixTimestamp64Micro(ended_at)) AS ended_links FROM ` + RowsSQL() + ` WHERE ended ORDER BY s, t, rt`
+	return `SELECT groupArray(concat(hex(s), '.', hex(t), '.', hex(rt), '.', toString(toInt64(toUnixTimestamp64Micro(ended_at))))) AS ended_links FROM ` + RowsSQL() + ` WHERE ended`
 }

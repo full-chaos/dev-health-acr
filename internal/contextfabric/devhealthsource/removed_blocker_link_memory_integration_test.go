@@ -48,9 +48,12 @@ func measureRuleStatements(t *testing.T, ctx context.Context, query contextpacke
 	at := time.Now().UTC().Truncate(time.Second).Add(-6 * time.Hour)
 	mustExec(t, ctx, direct, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`, repo, "acme/memory-row", nil, at, nil, at, org, "jira")
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
-SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? + toIntervalSecond(number % 3600) FROM numbers(?)`, repo, org, at, at, uint64(2*links))
+SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? FROM numbers(?)`, repo, org, at, at, uint64(2*links))
 	mustExec(t, ctx, direct, `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, org_id, last_synced)
-SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY-', toString(2 * number + 1)), 'blocks', 'blocks', ?, ? + toIntervalSecond(number % 3600) FROM numbers(?)`, org, at, uint64(links))
+SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY-', toString(2 * number + 1)), 'blocks', 'blocks', ?, ? + toIntervalSecond(1 + number % 3600) FROM numbers(?)`, org, at, uint64(links))
+	// Every tenth blocker syncs again without its link: those links are gone.
+	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
+SELECT concat('jira:PROJECTKEY-', toString(2 * number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? + toIntervalHour(4) FROM numbers(?) WHERE number % 10 = 0`, repo, org, at, at, uint64(links))
 
 	capped := contextpacket.NewMemoryCappedQueryClient(query, cap)
 	source, err := devhealthsource.NewClickHouseProjectionSource(capped)
