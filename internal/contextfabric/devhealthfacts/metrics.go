@@ -627,13 +627,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	var withoutRepos []contextfabric.SubjectRef
-	for _, teamID := range ids {
-		if len(owned[teamID]) == 0 {
-			withoutRepos = append(withoutRepos, bySubject[teamID])
-		}
-	}
-	return len(rows), rejected, withoutRepos, projectReachedWithoutRows, nil
+	return len(rows), rejected, teamsOwningNothingWithoutData(ids, bySubject, owned, *facts, nil), projectReachedWithoutRows, nil
 }
 
 // readProjectMetrics rolls FactMetrics up for a project through

@@ -98,3 +98,26 @@ func TestResultWithoutAReasonKeepsTheStateSentenceOnTheSubjectRow(t *testing.T) 
 		t.Errorf("row reason = %q, want the state sentence the kind's coverage carries", row.Reason)
 	}
 }
+
+func TestSubjectReasonEqualToTheKindReasonIsServedOnce(t *testing.T) {
+	empty := subject(contractsv1.ContextFabricSubjectTeam, "team:empty")
+	const sentence = "devhealthfacts: the team owns no repository in synced ownership, so no rollup applies; this is not a measured zero"
+	provider := &stubProvider{capability: deficiencyLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{
+			State:          contextfabric.SourceNotApplicable,
+			Reason:         sentence,
+			SubjectReasons: map[string]string{contextfabric.FactSubjectKey(query.Subjects[0]): sentence},
+		}, nil
+	}}
+	response, err := newTestFactsReader(t, teamGraph(empty), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
+		Kinds:    []string{"operational_deficiencies"},
+		Subjects: []RequestSubject{{Kind: "team", CanonicalID: empty.CanonicalID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := coverageOf(t, response, "operational_deficiencies", empty)
+	if n := strings.Count(row.Reason, "owns no repository"); n != 1 {
+		t.Errorf("the sentence appears %d times in %q, want once", n, row.Reason)
+	}
+}

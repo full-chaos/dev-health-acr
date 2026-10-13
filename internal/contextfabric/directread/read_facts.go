@@ -1121,7 +1121,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				row.KindState, row.Reason = string(outcome.State), outcome.Reason
 				if own := outcome.MemberReasons[key]; own != "" {
 					row.Reason = own
-					if outcome.Reason != "" {
+					if outcome.Reason != "" && !strings.Contains(own, outcome.Reason) {
 						row.Reason = clampRowReason(own + "; " + outcome.Reason)
 					}
 				}
