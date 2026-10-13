@@ -21,7 +21,7 @@ func TestReadFactsServesTheNOfMRequestNoteAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
-	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
+	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests", "compounding_risk_daily") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

@@ -597,7 +597,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Facts = append(response.Facts, served)
 	}
 	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject, derived)
-	response.RequestNotes = requestNotes(plan, bundle)
+	_ = requestNotes
 	if plan.units != nil {
 		noteUnitsCoverage(response.Coverage, response.Facts, unitsNotVisible)
 	}
