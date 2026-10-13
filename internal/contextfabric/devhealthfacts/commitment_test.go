@@ -57,13 +57,18 @@ func readCommitmentFacts(t *testing.T, client *fakeClient, subjects ...contextfa
 
 func readCommitmentFactsAs(t *testing.T, client contextpacket.ClickHouseQueryClient, principal storage.Principal, subjects ...contextfabric.SubjectRef) directread.FactsResponse {
 	t.Helper()
+	return readCommitmentFactsThrough(t, client, admitAllGraph{}, principal, subjects...)
+}
+
+func readCommitmentFactsThrough(t *testing.T, client contextpacket.ClickHouseQueryClient, graph directread.GraphAuthority, principal storage.Principal, subjects ...contextfabric.SubjectRef) directread.FactsResponse {
+	t.Helper()
 	restore := devhealthfacts.SetClockForTest(func() time.Time { return commitmentAsOf })
 	t.Cleanup(restore)
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(client), contextfabric.FactRegistryOptions{})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	reader := directread.NewFactsReader(directread.NewSubjectGate(admitAllGraph{}, nil), directread.NewFactReader(&seamCapture{registry: registry.WithoutScopeExpansion()}), nil)
+	reader := directread.NewFactsReader(directread.NewSubjectGate(graph, nil), directread.NewFactReader(&seamCapture{registry: registry.WithoutScopeExpansion()}), nil)
 	request := directread.FactsRequest{Kinds: []string{"commitment"}}
 	for _, subject := range subjects {
 		request.Subjects = append(request.Subjects, directread.RequestSubject{Kind: "project", CanonicalID: subject.CanonicalID})
@@ -368,5 +373,43 @@ func TestCommitmentItemsTheCallerCannotReadWithholdNoneStated(t *testing.T) {
 		if !strings.Contains(query.statement, "FROM project_rows\n  WHERE work_item_id IN (SELECT w.work_item_id FROM work_items AS w FINAL") {
 			t.Errorf("the served counts do not apply the caller filter:\n%s", query.statement)
 		}
+	}
+}
+
+func wantCommitmentDenied(t *testing.T, response directread.FactsResponse, subjects ...contextfabric.SubjectRef) {
+	t.Helper()
+	raw, _ := json.Marshal(response)
+	if response.Status != directread.StatusDenied || len(response.Facts) != 0 {
+		t.Fatalf("status = %q with %d facts, want denied and none: %s", response.Status, len(response.Facts), raw)
+	}
+	refused := map[string]string{}
+	for _, subject := range response.Request.SubjectsRefused {
+		refused[subject.CanonicalID] = subject.Answer
+	}
+	for _, subject := range subjects {
+		if refused[subject.CanonicalID] != "denied_or_not_found" {
+			t.Errorf("%s refusal = %q, want denied_or_not_found", subject.CanonicalID, refused[subject.CanonicalID])
+		}
+	}
+	for _, leaked := range []string{"items_", "target_date", "commitment_status", "sprint", "unknown_status_count", "project_state", "state_source", "iteration_basis"} {
+		if strings.Contains(string(raw), leaked) {
+			t.Errorf("a denied read carries %q: %s", leaked, raw)
+		}
+	}
+}
+
+func TestCommitmentProjectOutsideTheCallerOwnershipReachIsDeniedAndNothingLeaks(t *testing.T) {
+	dated, empty := projectSubject("linear", "proj-dated"), projectSubject("github", "proj-empty")
+	client := commitmentClient(
+		[][]any{
+			commitmentProjectRow("linear", "proj-dated", "started", "linear.project.state", "2026-11-01", true),
+			commitmentProjectRow("github", "proj-empty", "", "", "", true),
+		},
+		[][]any{commitmentItemRow("linear", "proj-dated", commitmentCounts{total: 3, open: 2, closed: 1, withDueAt: 2, pastDueOpen: 1})},
+	)
+	response := readCommitmentFactsAs(t, client, storage.Principal{OrgID: "org-commitment", Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/elsewhere"}}, dated, empty)
+	wantCommitmentDenied(t, response, dated, empty)
+	if len(client.queries) != 0 {
+		t.Errorf("the provider read %d statements for a denied project", len(client.queries))
 	}
 }

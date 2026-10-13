@@ -7,6 +7,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -35,8 +36,13 @@ func (s commitmentSeed) project(provider, id string, key, target any, state, sta
 
 func (s commitmentSeed) item(provider, id, typ, status, project string, due any, sprint string, synced time.Time) {
 	s.t.Helper()
+	s.itemIn("repo-commitment", provider, id, typ, status, project, due, sprint, synced)
+}
+
+func (s commitmentSeed) itemIn(repo, provider, id, typ, status, project string, due any, sprint string, synced time.Time) {
+	s.t.Helper()
 	s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced, due_at, sprint_id) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, '', ?, ?, NULL, ?, ?, ?)`,
-		id, repoUUID("repo-commitment"), commitmentOrg, "title "+id, typ, status, synced, synced, provider, project, synced, due, sprint)
+		id, repoUUID(repo), commitmentOrg, "title "+id, typ, status, synced, synced, provider, project, synced, due, sprint)
 }
 
 func (s commitmentSeed) sprint(org, provider, id string, ended time.Time) {
@@ -60,7 +66,9 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 		}
 	}
 	s := commitmentSeed{t: t, ctx: ctx, direct: direct, at: commitmentDay(2026, 10, 12)}
-	s.exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("repo-commitment"), commitmentOrg, "acme/repo-commitment", "github", s.at)
+	for _, repo := range []string{"repo-commitment", "repo-hidden"} {
+		s.exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(repo), commitmentOrg, "acme/"+repo, "github", s.at)
+	}
 
 	s.project("linear", "lin-p", nil, commitmentDay(2026, 11, 1), "started", "linear.project.state")
 	s.project("jira", "10001", "JP", nil, "started", "jira.project.category")
@@ -98,6 +106,7 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	s.sprint(commitmentOrg, "github", "ghms:acme/x:3", commitmentDay(2026, 11, 15))
 
 	s.item("gitlab", "N1", "issue", "todo", "gl-none", nil, "gitlab:acme/x:milestone:99", newer)
+	s.itemIn("repo-hidden", "gitlab", "N2", "issue", "todo", "gl-none", nil, "", newer)
 	s.exec(`INSERT INTO sprints (provider, sprint_id, ended_at, last_synced, org_id) VALUES (?, ?, NULL, ?, ?)`, "gitlab", "gitlab:acme/x:milestone:99", s.at, commitmentOrg)
 
 	linear, jira, gitlab, github := projectSubject("linear", "lin-p"), projectSubject("jira", "10001"), projectSubject("gitlab", "gl-p"), projectSubject("github", "gh-p")
@@ -140,21 +149,37 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	wantAbsent(t, fact, "target_date")
 
 	fact = servedCommitment(t, response, none)
-	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "1", "items_with_due_at": "0", "items_past_due_open": "0"})
+	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "2", "items_with_due_at": "0", "items_past_due_open": "0", "items_unreadable_count": "0"})
 	wantAbsent(t, fact, "target_date", "sprint_kind", "next_sprint_end", "latest_sprint_end")
 
 	fact = servedCommitment(t, response, empty)
 	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_total": "0", "items_open": "0", "items_closed": "0"})
 
-	restricted := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/elsewhere"}}, linear, none, empty)
+	denied := readCommitmentFactsAs(t, query, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/elsewhere"}}, linear, none, empty)
+	wantCommitmentDenied(t, denied, linear, none, empty)
+
+	restricted := readCommitmentFactsThrough(t, query, ownershipReachGraph{repositories: []string{"acme/repo-commitment"}}, storage.Principal{OrgID: commitmentOrg, Subject: "commitment", CredentialID: "commitment", RepositoryScopes: []string{"acme/repo-commitment"}}, linear, none, empty)
 	fact = servedCommitment(t, restricted, none)
-	wantServed(t, fact, map[string]any{"items_total": "0", "items_unreadable_count": "1", "items_unreadable_reason": "items_not_readable_for_caller"})
+	wantServed(t, fact, map[string]any{"items_total": "1", "items_unreadable_count": "1", "items_unreadable_reason": "items_not_readable_for_caller"})
 	wantAbsent(t, fact, "commitment_status")
 	fact = servedCommitment(t, restricted, empty)
 	wantServed(t, fact, map[string]any{"commitment_status": "none_stated", "items_unreadable_count": "0"})
 	fact = servedCommitment(t, restricted, linear)
-	wantServed(t, fact, map[string]any{"target_date": "2026-11-01", "commitment_status": "stated", "items_total": "0", "items_past_due_open": "0", "items_unreadable_count": "8"})
+	wantServed(t, fact, map[string]any{"target_date": "2026-11-01", "commitment_status": "stated", "items_total": "8", "items_past_due_open": "1", "items_unreadable_count": "0"})
 	if fact.PopulationScope != "caller_authorized_items" {
 		t.Errorf("restricted population_scope = %q, want caller_authorized_items", fact.PopulationScope)
 	}
+}
+
+type ownershipReachGraph struct {
+	admitAllGraph
+	repositories []string
+}
+
+func (g ownershipReachGraph) OwnershipReachedRepositories(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([][]string, error) {
+	out := make([][]string, len(subjects))
+	for index := range out {
+		out[index] = append([]string(nil), g.repositories...)
+	}
+	return out, nil
 }
