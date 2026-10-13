@@ -48,6 +48,23 @@ type orgMixRow struct {
 	EarliestUnit       time.Time
 }
 
+// investmentSplitMaxMemoryUsage is the named per-statement memory limit of the
+// two organization statements on repoSplitCore (organization mix,
+// organization unit listing). They split every work unit of the
+// organization over every repository, so their peak grows with org units x
+// refs: 180 MiB (organization mix) and 161 MiB (listing) at 15k units x 3
+// refs, 353 and 410 MiB at 12k units x 14 refs (CI, TestRepositoryScoped
+// SplitStatementsStayUnderTheMemoryCeilingOnRealClickHouse). The repository
+// and team reads fold per unit (investment_requested_split.go) and run under
+// the API default.
+//
+// memory-limit-measured: 410.23 MiB 2026-10-13 CI organization unit listing at 12k units x 14 refs
+const investmentSplitMaxMemoryUsage = uint64(512 << 20)
+
+func withInvestmentSplitMemory(statement string) string {
+	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: investmentSplitMaxMemoryUsage})
+}
+
 // orgMixStatement sums the per-(work unit, repository) split of
 // repoSplitCore over every repository. Rows of a ref that resolved to no
 // repository (repo_uuid = ”) contribute only to the unattributed effort.

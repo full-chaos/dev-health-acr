@@ -543,12 +543,17 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	totals := map[string]blockerTeamTotals{}
 	ages := map[string]blockerTeamAge{}
 	ageUnavailable := map[string]bool{}
+	var authorizedMemo *blockerAuthorizationMemo
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 || len(reached) > 0 {
-		authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
 		settings, settingsErr := workItemReaderSettings(ctx)
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
+		authorized, authorizationBindings, authErr := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+		if authErr != nil {
+			return outcome, authErr
+		}
+		authorizedMemo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
 		edgeRows := blockerEdgeRowsSQL(statusPredicate, authorized, false)
 		// The weakest tier of a repository's counted items; the per-repository
 		// counts feed the breakdown only. A team total is NOT the sum of these:
@@ -666,11 +671,19 @@ ORDER BY team_id`, settings)
 	// rollup's not-attributable figure.
 	var withoutLink int64
 	if orgWide && (len(owned) > 0 || len(reached) > 0) {
-		authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
-		settings, settingsErr := workItemReaderSettings(ctx)
-		if settingsErr != nil {
-			return outcome, settingsErr
+		memo := authorizedMemo
+		if memo == nil {
+			settings, settingsErr := workItemReaderSettings(ctx)
+			if settingsErr != nil {
+				return outcome, settingsErr
+			}
+			authorized, authorizationBindings, authErr := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+			if authErr != nil {
+				return outcome, authErr
+			}
+			memo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
 		}
+		authorized, authorizationBindings, settings := memo.sql, memo.bindings, memo.settings
 		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.target_work_item_id))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id

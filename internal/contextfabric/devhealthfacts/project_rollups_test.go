@@ -121,7 +121,9 @@ func TestProjectBlockerRollupServesTheProjectIssueCounts(t *testing.T) {
 }
 
 // Every work_items read of a project rollup statement is narrowed to the ids
-// a link row or a blocker edge names, and none reads the whole organization.
+// a link row or a blocker edge names, or is the requested projects' candidate
+// id read (no FINAL, by project join key), and none reads the whole
+// organization.
 func TestProjectRollupStatementsReadWorkItemsOnlyForNamedIDs(t *testing.T) {
 	t.Parallel()
 	project := projectRollupSubject(t, "P1")
@@ -137,7 +139,7 @@ func TestProjectRollupStatementsReadWorkItemsOnlyForNamedIDs(t *testing.T) {
 		seen++
 		for offset := strings.Index(statement, "FROM work_items"); offset >= 0; {
 			where := sameLevelWhereClause(statement[offset+len("FROM work_items"):])
-			if !strings.Contains(where, "work_item_id IN") {
+			if !strings.Contains(where, "work_item_id IN") && !strings.Contains(where, "(provider, project_id) IN (SELECT provider, join_key FROM") {
 				t.Fatalf("a work_items read is not narrowed to named ids (WHERE %q) in: %s", where, statement)
 			}
 			next := strings.Index(statement[offset+1:], "FROM work_items")

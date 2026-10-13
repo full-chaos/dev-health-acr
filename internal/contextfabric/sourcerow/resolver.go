@@ -38,6 +38,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
@@ -377,7 +378,7 @@ func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal,
 	var rows []found
 	seen := map[string]bool{}
 	for _, candidate := range targets {
-		references, err := r.rows.ResolveSourceRow(ctx, principal.OrgID, candidate.scope, candidate.read)
+		references, err := r.rows.ResolveSourceRow(contextpacket.WithWorkItemGrant(ctx, auth.WorkItemRepositorySelectorSet(principal.RepositoryScopes, true)), principal.OrgID, candidate.scope, candidate.read)
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, err
 			return contractsv1.ExpandedEvidence{}, decision

@@ -128,9 +128,12 @@ func TestFactScopeTeamProjectReachMatrix(t *testing.T) {
 		}
 	}
 	// source_health is organization-scoped: no team/project chain exists.
+	// security_alerts is served for a repository only; a team or project
+	// roll-up through ownership is not built yet.
 	var unexpected []string
 	for _, gap := range gaps {
-		if gap == "team x source_health = pruned" || gap == "project x source_health = pruned" {
+		if gap == "team x source_health = pruned" || gap == "project x source_health = pruned" ||
+			gap == "team x security_alerts = pruned" || gap == "project x security_alerts = pruned" {
 			continue
 		}
 		unexpected = append(unexpected, gap)

@@ -28,7 +28,6 @@ func purge(args []string) error {
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID to purge (required)")
 	dryRun := flags.Bool("dry-run", false, "count what would be removed; change nothing")
-	attest := flags.Bool("attest-deleted", false, "operator attests the organization is deleted in Dev Health")
 	confirm := flags.String("confirm-hash", "", "organization key printed by --dry-run")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -71,7 +70,7 @@ func purge(args []string) error {
 		return err
 	}
 	purger := &orgpurge.Purger{DB: runtime.DB, Graph: deleter, Set: runtime.Coordinator, Entitlements: entitlementClient, Locker: locker}
-	report, err := purger.Run(ctx, *org, orgpurge.Options{DryRun: *dryRun, AttestDeleted: *attest, ConfirmOrgKey: *confirm})
+	report, err := purger.Run(ctx, *org, orgpurge.Options{DryRun: *dryRun, ConfirmOrgKey: *confirm})
 	if err != nil {
 		if errors.Is(err, orgpurge.ErrIncomplete) {
 			if encoded, marshalErr := json.MarshalIndent(report, "", "  "); marshalErr == nil {

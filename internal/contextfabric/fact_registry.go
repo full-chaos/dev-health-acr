@@ -348,13 +348,16 @@ type FactProviderResult struct {
 	RequestNote string
 	// SubjectReasons are reasons true of one subject, keyed by FactSubjectKey.
 	SubjectReasons map[string]string
-	Facts          []CanonicalFact
-	State          SourceState
-	ObservedAt     *time.Time
-	Watermark      string
-	Reason         string
-	Version        string
-	Truncated      bool
+	// NotApplicableSubjects are subjects the kind does not apply to for a
+	// reason that holds of that subject alone, keyed by FactSubjectKey.
+	NotApplicableSubjects map[string]struct{}
+	Facts                 []CanonicalFact
+	State                 SourceState
+	ObservedAt            *time.Time
+	Watermark             string
+	Reason                string
+	Version               string
+	Truncated             bool
 	// Grain is the temporal precision THIS provider answered at
 	// (CHAOS-3781 round-1 F1). It exists because the providers are not
 	// uniform: a daily rollup can only speak for a day, while a provider
@@ -2087,7 +2090,7 @@ func factKindOrder(kind FactKind) int {
 		FactReviews: 8, FactContinuousIntegration: 9, FactDeployments: 10,
 		FactIncidents: 11, FactMetrics: 12, FactHealth: 13, FactWorkload: 14,
 		FactInvestment: 15, FactReadiness: 16, FactOperationalDeficiencies: 17,
-		FactSourceHealth: 18, FactEvidence: 19, FactFlow: 20, FactLandscape: 21,
+		FactSourceHealth: 18, FactEvidence: 19, FactFlow: 20, FactLandscape: 21, FactSecurityAlerts: 22,
 	}
 	if value, ok := order[kind]; ok {
 		return value
@@ -2149,7 +2152,7 @@ func validFactSourceState(state SourceState) bool {
 
 func validFactCapabilityKind(kind FactKind) bool {
 	switch kind {
-	case FactIdentity, FactMembership, FactStatus, FactActualCompletion, FactWork, FactBlockers, FactRequiredChildren, FactPullRequests, FactReviews, FactContinuousIntegration, FactDeployments, FactIncidents, FactMetrics, FactHealth, FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies, FactSourceHealth, FactEvidence, FactFlow, FactLandscape:
+	case FactIdentity, FactMembership, FactStatus, FactActualCompletion, FactWork, FactBlockers, FactRequiredChildren, FactPullRequests, FactReviews, FactContinuousIntegration, FactDeployments, FactIncidents, FactMetrics, FactHealth, FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies, FactSourceHealth, FactEvidence, FactFlow, FactLandscape, FactSecurityAlerts:
 		return true
 	default:
 		return false
