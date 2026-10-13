@@ -189,7 +189,7 @@
             "$ref": "#/$defs/ReadFactsSubjectRef"
           },
           "outcome": {
-            "description": "Closed outcome. Unknown, stale, sparse, not applicable and zero are distinct: a missing fact is not a healthy one. Open vocabulary; documented values: fact_served, read_no_fact, measured_zero, not_applicable, unavailable, stale, truncated, withheld_response_budget. A client must tolerate values it does not know.",
+            "description": "Outcome. Unknown, stale, sparse, not applicable and zero are distinct: a missing fact is not a healthy one. Open vocabulary; documented values: fact_served, read_no_fact, measured_zero, not_applicable, unavailable, stale, truncated, withheld_response_budget. A client must tolerate values it does not know.",
             "type": "string",
             "x-documented-values": [
               "fact_served",

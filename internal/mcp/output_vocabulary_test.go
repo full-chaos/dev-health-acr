@@ -379,3 +379,22 @@ func TestOutputVocabularyRegistryNamesAreWellFormed(t *testing.T) {
 		}
 	}
 }
+
+var vocabClosedWording = regexp.MustCompile(`(?i)\bclosed\b`)
+
+func TestOutputVocabularyAdditiveDescriptionsDoNotClaimClosure(t *testing.T) {
+	checked := 0
+	for _, s := range collectVocabSites(t) {
+		if vocabFor(t, s.id).kind != vocabAdditive {
+			continue
+		}
+		checked++
+		description, _ := s.node["description"].(string)
+		if loc := vocabClosedWording.FindStringIndex(description); loc != nil {
+			t.Errorf("%s (%s %s): an open vocabulary's description calls it closed: %q", s.id, s.file, s.pointer, description[max(0, loc[0]-40):min(len(description), loc[1]+40)])
+		}
+	}
+	if checked < 100 {
+		t.Fatalf("checked %d additive sites; the measurement did not happen", checked)
+	}
+}

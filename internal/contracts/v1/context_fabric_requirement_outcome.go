@@ -702,9 +702,9 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 }
 
 // validatePlanRequirementOutcomeRow, on a read, admits an added obligation
-// or cause_coverage token. Only a rule whose own operands include that token
-// is skipped: cause naming and the census and truncation exceptions read the
-// coverage code, and the census exception reads the obligation.
+// or cause_coverage token. Cause naming on a lossless row is the only rule
+// skipped for one; an added token never qualifies for the census or
+// truncation exception.
 func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRow, bounds contextFabricBounds) error {
 	if !ValidContextFabricOutcomeStage(row.Stage) {
 		return fmt.Errorf("outcome row stage %q is not a vocabulary member", row.Stage)
@@ -715,7 +715,6 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 	if !ValidContextFabricAnswerImpactKind(row.Impact) {
 		return fmt.Errorf("impact %q is not a vocabulary member", row.Impact)
 	}
-	obligationAdded := row.Obligation != "" && bounds.additiveUnknown(ValidContextFabricAnswerObligation(row.Obligation), row.Obligation)
 	coverageAdded := row.CauseCoverage != "" && bounds.additiveUnknown(validCoverageDetailCode(row.CauseCoverage), string(row.CauseCoverage))
 	if !stringLengthBetween(row.Requirement, 0, ContextFabricRequirementIdentityMaxLength) ||
 		!stringLengthBetween(row.Obligation, 0, ContextFabricRequirementObligationMaxLength) {
@@ -894,8 +893,7 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 		row.CauseNarrowing == "" &&
 		row.CauseOverrun == "" &&
 		coverageDetailCodeQualifiesSourceTruncation(row.CauseCoverage)
-	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified &&
-		!coverageAdded && !obligationAdded {
+	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
 	// THE OTHER DIRECTION IS NOT REFUSED, AND THAT IS DELIBERATE.

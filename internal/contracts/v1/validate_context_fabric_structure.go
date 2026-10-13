@@ -374,7 +374,7 @@ func (e ContextFabricConfirmedStructureEntry) validate(bounds contextFabricBound
 	if !bounds.additiveOK(ValidContextFabricStructureProvenance(e.Provenance), string(e.Provenance)) {
 		return fmt.Errorf("confirmed structure entry provenance is invalid")
 	}
-	if !bounds.additiveOK(ValidContextFabricStructureDisposition(e.Disposition), string(e.Disposition)) {
+	if !ValidContextFabricStructureDisposition(e.Disposition) {
 		return fmt.Errorf("confirmed structure entry disposition is invalid")
 	}
 	// A receipt-sourced entry must name the receipt it redeemed; a
@@ -399,8 +399,13 @@ func (e ContextFabricConfirmedStructureEntry) validate(bounds contextFabricBound
 			return fmt.Errorf("confirmed structure entry with source=carried must not carry a receipt_id")
 		}
 	default:
-		// An added source token is not known to carry no receipt identity.
-		if sourceKnown && (e.PriorResultID != "" || e.ReceiptID != "") {
+		// An added source token may carry a receipt identity, bounded as the
+		// schema bounds it.
+		if !sourceKnown {
+			if !optionalStringBetween(e.PriorResultID, 8, 256) || !optionalStringBetween(e.ReceiptID, 8, 256) {
+				return fmt.Errorf("confirmed structure entry prior_result_id or receipt_id violates v1 bounds")
+			}
+		} else if e.PriorResultID != "" || e.ReceiptID != "" {
 			return fmt.Errorf("confirmed structure entry with source=%q must not carry a receipt identity", e.Source)
 		}
 	}

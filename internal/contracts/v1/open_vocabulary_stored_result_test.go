@@ -119,7 +119,7 @@ func storedAdditiveRows() []storedVocabularyRow {
 		{name: "subject_resolution.committed.kind", fixture: resultV1, paths: []string{"subject_resolution.committed.0.kind", "subject_resolution.commit_decision_digests.0.subject.kind"}},
 		{name: "commit_decision_digests.commit_gate", fixture: resultV1, paths: []string{"subject_resolution.commit_decision_digests.0.commit_gate"}},
 		{name: "commit_decision_digests.identity_lookup", fixture: resultV1, paths: []string{"subject_resolution.commit_decision_digests.0.identity_lookup"}},
-		{name: "subject_resolution.prior_subject_receipt_dispositions", fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
+		{name: "subject_resolution.prior_subject_receipt_dispositions", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.SubjectResolution.PriorSubjectReceiptDispositions = []ContextFabricPriorSubjectReceiptEntry{{PriorResultID: "result_prior_0001", ReceiptID: "receipt_prior_0001", Disposition: ContextFabricPriorSubjectReceiptDisposition(v)}}
 		}},
 		{name: "claimed_facts.kind", fixture: resultV1, paths: []string{"claimed_facts.0.kind", "drivers.0.category"}},
@@ -143,7 +143,7 @@ func storedAdditiveRows() []storedVocabularyRow {
 		{name: "confirmed_structure.member", frozen: true, fixture: resultV1, paths: []string{"confirmed_structure.0.member"}},
 		{name: "confirmed_structure.source", fixture: resultV1, paths: []string{"confirmed_structure.0.source"}},
 		{name: "confirmed_structure.provenance", fixture: resultV1, paths: []string{"confirmed_structure.0.provenance"}},
-		{name: "confirmed_structure.disposition", fixture: resultV1, paths: []string{"confirmed_structure.0.disposition"}},
+		{name: "confirmed_structure.disposition", frozen: true, fixture: resultV1, paths: []string{"confirmed_structure.0.disposition"}},
 		{name: "structure_offer_snapshot.member", frozen: true, fixture: resultV1, mutate: func(r *ContextFabricInvestigationResult, v string) {
 			r.StructureOfferSnapshot = []ContextFabricStructureOfferSnapshotEntry{{Member: ContextFabricStructureNeedKind(v), OfferID: "offer_1", OfferSource: ContextFabricStructureOfferEngine}}
 		}},

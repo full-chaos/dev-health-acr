@@ -397,7 +397,7 @@ func (r ContextFabricPlanRequirement) validate(bounds contextFabricBounds) error
 		return fmt.Errorf("plan requirement %q disagrees with its own obligation/role/subject %q/%q/%q",
 			r.Requirement, r.Obligation, r.Role, r.Subject)
 	}
-	if len(r.FactKinds) > ContextFabricFactKindCount {
+	if len(r.FactKinds) > bounds.factKindListMax() {
 		return fmt.Errorf("plan requirement declares more fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range r.FactKinds {
@@ -408,7 +408,7 @@ func (r ContextFabricPlanRequirement) validate(bounds contextFabricBounds) error
 	if duplicate, found := firstDuplicateFactKind(r.FactKinds); found {
 		return fmt.Errorf("plan requirement declares fact kind %q twice; the list names what CAN serve the requirement, and naming a kind twice states nothing the first naming did not", duplicate)
 	}
-	if len(r.InputFactKinds) > ContextFabricFactKindCount {
+	if len(r.InputFactKinds) > bounds.factKindListMax() {
 		return fmt.Errorf("plan requirement declares more input fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range r.InputFactKinds {

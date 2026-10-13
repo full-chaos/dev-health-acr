@@ -157,7 +157,7 @@ func (p ContextFabricAnswerProjection) validate(bounds contextFabricBounds) erro
 		return fmt.Errorf("prior_subject_receipt_dispositions exceeds v1 bounds")
 	}
 	for i, entry := range p.PriorSubjectReceiptDispositions {
-		if err := entry.validate(bounds); err != nil {
+		if err := entry.Validate(); err != nil {
 			return fmt.Errorf("prior_subject_receipt_dispositions[%d]: %w", i, err)
 		}
 	}

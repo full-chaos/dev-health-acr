@@ -167,14 +167,10 @@ func (r ContextFabricBoundSubjectReceipt) Validate() error {
 // ContextFabricBoundSubjectReceipt's own bounds (this echoes a receipt the
 // caller sent, in the same shape) plus a closed Disposition.
 func (e ContextFabricPriorSubjectReceiptEntry) Validate() error {
-	return e.validate(contextFabricWriteBounds)
-}
-
-func (e ContextFabricPriorSubjectReceiptEntry) validate(bounds contextFabricBounds) error {
 	if !stringLengthBetween(e.PriorResultID, 8, 256) || !stringLengthBetween(e.ReceiptID, 8, 256) {
 		return fmt.Errorf("prior subject receipt disposition entry violates v1 bounds")
 	}
-	if !bounds.additiveOK(ValidContextFabricPriorSubjectReceiptDisposition(e.Disposition), string(e.Disposition)) {
+	if !ValidContextFabricPriorSubjectReceiptDisposition(e.Disposition) {
 		return fmt.Errorf("prior subject receipt disposition entry has an invalid disposition")
 	}
 	return nil

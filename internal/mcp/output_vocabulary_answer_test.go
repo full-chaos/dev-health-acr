@@ -147,10 +147,11 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "PriorSubjectReceiptDisposition",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"PriorSubjectReceiptDisposition"},
+			name: "PriorSubjectReceiptDisposition",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_types.go:1004 "the SAME design brief §2.1 rule ContextFabricStructureDisposition already applies" (silent-drop closure)
+			sites: []string{"PriorSubjectReceiptDisposition"},
 			// schema: "applied", "skipped_unloadable", "skipped_no_match", "skipped_stale_graph_epoch", "skipped_failed_reauth"
 			goSet:      []string{string(contractsv1.ContextFabricPriorSubjectReceiptApplied), string(contractsv1.ContextFabricPriorSubjectReceiptSkippedUnloadable), string(contractsv1.ContextFabricPriorSubjectReceiptSkippedNoMatch), string(contractsv1.ContextFabricPriorSubjectReceiptSkippedStaleGraphEpoch), string(contractsv1.ContextFabricPriorSubjectReceiptSkippedFailedReauth)},
 			exhaustive: true,
@@ -320,10 +321,11 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
-			name:           "StructureDisposition",
-			kind:           vocabAdditive,
-			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"StructureDisposition"},
+			name: "StructureDisposition",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_structure_types.go:385 "the closed vocabulary for what happened to one carried structure member (design brief §2.1's silent-drop closure"
+			sites: []string{"StructureDisposition"},
 			// schema: "applied", "vetoed_unresolved", "vetoed_conflict", "vetoed_stale", "superseded_by_caller", "not_evaluated"
 			goSet:      []string{string(contractsv1.ContextFabricStructureDispositionApplied), string(contractsv1.ContextFabricStructureDispositionVetoedUnresolved), string(contractsv1.ContextFabricStructureDispositionVetoedConflict), string(contractsv1.ContextFabricStructureDispositionVetoedStale), string(contractsv1.ContextFabricStructureDispositionSupersededByCaller), string(contractsv1.ContextFabricStructureDispositionNotEvaluated)},
 			exhaustive: true,

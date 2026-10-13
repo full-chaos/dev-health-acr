@@ -358,7 +358,7 @@
         },
         "refusal_basis": {
           "type": "string",
-          "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence. Open vocabulary; documented values: member_kind_unservable, frame_invariant_violated, unspecified, continuation_context_unverifiable, declared_kind_unmatched, organization_scope_unsupported, subject_identity_unconfirmed. A client must tolerate values it does not know.",
+          "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence. Open vocabulary; documented values: member_kind_unservable, frame_invariant_violated, unspecified, continuation_context_unverifiable, declared_kind_unmatched, organization_scope_unsupported, subject_identity_unconfirmed. A client must tolerate values it does not know.",
           "x-documented-values": [
             "member_kind_unservable",
             "frame_invariant_violated",
@@ -683,7 +683,7 @@
               "type": "integer"
             },
             "terminal_reason": {
-              "description": "Absent (or empty) exactly when terminal_status is complete -- there is nothing to disclose. Present and one of these closed values on every other status; never the engine's or a model's own raw text. Open vocabulary; documented values: clarification_reason_disclosed, degraded_reason_disclosed, limitation_disclosed, warning_disclosed, undisclosed. A client must tolerate values it does not know.",
+              "description": "Absent (or empty) exactly when terminal_status is complete -- there is nothing to disclose. Present and one of these values on every other status; never the engine's or a model's own raw text. Open vocabulary; documented values: clarification_reason_disclosed, degraded_reason_disclosed, limitation_disclosed, warning_disclosed, undisclosed. A client must tolerate values it does not know.",
               "type": "string",
               "x-documented-values": [
                 "clarification_reason_disclosed",
@@ -723,7 +723,7 @@
             },
             "refusal_basis": {
               "type": "string",
-              "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence. Open vocabulary; documented values: member_kind_unservable, frame_invariant_violated, unspecified, continuation_context_unverifiable, declared_kind_unmatched, organization_scope_unsupported, subject_identity_unconfirmed. A client must tolerate values it does not know.",
+              "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence. Open vocabulary; documented values: member_kind_unservable, frame_invariant_violated, unspecified, continuation_context_unverifiable, declared_kind_unmatched, organization_scope_unsupported, subject_identity_unconfirmed. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "member_kind_unservable",
                 "frame_invariant_violated",
@@ -831,7 +831,7 @@
                   "landscape"
                 ]
               },
-              "maxItems": 22,
+              "maxItems": 64,
               "type": "array"
             },
             "family": {
@@ -924,7 +924,7 @@
             },
             "obligation": {
               "type": "string",
-              "description": "The obligation at stake. Mirrors the server's own closed vocabulary; must equal the identity's first segment. Open vocabulary; documented values: state, completion, readiness, health, principal_drivers, ranking, remaining_work, evidence, coverage, count, allocation_breakdown, trend_series, period_delta. A client must tolerate values it does not know.",
+              "description": "The obligation at stake. Mirrors the server's own vocabulary; must equal the identity's first segment. Open vocabulary; documented values: state, completion, readiness, health, principal_drivers, ranking, remaining_work, evidence, coverage, count, allocation_breakdown, trend_series, period_delta. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "state",
                 "completion",
@@ -995,7 +995,7 @@
                 ]
               },
               "uniqueItems": true,
-              "maxItems": 22
+              "maxItems": 64
             },
             "step": {
               "type": "string",
@@ -1052,7 +1052,7 @@
                 ]
               },
               "uniqueItems": true,
-              "maxItems": 22,
+              "maxItems": 64,
               "description": "The fact kinds the step CONSUMES. Deliberately not fact_kinds: those are the kinds that can SERVE this cell, and a computation's inputs are facts some other cell is responsible for reading."
             },
             "scope": {
@@ -3889,7 +3889,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/FactRequirement"
               },
-              "maxItems": 22,
+              "maxItems": 64,
               "type": "array"
             },
             "requested_judgment": {
@@ -3920,7 +3920,7 @@
               "$ref": "#/$defs/context_fabric_common.v1/$defs/TimeContext"
             },
             "window_class": {
-              "description": "CHAOS-3900 W1: the model's own sanitized, closed-vocabulary evidence-window classification pick. Absent means the model made no pick. Open vocabulary; documented values: trend_assessment, recent_activity_lookup, state_snapshot, explicit_window. A client must tolerate values it does not know.",
+              "description": "CHAOS-3900 W1: the model's own sanitized, documented-vocabulary evidence-window classification pick. Absent means the model made no pick. Open vocabulary; documented values: trend_assessment, recent_activity_lookup, state_snapshot, explicit_window. A client must tolerate values it does not know.",
               "type": "string",
               "x-documented-values": [
                 "trend_assessment",
@@ -3938,7 +3938,7 @@
               ]
             },
             "requested_judgment_kind": {
-              "description": "the model's own closed-vocabulary classification of what BASIS requested_judgment asks for. Absent means the model made no pick (equivalent to unspecified) -- never derived from requested_judgment's own text by a consumer. Open vocabulary; documented values: performance, attention. A client must tolerate values it does not know.",
+              "description": "the model's own documented-vocabulary classification of what BASIS requested_judgment asks for. Absent means the model made no pick (equivalent to unspecified) -- never derived from requested_judgment's own text by a consumer. Open vocabulary; documented values: performance, attention. A client must tolerate values it does not know.",
               "type": "string",
               "x-documented-values": [
                 "performance",
@@ -4196,9 +4196,9 @@
           ]
         },
         "PriorSubjectReceiptDisposition": {
-          "description": "CHAOS-3478/CHAOS-3813: closed vocabulary for what happened to one PriorSubjectReceipts entry -- unlike StructureDisposition, a skip here never vetoes the investigation (a plural, best-effort conversational hint list degrades per-item by design), it is disclosed instead. Open vocabulary; documented values: applied, skipped_unloadable, skipped_no_match, skipped_stale_graph_epoch, skipped_failed_reauth. A client must tolerate values it does not know.",
+          "description": "CHAOS-3478/CHAOS-3813: closed vocabulary for what happened to one PriorSubjectReceipts entry -- unlike StructureDisposition, a skip here never vetoes the investigation (a plural, best-effort conversational hint list degrades per-item by design), it is disclosed instead.",
           "type": "string",
-          "x-documented-values": [
+          "enum": [
             "applied",
             "skipped_unloadable",
             "skipped_no_match",
@@ -4269,7 +4269,7 @@
           "type": "object"
         },
         "QuestionFamily": {
-          "description": "CHAOS-4636 (promoted from CHAOS-4632's shadow vocabulary once its false-emission rate was measured on real data). The closed question-family vocabulary. It does not replace InvestigationShape. Open vocabulary; documented values: subject_investigation, discovered_cohort_ranking, scoped_cohort_status, grouped_cohort_status, explicit_comparison, trend, investment_allocation, unclassified. A client must tolerate values it does not know.",
+          "description": "CHAOS-4636 (promoted from CHAOS-4632's shadow vocabulary once its false-emission rate was measured on real data). The question-family vocabulary. It does not replace InvestigationShape. Open vocabulary; documented values: subject_investigation, discovered_cohort_ranking, scoped_cohort_status, grouped_cohort_status, explicit_comparison, trend, investment_allocation, unclassified. A client must tolerate values it does not know.",
           "type": "string",
           "x-documented-values": [
             "subject_investigation",
@@ -5014,9 +5014,9 @@
           "type": "object"
         },
         "StructureDisposition": {
-          "description": "CHAOS-3900 P1: closed vocabulary for what happened to one carried structure member (design brief section 2.1's silent-drop closure). Open vocabulary; documented values: applied, vetoed_unresolved, vetoed_conflict, vetoed_stale, superseded_by_caller, not_evaluated. A client must tolerate values it does not know.",
+          "description": "CHAOS-3900 P1: closed vocabulary for what happened to one carried structure member (design brief section 2.1's silent-drop closure).",
           "type": "string",
-          "x-documented-values": [
+          "enum": [
             "applied",
             "vetoed_unresolved",
             "vetoed_conflict",
@@ -5211,7 +5211,7 @@
           "type": "object"
         },
         "StructureOfferSource": {
-          "description": "CHAOS-3900 P1: closed vocabulary distinguishing an engine-derived offer from a Bridge-proposed one (design brief section 2.1/2.4). Open vocabulary; documented values: engine, prior. A client must tolerate values it does not know.",
+          "description": "CHAOS-3900 P1: vocabulary distinguishing an engine-derived offer from a Bridge-proposed one (design brief section 2.1/2.4). Open vocabulary; documented values: engine, prior. A client must tolerate values it does not know.",
           "type": "string",
           "x-documented-values": [
             "engine",
@@ -5219,7 +5219,7 @@
           ]
         },
         "StructureProvenance": {
-          "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently. engine_committed (v1-additive) is a carried subject_anchor member the engine bound to the frame's own anchor with no clarification ever offered. Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed, engine_committed. A client must tolerate values it does not know.",
+          "description": "CHAOS-3900 P1: authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently. engine_committed (v1-additive) is a carried subject_anchor member the engine bound to the frame's own anchor with no clarification ever offered. Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed, engine_committed. A client must tolerate values it does not know.",
           "type": "string",
           "x-documented-values": [
             "inferred_default",
@@ -5229,7 +5229,7 @@
           ]
         },
         "StructureSource": {
-          "description": "CHAOS-3900 P1: closed vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo). Open vocabulary; documented values: receipt, explicit, explicit_unattributed, carried. A client must tolerate values it does not know.",
+          "description": "CHAOS-3900 P1: vocabulary for how a ConfirmedStructureEntry's value entered (design brief section 2.1's echo). Open vocabulary; documented values: receipt, explicit, explicit_unattributed, carried. A client must tolerate values it does not know.",
           "type": "string",
           "x-documented-values": [
             "receipt",

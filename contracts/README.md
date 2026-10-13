@@ -42,6 +42,8 @@ A shared `$defs` entry that a request schema reaches is frozen (request-echo): t
 
 On the Go side, `Validate` stays strict for producers and write paths; `ValidateRead` (and the read-path bounds of the stored-result tree) accepts well-formed unknown tokens for additive vocabularies and is what clients use on a hosted response. Frozen enums are strict in both.
 
+An array of an additive vocabulary is capped by a fixed protocol bound (`ContextFabricFactKindListMaxItems`, 64), never by the current vocabulary size, so a grown vocabulary does not break a cached schema.
+
 An enum used as a request input, or inside an `if`/`then`/`not` condition, is not an output vocabulary and stays as written.
 
 ## Compatibility

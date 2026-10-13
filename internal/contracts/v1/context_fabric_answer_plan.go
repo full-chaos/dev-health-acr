@@ -479,7 +479,7 @@ func (p ContextFabricAnswerPlan) validate(bounds contextFabricBounds) error {
 			return fmt.Errorf("answer plan render kind %q is not a member of the closed vocabulary", kind)
 		}
 	}
-	if len(p.FactKinds) > ContextFabricFactKindCount {
+	if len(p.FactKinds) > bounds.factKindListMax() {
 		return fmt.Errorf("answer plan declares more fact kinds than the closed vocabulary has")
 	}
 	for _, kind := range p.FactKinds {

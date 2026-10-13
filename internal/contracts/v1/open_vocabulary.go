@@ -27,6 +27,15 @@ func (b contextFabricBounds) additiveOK(known bool, token string) bool {
 	return known || (b.openVocabularies && openVocabularyToken(token))
 }
 
+// factKindListMax caps a list of fact kinds: the vocabulary size on writes,
+// the fixed protocol bound on reads.
+func (b contextFabricBounds) factKindListMax() int {
+	if b.openVocabularies {
+		return ContextFabricFactKindListMaxItems
+	}
+	return ContextFabricFactKindCount
+}
+
 // additiveUnknown reports a value the gate admitted only because it is open:
 // a token this build does not know. Rules keyed to specific members do not
 // apply to it.

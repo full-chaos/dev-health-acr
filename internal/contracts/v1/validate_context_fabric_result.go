@@ -129,7 +129,7 @@ func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) err
 			return fmt.Errorf("prior subject receipt dispositions exceed v1 bounds")
 		}
 		for _, entry := range r.PriorSubjectReceiptDispositions {
-			if err := entry.validate(bounds); err != nil {
+			if err := entry.Validate(); err != nil {
 				return fmt.Errorf("prior subject receipt dispositions: %w", err)
 			}
 		}
@@ -1421,12 +1421,21 @@ func boundedText(value string, minimum, maximum int, bounds contextFabricBounds)
 	return stringLengthBetween(strings.TrimSpace(value), minimum, maximum)
 }
 
+// factRequirementsMax is the model-facing cap on writes and the fixed
+// fact-kind list bound on reads.
+func factRequirementsMax(bounds contextFabricBounds) int {
+	if bounds.openVocabularies {
+		return ContextFabricFactKindListMaxItems
+	}
+	return ContextFabricFactRequirementsMaxCount
+}
+
 func (q ContextFabricInterpretedQuestion) Validate() error {
 	return q.validate(contextFabricWriteBounds)
 }
 
 func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) error {
-	if !bounds.additiveOK(validInvestigationShape(q.Shape), string(q.Shape)) || !boundedText(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, bounds) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > ContextFabricFactRequirementsMaxCount || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
+	if !bounds.additiveOK(validInvestigationShape(q.Shape), string(q.Shape)) || !boundedText(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, bounds) || len(q.SubjectTerms) > bounds.interpretationTerms || len(q.ComparisonTerms) > bounds.interpretationTerms || !uniqueTrimmedStrings(q.SubjectTerms, ContextFabricSubjectOrComparisonTermMaxLength) || !uniqueTrimmedStrings(q.ComparisonTerms, ContextFabricSubjectOrComparisonTermMaxLength) || len(q.FactRequirements) > factRequirementsMax(bounds) || !stringLengthBetween(q.ClarificationReason, 0, ContextFabricClarificationReasonMaxLength) {
 		return fmt.Errorf("interpreted question violates v1 bounds")
 	}
 	if err := q.TimeContext.Validate(); err != nil {
