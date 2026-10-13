@@ -87,9 +87,7 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 		narrowed       bool
 	}{
 		{"teamWorkItems", "min(a.team_id) AS origin_id", contextfabric.FactScopePolicyTeamPrimaryAttributionWorkItemStatus, []contextfabric.SubjectRef{teamSubject("TG")}, true},
-		// projectWorkItems filters w.work_item_id by its candidate set in its
-		// own WHERE, which the planner applies to the link aggregate; it
-		// passes no candidates, so only its rows and counts are checked.
+		// projectWorkItems passes no candidates: see its peak rows below.
 		{"projectWorkItems", "p.id)) AS origin_id", contextfabric.FactScopePolicyProjectWorkItemStatus, []contextfabric.SubjectRef{projectSubject("linear", "PG"), projectSubject("linear", "PD")}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,8 +146,13 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 			}
 			mib := func(bytes uint64) float64 { return float64(bytes) / (1 << 20) }
 			if !tc.narrowed {
-				// EXPERIMENT (one run): what keeps projectWorkItems small. The
-				// control is the statement with its candidate filter removed.
+				// projectWorkItems passes no candidates to the authorization
+				// relation: its own WHERE keeps only the requested projects'
+				// work items, and the planner carries that to the link
+				// aggregate. Its served peak must stay under the ceiling and
+				// must not grow with unrelated organization rows. The control is
+				// the defect itself: the same statement with that candidate
+				// filter removed must break the bound or the growth rule.
 				control := orgWide
 				small, smallControl := peak(captured.statement, true), peak(control, false)
 				exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at)
@@ -163,38 +166,12 @@ SELECT ?, concat('more-', toString(number)), toUInt32(number + 100000), 1, 'nati
 				breaks := func(small, large uint64) bool {
 					return small >= scopeStatementCeiling || large >= scopeStatementCeiling || grew(small, large)
 				}
-				t.Logf("EXPERIMENT projectWorkItems served %.1f -> %.1f MiB; candidate filter removed %.1f -> %.1f MiB (breaks=%v)", mib(small), mib(large), mib(smallControl), mib(largeControl), breaks(smallControl, largeControl))
-				fragment, _, _ := strings.Cut(tc.fragment, "\n")
-				for _, setting := range []string{"query_plan_filter_push_down = 0", "enable_join_runtime_filters = 0", "query_plan_enable_optimizations = 0", "allow_experimental_analyzer = 0", "optimize_move_to_prewhere = 0", "query_plan_optimize_join_order_limit = 0", "max_threads = 8"} {
-					variant := strings.Replace(captured.statement, "\nSETTINGS ", "\nSETTINGS "+setting+", ", 1)
-					mark := serverNowMicros(t, ctx, direct)
-					rows, err := query.Query(ctx, variant, captured.bindings)
-					if err == nil {
-						for rows.Next() {
-						}
-						_ = rows.Close()
-					}
-					t.Logf("EXPERIMENT projectWorkItems at the larger size with %s: %.1f MiB (error %v)", setting, mib(peakOf(t, ctx, direct, "work_items", fragment, mark)), err != nil)
-				}
-				for label, statement := range map[string]string{"served": captured.statement, "candidate filter removed": control} {
-					rows, err := query.Query(ctx, "EXPLAIN "+statement, captured.bindings)
-					if err != nil {
-						t.Logf("EXPERIMENT EXPLAIN %s: %v", label, err)
-						continue
-					}
-					var plan []string
-					for rows.Next() {
-						var line string
-						if err := rows.Scan(&line); err == nil {
-							plan = append(plan, line)
-						}
-					}
-					_ = rows.Close()
-					t.Logf("EXPERIMENT EXPLAIN %s:\n%s", label, strings.Join(plan, "\n"))
-				}
-				t.Run(fmt.Sprintf("served_%.1f_to_%.1fMiB_under_%dMiB", mib(small), mib(large), scopeStatementCeiling>>20), func(t *testing.T) {
+				t.Run(fmt.Sprintf("served_%.1f_to_%.1fMiB_under_%dMiB_filter_removed_%.1f_to_%.1fMiB", mib(small), mib(large), scopeStatementCeiling>>20, mib(smallControl), mib(largeControl)), func(t *testing.T) {
 					if breaks(small, large) {
 						t.Errorf("served statement peaked %.1f -> %.1f MiB with unrelated rows, want under %d MiB and not grown by 15%% and 2 MiB", mib(small), mib(large), scopeStatementCeiling>>20)
+					}
+					if !breaks(smallControl, largeControl) {
+						t.Errorf("with the candidate filter removed the statement peaked %.1f -> %.1f MiB, under the bound and not grown: the guard cannot fail on this data", mib(smallControl), mib(largeControl))
 					}
 				})
 				return
