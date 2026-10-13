@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"sort"
 	"strings"
@@ -94,9 +95,10 @@ var goalStopwords = map[string]bool{"the": true, "and": true, "for": true, "abou
 
 func goalWords(goal string) []string {
 	words := strings.FieldsFunc(strings.ToLower(goal), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-	kept := make([]string, 0, len(words))
+	kept, seen := make([]string, 0, len(words)), map[string]bool{}
 	for _, word := range words {
-		if len(word) > 2 && !goalStopwords[word] {
+		if len(word) > 2 && !goalStopwords[word] && !seen[word] {
+			seen[word] = true
 			kept = append(kept, word)
 		}
 	}
@@ -104,11 +106,14 @@ func goalWords(goal string) []string {
 }
 
 func goalScore(ref contractsv1.EvidenceRef, goal string) int {
-	haystack := strings.ToLower(ref.Citation + " " + ref.Source.DisplayLabel)
+	haystack := strings.FieldsFunc(strings.ToLower(ref.Citation+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	score := 0
 	for _, word := range goalWords(goal) {
-		if strings.Contains(haystack, word) {
-			score++
+		for _, token := range haystack {
+			if token == word || (len(word) >= 5 && strings.HasPrefix(token, word)) {
+				score++
+				break
+			}
 		}
 	}
 	return score
@@ -141,7 +146,8 @@ func canonicalEvidenceKeys(ref contractsv1.EvidenceRef) []string {
 }
 
 func evidenceTieKey(ref contractsv1.EvidenceRef) string {
-	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel}, "\000")
+	metadata, _ := json.Marshal(ref.Metadata)
+	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel, ref.Source.SafeURI, ref.Provenance, string(ref.Availability), ref.SourceVersion, ref.SnapshotHash, string(metadata)}, "\000")
 }
 
 func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems int) ([]contractsv1.EvidenceRef, bool) {
@@ -157,9 +163,19 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 		}
 	}
 	selectedIDs := map[string]bool{}
+	for _, ref := range refs {
+		if len(selected) >= (maxItems+1)/2 || goalScore(ref, goal) == 0 {
+			break
+		}
+		category := evidenceRule(ref).category
+		selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
+		if quotas[category] > 0 {
+			quotas[category]--
+		}
+	}
 	for _, category := range categories {
 		for _, ref := range refs {
-			if evidenceRule(ref).category == category && quotas[category] > 0 {
+			if evidenceRule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
 				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
 			}
 		}

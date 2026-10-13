@@ -67,3 +67,47 @@ func TestAssemblerSummaryReadsABareGraphTokenAsWords(t *testing.T) {
 		t.Fatalf("summary = %q", got)
 	}
 }
+
+func TestAssemblerBudgetKeepsTheBestGoalMatchAcrossCategories(t *testing.T) {
+	request := fixtureRequest("req-goal-budget", "main", "")
+	request.Goal = "change the deploy pipeline"
+	request.Options.MaxItems = 1
+	observed := time.Date(2026, 1, 15, 11, 0, 0, 0, time.UTC)
+	state := testEvidence("ev-state-unrelated", "dev_health", observed)
+	state.Source.EntityType = "deployment"
+	state.Source.DisplayLabel = "release of the billing service"
+	cause := testEvidence("ev-cause-deploy", "git", observed.Add(-48*time.Hour))
+	cause.Source.DisplayLabel = "rework deploy pipeline stages"
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{state, cause},
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if got := itemEvidenceIDs(packet); len(got) != 1 || got[0] != "ev-cause-deploy" {
+		t.Fatalf("served items = %v, want the goal match to survive the budget", got)
+	}
+}
+
+func TestAssemblerGoalMatchesWholeWordsNotSubstrings(t *testing.T) {
+	request := fixtureRequest("req-goal-words", "main", "")
+	request.Goal = "api api api"
+	observed := time.Date(2026, 1, 15, 11, 0, 0, 0, time.UTC)
+	rapid := testEvidence("ev-rapid", "git", observed)
+	rapid.Source.DisplayLabel = "rapid rapid rapid prototype"
+	api := testEvidence("ev-api-gateway", "git", observed.Add(-48*time.Hour))
+	api.Source.DisplayLabel = "api gateway"
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{rapid, api},
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if got := itemEvidenceIDs(packet); got[0] != "ev-api-gateway" {
+		t.Fatalf("served order = %v, want the whole-word match first", got)
+	}
+}

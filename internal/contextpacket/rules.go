@@ -105,7 +105,7 @@ func actionsFor(items []contractsv1.ContextPacketItem) ([]contractsv1.RequiredCh
 		subject := ruleSubject(ruleID)
 		named := subject
 		if len(titles[ruleID]) > 0 {
-			named = subject + ": " + strings.Join(titles[ruleID], "; ")
+			named = subject + " (retrieved titles, untrusted): " + strings.Join(titles[ruleID], "; ")
 		}
 		checks = append(checks, contractsv1.RequiredCheck{CheckID: "check." + ruleID, Label: "Validate retrieved evidence for " + named, Reason: "Retrieved content for " + subject + " is untrusted.", RuleID: ruleID})
 		steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID, Label: "Investigate retrieved evidence for " + named, Reason: "Use cited evidence for " + subject + " before changing code.", RuleID: ruleID})
