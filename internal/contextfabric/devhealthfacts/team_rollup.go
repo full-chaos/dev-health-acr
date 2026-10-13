@@ -147,20 +147,44 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // prune work_items granules on its primary key, so the statement's cost
 // follows the organization's links, not the size of its work item table.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
-	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
-    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-    WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)})`
+	owned := teamOwnedResolvedProjectsSQL(teamParam, bound)
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
     WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + linkedWorkItemIDsSQL + `
-      AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
+      AND cw.project_id IN ` + teamOwnedProjectKeyCandidatesSQL(teamParam, bound) + ` AND ` + workItemIsIssueSQL("cw") + `)`
 	return `(
-  SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
-  FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
-  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
-  INNER JOIN ` + issues + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
+  SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + owned + ` AS o
+  INNER JOIN ` + issues + ` AS w ON w.provider = o.provider AND w.project_id = o.join_key
   INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
-  WHERE p.key_resolution_count = 1 AND t.team_id IN {` + teamParam + `:Array(String)}
 )`
+}
+
+// teamOwnedResolvedProjectsSQL is (team_id, provider, join_key) of every
+// uniquely keyed project the named teams own under the bound's ownership rule.
+// The team restriction rides on the ownership rows themselves, so only the
+// named teams' rows reach the identity join.
+func teamOwnedResolvedProjectsSQL(teamParam string, bound factTimeBound) string {
+	ownedByTeams := "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(bound.neutral())+" AND team_id IN {"+teamParam+":Array(String)}") + ")"
+	return `(SELECT t.team_id AS team_id, p.provider AS provider, p.join_key AS join_key FROM ` + ownedByTeams + ` AS t
+    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+    WHERE p.key_resolution_count = 1)`
+}
+
+// teamOwnedProjectKeyCandidatesSQL is a superset of the join keys of the
+// projects the named teams own: every identity value an ownership row names,
+// and the id and key of every project one of those values names. It prunes the
+// work item read to the owned projects without evaluating the project
+// identity resolution a second time; the exact set is the join with
+// teamOwnedResolvedProjectsSQL.
+func teamOwnedProjectKeyCandidatesSQL(teamParam string, bound factTimeBound) string {
+	validity := readers.OwnershipValidityPredicate(bound.neutral()) + " AND team_id IN {" + teamParam + ":Array(String)}"
+	scopes := `(SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL` + validity + `
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''` + validity + `)`
+	return `(SELECT v FROM (SELECT v FROM ` + scopes + `
+    UNION ALL
+    SELECT arrayJoin([id, ifNull(project_key, '')]) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN ` + scopes + ` OR ifNull(project_key, '') IN ` + scopes + `)) WHERE v != '')`
 }
 
 // teamProjectLinkRowsAmongSQL is teamProjectLinkRowsSQL over the work item

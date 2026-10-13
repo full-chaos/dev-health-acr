@@ -22,7 +22,7 @@ func TestTeamProjectLinkRowsReadWorkItemsOnceForTheOwnedProjects(t *testing.T) {
 	if got := strings.Count(statement, "FROM work_items"); got != 1 {
 		t.Fatalf("team project link rows read work_items %d times, want 1:\n%s", got, statement)
 	}
-	for _, want := range []string{admittedLinkedPullRequestRowsSQL, "cw.work_item_id IN " + linkedWorkItemIDsSQL, "(cw.provider, cw.project_id) IN", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{admittedLinkedPullRequestRowsSQL, "cw.work_item_id IN " + linkedWorkItemIDsSQL, "cw.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}

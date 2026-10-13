@@ -2,6 +2,8 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,8 +13,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 const (
@@ -149,6 +153,7 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	if float64(largeBytes) > projectReachReadBytesSlope*float64(smallBytes) {
 		t.Errorf("project-reached statements' read_bytes grew with the organization's work items: %d at the larger size, %d at the smaller, over the %.2fx slope", largeBytes, smallBytes, projectReachReadBytesSlope)
 	}
+	assertLinkRowsNarrowedWithIdenticalRows(t, ctx, query, direct, org, teamID)
 	for _, read := range []struct {
 		result contextfabric.FactProviderResult
 		err    error
@@ -187,4 +192,52 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 		t.Fatalf("read query_log: %v", err)
 	}
 	return peak
+}
+
+// teamProjectLinkRowsSQL resolves the owned projects once and prunes the work
+// item read from the named teams' ownership rows. The rows are the rows of the
+// statement it replaced, and the statement's peak memory is lower.
+func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID string) {
+	t.Helper()
+	run := func(marker, rows string) ([]string, uint64) {
+		t.Helper()
+		statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, pr_number"
+		mark := serverNowMicros(t, ctx, direct)
+		var out []string
+		err := readers.QueryOrgScopedNamed(ctx, query, "TeamProjectLinkRows", statement, org, []string{teamID}, func(row contextpacket.ClickHouseRowScanner) error {
+			var team, item, repo string
+			var number int64
+			var rank int64
+			if err := row.Scan(&team, &item, &repo, &number, &rank); err != nil {
+				return err
+			}
+			out = append(out, fmt.Sprint(team, "|", item, "|", repo, "|", number, "|", rank))
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", marker, err)
+		}
+		peak := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_graph_issue_pr", QueryContains: marker}, mark)
+		var worst uint64
+		for _, bytes := range peak {
+			if bytes > worst {
+				worst = bytes
+			}
+		}
+		if worst == 0 {
+			t.Fatalf("%s: memory measurement did not happen", marker)
+		}
+		return out, worst
+	}
+	run("link-rows-before", devhealthfacts.LegacyTeamProjectLinkRowsSQLForTest("ids"))
+	beforeRows, before := run("link-rows-before", devhealthfacts.LegacyTeamProjectLinkRowsSQLForTest("ids"))
+	run("link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest("ids"))
+	afterRows, after := run("link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest("ids"))
+	t.Logf("MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
+	if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
+		t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
+	}
+	if after >= before {
+		t.Errorf("narrowed statement peaked at %d bytes, want under the %d bytes of the statement it replaced", after, before)
+	}
 }
