@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEveryManifestToolIsRegisteredForAFullCallerOrNamedUnlisted(t *testing.T) {
+func TestEveryManifestToolNotDisabledByDefaultIsRegisteredForAFullCaller(t *testing.T) {
 	caps := validCapabilitiesFixture()
 	for _, name := range manifestToolNames() {
 		if !contains(caps.EnabledTools, name) {
@@ -18,7 +18,7 @@ func TestEveryManifestToolIsRegisteredForAFullCallerOrNamedUnlisted(t *testing.T
 	session := connectedClientForCaller(t, cfg, caller)
 	listed := listedToolNames(t, session)
 	for _, name := range manifestToolNames() {
-		if name == toolRecordEpisode {
+		if entry, _ := lookupManifestEntry(name); entry.DisabledByDefault {
 			continue
 		}
 		require.Contains(t, listed, name, "a tool in the manifest is not registered by the server; the unlisted-call path would misjudge it")

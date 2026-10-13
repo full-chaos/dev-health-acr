@@ -80,3 +80,15 @@ func TestHTTPHostedServerPromisesNoListChanged(t *testing.T) {
 		t.Fatalf("resources.listChanged is promised: %+v", caps.Resources)
 	}
 }
+
+func TestHTTPCallToAToolDisabledAtServerLevelKeepsTheUnknownToolError(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpoint(t, hosted)
+	plain := hosted.issue(readScopes, []string{repoPlain}, nil)
+	session := connectClient(t, e, &headerTransport{bearer: plain.token})
+
+	result, err, text := callText(t, session, "record_episode")
+	if err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("a server-level-disabled tool must stay an unknown tool: err=%v result=%v text=%q", err, result, text)
+	}
+}

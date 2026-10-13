@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -13,8 +12,10 @@ import (
 // unlistedToolMiddleware turns the SDK's protocol error for a call to a tool
 // this server knows but did not register for this caller into a tool result
 // with isError set, so a client shows the reason instead of a bare failure.
-// A name the manifest does not declare keeps the protocol error, and so does
-// the write tool, which is off by default and is not a read-side listing.
+// Two classes keep the protocol error: a name the manifest does not declare,
+// and a tool the manifest marks disabled by default (off at server level for
+// every caller, so its existence is not disclosed). Every other manifest tool
+// is one this server has and this caller was not given.
 func unlistedToolMiddleware(caller *CallerContext) mcpsdk.Middleware {
 	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
@@ -30,7 +31,8 @@ func unlistedToolMiddleware(caller *CallerContext) mcpsdk.Middleware {
 			if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams || !strings.HasPrefix(rpcErr.Message, "unknown tool") {
 				return result, err
 			}
-			if call.Params.Name == toolRecordEpisode || !slices.Contains(manifestToolNames(), call.Params.Name) {
+			entry, known := lookupManifestEntry(call.Params.Name)
+			if !known || entry.DisabledByDefault {
 				return result, err
 			}
 			refused := &mcpsdk.CallToolResult{}
