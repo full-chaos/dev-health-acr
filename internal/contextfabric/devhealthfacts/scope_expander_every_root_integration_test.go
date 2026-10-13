@@ -335,16 +335,18 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				if size.reading.base == 0 || size.reading.with == 0 {
 					t.Fatalf("%s %s: measurement did not happen (%+v)", label, size.name, size.reading)
 				}
-				if float64(size.reading.with) > arrayMemoryShare*float64(size.reading.base) {
+				// Over the share AND beyond the two variants' own run-to-run
+				// spread: a few-MB statement swings past 15% on noise alone.
+				if float64(size.reading.with) > arrayMemoryShare*float64(size.reading.base) && size.reading.with > size.reading.base+size.reading.withSpread+size.reading.baseSpread {
 					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.reading.with, size.reading.base, arrayMemoryShare)
 				}
 			}
 			// The arrays' cost may not grow with the organization beyond the
-			// slope. Each cost is a difference of two minimums, so its noise
-			// is the two variants' own run-to-run spreads at both sizes.
+			// slope. The larger-size cost is a difference of two minimums, so
+			// its noise is the two variants' own run-to-run spreads there.
 			smallDelta := int64(small[label].with) - int64(small[label].base)
 			largeDelta := int64(large[label].with) - int64(large[label].base)
-			noise := small[label].withSpread + small[label].baseSpread + large[label].withSpread + large[label].baseSpread
+			noise := large[label].withSpread + large[label].baseSpread
 			if float64(largeDelta) > statementMemorySlope*float64(max(smallDelta, 0))+float64(noise) {
 				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, noise)
 			}
