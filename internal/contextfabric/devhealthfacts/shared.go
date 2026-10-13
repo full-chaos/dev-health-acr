@@ -1080,11 +1080,17 @@ import (
 // v213 -> v214: the security_alerts fact kind is served for a repository.
 // An answer saved under v213 cannot carry it.
 //
-// v214 -> v215: the blocker facts (work item, team and project) read a blocker
+// v214 -> v215: the blocker statements authorize their edge endpoints without
+// the library's organization-wide relation for an organization-wide grant, and
+// read it once, apart from the statements, for any other caller. The rows are
+// unchanged; the statements and their memory are not, so an answer saved under
+// v214 is not reused as one produced by the new statements.
+//
+// v215 -> v216: the blocker facts (work item, team and project) read a blocker
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
-// the direction the row states. An answer saved under v214 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v215"
+// the direction the row states. An answer saved under v215 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v216"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
