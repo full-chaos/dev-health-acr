@@ -271,6 +271,15 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			name:           "not_collected",
+			kind:           vocabAdditive,
+			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
+			sites:          []string{"read_relationships:not_collected.items"},
+			// schema: "repository_dependency"
+			goSet:      strs(directread.RelationshipsNotCollectedRepositoryDependency),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:  "status#4",
 			kind:  vocabFrozen,
 			why:   "state-machine",
