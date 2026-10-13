@@ -23,12 +23,14 @@ import (
 // either size: half of the work-item reader's 64 MiB statement cap.
 const scopeStatementCeiling = uint64(32 << 20)
 
-// slopeFloors replaces the slope floor for the two historical statements:
-// their peak moves up to 6.6 MB between runs of one dataset
-// (hosted run 38463043081, 12 samples, 18.7-24.0 MB at both sizes, no trend
-// with size), so 8 MiB is the measured spread plus margin. The 1.15x rule is
-// unchanged, and growth the organization-wide form shows is +300 MB.
-var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20}
+// slopeFloors replaces the slope floor for the statements whose peak moves
+// between runs of one dataset by more than the default floor: 8 MiB for the two
+// historical statements (spread up to 6.6 MB over 36 samples), 6 MiB for
+// projectRepositoriesAsOf (spread up to 4.5 MB, a +2.9 MB diff failed on CI).
+// All from hosted runs 38461148186, 38463043081, 38464327840: 18.7-24.0 MB at
+// both sizes, no trend with size. The 1.15x rule is unchanged, and each
+// statement's organization-wide form grows by 260 MB or more.
+var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20, "projectRepositoriesAsOf": 6 << 20}
 
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
