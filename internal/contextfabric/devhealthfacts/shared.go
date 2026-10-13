@@ -1056,9 +1056,14 @@ import (
 // no longer on every row of the kind. An answer saved under v208 carries each
 // on rows it is false for.
 //
-// v209 -> v210: the security_alerts fact kind is served for a repository.
-// An answer saved under v209 cannot carry it.
-const QueryVersion = "devhealthfacts.clickhouse.v210"
+// v209 -> v210: the revert-rate day count rides each repository's own row (the
+// read-wide count only the request note), and owning_teams_truncated rides only
+// the repositories whose owner table was cut. An answer saved under v209
+// carries both on repositories they are false for.
+//
+// v210 -> v211: the security_alerts fact kind is served for a repository.
+// An answer saved under v210 cannot carry it.
+const QueryVersion = "devhealthfacts.clickhouse.v211"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -188,6 +188,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		contextfabric.FactSourceHealth:            organizationSubject(orgID),
 		contextfabric.FactFlow:                    teamSubject("CHAOS"),
 		contextfabric.FactLandscape:               teamSubject("CHAOS"),
+		contextfabric.FactSecurityAlerts:          repoSubject(repoID),
 	}
 
 	providers := devhealthfacts.NewProviders(client)

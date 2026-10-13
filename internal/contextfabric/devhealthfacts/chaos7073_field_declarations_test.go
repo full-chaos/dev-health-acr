@@ -22,7 +22,7 @@ import (
 //     declared kind with at least one case; an undeclared kind fails.
 
 // directServableKinds are the declared kinds: the nine aggregate kinds
-// (CHAOS-7073) and the twelve entity kinds (CHAOS-7120). Every registered
+// (CHAOS-7073) and the thirteen entity kinds. Every registered
 // provider must be one of them; there is no "not yet" list.
 var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactInvestment, contextfabric.FactHealth, contextfabric.FactMetrics,
@@ -702,8 +702,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 	for _, kind := range directServableKinds {
 		direct[kind] = true
 	}
-	if len(directServableKinds) != 21 || len(direct) != 21 {
-		t.Fatalf("expected 21 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
+	if len(directServableKinds) != 22 || len(direct) != 22 {
+		t.Fatalf("expected 22 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
 	}
 	registered := map[contextfabric.FactKind]bool{}
 	for _, provider := range devhealthfacts.NewProviders(&fakeClient{}) {
@@ -720,7 +720,7 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 			t.Errorf("%s: declared kind has no catalogue-truth case", kind)
 		}
 	}
-	if len(registered) != 21 {
+	if len(registered) != 22 {
 		t.Errorf("registered providers = %d kinds, want 22", len(registered))
 	}
 	for kind := range direct {
@@ -830,8 +830,8 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 			}
 		}
 	}
-	if len(entity) != 12 || entity[0] != contextfabric.FactIdentity {
-		t.Fatalf("entity kinds = %v, want the twelve CHAOS-7120 kinds", entity)
+	if len(entity) != 13 || entity[0] != contextfabric.FactIdentity {
+		t.Fatalf("entity kinds = %v, want the thirteen entity kinds", entity)
 	}
 }
 
