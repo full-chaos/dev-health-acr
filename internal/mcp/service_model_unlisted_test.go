@@ -40,7 +40,7 @@ func TestCallerWithoutTheServiceModelNeverSeesInvestigateQuestion(t *testing.T) 
 	require.NotContains(t, instructions, "service_model_not_entitled")
 	require.Contains(t, instructions, "use investigate_with_interpretation with synthesis \"client\".")
 	require.Contains(t, instructions, "- investigate_with_interpretation:")
-	require.Contains(t, instructions, "Question shapes that work:")
+	require.Contains(t, instructions, "Question shapes that work (investigate tools only):")
 }
 
 func TestCallerWithTheServiceModelStillSeesInvestigateQuestion(t *testing.T) {
@@ -48,7 +48,7 @@ func TestCallerWithTheServiceModelStillSeesInvestigateQuestion(t *testing.T) {
 	session := connectedClientForCaller(t, cfg, caller)
 	require.Contains(t, listedToolNames(t, session), toolInvestigateQuestion)
 	instructions := serverInstructions(cfg, caller)
-	require.True(t, strings.Contains(instructions, "- investigate_question (callers with no model of their own)"))
+	require.True(t, strings.Contains(instructions, "- investigate_question (callers with no model of their own; spends the service's or your organization's model budget)"))
 	require.Contains(t, instructions, "instead of investigate_question.")
 	require.Contains(t, instructions, "B. You want our engine's narrative answer")
 }
