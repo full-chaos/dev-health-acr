@@ -136,6 +136,23 @@ GROUP BY lr.team_id`)
 	sets = strings.Replace(sets, lookupOldHead, lookupNewHead, 1)
 	sets = strings.Replace(sets, lookupOldTail, lookupNewTail, 1)
 	add("statement_sets", sets)
+	// The same statement with n and the per-pull-request c computed inside the
+	// unit fold, so the unit's reference array is not carried through the
+	// expansion to one row per pull request.
+	cOld := "countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,"
+	foldOld := "AS pairs\n\tFROM ("
+	foldNew := "AS pairs,\n\t\tlength(pairs) AS n,\n\t\tarrayMap(rp -> countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))), repo_prs) AS cs\n\tFROM ("
+	expandOld := "ARRAY JOIN repo_prs AS rp\n"
+	if strings.Count(statement, cOld) != 1 || strings.Count(statement, foldOld) != 1 || strings.Count(statement, expandOld) != 1 {
+		return nil, "statement_counts_in_fold"
+	}
+	inFold := strings.Replace(statement, cOld, "c, n,", 1)
+	inFold = strings.Replace(inFold, foldOld, foldNew, 1)
+	inFold = strings.Replace(inFold, expandOld, "ARRAY JOIN repo_prs AS rp, cs AS c\n", 1)
+	add("statement_counts_in_fold", inFold)
+	add("m_effort_only", "SELECT sum(effort) FROM ("+m+")")
+	add("m_bugfix_only", "SELECT sum(bugfix_share) FROM ("+m+")")
+	add("m_theme_only", "SELECT sum(length(mapKeys(theme_distribution_json))) FROM ("+m+")")
 	fragments = append(fragments, LinkedMixFragment{Name: "statement_one_thread", SQL: statement, Bindings: bindings, Settings: "max_threads = 1"})
 	fragments = append(fragments, LinkedMixFragment{Name: "statement_no_join_swap", SQL: linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1), Bindings: bindings, Settings: "query_plan_join_swap_table = 0"})
 	add("owned_repositories", "SELECT count() FROM "+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
