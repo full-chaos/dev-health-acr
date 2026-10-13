@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -121,7 +122,10 @@ type memberStatusWalk struct {
 	// read counts the distinct authorized members the status-narrowed read
 	// returned (for a review status, the open pull requests read), held those
 	// of them holding the status, and kept the members the walk served.
-	read, held, kept int
+	read, kept int
+	// held are the ids of the authorized members the read decided hold the
+	// status.
+	held map[string]bool
 	// reached: the anchor reaches at least one authorized member of the kind,
 	// whatever its status.
 	reached bool
@@ -145,10 +149,11 @@ type memberStatusWalk struct {
 	// is a lower bound.
 	outsideSet     int
 	outsideAtLeast bool
-	// matched counts the authorized members holding the status: the members
-	// kept, or when the member cap cut a set whose every member was decided,
-	// the bounded count of the matches; matchedAtLeast: that count was cut.
-	matched        int
+	// matched are the ids of the authorized members holding the status: the
+	// members kept, or when the member cap cut a set whose every member was
+	// decided, the bounded read of the matches; matchedAtLeast: that read was
+	// cut. Walks union them, so a member two anchors reach counts once.
+	matched        map[string]bool
 	matchedAtLeast bool
 }
 
@@ -165,7 +170,12 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	w.poolUnknown = w.poolUnknown || other.poolUnknown || (other.poolCut && other.pool < 0)
 	w.outsideSet += other.outsideSet
 	w.outsideAtLeast = w.outsideAtLeast || other.outsideAtLeast
-	w.matched += other.matched
+	for id := range other.matched {
+		if w.matched == nil {
+			w.matched = map[string]bool{}
+		}
+		w.matched[id] = true
+	}
 	w.matchedAtLeast = w.matchedAtLeast || other.matchedAtLeast
 }
 
@@ -231,7 +241,7 @@ func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state 
 	read := map[string]bool{}
 	kept := map[string]bool{}
 	pages := 0
-	defer func() { state.out.status.read, state.out.status.held = len(read), len(kept) }()
+	defer func() { state.out.status.read, state.out.status.held = len(read), kept }()
 	for _, source := range sources {
 		for skip := 0; ; skip += pageSize {
 			if state.collectLimit > 0 && len(kept) > state.collectLimit {
@@ -288,26 +298,32 @@ func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state 
 // A read of a stored status stopped by a filled cap is not a cut: every member
 // it read holds the status, so the cap cut a decided set. The count is then the
 // number of matches the answer states it listed some of.
-func (state treeWalkState) decidePoolCut(count func() (int, bool, error)) error {
+func (state treeWalkState) decidePoolCut(count func() (map[string]bool, bool, error)) error {
 	out := state.out
-	out.status.matched = out.status.kept
+	out.status.matched = keptMemberIDs(out)
 	out.status.reached = out.status.reached || out.status.read > 0
 	if !out.status.pageCapped && !out.status.capFilled {
 		return nil
 	}
-	pool, poolCut, err := count()
+	ids, poolCut, err := count()
 	if err != nil {
 		return err
 	}
+	pool := len(ids)
 	out.status.reached = out.status.reached || pool > 0
 	if !poolCut && pool == out.status.read {
 		// Every authorized member under the read's clause was read and
 		// decided: a filled cap cut a decided set, never a pool.
-		out.status.matched = max(out.status.held, out.status.kept)
+		for id := range out.status.held {
+			out.status.matched[id] = true
+		}
 		return nil
 	}
 	if out.status.capFilled && !state.status.reviewDerived() {
-		out.status.matched, out.status.matchedAtLeast = max(pool, out.status.kept), poolCut
+		for id := range ids {
+			out.status.matched[id] = true
+		}
+		out.status.matchedAtLeast = poolCut
 		return nil
 	}
 	if poolCut {
@@ -344,10 +360,10 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 			}
 		}
 	}
-	err := state.decidePoolCut(func() (int, bool, error) {
+	err := state.decidePoolCut(func() (map[string]bool, bool, error) {
 		pool := filtered
 		pool.projected = true
-		return a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, pool, temporal)
+		return a.authorizedHitIDs(ctx, key, orgID, state, hop, frontier, pool, temporal)
 	})
 	if err != nil {
 		return err
@@ -367,13 +383,32 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 	return nil
 }
 
+// keptMemberIDs are the ids of the members a walk kept.
+func keptMemberIDs(out *treeWalk) map[string]bool {
+	ids := map[string]bool{}
+	for _, nodes := range [][]graphrank.CandidateNode{out.nodes, out.linkNodes} {
+		for _, n := range nodes {
+			if subject, ok := graphrank.NodeSubject(n); ok {
+				ids[subject.CanonicalID] = true
+			}
+		}
+	}
+	return ids
+}
+
 // authorizedHitCount counts the distinct nodes a step reaches from frontier
 // that the caller may see, bounded by the census bound, and reports whether
 // that read was cut.
 func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (int, bool, error) {
+	ids, cut, err := a.authorizedHitIDs(ctx, key, orgID, state, hop, frontier, step, temporal)
+	return len(ids), cut, err
+}
+
+// authorizedHitIDs are the ids authorizedHitCount counts.
+func (a *Adapter) authorizedHitIDs(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (map[string]bool, bool, error) {
 	hits, cut, err := a.walkStepHits(ctx, key, orgID, frontier, step, temporal, exactNameCandidateQueryLimit)
 	if err != nil {
-		return 0, false, err
+		return nil, false, err
 	}
 	counted := map[string]bool{}
 	for _, h := range hits {
@@ -381,7 +416,7 @@ func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, sta
 			counted[canonicalIDOf(h.to)] = true
 		}
 	}
-	return len(counted), cut, nil
+	return counted, cut, nil
 }
 
 // finishLinkMemberStatus is finishMemberStatus for a walk whose link read
@@ -401,7 +436,7 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 		}
 		out.status.reached = len(ends) > 0
 	}
-	return state.decidePoolCut(func() (int, bool, error) {
+	return state.decidePoolCut(func() (map[string]bool, bool, error) {
 		// The authorized members the anchor's links reach under the read's
 		// clause, with no review decision, bounded by the census bound.
 		probeOut := treeWalk{}
@@ -411,8 +446,12 @@ func (a *Adapter) finishLinkMemberStatus(ctx context.Context, key, orgID string,
 		probe.collectLimit = exactNameCandidateQueryLimit
 		ends, _, err := a.linkSegment(ctx, key, orgID, probe, anchor, feed, link, temporal)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
-		return len(ends), probeOut.truncated || probeOut.status.pageCapped || len(ends) > exactNameCandidateQueryLimit, nil
+		ids := make(map[string]bool, len(ends))
+		for _, id := range ends {
+			ids[id] = true
+		}
+		return ids, probeOut.truncated || probeOut.status.pageCapped || len(ends) > exactNameCandidateQueryLimit, nil
 	})
 }

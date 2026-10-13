@@ -1031,7 +1031,11 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	out.linkTargets = len(seen)
 	out.linkDeniedTargets = len(seen) - len(admitted)
 	if status.set() {
-		out.status.read, out.status.held = len(read), len(admitted)
+		out.status.read = len(read)
+		out.status.held = map[string]bool{}
+		for id := range admitted {
+			out.status.held[id] = true
+		}
 		out.status.capFilled = stoppedFull && state.collectLimit > 0 && len(admitted) > state.collectLimit
 	}
 	if link.to == treeIssue {

@@ -764,3 +764,36 @@ func TestARequestedScopeNoReadNarrowsLeavesACutAnswer(t *testing.T) {
 		}
 	}
 }
+
+// TestTwoAnchorsSharingPullRequestsCountEachOnce: teams Alpha and Beta both own
+// the repository whose 40 open pull requests hold the status. Each team's read
+// is capped at 25, and each counts the 40 matches; the served population is the
+// 40 distinct pull requests, not 80.
+func TestTwoAnchorsSharingPullRequestsCountEachOnce(t *testing.T) {
+	fixtures := pullRequestPool(40, func(int) (string, []contextfabric.PullRequestReviewRow) { return "open", nil })
+	beta := scopedAnchorNode{"team", "team:beta", "Beta"}
+	alpha := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:alpha", Label: "Alpha"}
+	betaRef := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: beta.id, Label: beta.label}
+	frame := pullRequestStatusFrame("open")
+	frame.SubjectExpression.Scoped.AnchorTerms = []string{"Alpha", "Beta"}
+	request := ownershipRoutingRequest(frame, alpha)
+	request.Resolution.Committed = append(request.Resolution.Committed, betaRef)
+	request.Resolution.Candidates = append(request.Resolution.Candidates, contextfabric.SubjectCandidate{
+		ReceiptID: "receipt_beta", Subject: betaRef, State: contextfabric.ResolutionCommitted,
+		MatchedTerms: []string{"Beta"}, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{},
+	})
+	request.Bases.Record(betaRef, contextfabric.CommitBasisAuthoritativeIdentity)
+	request.Request.Options.MaxCohortMembers = 50
+	request.ScopeAnchorKind = contextfabric.SubjectTeam
+	request.Request.Question = "which pull requests of teams Alpha and Beta are open?"
+	result, err := newFakeAdapter(t, pullRequestStatusFakeOwnedBy(fixtures, nil, beta)).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 25 {
+		t.Fatalf("cohort = %+v, want 25 open pull requests", result.Cohort)
+	}
+	if result.CohortPopulation != 40 || result.CohortPopulationLowerBound {
+		t.Fatalf("population = %d (lower bound %v), want the 40 distinct matches", result.CohortPopulation, result.CohortPopulationLowerBound)
+	}
+}

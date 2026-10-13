@@ -1534,10 +1534,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortPopulationLowerBound := cohortPoolTruncated
-	if statusWalk.applied && statusWalk.matched > cohortPopulation {
+	if statusWalk.applied && len(statusWalk.matched) > cohortPopulation {
 		// The member cap cut a set of decided matches: the population is the
 		// counted matches, a lower bound only when that count was cut.
-		cohortPopulation, cohortPopulationLowerBound = statusWalk.matched, statusWalk.matchedAtLeast
+		cohortPopulation, cohortPopulationLowerBound = len(statusWalk.matched), statusWalk.matchedAtLeast
 	}
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {

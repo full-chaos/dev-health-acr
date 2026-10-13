@@ -131,10 +131,10 @@ func (a *Adapter) statusCensusMembers(ctx context.Context, key, orgID string, pr
 			}
 		}
 	}
-	err = state.decidePoolCut(func() (int, bool, error) {
+	err = state.decidePoolCut(func() (map[string]bool, bool, error) {
 		hits, _, err := census(status.clausePredicate().clause(), true)(0, exactNameCandidateQueryLimit+1)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
 		counted := map[string]bool{}
 		for _, h := range hits {
@@ -142,7 +142,7 @@ func (a *Adapter) statusCensusMembers(ctx context.Context, key, orgID string, pr
 				counted[canonicalIDOf(h.to)] = true
 			}
 		}
-		return len(counted), len(hits) > exactNameCandidateQueryLimit, nil
+		return counted, len(hits) > exactNameCandidateQueryLimit, nil
 	})
 	return out, err
 }
