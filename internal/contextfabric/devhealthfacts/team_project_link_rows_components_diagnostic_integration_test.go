@@ -60,15 +60,17 @@ SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), toUInt32(nu
 	measure := func(size int) {
 		for name, q := range components {
 			mark := serverNowMicros(t, ctx, direct)
-			rows, err := direct.Query(ctx, "/* "+name+" */ "+q, clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner"}))
+			rows, err := direct.Query(clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": name})), q, clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner"}))
 			if err != nil {
 				report("DIAG %s at %d: error %v", name, size, err)
 				continue
 			}
+			for rows.Next() {
+			}
 			rows.Close()
 			exec(`SYSTEM FLUSH LOGS`)
 			var mem, read uint64
-			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes) FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND startsWith(query, ?)`, mark, "/* "+name+" */").Scan(&mem, &read); err != nil {
+			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes) FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND log_comment = ?`, mark, name).Scan(&mem, &read); err != nil {
 				report("DIAG %s at %d: log %v", name, size, err)
 				continue
 			}
