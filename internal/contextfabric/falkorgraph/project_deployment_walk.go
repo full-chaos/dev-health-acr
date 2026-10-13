@@ -36,6 +36,11 @@ type walkStep struct {
 	// edgeWindowOnly: the window is applied to the edge alone. The edge says
 	// the owner owns the node; a node whose own validity ended is still owned.
 	edgeWindowOnly bool
+	// status keeps only the reached nodes whose stored status the clause
+	// names, inside the read and so before its limit.
+	status nodeStatusClause
+	// paged: the read starts at $skip.
+	paged bool
 }
 
 type walkHit struct {
@@ -72,9 +77,13 @@ func walkStepCypher(step walkStep, temporal temporalFilter) string {
 	if step.edgeWindowOnly {
 		nodeWindow = ""
 	}
-	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, %s, r ORDER BY id, b.%s, r.%s LIMIT $limit",
+	page := "LIMIT $limit"
+	if step.paged {
+		page = "SKIP $skip LIMIT $limit"
+	}
+	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s%s RETURN id, %s, r ORDER BY id, b.%s, r.%s %s",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
-		propRelationType, typeClause, temporal.predicate("r"), nodeWindow, column, propCanonicalID, propRelationshipID)
+		propRelationType, typeClause, step.status.predicate("b"), temporal.predicate("r"), nodeWindow, column, propCanonicalID, propRelationshipID, page)
 }
 
 // walkStepParams binds one batch of a step read.
@@ -88,6 +97,7 @@ func walkStepParams(orgID string, ids []interface{}, step walkStep, limit int, t
 	} else if len(step.notToTypes) > 0 {
 		params["btypes"] = step.notToTypes
 	}
+	step.status.bind(params)
 	return params
 }
 
@@ -120,17 +130,36 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 			rows = rows[:remaining]
 			cut = true
 		}
-		for _, r := range rows {
-			id, _ := r["id"].(string)
-			n := walkNode(r["b"])
-			e, _ := r["r"].(*edge)
-			if id == "" || n == nil || e == nil {
-				continue
-			}
-			hits = append(hits, walkHit{from: id, to: n, rel: e})
-		}
+		hits = append(hits, walkHitsOf(rows)...)
 	}
 	return hits, cut, nil
+}
+
+func walkHitsOf(rows []row) []walkHit {
+	hits := make([]walkHit, 0, len(rows))
+	for _, r := range rows {
+		id, _ := r["id"].(string)
+		n := walkNode(r["b"])
+		e, _ := r["r"].(*edge)
+		if id == "" || n == nil || e == nil {
+			continue
+		}
+		hits = append(hits, walkHit{from: id, to: n, rel: e})
+	}
+	return hits
+}
+
+// walkStepPage reads one page of one batch of a paged step: rows reports how
+// many rows the read returned, so a short page ends the batch.
+func (a *Adapter) walkStepPage(ctx context.Context, key, orgID string, batch []interface{}, step walkStep, temporal temporalFilter, skip, limit int) ([]walkHit, int, error) {
+	step.paged = true
+	params := walkStepParams(orgID, batch, step, limit, temporal)
+	params["skip"] = skip
+	rows, err := a.api.query(ctx, key, walkStepCypher(step, temporal), params, true)
+	if err != nil {
+		return nil, 0, safeDependencyError("walk the entity tree", err)
+	}
+	return walkHitsOf(rows), len(rows), nil
 }
 
 // noRepositoryScope is the authorization scope a work item with no repository

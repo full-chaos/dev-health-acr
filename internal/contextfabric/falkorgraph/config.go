@@ -1079,10 +1079,15 @@ func (t SlogTelemetry) RecordPullRequestStatusFilter(ctx context.Context, orgID 
 	}
 	if decision.Err == nil {
 		args = append(args,
+			"site", contextfabric.SanitizeLogAttr(string(decision.Site)),
 			"candidates", decision.Candidates,
-			"kept", decision.Kept)
+			"kept", decision.Kept,
+			"pool_cut", decision.PoolCut)
 		if decision.memberKind() != contextfabric.SubjectPullRequest {
 			args = append(args, "outside_set", decision.OutsideSet)
+		}
+		if decision.Pool >= 0 {
+			args = append(args, "pool", decision.Pool)
 		}
 	} else {
 		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))

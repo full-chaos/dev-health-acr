@@ -59,6 +59,18 @@ func MemberStatusFilterOf(frame *QuestionFrame) (SubjectKind, string) {
 type MemberStatusOutsideSet struct {
 	Kind  SubjectKind
 	Count int
+	// AtLeast: the count read was cut, so Count is a lower bound.
+	AtLeast bool
+}
+
+// MemberStatusPoolCut is a status filter decided within a cut read: Read
+// members of Kind were checked and members past the cut were not; Pool, when
+// not zero, is how many members of the kind the caller may see the read could
+// have checked. An empty Kind states nothing.
+type MemberStatusPoolCut struct {
+	Kind SubjectKind
+	Read int
+	Pool int
 }
 
 // MemberStatusUnappliedOf reports whether frame states a status on members of
@@ -142,10 +154,31 @@ func withMemberStatusDisclosure(result InvestigationResult, frame *QuestionFrame
 	return result
 }
 
+// withMemberStatusPoolCut states that the status filter was decided within
+// the first members a cut read reached.
+func withMemberStatusPoolCut(result InvestigationResult, cut MemberStatusPoolCut) InvestigationResult {
+	sentence := contractsv1.ContextFabricMemberStatusPoolCutLimitation(string(cut.Kind), cut.Read, cut.Pool)
+	if sentence == "" {
+		return result
+	}
+	for _, limitation := range result.Limitations {
+		if limitation == sentence {
+			return result
+		}
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	return result
+}
+
 // withMemberStatusOutsideSet states how many members of the kind the status
 // filter could not match because their stored status is outside the kind's set.
 func withMemberStatusOutsideSet(result InvestigationResult, outside MemberStatusOutsideSet) InvestigationResult {
 	sentence := contractsv1.ContextFabricMemberStatusOutsideSetLimitation(string(outside.Kind), outside.Count)
+	if outside.AtLeast {
+		sentence = contractsv1.ContextFabricMemberStatusOutsideSetAtLeastLimitation(string(outside.Kind), outside.Count)
+	}
 	if sentence == "" {
 		return result
 	}
