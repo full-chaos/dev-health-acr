@@ -239,8 +239,9 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
-	// The bound arrays must not be folded into the plan as literals repeated at
-	// every step: count how often one ended key's source id appears in the plan.
+	// Plan-size guard (not a memory rule): the bound arrays must not be folded
+	// into the plan text as literals repeated at every step, which bloats the
+	// plan. Count how often one ended key's source id appears in the plan.
 	var endedSources, endedTargets, endedTypes []string
 	probeRows, err := direct.Query(ctx, devhealthfacts.RelationCurrentProbeForTest(blockerProdShapeOrg))
 	if err != nil {
@@ -278,7 +279,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	occurrences := strings.Count(plan.String(), endedSources[0])
 	t.Logf("PRODSHAPE plan: %d ended links, plan text %d bytes, first ended source id appears %d times", len(endedSources), plan.Len(), occurrences)
 	if occurrences > 3 {
-		t.Errorf("the ended-link arrays are repeated %d times in the plan (a literal folded into every step); want at most 3", occurrences)
+		t.Errorf("the plan text repeats the ended-link arrays %d times (plan-size guard); want at most 3", occurrences)
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)

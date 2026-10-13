@@ -110,8 +110,8 @@ func SetBlockerEndedLinksBoundForTest(bound int) (restore func()) {
 }
 
 // BlockerEndedLinksPlanProbeForTest is an EXPLAIN of the bound end rule over the
-// dependency table, for a test that checks the bound arrays are not folded into
-// the plan as literals repeated at every step.
+// dependency table, for the plan-size guard: the bound arrays must not be folded
+// into the plan text as literals repeated at every step.
 func BlockerEndedLinksPlanProbeForTest(orgID string) string {
 	statement := `EXPLAIN actions = 1 SELECT count() FROM work_item_dependencies AS d FINAL WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + blockerEndedLinksCurrentSQL
 	return strings.ReplaceAll(statement, "{org_id:String}", "'"+orgID+"'")
