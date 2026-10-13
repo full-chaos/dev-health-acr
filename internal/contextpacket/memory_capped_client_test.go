@@ -2,6 +2,8 @@ package contextpacket
 
 import (
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +40,23 @@ func TestMemoryCappedQueryClientWithoutAWrapHasNoCap(t *testing.T) {
 	}
 	if inner.seen {
 		t.Fatal("an unwrapped client must not report a cap")
+	}
+}
+
+func TestSlogMemoryNearCapObserverLogsTheStatementByHashAndCounts(t *testing.T) {
+	t.Parallel()
+	var logged strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logged, nil))
+	counted := 0
+	observe := NewSlogMemoryNearCapObserver(logger, func(context.Context) { counted++ })
+	observe(context.Background(), MemoryNearCap{Statement: "SELECT  a\nFROM t WHERE x = {x:String}", PeakBytes: 140 << 20, CapBytes: 256 << 20})
+	line := logged.String()
+	for _, want := range []string{"level=WARN", `msg="clickhouse statement memory near cap"`, "peak_bytes=146800640", "cap_bytes=268435456", `statement_head="SELECT a FROM t WHERE x = {x:String}"`, "statement_sha="} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line %q lacks %q", line, want)
+		}
+	}
+	if counted != 1 {
+		t.Fatalf("counter called %d times, want 1", counted)
 	}
 }

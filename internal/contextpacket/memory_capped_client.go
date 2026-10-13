@@ -2,17 +2,26 @@ package contextpacket
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"log/slog"
+	"strings"
+	"sync/atomic"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// APIStatementMaxMemoryUsage is the per-statement ClickHouse memory cap of
-// every read the API binary sends. It is the single definition: the work-item
-// reader settings use it too. Prod peaks of statements on this default stay
-// under it (largest 58 MB, the project link-row read).
+// APIStatementMaxMemoryUsage is the per-statement ClickHouse memory default of
+// every read the API binary sends. It is a runaway guard, not a tuning knob:
+// it sits above every live statement seen (prod 104.48 MiB org investment mix
+// after rev 84; CI scope expander 148 MB at 300k work items) and is tightened
+// per statement by the lanes that cut those statements.
 //
-// memory-limit-measured: 58.1 MB 2026-10-13 prod query_log hash 15325842660101373389
-const APIStatementMaxMemoryUsage uint64 = 64 << 20
+// memory-limit-measured: 148 MB 2026-10-13 CI scope expander at 300k work items (prod peak 104.48 MiB org investment mix)
+const APIStatementMaxMemoryUsage uint64 = 256 << 20
+
+// NearCapRatio is the share of a statement's cap above which the observer is told.
+const NearCapRatio = 0.5
 
 type statementMemoryCapKey struct{}
 
@@ -24,24 +33,118 @@ func StatementMemoryCapFromContext(ctx context.Context) (uint64, bool) {
 	return capBytes, ok
 }
 
+// MemoryNearCap describes a finished statement that used more than the near-cap
+// share of its memory cap.
+type MemoryNearCap struct {
+	Statement string
+	PeakBytes uint64
+	CapBytes  uint64
+}
+
+// MemoryNearCapObserver is called once per finished statement above the
+// near-cap share. It must not block.
+type MemoryNearCapObserver func(context.Context, MemoryNearCap)
+
+// MemoryCapOption configures NewMemoryCappedQueryClient.
+type MemoryCapOption func(*memoryCappedQueryClient)
+
+// WithMemoryNearCapObserver reports statements that finish above the near-cap
+// share of the cap, from the peak memory the server sends in its profile events.
+func WithMemoryNearCapObserver(observer MemoryNearCapObserver) MemoryCapOption {
+	return func(c *memoryCappedQueryClient) { c.observer = observer }
+}
+
+// WithMemoryNearCapRatio replaces NearCapRatio (tests only).
+func WithMemoryNearCapRatio(ratio float64) MemoryCapOption {
+	return func(c *memoryCappedQueryClient) { c.ratio = ratio }
+}
+
 type memoryCappedQueryClient struct {
 	inner    ClickHouseQueryClient
 	capBytes uint64
+	observer MemoryNearCapObserver
+	ratio    float64
 }
 
 // NewMemoryCappedQueryClient wraps inner so every statement is sent with
 // max_memory_usage = capBytes. A SETTINGS clause inside a statement still
-// overrides it. This is the one place the cap is applied: a new call site
+// overrides it. This is the one place the default is applied: a new call site
 // built on a wrapped client cannot skip it.
-func NewMemoryCappedQueryClient(inner ClickHouseQueryClient, capBytes uint64) ClickHouseQueryClient {
+func NewMemoryCappedQueryClient(inner ClickHouseQueryClient, capBytes uint64, options ...MemoryCapOption) ClickHouseQueryClient {
 	if inner == nil || capBytes == 0 {
 		return inner
 	}
-	return memoryCappedQueryClient{inner: inner, capBytes: capBytes}
+	client := memoryCappedQueryClient{inner: inner, capBytes: capBytes, ratio: NearCapRatio}
+	for _, option := range options {
+		option(&client)
+	}
+	return client
 }
 
 func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bindings []ClickHouseBinding) (ClickHouseRowScanner, error) {
 	ctx = context.WithValue(ctx, statementMemoryCapKey{}, c.capBytes)
-	ctx = clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{"max_memory_usage": c.capBytes}))
-	return c.inner.Query(ctx, statement, bindings)
+	var peak atomic.Uint64
+	driverOptions := []clickhousedriver.QueryOption{clickhousedriver.WithSettings(clickhousedriver.Settings{"max_memory_usage": c.capBytes})}
+	if c.observer != nil {
+		driverOptions = append(driverOptions, clickhousedriver.WithProfileEvents(func(events []clickhousedriver.ProfileEvent) {
+			for _, event := range events {
+				if event.Name != "peak_memory_usage" || event.Value <= 0 {
+					continue
+				}
+				for value := uint64(event.Value); ; {
+					current := peak.Load()
+					if value <= current || peak.CompareAndSwap(current, value) {
+						break
+					}
+				}
+			}
+		}))
+	}
+	rows, err := c.inner.Query(clickhousedriver.Context(ctx, driverOptions...), statement, bindings)
+	if err != nil || rows == nil || c.observer == nil {
+		return rows, err
+	}
+	return &memoryObservedRows{ClickHouseRowScanner: rows, ctx: ctx, statement: statement, client: c, peak: &peak}, nil
+}
+
+type memoryObservedRows struct {
+	ClickHouseRowScanner
+	ctx       context.Context
+	statement string
+	client    memoryCappedQueryClient
+	peak      *atomic.Uint64
+	reported  atomic.Bool
+}
+
+func (r *memoryObservedRows) Close() error {
+	err := r.ClickHouseRowScanner.Close()
+	if r.reported.CompareAndSwap(false, true) {
+		peak := r.peak.Load()
+		if float64(peak) > r.client.ratio*float64(r.client.capBytes) {
+			r.client.observer(r.ctx, MemoryNearCap{Statement: r.statement, PeakBytes: peak, CapBytes: r.client.capBytes})
+		}
+	}
+	return err
+}
+
+// NewSlogMemoryNearCapObserver logs a WARN for each statement above the
+// near-cap share and calls count (when set). The statement is named by a hash
+// and its first words; statements are templates, bindings are never logged.
+func NewSlogMemoryNearCapObserver(logger *slog.Logger, count func(context.Context)) MemoryNearCapObserver {
+	return func(ctx context.Context, near MemoryNearCap) {
+		if count != nil {
+			count(ctx)
+		}
+		if logger == nil {
+			return
+		}
+		sum := sha256.Sum256([]byte(near.Statement))
+		head := strings.Join(strings.Fields(near.Statement), " ")
+		if len(head) > 80 {
+			head = head[:80]
+		}
+		logger.WarnContext(ctx, "clickhouse statement memory near cap",
+			"statement_sha", hex.EncodeToString(sum[:6]), "statement_head", head,
+			"peak_bytes", near.PeakBytes, "cap_bytes", near.CapBytes)
+	}
 }

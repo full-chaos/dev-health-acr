@@ -95,7 +95,8 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 	if err != nil {
 		return clickHouseComponents{}, err
 	}
-	capped := contextpacket.NewMemoryCappedQueryClient(client, contextpacket.APIStatementMaxMemoryUsage)
+	capped := contextpacket.NewMemoryCappedQueryClient(client, contextpacket.APIStatementMaxMemoryUsage,
+		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(request.logger, request.metrics.ClickHouseNearMemoryCap)))
 	fail := func(cause error) (clickHouseComponents, error) {
 		return clickHouseComponents{}, errors.Join(cause, client.Close())
 	}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
@@ -12,7 +14,7 @@ import (
 // client carries the 128 MiB memory cap, and a statement's own SETTINGS wins.
 func TestOpenProjectorClickHouseSendsTheStatementMemoryCapToTheServer(t *testing.T) {
 	dsn := chserver.StartDSN(t, context.Background())
-	client, err := openProjectorClickHouse(config.ProjectorConfig{ClickHouseDSN: dsn, ClickHouseMaxBytesToRead: 256 << 20})
+	client, err := openProjectorClickHouse(config.ProjectorConfig{ClickHouseDSN: dsn, ClickHouseMaxBytesToRead: 256 << 20}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +34,8 @@ func TestOpenProjectorClickHouseSendsTheStatementMemoryCapToTheServer(t *testing
 		}
 		return value
 	}
-	if got := read("SELECT toString(getSetting('max_memory_usage'))"); got != "134217728" {
-		t.Fatalf("server saw max_memory_usage %s through the projector client, want 134217728 (128 MiB)", got)
+	if got := read("SELECT toString(getSetting('max_memory_usage'))"); got != "201326592" {
+		t.Fatalf("server saw max_memory_usage %s through the projector client, want 201326592 (192 MiB)", got)
 	}
 	if got := read("SELECT toString(getSetting('max_memory_usage')) SETTINGS max_memory_usage = 12345678"); got != "12345678" {
 		t.Fatalf("server saw max_memory_usage %s with a statement-level SETTINGS, want 12345678", got)

@@ -73,7 +73,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(fmt.Errorf("load postgres migration contract: %w", err), runtime.Close())
 	}
 
-	projectorClickHouse, err := openProjectorClickHouse(cfg)
+	projectorClickHouse, err := openProjectorClickHouse(cfg, logger)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -366,13 +366,13 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 // Health's ClickHouse, each with the operator's overlap window
 // (ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP, CHAOS-7263). A separate function so
 // a test can pin that the setting reaches both.
-// projectorStatementMaxMemoryUsage is the per-statement memory cap of every
-// projector ClickHouse read. 128 MiB sits above the prod peak measured on
-// 2026-10-13 for the heaviest projector statement (94 MB, p50 85 MB,
-// querySubjectProjectMemberships); re-measure from system.query_log after the roll.
+// projectorStatementMaxMemoryUsage is the per-statement memory default of every
+// projector ClickHouse read: a runaway guard above the prod peak of 87.35 MiB
+// (querySubjectProjectMemberships, which grows with org size, 2026-10-13 rev 84
+// query_log). The projector read lane may lower it with its own readback.
 //
-// memory-limit-measured: 93.9 MB 2026-10-13 prod query_log hash 783246543299970617
-const projectorStatementMaxMemoryUsage uint64 = 128 << 20
+// memory-limit-measured: 87.35 MiB 2026-10-13 prod query_log hash 783246543299970617
+const projectorStatementMaxMemoryUsage uint64 = 192 << 20
 
 type projectorClickHouseClient struct {
 	query contextpacket.ClickHouseQueryClient
@@ -380,7 +380,7 @@ type projectorClickHouseClient struct {
 	close func() error
 }
 
-func openProjectorClickHouse(cfg config.ProjectorConfig) (projectorClickHouseClient, error) {
+func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger) (projectorClickHouseClient, error) {
 	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(cfg.ClickHouseCACertPath)
 	if err != nil {
 		return projectorClickHouseClient{}, err
@@ -398,8 +398,9 @@ func openProjectorClickHouse(cfg config.ProjectorConfig) (projectorClickHouseCli
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
 	return projectorClickHouseClient{
-		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage),
-		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
+		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage,
+			contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, nil))),
+		ping: clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
 }
 

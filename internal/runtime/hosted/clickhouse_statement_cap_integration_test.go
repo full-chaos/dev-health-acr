@@ -2,8 +2,12 @@ package hosted
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -39,10 +43,66 @@ func TestOpenClickHouseSendsTheStatementMemoryCapToTheServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = components.close() })
-	if got := readSetting(t, components.queryClient, "SELECT toString(getSetting('max_memory_usage'))"); got != "67108864" {
-		t.Fatalf("server saw max_memory_usage %s through the API client, want 67108864 (64 MiB)", got)
+	if got := readSetting(t, components.queryClient, "SELECT toString(getSetting('max_memory_usage'))"); got != "268435456" {
+		t.Fatalf("server saw max_memory_usage %s through the API client, want 268435456 (256 MiB)", got)
 	}
 	if got := readSetting(t, components.queryClient, "SELECT toString(getSetting('max_memory_usage')) SETTINGS max_memory_usage = 12345678"); got != "12345678" {
 		t.Fatalf("server saw max_memory_usage %s with a statement-level SETTINGS, want 12345678", got)
 	}
+}
+
+// Against a real server, the profile events carry the statement's peak memory
+// and the near-cap observer is told once the statement is closed.
+func TestMemoryNearCapObserverSeesTheServersPeakMemory(t *testing.T) {
+	ctx := context.Background()
+	dsn := chserver.StartDSN(t, ctx)
+	raw, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	var seen []contextpacket.MemoryNearCap
+	client := contextpacket.NewMemoryCappedQueryClient(raw, contextpacket.APIStatementMaxMemoryUsage,
+		contextpacket.WithMemoryNearCapRatio(0.0001),
+		contextpacket.WithMemoryNearCapObserver(func(_ context.Context, near contextpacket.MemoryNearCap) { seen = append(seen, near) }))
+	const statement = "SELECT toString(count()) FROM (SELECT number FROM numbers(1000000) GROUP BY number)"
+	if got := readSetting(t, client, statement); got != "1000000" {
+		t.Fatalf("statement returned %s, want 1000000", got)
+	}
+	if len(seen) != 1 || seen[0].PeakBytes == 0 || seen[0].CapBytes != contextpacket.APIStatementMaxMemoryUsage || seen[0].Statement != statement {
+		t.Fatalf("near-cap observer saw %+v, want one call with a nonzero peak and the API cap; profile event names the server sent: %v", seen, profileEventNames(t, dsn))
+	}
+}
+
+func profileEventNames(t *testing.T, dsn string) []string {
+	t.Helper()
+	options, err := clickhousedriver.ParseDSN(dsn)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	conn, err := clickhousedriver.Open(options)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	defer func() { _ = conn.Close() }()
+	names := map[string]bool{}
+	queryCtx := clickhousedriver.Context(context.Background(), clickhousedriver.WithProfileEvents(func(events []clickhousedriver.ProfileEvent) {
+		for _, event := range events {
+			names[event.Type+":"+event.Name] = true
+		}
+	}))
+	rows, err := conn.Query(queryCtx, "SELECT count() FROM (SELECT number FROM numbers(1000000) GROUP BY number)")
+	if err == nil {
+		for rows.Next() {
+		}
+		_ = rows.Close()
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		if strings.Contains(strings.ToLower(name), "mem") {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
