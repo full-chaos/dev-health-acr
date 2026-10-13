@@ -12,7 +12,8 @@ type driverSourceStateCorrectionRecorder interface {
 
 // groundedDriverSourceStates sets each driver's source_state from the state of
 // the canonical facts its claims ground to: truncated when any grounded fact is
-// truncated, empty otherwise. A draft's own value is never trusted.
+// truncated, else stale when any is stale, empty otherwise. A draft's own value
+// is never trusted.
 func groundedDriverSourceStates(drivers []DriverJudgment, claims []ClaimedFact, facts []CanonicalFact) ([]DriverJudgment, int) {
 	byID := make(map[string]ClaimedFact, len(claims))
 	for _, claim := range claims {
@@ -27,10 +28,7 @@ func groundedDriverSourceStates(drivers []DriverJudgment, claims []ClaimedFact, 
 			if !ok {
 				continue
 			}
-			if claimRestsOnTruncatedFact(facts, claim) {
-				derived = SourceTruncated
-				break
-			}
+			derived = worseDriverSourceState(derived, claimSourceState(facts, claim))
 		}
 		if out[index].SourceState != derived {
 			out[index].SourceState = derived
@@ -40,20 +38,40 @@ func groundedDriverSourceStates(drivers []DriverJudgment, claims []ClaimedFact, 
 	return out, corrected
 }
 
-func claimRestsOnTruncatedFact(facts []CanonicalFact, claim ClaimedFact) bool {
-	if _, outcome := groundClaim(facts, claim); outcome != claimGrounded {
-		return false
+func worseDriverSourceState(a, b SourceState) SourceState {
+	rank := func(state SourceState) int {
+		switch state {
+		case SourceTruncated:
+			return 2
+		case SourceStale:
+			return 1
+		}
+		return 0
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+// claimSourceState is the non-available state a grounded claim rests on:
+// truncated or stale, or empty. A derived claim takes the worst state over its
+// input facts.
+func claimSourceState(facts []CanonicalFact, claim ClaimedFact) SourceState {
+	fact, outcome := groundClaim(facts, claim)
+	if outcome != claimGrounded {
+		return ""
 	}
 	if len(claim.DerivedFrom) == 0 {
-		fact, _ := groundClaim(facts, claim)
-		return fact.SourceState == SourceTruncated
+		return worseDriverSourceState("", fact.SourceState)
 	}
+	var derived SourceState
 	for _, input := range claim.DerivedFrom {
-		for _, fact := range facts {
-			if fact.ID != "" && fact.ID == input.FactID && fact.SourceState == SourceTruncated {
-				return true
+		for _, candidate := range facts {
+			if candidate.ID != "" && candidate.ID == input.FactID {
+				derived = worseDriverSourceState(derived, candidate.SourceState)
 			}
 		}
 	}
-	return false
+	return derived
 }

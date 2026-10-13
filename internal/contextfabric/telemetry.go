@@ -1006,13 +1006,19 @@ func (t SlogEngineTelemetry) RecordProjectStatusDrivers(ctx context.Context, pri
 	for _, kind := range event.Partial {
 		partial = append(partial, string(kind))
 	}
+	partialStates := make([]string, 0, len(event.PartialStates))
+	for _, state := range event.PartialStates {
+		partialStates = append(partialStates, string(state))
+	}
 	t.logger.InfoContext(ctx, "context fabric project status drivers", append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"emitted", event.Emitted,
 		"skipped_budget", event.SkippedBudget,
 		"skipped_id_clash", event.SkippedIDClash,
 		"missing_kinds", SanitizeLogStrings(missing),
+		"missing_states", SanitizeLogStrings(event.MissingStates),
 		"partial_kinds", SanitizeLogStrings(partial),
+		"partial_states", SanitizeLogStrings(partialStates),
 	}, requestIDLogAttrs(ctx)...)...)
 }
 

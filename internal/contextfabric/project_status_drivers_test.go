@@ -78,7 +78,7 @@ func TestProjectStatusClientModeResultCarriesStatusDrivers(t *testing.T) {
 func TestProjectStatusMissingKindServesNoDriver(t *testing.T) {
 	rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
 		facts := projectStatusFacts(p)
-		facts[1].SourceState = SourceStale
+		facts[1].SourceState = SourceNoData
 		facts[3].Fields = map[string]FactValue{"severity": {Null: true}}
 		return facts
 	})
@@ -181,7 +181,7 @@ func TestProjectStatusServerModeRecomposesCurrentStateFromTheMintedClaims(t *tes
 func TestProjectStatusDecisionTelemetryNamesWhatWasOmitted(t *testing.T) {
 	rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
 		facts := projectStatusFacts(p)
-		facts[1].SourceState = SourceStale
+		facts[1].SourceState = SourceNoData
 		return facts
 	})
 	if _, _, err := rig.investigate(serverRequest()); err != nil {
@@ -193,6 +193,9 @@ func TestProjectStatusDecisionTelemetryNamesWhatWasOmitted(t *testing.T) {
 	event := rig.telemetry.projectStatusDrivers[0]
 	if event.Emitted != 2 || len(event.Missing) != 1 || event.Missing[0] != FactWorkload {
 		t.Errorf("event = %#v, want 2 emitted and workload missing", event)
+	}
+	if len(event.MissingStates) != 1 || event.MissingStates[0] != string(SourceNoData) {
+		t.Errorf("missing states = %v, want [no_data]", event.MissingStates)
 	}
 }
 

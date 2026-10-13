@@ -99,3 +99,65 @@ func collectCandidateStates(node any, states map[string]string) {
 		}
 	}
 }
+
+func TestProjectStatusStaleFactIsUsableWithAStaleLabel(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
+		facts := projectStatusFacts(p)
+		facts[1].SourceState = SourceStale
+		return facts
+	})
+	result, _, err := rig.investigate(serverRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Estimate coverage: 18 of 40 items estimated|Risk severity: medium"; got != want {
+		t.Fatalf("drivers = %q, want %q", got, want)
+	}
+	for _, driver := range result.Drivers {
+		stale := driver.Category == "workload"
+		if got := strings.Contains(driver.Summary, "(stale: the source read is out of date)"); got != stale {
+			t.Errorf("driver %q summary %q: stale label = %v, want %v", driver.DriverID, driver.Summary, got, stale)
+		}
+		wantState := SourceState("")
+		if stale {
+			wantState = SourceStale
+		}
+		if driver.SourceState != wantState {
+			t.Errorf("driver %q source_state = %q, want %q", driver.DriverID, driver.SourceState, wantState)
+		}
+	}
+	event := rig.telemetry.projectStatusDrivers[0]
+	if len(event.Missing) != 0 || len(event.PartialStates) != 1 || event.PartialStates[0] != SourceStale {
+		t.Errorf("event missing=%v partial states=%v, want none missing and [stale]", event.Missing, event.PartialStates)
+	}
+}
+
+func TestProjectStatusUnusableFactStatesStayMissingAndNameTheState(t *testing.T) {
+	for _, state := range []SourceState{SourceNoData, SourceUnavailable, SourceConflicted} {
+		t.Run(string(state), func(t *testing.T) {
+			rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
+				facts := projectStatusFacts(p)
+				facts[2].SourceState = state
+				return facts
+			})
+			result, _, err := rig.investigate(serverRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Risk severity: medium"; got != want {
+				t.Errorf("drivers = %q, want %q", got, want)
+			}
+			event := rig.telemetry.projectStatusDrivers[0]
+			if len(event.Missing) != 1 || event.Missing[0] != FactReadiness || len(event.MissingStates) != 1 || event.MissingStates[0] != string(state) {
+				t.Errorf("missing = %v states = %v, want readiness named %s", event.Missing, event.MissingStates, state)
+			}
+		})
+	}
+}
+
+func TestSuppliedDraftCannotHideAStaleFact(t *testing.T) {
+	t.Parallel()
+	if got := suppliedDriverSourceState(t, SourceStale, ""); got != SourceStale {
+		t.Errorf("served driver source_state = %q, want stale from the grounded fact", got)
+	}
+}

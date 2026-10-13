@@ -57,7 +57,23 @@ type ProjectStatusDriverEvent struct {
 	SkippedBudget  int
 	SkippedIDClash int
 	Missing        []FactKind
+	MissingStates  []string
 	Partial        []FactKind
+	PartialStates  []SourceState
+}
+
+func projectStatusUsableState(state SourceState) bool {
+	return state == SourceAvailable || state == SourceTruncated || state == SourceStale
+}
+
+func projectStatusStateLabel(state SourceState) string {
+	switch state {
+	case SourceTruncated:
+		return " (partial: the source read was truncated)."
+	case SourceStale:
+		return " (stale: the source read is out of date)."
+	}
+	return "."
 }
 
 func projectStatusIntent(interpretation InterpretedQuestion) bool {
@@ -100,23 +116,40 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 	var drivers []DriverJudgment
 	var claims []ClaimedFact
 	for _, observation := range projectStatusObservations {
-		var fact *CanonicalFact
+		var fact, named *CanonicalFact
 		for index := range facts {
 			candidate := &facts[index]
-			if candidate.Kind == observation.kind && candidate.Subject.Kind == project.Kind && candidate.Subject.CanonicalID == project.CanonicalID &&
-				(candidate.SourceState == SourceAvailable || candidate.SourceState == SourceTruncated) {
+			if candidate.Kind != observation.kind || candidate.Subject.Kind != project.Kind || candidate.Subject.CanonicalID != project.CanonicalID {
+				continue
+			}
+			if named == nil {
+				named = candidate
+			}
+			if projectStatusUsableState(candidate.SourceState) {
 				fact = candidate
 				break
 			}
 		}
-		if fact == nil || len(fact.EvidenceRefIDs) == 0 {
+		missing := func(state string) {
 			event.Missing = append(event.Missing, observation.kind)
+			event.MissingStates = append(event.MissingStates, state)
+		}
+		if fact == nil {
+			if named == nil {
+				missing("not_read")
+			} else {
+				missing(string(named.SourceState))
+			}
+			continue
+		}
+		if len(fact.EvidenceRefIDs) == 0 {
+			missing("no_evidence")
 			continue
 		}
 		title, ok := observation.title(fact.Fields)
 		claimValue, hasValue := fact.Fields[observation.field]
 		if !ok || !hasValue || claimValue.Null {
-			event.Missing = append(event.Missing, observation.kind)
+			missing("no_value")
 			continue
 		}
 		if len(drivers) >= allowed {
@@ -132,12 +165,12 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			continue
 		}
 		taken[driverID] = struct{}{}
-		summary := title + "."
+		summary := title + projectStatusStateLabel(fact.SourceState)
 		var sourceState SourceState
-		if fact.SourceState == SourceTruncated {
-			summary = title + " (partial: the source read was truncated)."
-			sourceState = SourceTruncated
+		if fact.SourceState != SourceAvailable {
+			sourceState = fact.SourceState
 			event.Partial = append(event.Partial, observation.kind)
+			event.PartialStates = append(event.PartialStates, fact.SourceState)
 		}
 		claims = append(claims, ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue)})
 		drivers = append(drivers, DriverJudgment{
