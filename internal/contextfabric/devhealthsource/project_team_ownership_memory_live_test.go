@@ -277,7 +277,7 @@ func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T
 			for i, versions := range []int{100, 1000, 2000} {
 				m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-0000000001%d%d", len(layout), i), layout, versions)
 				capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
-				only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true}
+				only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true, "exp_ownership_final_where_false": true, "exp_ownership_final_scalar_gate": true, "exp_ownership_final_pk_in_empty": true, "exp_ownership_final_pk_in_literal_empty": true, "exp_ownership_nofinal_gate": true}
 				all := measureProjectTeamsFragments(t, m.f, m.query, capped, fmt.Sprintf("slope-%s-%d", layout, versions), only)
 				peak := peakOf(t, all, "paged_statement")
 				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
