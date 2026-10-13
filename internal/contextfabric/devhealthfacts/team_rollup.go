@@ -639,7 +639,7 @@ const ownershipNoteReadBudget = 2 * time.Second
 func ownershipNoteContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	budget := ownershipNoteReadBudget
 	if deadline, ok := ctx.Deadline(); ok {
-		if quarter := time.Until(deadline) / 4; quarter < budget {
+		if quarter := deadline.Sub(clock()) / 4; quarter < budget {
 			budget = quarter
 		}
 	}

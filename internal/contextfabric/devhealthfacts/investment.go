@@ -103,7 +103,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	omittedUnrepresentableCount := 0
 	rejectedCount := 0
 	defer func() {
-		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, teamOwnedOrReachedRepositories, timeBound, err)
+		attachOwnershipNoteToFailure(ctx, p.facts.client, orgID, query.Subjects, p.ownershipForFailureNote, timeBound, err)
 	}()
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note. A team/project subject
@@ -866,4 +866,34 @@ func projectSpanKey(subject contextfabric.SubjectRef) string {
 		return ""
 	}
 	return segments[0] + ":" + segments[len(segments)-1]
+}
+
+// ownershipForFailureNote is teamOwnedOrReachedRepositories over the readers
+// this kind's success path uses, so a failed mix read still knows which
+// requested teams own no repository.
+func (p *InvestmentProvider) ownershipForFailureNote(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string][]teamOwnedRepo, error) {
+	owned, err := p.readTeamOwnedRepositories(ctx, orgID, teamIDs, bound)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]teamOwnedRepo, len(owned))
+	for teamID, keys := range owned {
+		for _, key := range keys {
+			out[teamID] = append(out[teamID], teamOwnedRepo{key: key})
+		}
+	}
+	projectTeams, err := teamsOwningAnyProject(ctx, client, orgID, teamIDs)
+	if err != nil || len(projectTeams) == 0 {
+		return out, err
+	}
+	reached, err := teamProjectReachedRepositories(ctx, client, orgID, projectTeams, bound)
+	if err != nil {
+		return nil, err
+	}
+	for teamID, repos := range reachedOnlyRepositories(reached, out) {
+		if len(out[teamID]) == 0 && len(repos) > 0 {
+			out[teamID] = []teamOwnedRepo{{key: "reached"}}
+		}
+	}
+	return out, nil
 }
