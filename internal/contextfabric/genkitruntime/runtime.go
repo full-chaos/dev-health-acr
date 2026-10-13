@@ -1700,13 +1700,13 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	case contextfabric.SubjectExpressionNamed:
 		capture.Frame.SubjectExpression.Named = &contextfabric.NamedSubjectExpression{Terms: terms}
 	case contextfabric.SubjectExpressionDiscoveredKind:
-		capture.Frame.SubjectExpression.Discovered = &contextfabric.DiscoveredSetExpression{MemberKind: memberKind}
+		capture.Frame.SubjectExpression.Discovered = &contextfabric.DiscoveredSetExpression{MemberKind: memberKind, MemberQualifier: memberQualifier, MemberQualifierValue: memberQualifierValue}
 	case contextfabric.SubjectExpressionChildrenOfScope:
 		capture.Frame.SubjectExpression.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier, MemberQualifierValue: memberQualifierValue}
 	case contextfabric.SubjectExpressionGroupedMembers:
 		capture.Frame.SubjectExpression.Grouped = &contextfabric.GroupedSetExpression{GroupKind: groupKind, MemberKind: memberKind}
 	case contextfabric.SubjectExpressionOrganizationScope:
-		org := &contextfabric.OrganizationScopeExpression{}
+		org := &contextfabric.OrganizationScopeExpression{MemberQualifier: memberQualifier, MemberQualifierValue: memberQualifierValue}
 		if memberKind != "" {
 			org.MemberKind = &memberKind
 		}

@@ -255,7 +255,7 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 	{ID: FrameInvariantI1, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldSubjectExpressionKind, FrameFieldSubjectTerms, FrameFieldAnchorTerms, FrameFieldOperands, FrameFieldMemberKind, FrameFieldGroupKind}},
 	{ID: FrameInvariantI17, Phase: FrameValidationPhaseA1,
-		Reads: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind, FrameFieldMemberKind}},
+		Reads: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind, FrameFieldMemberKind, FrameFieldMemberQualifier, FrameFieldMemberQualifierValue}},
 	{ID: FrameInvariantI2, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldOperands}},
 	{ID: FrameInvariantI3, Phase: FrameValidationPhaseA1,
@@ -263,7 +263,7 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 	{ID: FrameInvariantI19, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldOperands}},
 	{ID: FrameInvariantI4, Phase: FrameValidationPhaseA1,
-		Reads: []FrameField{FrameFieldMemberKind}},
+		Reads: []FrameField{FrameFieldMemberKind, FrameFieldMemberQualifier, FrameFieldMemberQualifierValue}},
 	{ID: FrameInvariantI5, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind, FrameFieldMemberQualifier, FrameFieldMemberQualifierValue}},
 	{ID: FrameInvariantI6, Phase: FrameValidationPhaseA1,
@@ -619,6 +619,14 @@ func checkI17(frame QuestionFrame) (FrameValidationFailure, bool) {
 	if org != nil && org.MemberKind != nil && !contractsv1.ValidContextFabricSubjectKind(*org.MemberKind) {
 		return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberKindInvalid}, true
 	}
+	if org != nil && org.MemberKind != nil {
+		if !ValidMemberQualifier(org.MemberQualifier) {
+			return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberQualifierInvalid}, true
+		}
+		if !ValidMemberQualifierValue(*org.MemberKind, org.MemberQualifier, org.MemberQualifierValue) {
+			return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberQualifierValueInvalid}, true
+		}
+	}
 	if !frame.HasGoal(GoalCountOrAggregate) {
 		return FrameValidationFailure{}, false
 	}
@@ -732,6 +740,12 @@ func checkI4(expression SubjectExpression) (FrameValidationFailure, bool) {
 	}
 	if !contractsv1.ValidContextFabricSubjectKind(expression.Discovered.MemberKind) {
 		return FrameValidationFailure{Invariant: FrameInvariantI4, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberKindInvalid}, true
+	}
+	if !ValidMemberQualifier(expression.Discovered.MemberQualifier) {
+		return FrameValidationFailure{Invariant: FrameInvariantI4, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberQualifierInvalid}, true
+	}
+	if !ValidMemberQualifierValue(expression.Discovered.MemberKind, expression.Discovered.MemberQualifier, expression.Discovered.MemberQualifierValue) {
+		return FrameValidationFailure{Invariant: FrameInvariantI4, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberQualifierValueInvalid}, true
 	}
 	return FrameValidationFailure{}, false
 }

@@ -1018,6 +1018,14 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 			return fmt.Errorf("scoped member_qualifier_value is not valid beside its qualifier and member kind")
 		}
 	}
+	if expression.Discovered != nil {
+		if !ValidMemberQualifier(expression.Discovered.MemberQualifier) {
+			return fmt.Errorf("discovered member_qualifier %q is not a vocabulary member", expression.Discovered.MemberQualifier)
+		}
+		if !ValidMemberQualifierValue(expression.Discovered.MemberKind, expression.Discovered.MemberQualifier, expression.Discovered.MemberQualifierValue) {
+			return fmt.Errorf("discovered member_qualifier_value is not valid beside its qualifier and member kind")
+		}
+	}
 	if expression.Explicit != nil {
 		if len(expression.Explicit.Operands) > SemanticStateMaxOperands {
 			return over(SemanticStateBoundOperands, "%d operands exceeds %d", len(expression.Explicit.Operands), SemanticStateMaxOperands)

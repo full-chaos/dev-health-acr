@@ -312,6 +312,12 @@ type DiscoveredSetExpression struct {
 	// makes DiscoveredCohort read instead of a substring match over model
 	// prose (L6 inventory row 1).
 	MemberKind SubjectKind `json:"member_kind"`
+	// MemberQualifier and MemberQualifierValue state the same optional
+	// qualifier as ScopedSetExpression, over the caller's whole
+	// organization: a question that names no anchor ("which pull requests
+	// are waiting on review") still states a status.
+	MemberQualifier      MemberQualifier `json:"member_qualifier,omitempty"`
+	MemberQualifierValue string          `json:"member_qualifier_value,omitempty"`
 }
 
 // ScopedSetExpression asks for the members of a kind reachable from a
@@ -370,6 +376,31 @@ type OrganizationScopeExpression struct {
 	// counting goals and permits its absence otherwise, where the org
 	// itself is the subject and there is nothing to enumerate.
 	MemberKind *SubjectKind `json:"member_kind,omitempty"`
+	// MemberQualifier and MemberQualifierValue state the same optional
+	// qualifier as ScopedSetExpression over the organization's members.
+	MemberQualifier      MemberQualifier `json:"member_qualifier,omitempty"`
+	MemberQualifierValue string          `json:"member_qualifier_value,omitempty"`
+}
+
+// MemberQualification is the member kind and qualifier an expression states
+// over its members, whichever variant states it: the one place a status filter
+// is read from, so an anchored and an unanchored question cannot diverge.
+func (e SubjectExpression) MemberQualification() (kind SubjectKind, qualifier MemberQualifier, value string, ok bool) {
+	switch e.Kind {
+	case SubjectExpressionChildrenOfScope:
+		if e.Scoped != nil {
+			return e.Scoped.MemberKind, e.Scoped.MemberQualifier, e.Scoped.MemberQualifierValue, true
+		}
+	case SubjectExpressionDiscoveredKind:
+		if e.Discovered != nil {
+			return e.Discovered.MemberKind, e.Discovered.MemberQualifier, e.Discovered.MemberQualifierValue, true
+		}
+	case SubjectExpressionOrganizationScope:
+		if e.Org != nil && e.Org.MemberKind != nil {
+			return *e.Org.MemberKind, e.Org.MemberQualifier, e.Org.MemberQualifierValue, true
+		}
+	}
+	return "", "", "", false
 }
 
 // MemberKind returns the member kind the expression asks for, and whether

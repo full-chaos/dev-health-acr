@@ -48,14 +48,14 @@ func MemberStatusStoredProperty(kind SubjectKind) string {
 // children_of_scope frame whose status qualifier carries a value of the set of
 // its member kind. Pull requests are PullRequestStatusFilterOf.
 func MemberStatusFilterOf(frame *QuestionFrame) (SubjectKind, string) {
-	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+	if frame == nil {
 		return "", ""
 	}
-	scoped := frame.SubjectExpression.Scoped
-	if scoped.MemberKind == SubjectPullRequest || scoped.MemberQualifier != MemberQualifierStatus || !InMemberStatusVocabulary(scoped.MemberKind, scoped.MemberQualifierValue) {
+	kind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+	if !ok || kind == SubjectPullRequest || qualifier != MemberQualifierStatus || !InMemberStatusVocabulary(kind, value) {
 		return "", ""
 	}
-	return scoped.MemberKind, scoped.MemberQualifierValue
+	return kind, value
 }
 
 // MemberStatusOutsideSet is how many members of a kind the pool held whose
@@ -91,9 +91,9 @@ func MemberStatusUnappliedOf(frame *QuestionFrame, kind SubjectKind) bool {
 		return false
 	}
 	switch frame.SubjectExpression.Kind {
-	case SubjectExpressionChildrenOfScope:
-		scoped := frame.SubjectExpression.Scoped
-		return scoped != nil && scoped.MemberKind == kind && scoped.MemberQualifier == MemberQualifierStatus && scoped.MemberQualifierValue == ""
+	case SubjectExpressionChildrenOfScope, SubjectExpressionDiscoveredKind, SubjectExpressionOrganizationScope:
+		memberKind, qualifier, value, ok := frame.SubjectExpression.MemberQualification()
+		return ok && memberKind == kind && qualifier == MemberQualifierStatus && value == ""
 	case SubjectExpressionExplicitSet:
 		if frame.SubjectExpression.Explicit == nil {
 			return false

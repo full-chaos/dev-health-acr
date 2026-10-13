@@ -1010,7 +1010,11 @@ import (
 // to what the synthesis input leaves of that budget, and the input is cut to
 // the budget with the cut stated. An answer saved under v199 was fitted to the
 // whole budget.
-const QueryVersion = "devhealthfacts.clickhouse.v200"
+//
+// v200 -> v201: a pull request, project or incident list question that names no
+// organization or parent now applies its stated status. An answer saved under
+// v200 listed the unfiltered set.
+const QueryVersion = "devhealthfacts.clickhouse.v201"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

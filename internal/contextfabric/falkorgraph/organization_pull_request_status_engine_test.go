@@ -122,6 +122,16 @@ func investigateOrganizationPullRequests(t *testing.T, pulls []organizationPullR
 // with the synthesizer the investigation answers through.
 func investigateOrganizationPullRequestsWith(t *testing.T, synthesizer contextfabric.AnswerSynthesizer, pulls []organizationPullRequest, status string, principal storage.Principal, anchored bool, scope ...contextfabric.RequestedScope) (contextfabric.InvestigationResult, *recordingTelemetry) {
 	t.Helper()
+	return investigatePullRequestsFramed(t, synthesizer, pulls, status, principal, anchored, func(status string) *contextfabric.QuestionFrame {
+		frame := pullRequestStatusFrame(status)
+		frame.SubjectExpression.Scoped.AnchorTerms = []string{"Acme"}
+		return frame
+	}, scope...)
+}
+
+// investigatePullRequestsFramed is the engine run over the frame build makes.
+func investigatePullRequestsFramed(t *testing.T, synthesizer contextfabric.AnswerSynthesizer, pulls []organizationPullRequest, status string, principal storage.Principal, anchored bool, build func(string) *contextfabric.QuestionFrame, scope ...contextfabric.RequestedScope) (contextfabric.InvestigationResult, *recordingTelemetry) {
+	t.Helper()
 	byID := map[string]organizationPullRequest{}
 	for _, p := range pulls {
 		byID[p.id] = p
@@ -183,9 +193,8 @@ func investigateOrganizationPullRequestsWith(t *testing.T, synthesizer contextfa
 		}
 		return nil, nil
 	}}
-	frame := pullRequestStatusFrame(status)
+	frame := build(status)
 	frame.Goals = []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey}
-	frame.SubjectExpression.Scoped.AnchorTerms = []string{"Acme"}
 	derived := contextfabric.DeriveFrameObligations(*frame, nil)
 	telemetry := &recordingTelemetry{}
 	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
