@@ -24,10 +24,16 @@ func TestProbeTitleGateMemory(t *testing.T) {
 	scope := readers.WorkItemScopeSQL(readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{}})
 	titles := `SELECT w.work_item_id AS id, if(uniqExactIf(w.title, (` + scope.AuthorizationExpr + `)) = 1, anyIf(w.title, (` + scope.AuthorizationExpr + `)), '') AS title FROM work_items AS w FINAL ` + scope.JoinSQL + ` WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('00000000-0000-0000-0000-000000000000')) AND w.work_item_id IN (SELECT source_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND source_type = 'issue' UNION ALL SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND target_type = 'issue') GROUP BY w.work_item_id`
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", WorkItemGrant: auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true)}
-	binds := plan.Bindings()
+	_ = query
+	grant := plan.WorkItemGrant
+	literal := func(statement string) string {
+		slugs := "['acme/deploy-service']"
+		_ = grant
+		return strings.NewReplacer("{org_id:String}", "'"+wgOrg+"'", "{repo_id:UUID}", "toUUID('"+wgRepo+"')", "{authorized_repo_all:UInt8}", "0", "{authorized_repo_slugs:Array(String)}", slugs, "{authorized_repo_owners:Array(String)}", "[]").Replace(statement)
+	}
 	run := func(label, statement string) {
 		for i := 0; i < 2; i++ {
-			rows, err := query.Query(ctx, statement, binds)
+			rows, err := direct.Query(ctx, literal(statement))
 			if err != nil {
 				t.Fatalf("%s: %v", label, err)
 			}
