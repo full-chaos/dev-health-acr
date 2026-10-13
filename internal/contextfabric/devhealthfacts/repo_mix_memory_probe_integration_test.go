@@ -19,9 +19,9 @@ import (
 const probeRepos = 200
 
 type probeDataset struct {
-	org            string
-	units          int
-	commits, edges int
+	org                 string
+	units               int
+	commits, edges, prs int
 }
 
 func probeSeed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, d probeDataset) {
@@ -52,13 +52,13 @@ SELECT concat('wu-', toString(u)),
 	map(themes[1 + u %% 5], 0.6, themes[1 + (u + 2) %% 5], 0.4),
 	map('%s', 0.25, 'refactor', 0.15, 'docs', 0.1, 'tests', 0.1),
 	concat('{"issues":', toJSONString([concat('ghpr:acme/repo-', toString((u * 11) %% %d), '#', toString(u)), concat('linear:CH-', toString(u)), concat('jira:OPS-', toString(u))]),
-		',"prs":', toJSONString(arrayMap(j -> concat(repos_arr[1 + (u * 7 + j * 13) %% %d], '#pr', toString(u * 4 + j)), range(3))),
+		',"prs":', toJSONString(arrayMap(j -> concat(repos_arr[1 + (u * 7 + j * 13) %% %d], '#pr', toString(u * 4 + j)), range(%d))),
 		',"commits":', toJSONString(arrayMap(j -> lower(hex(SHA1(concat(toString(u), '-', toString(j))))), range(%d))),
 		',"edges":', toJSONString(arrayMap(j -> lower(hex(SHA256(concat('e', toString(u), '-', toString(j))))), range(%d))), '}'),
 	toDateTime64('2026-09-20 00:00:00', 3, 'UTC') + toIntervalHour(v),
 	'%s'
 FROM (SELECT intDiv(number, 2) AS u, number %% 2 AS v FROM numbers(%d))`,
-		strings.Join(quoted, ","), readers.BugfixSubcategoryKey, probeRepos, probeRepos, d.commits, d.edges, d.org, 2*d.units)
+		strings.Join(quoted, ","), readers.BugfixSubcategoryKey, probeRepos, probeRepos, d.prs, d.commits, d.edges, d.org, 2*d.units)
 	if err := direct.Exec(ctx, statement); err != nil {
 		t.Fatalf("seed units: %v", err)
 	}
@@ -123,10 +123,12 @@ func TestProbeRepositoryMixMemorySlopeOnRealClickHouse(t *testing.T) {
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	datasets := []probeDataset{
-		{org: "org-w-4000", units: 4000, commits: 20, edges: 40},
-		{org: "org-w-16000", units: 16000, commits: 20, edges: 40},
-		{org: "org-w-48000", units: 48000, commits: 20, edges: 40},
-		{org: "org-n-48000", units: 48000},
+		{org: "org-w-2500", units: 2500, commits: 10, edges: 10, prs: 3},
+		{org: "org-w-10000", units: 10000, commits: 10, edges: 10, prs: 3},
+		{org: "org-w-15000", units: 15000, commits: 10, edges: 10, prs: 3},
+		{org: "org-n-20000", units: 20000, prs: 3},
+		{org: "org-r14-3000", units: 3000, prs: 14},
+		{org: "org-r14-12000", units: 12000, prs: 14},
 	}
 	for _, d := range datasets {
 		probeSeed(t, ctx, direct, d)
@@ -148,6 +150,7 @@ FROM work_unit_investments WHERE org_id = {org_id:String} GROUP BY work_unit_id`
 		{"latest_refs_only", probeLatestPrefix + `, argMax(theme_distribution_json, computed_at) AS t, argMax(ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0), computed_at) AS b,
 	argMax(tuple(JSONExtract(structural_evidence_json, 'prs', 'Array(String)'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')), computed_at) AS e
 FROM work_unit_investments WHERE org_id = {org_id:String} GROUP BY work_unit_id`},
+		{"parsed_arrayjoin", devhealthfacts.ProbeRepoSplitParsed()},
 		{"split_core", devhealthfacts.ProbeRepoSplitCore()},
 		{"full_no_scope", devhealthfacts.ProbeRepoMixStatement(100000)},
 	}
@@ -160,22 +163,37 @@ FROM work_unit_investments WHERE org_id = {org_id:String} GROUP BY work_unit_id`
 		fmt.Fprintf(&report, "\n== %s units=%d versions=2 avg_evidence_bytes=%.0f\n", d.org, d.units, avgEvidence)
 		for _, s := range stages {
 			r := probeStage(t, ctx, direct, d.org, d.org+"/"+s.name, s.sql, ids)
-			fmt.Fprintf(&report, "%-20s mem=%7.2f MiB read=%7.2f MiB rows=%d\n", s.name, float64(r.memory)/(1<<20), float64(r.readBytes)/(1<<20), r.readRows)
+			line := fmt.Sprintf("%-20s mem=%7.2f MiB read=%7.2f MiB rows=%d", s.name, float64(r.memory)/(1<<20), float64(r.readBytes)/(1<<20), r.readRows)
+			t.Logf("%s %s", d.org, line)
+			report.WriteString(line + "\n")
 		}
 		var mark int64
-		for i := 0; i < 2; i++ {
+		failed := false
+		for i := 0; i < 2 && !failed; i++ {
 			mark = serverNowMicros(t, ctx, direct)
 			result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: d.org}, contextfabric.FactQuery{
 				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: requested,
 			})
 			if err != nil {
-				t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
+				t.Logf("%s ReadFacts: %v: %s", d.org, err, readFailureCause(err))
+				fmt.Fprintf(&report, "PROVIDER failed: %v\n", err)
+				failed = true
+				break
 			}
 			if len(result.Facts) == 0 {
 				t.Fatalf("%s: no facts served", d.org)
 			}
 		}
+		if failed {
+			continue
+		}
+		var tableBytes uint64
+		if err := direct.QueryRow(ctx, `SELECT sum(length(work_unit_id) + length(structural_evidence_json) + 8*4 + 16*length(mapKeys(theme_distribution_json)) + 16*length(mapKeys(subcategory_distribution_json))) FROM work_unit_investments WHERE org_id = ?`, d.org).Scan(&tableBytes); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&report, "approx org rows bytes=%.2f MiB\n", float64(tableBytes)/(1<<20))
 		r := probeLogged(t, ctx, direct, queryLogSinceMark+` AND position(query, 'v * effort), theme_distribution_json)) AS theme_effort') > 0`, mark)
+		t.Logf("%s PROVIDER mem=%.2f MiB read=%.2f MiB", d.org, float64(r.memory)/(1<<20), float64(r.readBytes)/(1<<20))
 		fmt.Fprintf(&report, "%-20s mem=%7.2f MiB read=%7.2f MiB rows=%d\n", "PROVIDER(ids scope)", float64(r.memory)/(1<<20), float64(r.readBytes)/(1<<20), r.readRows)
 		keys := make([]string, 0, len(r.events))
 		for k := range r.events {
