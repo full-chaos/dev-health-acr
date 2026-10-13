@@ -32,6 +32,15 @@ func teamWorkloadFact(team contextfabric.SubjectRef) contextfabric.CanonicalFact
 			"high_variance":        contextfabric.BooleanFactValue(false),
 			"backlog_size":         intValue(31),
 			"forecast_p50_days":    intValue(12),
+			"work_scope_id":        strValue("SECRETSCOPE-9"),
+			"daily_workload": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableTimeSeries, Key: []string{"day"},
+				Measures: []string{"backlog_size", "throughput_mean", "throughput_stddev"},
+				Grain:    contextfabric.GrainDay,
+				Rows: []contextfabric.FactValueRow{{Fields: map[string]contextfabric.FactValue{
+					"day": strValue("2026-09-28"), "backlog_size": intValue(31), "throughput_mean": numValue(4.5), "throughput_stddev": numValue(1.25),
+				}}},
+			}),
 		},
 		EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "t")},
 		SourceState:    contextfabric.SourceAvailable,
@@ -61,6 +70,12 @@ func TestRestrictedCallerReadsTeamForecastLabelledAsAllOwnedRepositories(t *test
 	if fact.AggregateScope != "all_owned_repositories" {
 		t.Errorf("aggregate_scope = %q, want all_owned_repositories", fact.AggregateScope)
 	}
+	if _, served := fact.Tables["daily_workload"]; !served {
+		t.Errorf("daily_workload table not served")
+	}
+	if !containsString(fact.AggregateFields, "daily_workload") {
+		t.Errorf("daily_workload not labelled aggregate: %v", fact.AggregateFields)
+	}
 	for _, name := range []string{"throughput_mean", "throughput_stddev", "backlog_size", "forecast_p50_days"} {
 		if _, served := fact.Fields[name]; !served {
 			t.Errorf("%s not served", name)
@@ -70,7 +85,7 @@ func TestRestrictedCallerReadsTeamForecastLabelledAsAllOwnedRepositories(t *test
 		}
 	}
 	encoded := mustJSON(t, response)
-	for _, leak := range []string{"acme/b", "repository:b", "acme/a", "acr:v1:repository"} {
+	for _, leak := range []string{"acme/b", "repository:b", "acme/a", "acr:v1:repository", "SECRETSCOPE-9"} {
 		if strings.Contains(encoded, leak) {
 			t.Errorf("response names a repository (%q): %s", leak, encoded)
 		}
@@ -87,3 +102,24 @@ func containsString(list []string, want string) bool {
 }
 
 var _ = contractsv1.ContextFabricSubjectTeam
+
+func TestRestrictedCallerWorkScopeIdIsWithheld(t *testing.T) {
+	provider := &stubProvider{capability: workloadCapability(t), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{teamWorkloadFact(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
+	}}
+	request := FactsRequest{Kinds: []string{"workload"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}}
+	restricted, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), restrictedToA(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, served := restricted.Facts[0].Fields["work_scope_id"]; served || strings.Contains(mustJSON(t, restricted), "SECRETSCOPE-9") {
+		t.Errorf("work_scope_id reached a restricted caller: %s", mustJSON(t, restricted))
+	}
+	open, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, served := open.Facts[0].Fields["work_scope_id"]; !served {
+		t.Errorf("an unrestricted caller must keep work_scope_id: %s", mustJSON(t, open))
+	}
+}

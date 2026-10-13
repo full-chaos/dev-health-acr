@@ -661,6 +661,7 @@ func readinessFields() []fieldDecl {
 func workloadFields() []fieldDecl {
 	daily := fDaily("daily_workload",
 		cStr("day"), cNon(cInt("backlog_size", "count")), cNon(cNum("throughput_mean", "")), cNon(cNum("throughput_stddev", "")))
+	daily.Aggregate = true
 	teamBreakdown := fTable("team_breakdown",
 		cNullable(cRef(declTeamRef, cStr("team_id"))),
 		cNullable(cStr("team_name")),
