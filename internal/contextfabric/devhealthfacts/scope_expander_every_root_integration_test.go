@@ -405,7 +405,7 @@ func (c *recordingQueryClient) find(fragment string) (capturedStatement, bool) {
 // shape (the work-item authorization's repository lists) that must stay.
 func stripOriginArrays(statement string) string {
 	isOrigin := func(expression string) bool {
-		if strings.HasPrefix(expression, "if(authorized = 1, origin_ids,") {
+		if strings.HasPrefix(expression, "if(authorized = 1, origin_ids,") || strings.HasPrefix(expression, "arraySort(arrayConcat(groupUniqArray(p.id),") {
 			return true
 		}
 		inner := strings.TrimSuffix(strings.TrimPrefix(expression, "arraySort(groupUniqArray("), "))")
@@ -415,7 +415,7 @@ func stripOriginArrays(statement string) string {
 		}
 		return strings.HasPrefix(inner, "concat(p.provider, ") && strings.HasSuffix(inner, "p.id)")
 	}
-	for _, open := range []string{"arraySort(groupUniqArray(", "if(authorized = 1, origin_ids,"} {
+	for _, open := range []string{"arraySort(arrayConcat(groupUniqArray(p.id),", "arraySort(groupUniqArray(", "if(authorized = 1, origin_ids,"} {
 		from := 0
 		for {
 			found := strings.Index(statement[from:], open)

@@ -457,7 +457,7 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	// "first origin in the caller's slice order" because origins order is
 	// not part of any documented contract and SQL has no visibility into it
 	// anyway.
-	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank), arraySort(groupUniqArray(p.id))
+	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank), arraySort(arrayConcat(groupUniqArray(p.id), arraySlice((SELECT groupArray(work_item_id) FROM work_items WHERE org_id = {org_id:String}), 1, 0)))
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 INNER JOIN ` + admittedIssueLinksSQL + ` AS l ON l.work_item_id = w.work_item_id
