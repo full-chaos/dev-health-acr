@@ -83,9 +83,25 @@ SELECT ?, NULL, ?, 'work_item', concat(?, '-', repeat('x', 64), '-', toString(nu
 // follow the rows, not how many parts the inserts happen to leave unmerged.
 func mergeScopeTables(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 	t.Helper()
-	for _, table := range []string{"work_items", "work_item_team_attributions", "team_repo_ownership", "work_graph_issue_pr", "git_pull_requests", "project_membership_transitions"} {
-		if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
-			t.Fatalf("optimize %s: %v", table, err)
+	tables, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree%'`)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+	var names []string
+	for tables.Next() {
+		var name string
+		if err := tables.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		names = append(names, name)
+	}
+	tables.Close()
+	if len(names) == 0 {
+		t.Fatal("no table to merge: the layout step did not happen")
+	}
+	for _, name := range names {
+		if err := direct.Exec(ctx, "OPTIMIZE TABLE `"+name+"` FINAL"); err != nil {
+			t.Fatalf("optimize %s: %v", name, err)
 		}
 	}
 }
@@ -328,17 +344,12 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		}
 		return readings
 	}
-	// grew applies the slope guard: the larger reading is over the slope AND
-	// beyond both sizes' run-to-run spread and the absolute floor.
+	// grew is the slope guard: the larger size's reading (the smallest of
+	// three warm runs, both sizes on one merged part per table) over 1.15x
+	// the smaller size's plus a fixed floor. A cost that grows with the rows
+	// lifts all three runs, so the minimum carries it; jitter does not.
 	grew := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+max(arrayMemoryFloor, small.spread+large.spread)
-	}
-	// rose is the planted defect's growth: over the slope, and every run at the
-	// larger size above every run at the smaller size by more than the floor.
-	// The organization-wide forms are noisy at the larger size (spreads to
-	// 8 MB on 18-25 MB statements), so their own spread is not the yardstick.
-	rose := func(small, large variant) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+small.spread+arrayMemoryFloor
+		return float64(large.peak) > statementMemorySlope*float64(small.peak)+float64(arrayMemoryFloor)
 	}
 
 	// The guard reads merged parts; production tables are not one part, so
@@ -374,6 +385,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	mergeScopeTables(t, ctx, direct)
 	largeStatements := served(t)
 	t.Run("rows at the larger size", func(t *testing.T) { differential(t, largeStatements) })
+	measure(t, largeStatements)
 	large := measure(t, largeStatements)
 
 	for _, statement := range scopeExpanderStatements {
@@ -396,7 +408,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 		}
 		if !statement.threadBound {
-			if !rose(s.orgWide, l.orgWide) {
+			if !grew(s.orgWide, l.orgWide) {
 				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
 			}
 			continue
