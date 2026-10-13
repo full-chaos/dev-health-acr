@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // Prod shape of the largest org (read-only counts 2026-10-13): 67,486
@@ -130,6 +132,19 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 	return out
 }
 
+// memoryDiagnostic makes the tables fail the run so they show in the CI log;
+// TEMPORARY.
+const memoryDiagnostic = true
+
+func report(t *testing.T, text string) {
+	t.Helper()
+	if memoryDiagnostic {
+		t.Error("DIAGNOSTIC (temporary): " + text)
+		return
+	}
+	t.Log(text)
+}
+
 func peakOf(t *testing.T, peaks []fragmentPeak, name string) fragmentPeak {
 	t.Helper()
 	for _, p := range peaks {
@@ -156,73 +171,121 @@ func fragmentTable(stage string, peaks []fragmentPeak) string {
 // projector's own statement settings. The worst case is merges stopped with
 // several unmerged parts; the other stage is after OPTIMIZE FINAL.
 func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
-	query, direct := orgIsolationClickHouseFixture(t)
-	f := newIngestColumnsFixture(t, "95460000-0000-4000-8000-000000000001", nil, nil)
-	seedProjectTeamOwnershipShape(t, f, memoryShapeRows, memoryShapeUnmerged)
-	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
-	t.Cleanup(func() {
-		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
-		_ = direct.Exec(context.Background(), "SYSTEM START MERGES team_project_ownership")
-	})
-	// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
-	mustExec(t, f.ctx, direct, "SYSTEM STOP MERGES team_project_ownership")
-	unmerged := measureProjectTeamsFragments(t, f, query, capped, "unmerged", nil)
-	// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
-	mustExec(t, f.ctx, direct, "SYSTEM START MERGES team_project_ownership")
-	// devhealthschema:not-a-production-replica these statements maintain tables the production DDL created; no column, type or engine is declared here.
-	for _, table := range []string{"team_project_ownership", "projects", "teams"} {
-		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE "+table+" FINAL")
-	}
-	merged := measureProjectTeamsFragments(t, f, query, capped, "optimized", nil)
-	t.Log(fragmentTable("unmerged", unmerged) + fragmentTable("optimized", merged))
-
-	for stage, peaks := range map[string][]fragmentPeak{"unmerged": unmerged, "optimized": merged} {
-		paged := peakOf(t, peaks, "paged_statement")
-		raw := peakOf(t, peaks, "ownership_raw_final_x1")
-		if paged.mib > memoryBoundMiB {
-			t.Errorf("%s: the paged statement peaked at %.2f MiB, bound %.0f MiB", stage, paged.mib, memoryBoundMiB)
-		}
-		// The ownership table is read once: the statement's whole read is the
-		// raw FINAL read plus the small projects and teams tables.
-		if limit := raw.readRows + raw.readRows/10 + 2000; paged.readRows > limit {
-			t.Errorf("%s: the paged statement read %d rows, want at most %d (one read of the %d ownership rows)", stage, paged.readRows, limit, raw.readRows)
-		}
+	// 767 versions per pair over 88 pairs is the 67,496 rows of the largest org.
+	for i, layout := range []string{"parts", "merged"} {
+		t.Run(layout, func(t *testing.T) {
+			m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000030%d", i), layout, 767)
+			capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
+			peaks := measureProjectTeamsFragments(t, m.f, m.query, capped, "prod-"+layout, nil)
+			report(t, fmt.Sprintf("%d active parts\n%s", m.parts, fragmentTable(layout, peaks)))
+			paged := peakOf(t, peaks, "paged_statement")
+			raw := peakOf(t, peaks, "ownership_raw_final_x1")
+			if paged.mib > memoryBoundMiB {
+				t.Errorf("%s: the paged statement peaked at %.2f MiB, bound %.0f MiB", layout, paged.mib, memoryBoundMiB)
+			}
+			// The ownership table is read once: the statement's whole read is the
+			// raw FINAL read plus the small projects and teams tables.
+			if limit := raw.readRows + raw.readRows/10 + 2000; paged.readRows > limit {
+				t.Errorf("%s: the paged statement read %d rows, want at most %d (one read of the %d ownership rows)", layout, paged.readRows, limit, raw.readRows)
+			}
+		})
 	}
 }
 
-// The statement's memory must not follow the length of the ownership history.
-// The rule (fail when large > 1.15x small and large > small + 2 MiB) compares
-// 1,000 with 2,000 versions per pair: both are past the point where one block
-// of rows is full (about 65k rows), so the read buffers have stopped growing
-// with the table and what is left is the history's own cost. The 100 versions
-// per pair point is logged to show the climb to that point.
-func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T) {
-	query, direct := orgIsolationClickHouseFixture(t)
-	capped := contextpacket.NewMemoryCappedQueryClient(query, prodMaxMemoryUsage)
-	only := map[string]bool{"ownership_raw_final_x1": true, "ownership_raw_final_threads1": true, "ownership_raw_final_block8k": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true}
-	peaks := map[int]float64{}
-	for i, versions := range []int{100, 1000, 2000} {
-		f := newIngestColumnsFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000010%d", i), nil, nil)
-		seedProjectTeamOwnershipShape(t, f, memoryShapePairs*versions, memoryShapeUnmerged)
-		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
-		mustExec(t, f.ctx, direct, "OPTIMIZE TABLE team_project_ownership FINAL")
-		var parts, activeRows uint64
-		pr, perr := direct.Query(f.ctx, "SELECT count(), sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table = 'team_project_ownership'")
-		if perr != nil {
-			t.Fatal(perr)
-		}
-		if pr.Next() {
-			_ = pr.Scan(&parts, &activeRows)
-		}
-		_ = pr.Close()
-		t.Logf("slope: %d versions per pair: team_project_ownership holds %d active parts, %d rows", versions, parts, activeRows)
-		all := measureProjectTeamsFragments(t, f, query, capped, fmt.Sprintf("slope%d", versions), only)
-		peak := peakOf(t, all, "paged_statement")
-		t.Errorf("DIAGNOSTIC (temporary) %d versions:\n%s", versions, fragmentTable("slope", all))
-		t.Logf("slope: %d versions per pair (%d rows): paged statement peak %.2f MiB read_rows=%d", versions, memoryShapePairs*versions, peak.mib, peak.readRows)
-		peaks[versions] = peak.mib
+// layoutMeasurement is a fresh database holding the seeded ownership history in
+// a fixed physical layout: "merged" is one part after OPTIMIZE FINAL; "parts"
+// is memoryShapeUnmerged inserts with merges stopped for the table, which is
+// what a prod table looks like between merges.
+type layoutMeasurement struct {
+	f      *ingestColumnsFixture
+	query  contextpacket.ClickHouseQueryClient
+	parts  uint64
+	layout string
+}
+
+func freshDatabaseFixture(t *testing.T, orgID, layout string, versions int) layoutMeasurement {
+	t.Helper()
+	ctx := context.Background()
+	addr, admin := sharedDevHealthClickHouse(t)
+	database := fmt.Sprintf("t%d", perTestDatabaseSeq.Add(1))
+	if err := admin.Exec(ctx, "CREATE DATABASE "+database); err != nil {
+		t.Fatalf("create per-test database %s: %v", database, err)
 	}
-	if small, large := peaks[1000], peaks[2000]; large > 1.15*small && large > small+2 {
-		t.Errorf("memory grows with the ownership history: %.2f MiB at 1,000 versions per pair, %.2f MiB at 2,000 (fail when large > 1.15x small and large > small + 2 MiB)", small, large)
+	t.Cleanup(func() { _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" SYNC") })
+	direct, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: database, Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open native ClickHouse connection: %v", err)
+	}
+	t.Cleanup(func() { _ = direct.Close() })
+	query, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
+		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open query client: %v", err)
+	}
+	t.Cleanup(func() { _ = query.Close() })
+	for _, statement := range productionSchemaDDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("apply rendered schema statement: %v\n%s", err, statement)
+		}
+	}
+	f := &ingestColumnsFixture{t: t, ctx: ctx, now: time.Now().UTC().Truncate(time.Second)}
+	f.hourAgo, f.old = f.now.Add(-time.Hour), f.now.Add(-45*24*time.Hour)
+	f.h = &ingestHarness{t: t, ctx: ctx, direct: direct, orgID: orgID, repo: zeroUUID}
+	// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
+	mustExec(t, ctx, direct, "SYSTEM STOP MERGES team_project_ownership")
+	inserts := 1
+	if layout == "parts" {
+		inserts = memoryShapeUnmerged
+	}
+	seedProjectTeamOwnershipShape(t, f, memoryShapePairs*versions, inserts)
+	if layout == "merged" {
+		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
+		mustExec(t, ctx, direct, "SYSTEM START MERGES team_project_ownership")
+		// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.
+		mustExec(t, ctx, direct, "OPTIMIZE TABLE team_project_ownership FINAL")
+	}
+	var parts uint64
+	pr, err := direct.Query(ctx, "SELECT count() FROM system.parts WHERE active AND database = ? AND table = 'team_project_ownership'", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Next() {
+		_ = pr.Scan(&parts)
+	}
+	_ = pr.Close()
+	want := uint64(1)
+	if layout == "parts" {
+		want = memoryShapeUnmerged
+	}
+	if parts != want {
+		t.Fatalf("layout %s: %d active parts in team_project_ownership, want %d (the layout is not the one this row claims)", layout, parts, want)
+	}
+	return layoutMeasurement{f: f, query: query, parts: parts, layout: layout}
+}
+
+// The statement's memory must not follow the length of the ownership history,
+// in the merged layout and in a fixed multi-part layout. The rule (fail when
+// large > 1.15x small and large > small + 2 MiB) compares 1,000 with 2,000
+// versions per pair; 100 is logged to show the climb to block saturation.
+func TestProjectTeamOwnershipStatementMemoryDoesNotGrowWithVersions(t *testing.T) {
+	for _, layout := range []string{"merged", "parts"} {
+		t.Run(layout, func(t *testing.T) {
+			peaks := map[int]float64{}
+			for i, versions := range []int{100, 1000, 2000} {
+				m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-0000000001%d%d", len(layout), i), layout, versions)
+				capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
+				only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true}
+				all := measureProjectTeamsFragments(t, m.f, m.query, capped, fmt.Sprintf("slope-%s-%d", layout, versions), only)
+				peak := peakOf(t, all, "paged_statement")
+				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
+				peaks[versions] = peak.mib
+			}
+			if small, large := peaks[1000], peaks[2000]; large > 1.15*small && large > small+2 {
+				t.Errorf("%s: memory grows with the ownership history: %.2f MiB at 1,000 versions per pair, %.2f MiB at 2,000 (fail when large > 1.15x small and large > small + 2 MiB)", layout, small, large)
+			}
+		})
 	}
 }
