@@ -998,12 +998,16 @@ import (
 // partial. A candidate saved under v196 may hold the cut, mismatched set, that
 // no_match, or a complete status over a cut read.
 //
-// v197 -> v198: a coverage row carries the reason of its own subject. A
+// v197 -> v198: a project status answer serves a truncated readiness fact as a
+// partial estimate coverage driver with source_state truncated. An answer saved
+// under v197 has no such driver.
+//
+// v198 -> v199: a coverage row carries the reason of its own subject. A
 // sentence about some of the requested teams (N of M own no repository) is
 // served once for the request and no longer on the row of a team it is false
 // for; a team that owns nothing gets its own reason. A stored answer can
 // differ.
-const QueryVersion = "devhealthfacts.clickhouse.v198"
+const QueryVersion = "devhealthfacts.clickhouse.v199"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

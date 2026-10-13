@@ -345,6 +345,7 @@ type ContextFabricProjectedDriver struct {
 	Title          string                      `json:"title"`
 	Summary        string                      `json:"summary"`
 	Qualification  string                      `json:"qualification,omitempty"`
+	SourceState    ContextFabricSourceState    `json:"source_state,omitempty"`
 	Confidence     float64                     `json:"confidence"`
 	EvidenceRefIDs []string                    `json:"evidence_ref_ids"`
 	ClaimedFactIDs []string                    `json:"claimed_fact_ids,omitempty"`
