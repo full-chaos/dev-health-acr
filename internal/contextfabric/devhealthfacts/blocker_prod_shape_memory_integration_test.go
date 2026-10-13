@@ -174,7 +174,10 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
 
 	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+	read(restricted)
+	mark = serverNowMicros(t, ctx, direct)
 	inStatement := read(restricted)
+	blockerProdShapeStatements(t, ctx, direct, "restricted-in-statement", mark)
 	restore()
 	for _, pair := range []struct {
 		label     string
