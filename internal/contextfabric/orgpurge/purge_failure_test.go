@@ -46,7 +46,7 @@ func TestFailureAfterTheGraphDropIsIncompleteNeverPurged(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	purger := &Purger{DB: db, Graph: droppingGraph{}, Set: fakeSet{}, Entitlements: fakeEntitlements{}, Locker: freeLocker{}}
 
-	report, err := purger.Run(context.Background(), testOrg, Options{AttestDeleted: true, ConfirmOrgKey: OrgKey(testOrg)})
+	report, err := purger.Run(context.Background(), testOrg, Options{ConfirmOrgKey: OrgKey(testOrg)})
 	if !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("Run() error = %v, want ErrIncomplete", err)
 	}
