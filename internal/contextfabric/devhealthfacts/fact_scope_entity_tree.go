@@ -153,10 +153,18 @@ func (e *ScopeExpander) scalarCount(ctx context.Context, statement string, bindi
 	return int(count), nil
 }
 
-// teamOwnedProjectsSQL is every (provider, project id, team) a team currently
-// owns through team_project_ownership, identity-resolved by the library's
-// two-armed project match.
-var teamOwnedProjectsSQL = "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(readers.TimeBound{})) + ")"
+// teamOwnedProjectsSQL is every (provider, project id, team) a requested team
+// ({team_ids}) currently owns through team_project_ownership, identity-resolved
+// by the library's two-armed project match. The team filter is applied to the
+// ownership rows before their grouping, which is per team.
+var teamOwnedProjectsSQL = "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(requestedTeamsPredicate+readers.OwnershipValidityPredicate(readers.TimeBound{})) + ")"
+
+// requestedTeamRepositoryOwnershipSQL is the requested teams' current
+// repository ownership rows, filtered before their per-team grouping.
+var requestedTeamRepositoryOwnershipSQL = readers.TeamRepositoryOwnershipSQL(requestedTeamsPredicate + readers.OwnershipValidityPredicate(readers.TimeBound{}))
+
+// requestedTeamsPredicate restricts an ownership table to the requested teams.
+const requestedTeamsPredicate = ` AND team_id IN {team_ids:Array(String)}`
 
 // teamRepositoryOwnershipSource is the source label of a repository the team
 // owns directly, the one team target that is a Direct edge.
@@ -182,11 +190,10 @@ func (e *ScopeExpander) teamRepositories(ctx context.Context, orgID string, orig
 		return nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	limitPlusOne := limit + 1
-	current := readers.OwnershipValidityPredicate(readers.TimeBound{})
 	statement := `SELECT repo_id_str, repo_slug, argMin(source, source_rank) AS best_source, argMin(origin_team_id, (source_rank, origin_team_id)) AS best_origin_team_id, arraySort(groupUniqArray(origin_team_id)) AS origin_team_ids
 FROM (
   SELECT toString(o.repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, '` + teamRepositoryOwnershipSource + `' AS source, 0 AS source_rank, o.team_id AS origin_team_id
-  FROM ` + readers.TeamRepositoryOwnershipSQL(current) + ` AS o
+  FROM ` + requestedTeamRepositoryOwnershipSQL + ` AS o
   LEFT JOIN repos AS r FINAL ON r.id = o.repo_id AND r.org_id = {org_id:String}
   WHERE o.team_id IN {team_ids:Array(String)}
   UNION ALL

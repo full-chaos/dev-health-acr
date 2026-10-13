@@ -1,6 +1,10 @@
 package devhealthfacts
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/full-chaos/dev-health-go/readers"
+)
 
 // scopeCandidateSets is every candidate set a scope expander statement filters
 // by, rendered by the production builders.
@@ -21,6 +25,9 @@ func scopeCandidateSets() []string {
 // left after the rewrite.
 func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, ok bool) {
 	out := strings.ReplaceAll(statement, "INNER JOIN "+teamOwnedProjectWorkItemsSQL+" AS w ON ", "INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND ")
+	current := readers.OwnershipValidityPredicate(readers.TimeBound{})
+	out = strings.ReplaceAll(out, teamOwnedProjectsSQL, "(SELECT provider, id, team_id FROM "+readers.ProjectOwnershipCatalogJoinSQL(current)+")")
+	out = strings.ReplaceAll(out, requestedTeamRepositoryOwnershipSQL, readers.TeamRepositoryOwnershipSQL(current))
 	out = strings.ReplaceAll(out, " AND (repo_id, work_item_id) IN "+teamAttributedWorkItemKeysSQL, "")
 	for _, candidates := range scopeCandidateSets() {
 		out = strings.ReplaceAll(out, issueLinkRowsAmongSQL(candidates), issueLinkRowsSQL)
@@ -29,7 +36,7 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 		out = strings.ReplaceAll(out, " AND w.work_item_id IN "+candidates, "")
 		out = strings.ReplaceAll(out, " AND subject_id IN "+candidates, "")
 	}
-	ok = !strings.Contains(out, teamAttributedWorkItemKeysSQL) && !strings.Contains(out, teamOwnedProjectWorkItemIDsSQL)
+	ok = !strings.Contains(out, teamAttributedWorkItemKeysSQL) && !strings.Contains(out, teamOwnedProjectWorkItemIDsSQL) && !strings.Contains(out, requestedTeamsPredicate)
 	for _, candidates := range scopeCandidateSets() {
 		ok = ok && !strings.Contains(out, candidates)
 	}
