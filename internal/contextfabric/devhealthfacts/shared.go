@@ -1155,7 +1155,14 @@ import (
 // named the oldest blocker. Team and project blockers facts carry
 // blocker_dependencies_writer_unresolved_current. An answer saved under v226
 // can count a removed link.
-const QueryVersion = "devhealthfacts.clickhouse.v227"
+//
+// v227 -> v228: the team and project commit counters (commits_count,
+// after_hours_commits_count, weekend_commits_count, and the same three columns
+// of the project team_breakdown table) are served as numbers instead of
+// integers, because a team that co-owns a repository holds a share of the
+// counters and can carry a fraction of a commit. An answer saved under v227
+// carries integer counters and is not reused as one produced by this version.
+const QueryVersion = "devhealthfacts.clickhouse.v228"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
