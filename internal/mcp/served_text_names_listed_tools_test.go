@@ -17,7 +17,7 @@ import (
 )
 
 var optionalToolNames = []string{
-	toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult,
+	toolRecordEpisode, toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult,
 	toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation, toolGraphQLQuery,
 }
 
@@ -192,9 +192,11 @@ func TestUnqualifiedMentionDetectorFlagsAPlantedSentence(t *testing.T) {
 }
 
 // schemaOwners returns the tools whose input or output schema is the given
-// file. A schema may name its own tools freely; every other optional tool it
-// names must carry the availability qualifier, because the schema text is the
-// same for every caller.
+// file. A schema served to one tool may name that tool freely. A file shared by
+// several tools (the investigate_question response is also the response of
+// investigate_with_interpretation) exempts none of them, because a caller may
+// hold only one; every other optional tool must carry the availability
+// qualifier, because the schema text is the same for every caller.
 func schemaOwners(t *testing.T, file string) []string {
 	t.Helper()
 	var manifest toolManifest
@@ -268,15 +270,15 @@ func TestServedSchemasNameSiblingToolsOnlyWithTheAvailabilityQualifier(t *testin
 	inspected := 0
 	for _, tool := range tools.Tools {
 		entry := manifestEntry(tool.Name)
-		inputOwners := schemaOwners(t, entry.InputSchemaRef)
-		outputOwners := schemaOwners(t, entry.OutputSchemaRef)
+		require.Contains(t, schemaOwners(t, entry.InputSchemaRef), tool.Name)
+		require.Contains(t, schemaOwners(t, entry.OutputSchemaRef), tool.Name)
 		for _, b := range unqualifiedUnlistedMentions(tool.Description, []string{tool.Name}) {
 			bad = append(bad, "tools/list "+tool.Name+" description: "+b)
 		}
-		for _, p := range schemaDescriptionProblems(decodeJSONAny(t, tool.InputSchema), "$", inputOwners, &inspected) {
+		for _, p := range schemaDescriptionProblems(decodeJSONAny(t, tool.InputSchema), "$", []string{tool.Name}, &inspected) {
 			bad = append(bad, "tools/list "+tool.Name+" inputSchema "+p)
 		}
-		for _, p := range schemaDescriptionProblems(decodeJSONAny(t, tool.OutputSchema), "$", outputOwners, &inspected) {
+		for _, p := range schemaDescriptionProblems(decodeJSONAny(t, tool.OutputSchema), "$", []string{tool.Name}, &inspected) {
 			bad = append(bad, "tools/list "+tool.Name+" outputSchema "+p)
 		}
 	}
@@ -309,7 +311,11 @@ func TestEmbeddedSchemaFilesNameSiblingToolsOnlyWithTheAvailabilityQualifier(t *
 			continue
 		}
 		files++
-		for _, p := range schemaDescriptionProblems(readEmbeddedJSON(t, file), "$", schemaOwners(t, file), &inspected) {
+		var exempt []string
+		if owners := schemaOwners(t, file); len(owners) == 1 {
+			exempt = owners
+		}
+		for _, p := range schemaDescriptionProblems(readEmbeddedJSON(t, file), "$", exempt, &inspected) {
 			bad = append(bad, e.Name()+" "+p)
 		}
 	}
@@ -359,4 +365,9 @@ func TestSchemaScanFlagsAPlantedDescriptionByPath(t *testing.T) {
 	require.Contains(t, bad[0], "$.properties.bare.description: find_subjects in:")
 	require.Contains(t, bad[1], "$.properties.loose.description: find_subjects in:")
 	require.Contains(t, bad[2], "$.properties.nested.items[0].description: run_operation in:")
+}
+
+func TestSharedResponseSchemaExemptsNoTool(t *testing.T) {
+	require.ElementsMatch(t, []string{toolInvestigateQuestion, toolInvestigateWithInterpretation}, schemaOwners(t, investigateQuestionResponseSchemaFile))
+	require.Equal(t, []string{toolDataCatalog}, schemaOwners(t, dataCatalogRequestSchemaFile))
 }
