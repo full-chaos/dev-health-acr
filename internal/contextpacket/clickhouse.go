@@ -114,17 +114,17 @@ func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, or
 	}
 	plan.ReadableRepositorylessIssueIDs = gated
 	if locatorHash == "" {
-		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501)
+		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501, false)
 	}
 	if len(locatorHash) != 64 {
 		return nil, storage.ErrNotFound
 	}
 	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_locator_hash", Value: locatorHash})
 	statement := `SELECT * FROM (` + query.Statement + `) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`
-	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 2)
+	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 2, true)
 }
 
-func (r *CatalogClickHouseRows) queryEvidenceReferences(ctx context.Context, repoSlug, queryID, statement string, bindings []ClickHouseBinding, saturationLimit int) ([]EvidenceReference, error) {
+func (r *CatalogClickHouseRows) queryEvidenceReferences(ctx context.Context, repoSlug, queryID, statement string, bindings []ClickHouseBinding, saturationLimit int, selectsTypedColumns bool) ([]EvidenceReference, error) {
 	rows, err := r.client.Query(ctx, statement, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("resolve evidence locator: %w", err)
@@ -132,7 +132,11 @@ func (r *CatalogClickHouseRows) queryEvidenceReferences(ctx context.Context, rep
 	defer rows.Close()
 	references := make([]EvidenceReference, 0, min(saturationLimit-1, 16))
 	for rows.Next() {
-		evidence, scanErr := scanEvidenceRow(rows)
+		scan := scanEvidenceRow
+		if names, typed := typedEvidenceColumns[queryID]; typed && selectsTypedColumns {
+			scan = scanTypedEvidenceRow(names)
+		}
+		evidence, scanErr := scan(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("scan evidence locator: %w", scanErr)
 		}
