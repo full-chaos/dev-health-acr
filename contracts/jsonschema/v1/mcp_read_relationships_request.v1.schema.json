@@ -36,16 +36,16 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Subject kind, as returned by find_subjects."
+          "description": "Subject kind, as returned by find_subjects (if listed)."
         },
         "canonical_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Canonical id, as returned by find_subjects. Never build or guess one."
+          "description": "Canonical id, as returned by find_subjects (if listed). Never build or guess one."
         }
       },
-      "description": "The one subject whose edges are read. Take it from find_subjects. A subject you may not read and one that does not exist give the same answer."
+      "description": "The one subject whose edges are read. Take it from find_subjects (if listed). A subject you may not read and one that does not exist give the same answer."
     },
     "types": {
       "type": "array",
