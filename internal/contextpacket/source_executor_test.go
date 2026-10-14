@@ -180,6 +180,9 @@ func (timeoutQueryClient) Query(context.Context, string, []contextpacket.ClickHo
 }
 
 func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.Contains(statement, "FROM system.columns") {
+		return &rowScanner{rows: [][]any{{uint64(1)}}}, nil
+	}
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
 		if strings.Contains(statement, query.Statement) {
 			if err := c.fail[query.ID]; err != nil {
