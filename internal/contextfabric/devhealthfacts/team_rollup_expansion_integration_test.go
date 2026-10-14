@@ -33,9 +33,10 @@ func TestTeamPullRequestsAreServedAsRollupBesideTheExpandedPullRequests(t *testi
 		t.Fatal(err)
 	}
 	bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{chaos4101RepoASlug, chaos4101RepoBSlug}}, contextfabric.CanonicalFactRequest{
-		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
-		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
-		Requirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}},
+		Question:         contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+		Subjects:         []contextfabric.SubjectRef{chaos4101TeamSubject()},
+		Requirements:     []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}},
+		PullRequestFacts: true,
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts error = %v", err)

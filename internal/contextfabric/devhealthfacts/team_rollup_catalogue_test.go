@@ -107,7 +107,7 @@ func TestTeamRollupDeclarationMarks(t *testing.T) {
 				t.Errorf("%s %s: a team rollup field is a count, never a score", kind, field.Name)
 			}
 			counts := field.Type == contextfabric.FactFieldInteger && (strings.HasSuffix(field.Name, "_window") || strings.HasSuffix(field.Name, "_current") || strings.HasSuffix(field.Name, "_count"))
-			if counts && field.Name != "owned_repositories_omitted_count" && field.Name != "repository_breakdown_omitted_count" && !field.Aggregate && !field.CallerScoped {
+			if counts && field.Name != "owned_repositories_omitted_count" && field.Name != "repository_breakdown_omitted_count" && field.Name != "pull_requests_by_state_omitted_count" && !field.Aggregate && !field.CallerScoped {
 				t.Errorf("%s %s: a count over the owned set must be Aggregate or CallerScoped", kind, field.Name)
 			}
 		}
