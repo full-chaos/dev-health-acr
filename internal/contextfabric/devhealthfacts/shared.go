@@ -1090,10 +1090,16 @@ import (
 // sprint ends and the raw issue counts beside them). An answer saved under
 // v215 has no commitment fact.
 //
-// v216 -> v217: the team linked pull request mix takes a unit's reference
+// v216 -> v217: a team whose owned repositories hold work units that all have
+// zero persisted effort is named investment_team_effort_not_measurable, with
+// the unit count, instead of investment_team_no_unit_in_window. Still no fact
+// and no zero mix. An answer saved under v216 states the false reason that no
+// effort was persisted.
+//
+// v217 -> v218: the team linked pull request mix takes a unit's reference
 // count once per unit, not from the unit's reference array on every expanded
 // row. The rows are unchanged; the statement and its memory are not.
-const QueryVersion = "devhealthfacts.clickhouse.v217"
+const QueryVersion = "devhealthfacts.clickhouse.v218"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
