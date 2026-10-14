@@ -35,9 +35,10 @@ func TestTeamPullRequestAndReviewFactsAreServedThroughTheRealProducers(t *testin
 	}
 
 	bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{chaos4101RepoASlug, chaos4101RepoBSlug}}, contextfabric.CanonicalFactRequest{
-		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
-		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
-		Requirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}, {Kind: contextfabric.FactReviews}},
+		Question:         contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+		Subjects:         []contextfabric.SubjectRef{chaos4101TeamSubject()},
+		Requirements:     []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}, {Kind: contextfabric.FactReviews}},
+		PullRequestFacts: true,
 	})
 
 	if err != nil {

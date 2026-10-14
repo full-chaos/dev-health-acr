@@ -219,7 +219,7 @@ func (p *BlockersProvider) readProjectRollup(ctx context.Context, principal stor
 	if err != nil {
 		return rejected, err
 	}
-	statement := readers.WithSettings(`SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 0))
+	statement := blockerStatement(`SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 0))
 FROM (`+projectBlockerEdgeRowsSQL(authorized, false)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
@@ -237,7 +237,7 @@ ORDER BY project_key`, settings)
 	if err != nil {
 		return rejected, err
 	}
-	ageStatement := readers.WithSettings(`SELECT project_key, toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_exact = 1)),
+	ageStatement := blockerStatement(`SELECT project_key, toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_exact = 1)),
   ifNull(toInt64(minIf(start_unix, is_open = 1)), 0)
 FROM (`+projectBlockerEdgeRowsSQL(authorized, true)+`)
 GROUP BY project_key
