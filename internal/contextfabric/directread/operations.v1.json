@@ -2960,7 +2960,6 @@
           "source": "client",
           "allowed_values": [
             "COUNT",
-            "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
             "THROUGHPUT",
@@ -3899,7 +3898,6 @@
           "source": "client",
           "allowed_values": [
             "COUNT",
-            "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
             "THROUGHPUT",
