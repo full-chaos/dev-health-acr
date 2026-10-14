@@ -101,31 +101,7 @@ func OrganizationWideAuthorizationScopeForTest(scope readers.AuthorizationScope)
 	return organizationWideAuthorization(scope)
 }
 
-// SetBlockerEndedLinksBoundForTest moves the bound above which the blocker
-// statements carry the end rule themselves.
-func SetBlockerEndedLinksBoundForTest(bound int) (restore func()) {
-	previous := blockerEndedLinksBound
-	blockerEndedLinksBound = bound
-	return func() { blockerEndedLinksBound = previous }
-}
-
-// BlockerEndedLinksPlanProbeForTest is an EXPLAIN of the bound end rule over the
-// dependency table, for the plan-size guard: the bound arrays must not be folded
-// into the plan text as literals repeated at every step.
-func BlockerEndedLinksPlanProbeForTest(orgID string) string {
-	statement := `EXPLAIN actions = 1 SELECT count() FROM work_item_dependencies AS d FINAL WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + blockerEndedLinksCurrentSQL
-	return strings.ReplaceAll(statement, "{org_id:String}", "'"+orgID+"'")
-}
-
-// BlockerEndedLinkBindingNamesForTest are the three binding names of the end rule.
-func BlockerEndedLinkBindingNamesForTest() (source, target, relationType string) {
-	return blockerEndedSourceBinding, blockerEndedTargetBinding, blockerEndedTypeBinding
-}
-
-// SetBlockerEndedFormForTest selects how the bound ended links are tested, for
-// a measurement.
-func SetBlockerEndedFormForTest(form string) (restore func()) {
-	previous := blockerEndedForm
-	blockerEndedForm = form
-	return func() { blockerEndedForm = previous }
+func CommitmentAuthorizedItemIDsSQLForTest(principal storage.Principal, requestedScope []string) string {
+	authorized, _ := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
+	return authorized
 }

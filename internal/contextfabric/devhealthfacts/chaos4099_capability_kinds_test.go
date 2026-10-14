@@ -132,6 +132,7 @@ func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 		contextfabric.FactActualCompletion: true,
 		contextfabric.FactPullRequests:     true,
 		contextfabric.FactBlockers:         true,
+		contextfabric.FactCommitment:       true,
 	}
 	for _, provider := range allProvidersForKindAudit() {
 		capability := provider.Capability()
@@ -167,5 +168,6 @@ func allProvidersForKindAudit() []contextfabric.FactProvider {
 		// never actually exercised either -- the exact silent-gap this
 		// list's own doc comment exists to prevent.
 		&FlowProvider{}, &LandscapeProvider{},
+		&CommitmentProvider{},
 	}
 }

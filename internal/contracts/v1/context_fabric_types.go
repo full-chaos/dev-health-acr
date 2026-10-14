@@ -452,6 +452,7 @@ const (
 	// ContextFabricFactSecurityAlerts is a v1 ADDITIVE fact kind: stored
 	// security alert counts per repository (security_alerts), counts only.
 	ContextFabricFactSecurityAlerts ContextFabricFactKind = "security_alerts"
+	ContextFabricFactCommitment     ContextFabricFactKind = "commitment"
 )
 
 // ContextFabricFactCardinality is a CLAIM kind and NOT a requestable one, and
@@ -521,6 +522,7 @@ var contextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactFlow,
 	ContextFabricFactLandscape,
 	ContextFabricFactSecurityAlerts,
+	ContextFabricFactCommitment,
 }
 
 // ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,

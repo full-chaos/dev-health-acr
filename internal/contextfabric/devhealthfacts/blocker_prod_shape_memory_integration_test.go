@@ -90,7 +90,9 @@ type blockerProdShapeStatement struct {
 	head                 string
 }
 
-func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
+// blockerProdShapeQueryLog is every statement over the dependency table logged
+// after mark, with its peak memory and its head.
+func blockerProdShapeQueryLog(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64) []blockerProdShapeStatement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
@@ -110,6 +112,14 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 			t.Fatal(err)
 		}
 		out = append(out, st)
+	}
+	return out
+}
+
+func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
+	t.Helper()
+	out := blockerProdShapeQueryLog(t, ctx, direct, mark)
+	for _, st := range out {
 		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
 	}
 	if len(out) < 4 {
@@ -125,29 +135,6 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 		}
 	}
 	return out
-}
-
-func blockerProdShapeStatementsNoCeiling(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) {
-	t.Helper()
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-		t.Fatalf("flush logs: %v", err)
-	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 70))
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
-GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
-	if err != nil {
-		t.Fatalf("read query_log: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var hash, peak uint64
-		var head string
-		if err := rows.Scan(&hash, &peak, &head); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB): %s", label, hash, peak, float64(peak)/(1<<20), head)
-	}
 }
 
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
@@ -196,55 +183,6 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	restrictedResult := read(restricted)
 	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
 
-	// Measurement of the alternative bound form, logged (no ceiling assertion:
-	// the form is chosen on these numbers).
-	for _, form := range []string{"hash_pair"} {
-		restoreForm := devhealthfacts.SetBlockerEndedFormForTest(form)
-		read(restricted)
-		formMark := serverNowMicros(t, ctx, direct)
-		formResult := read(restricted)
-		blockerProdShapeStatementsNoCeiling(t, ctx, direct, "restricted, form "+form, formMark)
-		restoreForm()
-		if len(formResult.Facts) != len(restrictedResult.Facts) {
-			t.Errorf("form %s serves %d facts, the tuple form %d", form, len(formResult.Facts), len(restrictedResult.Facts))
-		}
-		for index := range formResult.Facts {
-			a, b := formResult.Facts[index].Fields["blocked_work_items_current"], restrictedResult.Facts[index].Fields["blocked_work_items_current"]
-			if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
-				t.Errorf("form %s: team fact %d blocked_work_items_current differs: %+v vs %+v", form, index, a, b)
-			}
-		}
-	}
-
-	// The end rule kept inside each statement (the form above the bound) is
-	// measured under the same ceilings and must serve the same answer.
-	restoreEnded := devhealthfacts.SetBlockerEndedLinksBoundForTest(0)
-	read(orgWide)
-	mark = serverNowMicros(t, ctx, direct)
-	endedFallbackOrgWide := read(orgWide)
-	blockerProdShapeStatements(t, ctx, direct, "org-wide, end rule inside the statements", mark)
-	read(restricted)
-	mark = serverNowMicros(t, ctx, direct)
-	endedFallbackRestricted := read(restricted)
-	blockerProdShapeStatements(t, ctx, direct, "restricted, end rule inside the statements", mark)
-	restoreEnded()
-	for _, pair := range []struct {
-		label     string
-		got, want contextfabric.FactProviderResult
-	}{{"org-wide", orgWideResult, endedFallbackOrgWide}, {"restricted", restrictedResult, endedFallbackRestricted}} {
-		if len(pair.got.Facts) != len(pair.want.Facts) {
-			t.Fatalf("%s, ended links bound vs inside: %d facts vs %d", pair.label, len(pair.got.Facts), len(pair.want.Facts))
-		}
-		for index := range pair.got.Facts {
-			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "oldest_blocked_age_days"} {
-				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
-				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
-					t.Errorf("%s, ended links bound vs inside: team fact %d field %s differs: %+v vs %+v", pair.label, index, name, a, b)
-				}
-			}
-		}
-	}
-
 	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
 	inStatement := read(restricted)
 	restore()
@@ -282,47 +220,40 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
-	// Plan-size guard (not a memory rule): the bound arrays must not be folded
-	// into the plan text as literals repeated at every step, which bloats the
-	// plan. Count how often one ended key's source id appears in the plan.
-	var endedSources, endedTargets, endedTypes []string
-	probeRows, err := direct.Query(ctx, devhealthfacts.RelationCurrentProbeForTest(blockerProdShapeOrg))
-	if err != nil {
-		t.Fatalf("ended links probe: %v", err)
-	}
-	for probeRows.Next() {
-		var source, target string
-		var current, unresolved uint8
-		if err := probeRows.Scan(&source, &target, &current, &unresolved); err != nil {
-			t.Fatal(err)
+	// Spread: the peak of each statement over three warm reads, as seeded and
+	// after the parts are merged. Logged (no assertion): the ceiling is chosen
+	// from the minimum and the maximum seen here.
+	for _, state := range []string{"parts as seeded", "parts merged (OPTIMIZE FINAL)"} {
+		if strings.Contains(state, "OPTIMIZE") {
+			for _, table := range []string{"work_item_dependencies", "work_items", "work_graph_issue_pr", "team_project_ownership", "team_repo_ownership", "projects", "repos", "git_pull_requests"} {
+				if err := direct.Exec(ctx, "OPTIMIZE TABLE "+table+" FINAL"); err != nil {
+					t.Fatalf("optimize %s: %v", table, err)
+				}
+			}
 		}
-		if current == 0 {
-			endedSources, endedTargets, endedTypes = append(endedSources, source), append(endedTargets, target), append(endedTypes, "blocks")
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+		}{{"org-wide", orgWide}, {"restricted", restricted}} {
+			read(caller.principal)
+			low, high := map[string]uint64{}, map[string]uint64{}
+			for round := 0; round < 3; round++ {
+				roundMark := serverNowMicros(t, ctx, direct)
+				read(caller.principal)
+				for _, st := range blockerProdShapeQueryLog(t, ctx, direct, roundMark) {
+					key := st.head
+					if low[key] == 0 || st.peak < low[key] {
+						low[key] = st.peak
+					}
+					if st.peak > high[key] {
+						high[key] = st.peak
+					}
+				}
+			}
+			for key := range low {
+				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+			}
 		}
-	}
-	probeRows.Close()
-	if len(endedSources) == 0 {
-		t.Fatal("the production shape holds no ended links: the plan check is vacuous")
-	}
-	sourceName, targetName, typeName := devhealthfacts.BlockerEndedLinkBindingNamesForTest()
-	planRows, err := direct.Query(ctx, devhealthfacts.BlockerEndedLinksPlanProbeForTest(blockerProdShapeOrg),
-		clickhouse.Named(sourceName, endedSources), clickhouse.Named(targetName, endedTargets), clickhouse.Named(typeName, endedTypes))
-	if err != nil {
-		t.Fatalf("explain: %v", err)
-	}
-	var plan strings.Builder
-	for planRows.Next() {
-		var line string
-		if err := planRows.Scan(&line); err != nil {
-			t.Fatal(err)
-		}
-		plan.WriteString(line + "\n")
-	}
-	planRows.Close()
-	occurrences := strings.Count(plan.String(), endedSources[0])
-	t.Logf("PRODSHAPE plan: %d ended links, plan text %d bytes, first ended source id appears %d times", len(endedSources), plan.Len(), occurrences)
-	if occurrences > 3 {
-		t.Errorf("the plan text repeats the ended-link arrays %d times (plan-size guard); want at most 3", occurrences)
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
@@ -492,66 +423,4 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	if equal(ids(restricted, nil, "fast"), ids(restricted, nil, "library")) {
 		t.Fatal("the organization-wide shape forced on a restricted scope authorizes the same work items as the library: the differential cannot tell a wrongly fired fast path")
 	}
-}
-
-// The ended-link list rides as three Array(String) bindings. At the bound, with
-// long identifiers, it must still be accepted and give the same counts as the
-// end rule inside the statements.
-func TestBlockerEndedLinksAtTheBoundRideAsOneBindingOnRealClickHouse(t *testing.T) {
-	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
-		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
-	) {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
-	exec := func(statement string, args ...any) {
-		t.Helper()
-		if err := direct.Exec(ctx, statement, args...); err != nil {
-			t.Fatalf("seed: %v\n%s", err, statement)
-		}
-	}
-	org := blockerProdShapeOrg
-	at := ts(2026, 9, 29, 0, 0, 0)
-	repo := "00000000-0000-4000-8000-000000000001"
-	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, 'acme/repo-1', 'github', ?)`, repo, org, at)
-	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES ('team-1', 'team-1', NULL, ?, ?, 'linear', [], 1)`, at, org)
-	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'linear', 'team-1', ?, 'acme/repo-1', 'exact', 'native', 1, 100, 0, ?, NULL, ?)`, org, repo, ts(2026, 1, 1, 0, 0, 0), at)
-	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, 1, 'pr', 'open', ?, ?, NULL, NULL, 'feature', '')`, repo, org, at, at)
-	// 100 sources x 10 targets = 1,000 distinct ended links (the bound) over 110 work items
-	// with 130-character ids, so the binding is large and the statements' own
-	// memory is not what the row measures.
-	const sources, targets = 100, 10
-	id := func(expr string) string { return "concat('linear:', repeat('k', 120), '-', toString(" + expr + "))" }
-	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
-SELECT `+id("number")+`, ?, ?, 't', 'issue', 'open', '', ?, ?, '', 'linear', '', NULL, ? FROM numbers(?)`, repo, org, at, at, at, uint64(sources+targets+2))
-	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
-SELECT ?, `+id("number")+`, 1, 1, 'native', '', ?, ? FROM numbers(?)`, repo, at, org, uint64(sources+targets+2))
-	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, `+id("number % 100")+`, `+id("100 + intDiv(number, 100)")+`, 'blocks', 'blocks', ? - toIntervalHour(1), NULL FROM numbers(1000)`, org, at)
-	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-VALUES (?, `+id("110")+`, `+id("111")+`, 'blocks', 'blocks', ?, NULL)`, org, at)
-
-	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
-	team := teamSubject("team-1")
-	read := func() map[string]contextfabric.FactValue {
-		t.Helper()
-		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{team},
-		})
-		if err != nil {
-			t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
-		}
-		return factFor(t, result, team).Fields
-	}
-	bound := read()
-	restore := devhealthfacts.SetBlockerEndedLinksBoundForTest(0)
-	inside := read()
-	restore()
-	wantInt(t, bound, "blocker_dependencies_current", 1)
-	wantInt(t, inside, "blocker_dependencies_current", 1)
-	t.Logf("PRODSHAPE ended-link binding at the bound: 1000 links, ids of %d bytes: about %d bytes in three Array(String) bindings", len("linear:")+120+1+3, 1000*(2*(len("linear:")+120+1+3)+len("blocks")))
 }

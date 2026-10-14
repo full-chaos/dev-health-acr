@@ -22,7 +22,7 @@ import (
 //     declared kind with at least one case; an undeclared kind fails.
 
 // directServableKinds are the declared kinds: the nine aggregate kinds
-// (CHAOS-7073) and the thirteen entity kinds. Every registered
+// (CHAOS-7073) and the thirteen entity kinds and commitment. Every registered
 // provider must be one of them; there is no "not yet" list.
 var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactInvestment, contextfabric.FactHealth, contextfabric.FactMetrics,
@@ -33,6 +33,7 @@ var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactRequiredChildren, contextfabric.FactPullRequests, contextfabric.FactReviews,
 	contextfabric.FactContinuousIntegration, contextfabric.FactDeployments, contextfabric.FactIncidents,
 	contextfabric.FactSecurityAlerts,
+	contextfabric.FactCommitment,
 }
 
 // declaredButNotExercised lists declarations no case here can reach, with a
@@ -184,6 +185,23 @@ func t4Cases() []t4Case {
 		{match: "sumIf(il.one_churn", rows: t4Rows(66, func(i int, _ string) []any {
 			return landscapeProjectRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), 1, 10, 1, 5.0, 2)
 		})},
+	}})
+
+	// ---- commitment
+	add(t4Case{name: "commitment/project_stated", kind: contextfabric.FactCommitment, subjects: proj, tables: []fakeTable{
+		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("linear", "proj-1", "started", "linear.project.state", "2026-11-01", true)}},
+		{match: commitmentItemsMatch, rows: [][]any{commitmentItemRow("linear", "proj-1", commitmentCounts{
+			total: 3, open: 2, closed: 1, withDueAt: 2, pastDueOpen: 1, sprints: 1, nextSprints: 1,
+			nextEnd: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC), latestEnd: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
+		})}},
+	}})
+	add(t4Case{name: "commitment/project_unreachable", kind: contextfabric.FactCommitment, subjects: proj, tables: []fakeTable{
+		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("linear", "proj-1", "", "", "", false)}},
+	}})
+	githubProject := []contextfabric.SubjectRef{projectSubject("github", "proj-1")}
+	add(t4Case{name: "commitment/project_unreadable_github", kind: contextfabric.FactCommitment, subjects: githubProject, tables: []fakeTable{
+		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("github", "proj-1", "", "", "", true)}},
+		{match: commitmentItemsMatch, rows: [][]any{commitmentItemRow("github", "proj-1", commitmentCounts{all: 3, total: 2, open: 1, unknown: 1, unresolved: 1})}},
 	}})
 
 	// ---- readiness
@@ -710,8 +728,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 	for _, kind := range directServableKinds {
 		direct[kind] = true
 	}
-	if len(directServableKinds) != 22 || len(direct) != 22 {
-		t.Fatalf("expected 22 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
+	if len(directServableKinds) != 23 || len(direct) != 23 {
+		t.Fatalf("expected 23 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
 	}
 	registered := map[contextfabric.FactKind]bool{}
 	for _, provider := range devhealthfacts.NewProviders(&fakeClient{}) {
@@ -728,8 +746,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 			t.Errorf("%s: declared kind has no catalogue-truth case", kind)
 		}
 	}
-	if len(registered) != 22 {
-		t.Errorf("registered providers = %d kinds, want 22", len(registered))
+	if len(registered) != 23 {
+		t.Errorf("registered providers = %d kinds, want 23", len(registered))
 	}
 	for kind := range direct {
 		if !registered[kind] {
@@ -812,7 +830,7 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 	}
 	// Labels and ratios are not scores; no entity field is an aggregate
 	// (actual_completion's project counts are over the caller's own items).
-	entity := directServableKinds[9:]
+	entity := directServableKinds[9:22]
 	for _, kind := range entity {
 		capability := t4Capability(kind)
 		for _, field := range capability.Fields {

@@ -306,7 +306,8 @@ const (
 	// rather than repeating its own literal). Exported so a producer can cap
 	// a served Coverage against the exact bound the write validator will
 	// enforce, rather than duplicate the number (CHAOS-5612).
-	ContextFabricCoverageEntriesMaxCount = 100
+	// 4 rows per fact kind + 5 graph rows; 24 kinds = 101
+	ContextFabricCoverageEntriesMaxCount = 101
 	// ContextFabricClaimedFactsMaxCount bounds the synthesis draft's own
 	// top-level claimed_facts list -- the model decides how many claims to
 	// write (unlike driver/finding claimed_fact_ids, which only REFERENCE
