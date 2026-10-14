@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,12 +16,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// read_facts pull_requests for several teams in tables-only mode, through the
-// production providers and the real scope expander on ClickHouse: every
-// reached pull request that serves no field is left out and counted in one
-// request note; a reached pull request that holds a project_breakdown table is
-// still served.
-func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testing.T) {
+// read_facts pull_requests for several teams, through the production providers
+// and the real scope expander on ClickHouse: one fact per team carrying the
+// pull_requests_by_state table, and no fact per reached pull request.
+func TestDirectReadPullRequestsForSeveralTeamsServesCountsByStateNotOneFactPerPullRequest(t *testing.T) {
 	ctx := context.Background()
 	orgID := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
@@ -73,43 +72,42 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 	}
 	response, err := reader.Read(observability.WithRequestID(ctx, "req_0000000000000000000000000000f00d"),
 		storage.Principal{OrgID: orgID, Subject: "pr-rows", CredentialID: "pr-rows"},
-		directread.FactsRequest{Kinds: []string{"pull_requests"}, Tables: directread.TablesOnly, Subjects: subjects})
+		directread.FactsRequest{Kinds: []string{"pull_requests"}, Subjects: subjects})
 	if err != nil {
 		t.Fatalf("read_facts: %v", err)
 	}
-	for _, fact := range response.Facts {
-		if fact.Subject.Kind == "pull_request" && len(fact.Fields) == 0 && len(fact.Tables) == 0 && len(fact.Withheld) == 0 {
-			t.Fatalf("an empty pull request fact was served: %+v", fact)
-		}
-	}
-	linkedServed := false
-	for _, fact := range response.Facts {
-		if fact.Subject.Kind == "pull_request" && strings.HasSuffix(fact.Subject.CanonicalID, ":900") && len(fact.Tables["project_breakdown"].Rows) == 1 {
-			linkedServed = true
-		}
-	}
-	if !linkedServed {
-		t.Fatalf("the linked pull request with a project_breakdown table is not served: %+v", response.Facts)
-	}
-	// Every reached pull request is either served with content or counted:
-	// perTeam per team plus the linked one, none lost silently.
-	reached := len(teams)*perTeam + 1
-	served := 0
+	// A default team read serves the team facts alone: no fact per pull
+	// request, the counts by state in one table on each team fact.
+	teamsServed := 0
 	for _, fact := range response.Facts {
 		if fact.Subject.Kind == "pull_request" {
-			served++
+			t.Fatalf("a per pull request fact was served on a team read: %+v", fact)
+		}
+		if fact.Subject.Kind != "team" {
+			continue
+		}
+		teamsServed++
+		table := fact.Tables["pull_requests_by_state"]
+		column := map[string]int{}
+		for index, name := range table.Columns {
+			column[name] = index
+		}
+		counts := map[string]int64{}
+		for _, row := range table.Rows {
+			if row[column["state"]] != "open" {
+				t.Fatalf("unexpected state in %+v", table.Rows)
+			}
+			n, convErr := strconv.ParseInt(fmt.Sprint(row[column["pull_request_count"]]), 10, 64)
+			if convErr != nil {
+				t.Fatalf("count cell is not an integer: %+v", row)
+			}
+			counts["open"] += n
+		}
+		if counts["open"] != perTeam {
+			t.Fatalf("%s open pull requests = %d, want %d (table %+v)", fact.Subject.CanonicalID, counts["open"], perTeam, table.Rows)
 		}
 	}
-	if served != 1 {
-		t.Fatalf("served %d pull request facts, want only the linked one", served)
-	}
-	var note string
-	for _, candidate := range response.RequestNotes {
-		if candidate.Kind == "pull_requests" && strings.Contains(candidate.Note, "not listed") {
-			note = candidate.Note
-		}
-	}
-	if !strings.Contains(note, fmt.Sprintf("%d reached pull_requests facts are not listed", reached-served)) {
-		t.Fatalf("counted note missing: served %d of %d reached, note %q (notes %+v)", served, reached, note, response.RequestNotes)
+	if teamsServed != len(teams) {
+		t.Fatalf("served %d team facts, want %d: %+v", teamsServed, len(teams), response.Facts)
 	}
 }

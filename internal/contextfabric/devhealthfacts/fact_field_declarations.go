@@ -442,6 +442,21 @@ func pullRequestFields() []fieldDecl {
 				cStr("reach_basis"),
 				cNullable(cStr("link_tier")),
 			),
+			// One row per repository and stored pull request state (the
+			// state the per pull request fact serves, spelled as stored; a
+			// bounded historical read derives merged / closed / open). A
+			// state with no pull request has no row: absent is not zero. Not
+			// windowed. Served in place of one fact per pull request unless
+			// the question asks for the pull requests themselves.
+			fInt("pull_requests_by_state_omitted_count", "count"),
+			fTable("pull_requests_by_state",
+				cRef(declRepositoryRef, cStr("repository_id")),
+				cNullable(cStr("repository_name")),
+				cStr("state"),
+				cInt("pull_request_count", "count"),
+				cStr("reach_basis"),
+				cNullable(cStr("link_tier")),
+			),
 		),
 		// A project reaches pull requests only through its issues' linked
 		// pull request rows; each pull request counts once, under its
