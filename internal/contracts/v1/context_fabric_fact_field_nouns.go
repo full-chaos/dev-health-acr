@@ -72,7 +72,7 @@ const (
 var contextFabricStringFieldClasses = func() map[string]ContextFabricStringFieldClass {
 	classes := map[string]ContextFabricStringFieldClass{}
 	for _, name := range []string{
-		"alert_basis", "as_of_day", "blocked_by_work_item_id", "blocked_by_work_item_ref", "completed_at", "computed_at", "day",
+		"alert_basis", "complexity_snapshot_day", "file_path", "latest_run_day", "rank_basis", "as_of_day", "blocked_by_work_item_id", "blocked_by_work_item_ref", "completed_at", "computed_at", "day",
 		"environment", "id", "last_failure_occurred_at", "last_sync_at", "latest_as_of_day", "latest_day",
 		"latest_computed_at", "latest_severity", "latest_synced_at", "map_name", "newest_open_created_at", "oldest_open_created_at", "name", "organization_id", "provider", "repository_id",
 		"repository_name", "required_child_work_item_id", "required_child_work_item_ref", "rule_basis_severity",
@@ -84,8 +84,8 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		classes[name] = StringFieldText
 	}
 	for _, name := range []string{
-		"archived_items", "attribution", "closed_alert_basis", "collection_basis", "secret_scanning_basis", "attribution_basis", "basis", "blocker_status_basis", "change_failure_link_tier",
-		"change_failure_rate_state", "last_failure_stage", "daily_flow_omitted_reason", "incident_attribution_basis", "investment_mix_source",
+		"archived_items", "attribution", "closed_alert_basis", "collection_basis", "complexity_basis", "hotspot_basis", "secret_scanning_basis", "attribution_basis", "basis", "blocker_status_basis", "change_failure_link_tier",
+		"change_failure_rate_state", "change_failure_unknown_reason", "change_failure_evidence_basis", "last_failure_stage", "daily_flow_omitted_reason", "incident_attribution_basis", "investment_mix_source",
 		"latest_score_unavailable_reason", "latest_severity_unavailable_reason", "latest_unavailable_reason", "link_tier",
 		"member_kind", "mix_source", "oldest_blocked_age_basis", "oldest_blocked_age_unavailable_reason", "outcome", "window", "p50_basis", "p50_unavailable_reason", "population_window", "pull_request_link_basis", "reach_basis",
 		"relationship_type", "repository_link_basis", "repository_tables_basis", "rollup_basis",

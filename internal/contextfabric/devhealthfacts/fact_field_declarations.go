@@ -180,6 +180,8 @@ func factKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclar
 		return landscapeFields()
 	case contextfabric.FactSecurityAlerts:
 		return securityAlertsFields()
+	case contextfabric.FactFileHotspots:
+		return fileHotspotsFields()
 	case contextfabric.FactOperationalDeficiencies:
 		return deficiencyFields()
 	case contextfabric.FactSourceHealth:
@@ -898,6 +900,11 @@ func metricsFields() []fieldDecl {
 			fInt("change_failure_deployments_count", "count"),
 			fInt("change_failure_failed_deployments_count", "count"),
 			fStr("change_failure_link_tier"),
+			fStr("change_failure_unknown_reason"),
+			fStr("change_failure_evidence_basis"),
+			fInt("change_failure_status_failed_deployments_count", "count"),
+			fInt("change_failure_status_known_deployments_count", "count"),
+			fNum("change_failure_status_coverage", "ratio"),
 			fInt("bus_factor", "count"),
 			fNum("code_ownership_gini", "ratio"),
 			fNum("mttr_hours", "hours"),
@@ -910,6 +917,11 @@ func metricsFields() []fieldDecl {
 			declAggregate(fInt("change_failure_deployments_count", "count")),
 			declAggregate(fInt("change_failure_failed_deployments_count", "count")),
 			declAggregate(fStr("change_failure_link_tier")),
+			declAggregate(fStr("change_failure_unknown_reason")),
+			declAggregate(fStr("change_failure_evidence_basis")),
+			declAggregate(fInt("change_failure_status_failed_deployments_count", "count")),
+			declAggregate(fInt("change_failure_status_known_deployments_count", "count")),
+			declAggregate(fNum("change_failure_status_coverage", "ratio")),
 		),
 		declOn(declTeamOnly,
 			fInt("after_hours_commits_count", "count"),
@@ -1100,4 +1112,25 @@ func securityAlertsFields() []fieldDecl {
 		fields = append(fields, declNullable(fInt(name, "count")))
 	}
 	return declOn(declRepositoryOnly, fields...)
+}
+
+func fileHotspotsFields() []fieldDecl {
+	return declOn(declRepositoryOnly,
+		fStr("hotspot_basis"),
+		fStr("rank_basis"),
+		fStr("complexity_basis"),
+		declNullable(fStr("complexity_snapshot_day")),
+		declNullable(fInt("hotspot_file_count", "count")),
+		declNullable(fStr("latest_run_day")),
+		declNullable(declFresh(fStr("latest_computed_at"))),
+		declNullable(fTable("hotspot_files",
+			cStr("file_path"),
+			cNum("risk_score", "score"),
+			cInt("churn_loc_30d", "lines"),
+			cInt("churn_commits_30d", "count"),
+			cNullable(cInt("cyclomatic_total", "count")),
+			cNullable(cNum("cyclomatic_avg", "score")),
+			cNullable(cNum("blame_concentration", "share")),
+		)),
+	)
 }
