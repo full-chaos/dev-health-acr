@@ -881,7 +881,7 @@
         },
         "kind": {
           "type": "string",
-          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment, cardinality. A client must tolerate values it does not know.",
+          "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment, file_hotspots, cardinality. A client must tolerate values it does not know.",
           "x-documented-values": [
             "identity",
             "membership",
@@ -907,6 +907,7 @@
             "landscape",
             "security_alerts",
             "commitment",
+            "file_hotspots",
             "cardinality"
           ]
         },

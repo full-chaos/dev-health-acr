@@ -180,6 +180,8 @@ func factKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclar
 		return landscapeFields()
 	case contextfabric.FactSecurityAlerts:
 		return securityAlertsFields()
+	case contextfabric.FactFileHotspots:
+		return fileHotspotsFields()
 	case contextfabric.FactOperationalDeficiencies:
 		return deficiencyFields()
 	case contextfabric.FactSourceHealth:
@@ -1112,4 +1114,25 @@ func securityAlertsFields() []fieldDecl {
 		fields = append(fields, declNullable(fInt(name, "count")))
 	}
 	return declOn(declRepositoryOnly, fields...)
+}
+
+func fileHotspotsFields() []fieldDecl {
+	return declOn(declRepositoryOnly,
+		fStr("hotspot_basis"),
+		fStr("rank_basis"),
+		fStr("complexity_basis"),
+		declNullable(fStr("complexity_snapshot_day")),
+		declNullable(fInt("hotspot_file_count", "count")),
+		declNullable(fStr("latest_run_day")),
+		declNullable(declFresh(fStr("latest_computed_at"))),
+		declNullable(fTable("hotspot_files",
+			cStr("file_path"),
+			cNum("risk_score", "score"),
+			cInt("churn_loc_30d", "lines"),
+			cInt("churn_commits_30d", "count"),
+			cNullable(cInt("cyclomatic_total", "count")),
+			cNullable(cNum("cyclomatic_avg", "score")),
+			cNullable(cNum("blame_concentration", "share")),
+		)),
+	)
 }

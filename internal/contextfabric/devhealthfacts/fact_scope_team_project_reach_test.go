@@ -133,7 +133,8 @@ func TestFactScopeTeamProjectReachMatrix(t *testing.T) {
 	var unexpected []string
 	for _, gap := range gaps {
 		if gap == "team x source_health = pruned" || gap == "project x source_health = pruned" ||
-			gap == "team x security_alerts = pruned" || gap == "project x security_alerts = pruned" {
+			gap == "team x security_alerts = pruned" || gap == "project x security_alerts = pruned" ||
+			gap == "team x file_hotspots = pruned" || gap == "project x file_hotspots = pruned" {
 			continue
 		}
 		unexpected = append(unexpected, gap)
