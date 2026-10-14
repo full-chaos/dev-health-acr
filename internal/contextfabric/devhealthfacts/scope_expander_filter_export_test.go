@@ -10,6 +10,7 @@ import (
 // by, rendered by the production builders.
 func scopeCandidateSets() []string {
 	return []string{
+		readOnceCandidatesSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)),
 		requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate),
 		requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate),
 		requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate),

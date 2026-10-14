@@ -1179,7 +1179,13 @@ import (
 // size counts one); the served weighted_effort, share_in_scope, unit_effort_value
 // and effort_unit_count are counts of work units, not lines of code. An answer
 // saved under v230 carries the old weights and is not reused.
-const QueryVersion = "devhealthfacts.clickhouse.v231"
+//
+// v231 -> v232: the scoped as-of historical statements (the drop count and the
+// touch count of the project chain) build their candidate set once per
+// statement, as one scalar subquery, instead of once at every reference. Their
+// rows are unchanged; the text changes so an answer saved under v231 is not
+// reused as one produced by this version.
+const QueryVersion = "devhealthfacts.clickhouse.v232"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

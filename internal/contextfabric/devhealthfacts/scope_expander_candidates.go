@@ -45,6 +45,19 @@ func requestedProjectHistoryWorkItemIDsSQL(projectPredicate string) string {
   SELECT subject_id FROM project_membership_transitions WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND (to_project_id IN ` + keys + ` OR from_project_id IN ` + keys + `))`
 }
 
+// readOnceCandidatesSQL is the candidate set candidates names, evaluated once
+// per statement. ClickHouse plans each place a statement refers to a candidate
+// subquery on its own, so a statement that refers to it N times scans the
+// tables it reads N times over (the as-of touch statements refer to it six
+// times: measured 6.0 reads per added unrelated row). A scalar subquery is
+// evaluated once and its value reused (ScalarSubqueriesCacheMiss = 1), so the
+// candidates are scanned once and every reference only unpacks the array. The
+// ids go through the server, never as a bound parameter: a bound array is
+// parsed again at every reference and measured 2.3 to 2.6 times the memory.
+func readOnceCandidatesSQL(candidates string) string {
+	return `(SELECT arrayJoin((SELECT groupUniqArray(work_item_id) FROM ` + candidates + `)))`
+}
+
 // teamOwnedProjectJoinKeysSQL is every (provider, project_id) a work item can
 // carry to reach a project the requested teams ({team_ids}) own, in any
 // stored version or validity: the projects whose id or project key equals an
