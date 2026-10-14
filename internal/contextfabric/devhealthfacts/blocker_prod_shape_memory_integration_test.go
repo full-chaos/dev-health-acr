@@ -64,7 +64,7 @@ SELECT `+repoUUIDExpr("number % 11")+`, ?, toUInt32(intDiv(number, 11) + 1), 'pr
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT `+repoUUIDExpr("(number * 7) % 11")+`, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 14017), 12, '0')), toUInt32((number * 31) % 705 + 1), 1, multiIf(number % 3 = 0, 'native', number % 3 = 1, 'explicit_text', 'heuristic'), '', ?, ? FROM numbers(23905)`, at, org)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', ?, ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', if(number % 9 = 0, ? - toIntervalHour(1), ?), ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at, at)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
 SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 11 + 3) % 17000), 12, '0')), 'relates_to', 'relates', ?, NULL FROM numbers(21142)`, org, at)
 	exec(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at)
@@ -90,7 +90,40 @@ type blockerProdShapeStatement struct {
 	head                 string
 }
 
-func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
+// blockerProdShapeQueryLog is every statement over the dependency table logged
+// after mark, with its peak memory and its head.
+// blockerProdShapeCeilingFor is the ceiling of one statement: the totals
+// statement is held to the lower one (its calibration ratio is 0.80).
+func blockerProdShapeCeilingFor(head string) uint64 {
+	if strings.HasPrefix(head, blockerProdShapeTotalsHead) {
+		return blockerProdShapeTotalsCeiling
+	}
+	return blockerProdShapeCeiling
+}
+
+// blockerProdShapeMinOfWarmReads runs read three times after one warm-up and
+// returns, per statement, the smallest peak seen (and the largest, for the
+// log).
+func blockerProdShapeMinOfWarmReads(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, read func()) (low, high map[string]uint64) {
+	t.Helper()
+	read()
+	low, high = map[string]uint64{}, map[string]uint64{}
+	for round := 0; round < 3; round++ {
+		roundMark := serverNowMicros(t, ctx, direct)
+		read()
+		for _, st := range blockerProdShapeQueryLog(t, ctx, direct, roundMark) {
+			if low[st.head] == 0 || st.peak < low[st.head] {
+				low[st.head] = st.peak
+			}
+			if st.peak > high[st.head] {
+				high[st.head] = st.peak
+			}
+		}
+	}
+	return low, high
+}
+
+func blockerProdShapeQueryLog(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64) []blockerProdShapeStatement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
@@ -110,19 +143,18 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 			t.Fatal(err)
 		}
 		out = append(out, st)
+	}
+	return out
+}
+
+func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
+	t.Helper()
+	out := blockerProdShapeQueryLog(t, ctx, direct, mark)
+	for _, st := range out {
 		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
 	}
 	if len(out) < 4 {
 		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
-	}
-	for _, st := range out {
-		ceiling := blockerProdShapeCeiling
-		if strings.HasPrefix(st.head, blockerProdShapeTotalsHead) {
-			ceiling = blockerProdShapeTotalsCeiling
-		}
-		if st.peak >= ceiling {
-			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, st.peak, ceiling, st.head)
-		}
 	}
 	return out
 }
@@ -134,7 +166,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -208,6 +240,78 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	t.Logf("PRODSHAPE org-wide: %d of 39 teams served, %d blocked items; restricted: %d teams, %d blocked items", orgTeams, orgBlocked, resTeams, resBlocked)
 	if orgTeams == 0 || orgBlocked == 0 {
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
+	}
+
+	// Block-size experiment (logged): the same reads with the server default
+	// block size, to show what the setting buys on this shape.
+	for _, rows := range []int{0, 2048} {
+		restoreBlock := devhealthfacts.SetBlockerMaxBlockSizeForTest(rows)
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+		}{{"org-wide", orgWide}, {"restricted", restricted}} {
+			_, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
+			for key, peak := range high {
+				t.Logf("PRODSHAPE block size %d [%s] highest %.1f MiB: %s", rows, caller.label, float64(peak)/(1<<20), key)
+			}
+		}
+		restoreBlock()
+	}
+
+	// Ceilings: the HIGHEST peak of each statement over three warm reads, as
+	// seeded and after the parts are merged, for both callers, must be under the
+	// statement's ceiling (a cap is hit by the worst read). A single cold read is
+	// logged above, not asserted. The lowest read is logged beside it.
+	for _, state := range []string{"parts as seeded", "parts merged (OPTIMIZE FINAL)"} {
+		if strings.Contains(state, "OPTIMIZE") {
+			tableRows, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree' AND name NOT LIKE '.%'`)
+			if err != nil {
+				t.Fatalf("list tables: %v", err)
+			}
+			var tables []string
+			for tableRows.Next() {
+				var name string
+				if err := tableRows.Scan(&name); err != nil {
+					t.Fatal(err)
+				}
+				tables = append(tables, name)
+			}
+			tableRows.Close()
+			for _, table := range tables {
+				if err := direct.Exec(ctx, "OPTIMIZE TABLE `"+table+"` FINAL"); err != nil {
+					t.Fatalf("optimize %s: %v", table, err)
+				}
+			}
+		}
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+		}{{"org-wide", orgWide}, {"restricted", restricted}} {
+			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
+			for key := range low {
+				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+				if ceiling := blockerProdShapeCeilingFor(key); high[key] >= ceiling {
+					t.Errorf("%s, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, high[key], ceiling)
+				}
+			}
+		}
+	}
+
+	// Negative control: with the library authorization forced back in (the shape
+	// before the organization-wide fast path) even the LOWEST of three warm reads
+	// must exceed a ceiling, the harder side of the same assertion.
+	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
+	lowForced, _ := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
+	restoreLibrary()
+	exceeded := false
+	for key, peak := range lowForced {
+		if peak >= blockerProdShapeCeilingFor(key) {
+			exceeded = true
+		}
+		t.Logf("PRODSHAPE negative control [org-wide, library authorization forced] min %.1f MiB: %s", float64(peak)/(1<<20), key)
+	}
+	if !exceeded {
+		t.Error("with the library authorization forced back in, no statement exceeded its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
@@ -293,7 +397,7 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	ctx := context.Background()
 	_, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {

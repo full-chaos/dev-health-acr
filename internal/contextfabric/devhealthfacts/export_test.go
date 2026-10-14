@@ -95,3 +95,20 @@ func CommitmentAuthorizedItemIDsSQLForTest(principal storage.Principal, requeste
 	authorized, _ := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
 	return authorized
 }
+
+// ForceLibraryAuthorizationForTest makes the organization-wide scope take the
+// library relation again (the shape before the fast path), a negative control
+// for the memory ceilings.
+func ForceLibraryAuthorizationForTest() (restore func()) {
+	previous := libraryAuthorizationForced
+	libraryAuthorizationForced = true
+	return func() { libraryAuthorizationForced = previous }
+}
+
+// SetBlockerMaxBlockSizeForTest sets the rows per block of the blocker
+// statements (0 leaves the server default), for a measurement.
+func SetBlockerMaxBlockSizeForTest(rows int) (restore func()) {
+	previous := blockerMaxBlockSize
+	blockerMaxBlockSize = rows
+	return func() { blockerMaxBlockSize = previous }
+}

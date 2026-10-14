@@ -557,7 +557,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		// The weakest tier of a repository's counted items; the per-repository
 		// counts feed the breakdown only. A team total is NOT the sum of these:
 		// an item linked to two owned repositories is one blocked item.
-		statement := readers.WithSettings(`SELECT toString(rid), toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)), toInt64(if(countIf(is_open) > 0, minIf(item_rank, is_open), min(item_rank)))
+		statement := blockerStatement(`SELECT toString(rid), toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)), toInt64(if(countIf(is_open) > 0, minIf(item_rank, is_open), min(item_rank)))
 FROM (`+edgeRows+`)
 GROUP BY rid
 ORDER BY rid`, settings)
@@ -583,7 +583,7 @@ ORDER BY rid`, settings)
 		// The read groups by team, so team ids go in chunks under the
 		// statement's result row cap; a team's rows live in one chunk only.
 		const projectArm = "arm = 'project'"
-		totalsStatement := readers.WithSettings(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
+		totalsStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
   toInt64(uniqExactIf(tgt, is_open AND `+projectArm+`)),
   toInt64(if(countIf(is_open AND `+projectArm+`) > 0, minIf(item_rank, is_open AND `+projectArm+`), minIf(item_rank, `+projectArm+`)))
 FROM (
@@ -599,7 +599,7 @@ FROM (
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
-		ageStatement := readers.WithSettings(`SELECT team_id, toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), is_open AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open AND start_exact = 1)),
+		ageStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), is_open AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open AND start_exact = 1)),
   ifNull(toInt64(minIf(start_unix, is_open)), 0)
 FROM (
   SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, e.start_unix AS start_unix, e.start_exact AS start_exact
@@ -682,7 +682,7 @@ ORDER BY team_id`, settings)
 			memo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
 		}
 		authorized, authorizationBindings, settings := memo.sql, memo.bindings, memo.settings
-		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.target_work_item_id))
+		statement := blockerStatement(`SELECT toInt64(uniqExact(d.target_work_item_id))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
