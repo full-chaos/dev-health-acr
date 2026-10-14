@@ -36,8 +36,8 @@ var historicalReadRowsStatements = []struct {
 	// rows added to grownTables, from hosted CI (spread 0 across runs).
 	readsPerAddedRow float64
 }{
-	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr", "git_pull_requests"}, 5.1898},
-	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 6.0},
+	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr", "git_pull_requests"}, 0},
+	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 0},
 }
 
 // historicalReadRowsRuns is the number of warm reads per size; the smallest

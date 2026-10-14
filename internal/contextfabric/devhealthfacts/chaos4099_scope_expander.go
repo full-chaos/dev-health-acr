@@ -807,7 +807,7 @@ func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, p
 	// here would let a redundant touch masquerade as independent evidence
 	// of a match/miss the ORIGINAL (first-add) interval already decides on
 	// its own.
-	candidates := requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)
+	candidates := readOnceCandidatesSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate))
 	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed AND NOT is_duplicate_add) AS ever_matched,
   uniqExactIf(repo_id_str, in_window AND NOT is_malformed AND NOT is_duplicate_add) AS window_matched
 FROM (
