@@ -2,6 +2,8 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,8 +13,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 const (
@@ -50,6 +54,9 @@ func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnR
 	})
 	t.Run("interleaved", func(t *testing.T) {
 		measureProjectReachedRead(t, ctx, query, direct, projectReachInterleavedMemoryOrg, true)
+	})
+	t.Run("empty project id and ambiguous project key", func(t *testing.T) {
+		assertIdentityEdgeCaseLinkRowsIdentical(t, ctx, query, direct)
 	})
 }
 
@@ -149,6 +156,7 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	if float64(largeBytes) > projectReachReadBytesSlope*float64(smallBytes) {
 		t.Errorf("project-reached statements' read_bytes grew with the organization's work items: %d at the larger size, %d at the smaller, over the %.2fx slope", largeBytes, smallBytes, projectReachReadBytesSlope)
 	}
+	assertLinkRowsNarrowedWithIdenticalRows(t, ctx, query, direct, org, teamID)
 	for _, read := range []struct {
 		result contextfabric.FactProviderResult
 		err    error
@@ -187,4 +195,110 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 		t.Fatalf("read query_log: %v", err)
 	}
 	return peak
+}
+
+// teamProjectLinkRowsSQL resolves the owned projects once and prunes the work
+// item read from the named teams' ownership rows. The rows are the rows of the
+// statement it replaced, and the statement's peak memory is lower.
+func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID string) {
+	t.Helper()
+	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+	beforeRows, before := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
+	afterRows, after := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
+	t.Logf("MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
+	if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
+		t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
+	}
+	if after >= before {
+		t.Errorf("narrowed statement peaked at %d bytes, want under the %d bytes of the statement it replaced", after, before)
+	}
+}
+
+// Two identity edge cases the narrowed statement must keep exactly as the
+// statement it replaced: a project key that resolves to two projects owns
+// nothing (key_resolution_count), while the ids of those same projects still
+// match; and a project whose id is the empty string is a real identity value: the
+// ownership arm matches it, the identity resolution gives it the join key "",
+// and an issue with no project id is then one of its issues. The narrowed
+// statement must return exactly the rows of the statement it replaced.
+func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
+	t.Helper()
+	const org, teamID = "c1d2e3f4-5a6b-4c7d-8e9f-0a1b2c3d4e5f", "team-empty-id"
+	at := ts(2026, 9, 29, 0, 0, 0)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("repo-empty-id"), org, "acme/repo-empty-id", "github", at)
+	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+		teamID, teamID, at, org, "linear", uint8(1))
+	exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"", org, "linear", nil, "empty id", uint8(1), "active", "", at)
+	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		org, "linear", teamID, "", nil, "native", ts(2026, 1, 1, 0, 0, 0), nil, at)
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', '', NULL)`,
+		"i-empty-id", repoUUID("repo-empty-id"), org, "title", at)
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		repoUUID("repo-empty-id"), org, uint32(7), "pr", "open", at, at, "feature", "")
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoUUID("repo-empty-id"), "i-empty-id", uint32(7), float32(1), "native", "", at, org)
+	for _, id := range []string{"dup-a", "dup-b"} {
+		exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, org, "linear", "DUPKEY", id, uint8(1), "active", "", at)
+	}
+	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		org, "linear", teamID, "dup-a", "DUPKEY", "native", ts(2026, 1, 1, 0, 0, 0), nil, at)
+	for _, item := range []struct {
+		id, project string
+		number      uint32
+	}{{"i-dup-key", "DUPKEY", 8}, {"i-dup-id", "dup-a", 9}} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+			item.id, repoUUID("repo-empty-id"), org, "title", at, item.project)
+		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+			repoUUID("repo-empty-id"), org, item.number, "pr", "open", at, at, "feature", "")
+		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoUUID("repo-empty-id"), item.id, item.number, float32(1), "native", "", at, org)
+	}
+	beforeRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+	afterRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
+	if len(beforeRows) != 2 || !slices.Equal(beforeRows, afterRows) {
+		t.Fatalf("identity edge case link rows differ: before %v, after %v, want the empty-id row and the dup-a id row, and no row for the ambiguous key, in both", beforeRows, afterRows)
+	}
+	for _, row := range afterRows {
+		if strings.Contains(row, "i-dup-key") {
+			t.Fatalf("a project key resolving to two projects reached an issue: %v", afterRows)
+		}
+	}
+}
+
+func runLinkRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID, marker, rows string) ([]string, uint64) {
+	t.Helper()
+	statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, toString(pr_repo_id), pr_number, link_rank"
+	mark := serverNowMicros(t, ctx, direct)
+	var out []string
+	err := readers.QueryOrgScopedNamed(ctx, query, "TeamProjectLinkRows", statement, org, []string{teamID}, func(row contextpacket.ClickHouseRowScanner) error {
+		var team, item, repo string
+		var number, rank int64
+		if err := row.Scan(&team, &item, &repo, &number, &rank); err != nil {
+			return err
+		}
+		out = append(out, fmt.Sprint(team, "|", item, "|", repo, "|", number, "|", rank))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("%s: %v", marker, err)
+	}
+	var worst uint64
+	for _, bytes := range statementMemorySince(t, ctx, direct, statementFilter{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"}, mark) {
+		if bytes > worst {
+			worst = bytes
+		}
+	}
+	if worst == 0 {
+		t.Fatalf("%s: memory measurement did not happen", marker)
+	}
+	return out, worst
 }

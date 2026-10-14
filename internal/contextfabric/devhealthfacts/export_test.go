@@ -28,6 +28,54 @@ func RelationCurrentProbeForTest(orgID string) string {
 	return strings.ReplaceAll(probe, "{org_id:String}", "'"+orgID+"'")
 }
 
+func TeamProjectLinkRowsSQLForTest() string {
+	return teamProjectLinkRowsSQL("ids", factTimeBound{})
+}
+
+// TeamProjectLinkRowsPreStreamingSQLForTest is the team project link rows
+// statement as it read before the organization's link rows and pull requests
+// were streamed past the owned issues: a differential oracle only.
+func TeamProjectLinkRowsPreStreamingSQLForTest() string {
+	bound := factTimeBound{}
+	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+    WHERE p.key_resolution_count = 1 AND t.team_id IN {ids:Array(String)})`
+	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
+    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
+	return `(
+  SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+  INNER JOIN ` + issues + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+  WHERE p.key_resolution_count = 1 AND t.team_id IN {ids:Array(String)}
+)`
+}
+
+// TeamProjectLinkRowsTwoPassSQLForTest is the team project link rows statement
+// as main carried it before the owned projects were resolved once: the before
+// side of the memory comparison.
+func TeamProjectLinkRowsTwoPassSQLForTest() string {
+	bound := factTimeBound{}
+	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+    INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+    WHERE p.key_resolution_count = 1 AND t.team_id IN {ids:Array(String)})`
+	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND (cp.provider, cp.project_id) IN ` + owned + `)`
+	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
+    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
+      AND (cw.provider, cw.project_id) IN ` + owned + ` AND ` + workItemIsIssueSQL("cw") + `)`
+	return `(
+  SELECT DISTINCT t.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
+  INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
+  INNER JOIN ` + issues + ` AS w ON w.provider = p.provider AND w.project_id = p.join_key
+  INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+  WHERE p.key_resolution_count = 1 AND t.team_id IN {ids:Array(String)}
+)`
+}
+
 // BlockerFragmentNames are the parts RunBlockerFragmentsForTest runs on their
 // own; each statement carries its name as the literal 'frag-<name>'.
 var BlockerFragmentNames = []string{"endpoints", "authorized", "admitted_links", "edge_rows_repo", "edge_rows_project", "owned_projects", "project_link_rows", "work_items_s", "relation_ended_keys"}
@@ -113,4 +161,25 @@ func ForceLibraryAuthorizationForTest() (restore func()) {
 	previous := libraryAuthorizationForced
 	libraryAuthorizationForced = true
 	return func() { libraryAuthorizationForced = previous }
+}
+
+// SetBlockerMaxBlockSizeForTest sets the rows per block of the blocker
+// statements (0 leaves the server default), for a measurement.
+func SetBlockerMaxBlockSizeForTest(rows int) (restore func()) {
+	previous := blockerMaxBlockSize
+	blockerMaxBlockSize = rows
+	return func() { blockerMaxBlockSize = previous }
+}
+
+// BlockerStatementForTest renders a statement with the blocker settings.
+func BlockerStatementForTest(statement string, settings readers.Settings) string {
+	return blockerStatement(statement, settings)
+}
+
+// SetBlockerStartVariantForTest selects an experimental first-seen narrowing
+// of the age statements, for a measurement.
+func SetBlockerStartVariantForTest(variant string) (restore func()) {
+	previous := blockerStartVariant
+	blockerStartVariant = variant
+	return func() { blockerStartVariant = previous }
 }

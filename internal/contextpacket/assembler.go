@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +32,7 @@ type Options struct {
 	Observer                              AssemblyObserver
 	StoreBackend                          StoreBackend
 	Tracer                                AssemblyTraceBoundary
+	ActionFindings                        ActionFindingsSource
 }
 type Assembler struct {
 	store   storage.EvidenceStore
@@ -110,7 +114,17 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
-	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
+	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(warnings(bundle), roleWarnings(bundle.Evidence)...))
+	actionEvidence, actionReason, actionNotes := a.actionEvidence(ctx, principal, request, scope, packet.Freshness.AsOf)
+	packet.Warnings = sortedUnique(append(packet.Warnings, actionNotes...))
+	if len(actionNotes) > 0 {
+		markActionPartial(&packet, request)
+	}
+	if actionReason != "" {
+		packet.Warnings = sortedUnique(append(packet.Warnings, "action_items_unavailable:"+actionReason))
+		markActionSourceUnavailable(&packet, request, actionReason)
+	}
+	bundle.Evidence = append(bundle.Evidence, actionEvidence...)
 	applyEvidenceQuarantine(&packet, validation)
 	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
@@ -237,4 +251,68 @@ func sameScope(a, b contractsv1.ResolvedScope) bool {
 func packetID(p storage.Principal, r contractsv1.ContextPacketRequest) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{p.OrgID, r.RequestID, r.Repository.Slug, r.Scope.Branch, r.Scope.CommitSHA}, "\000")))
 	return "pkt_" + hex.EncodeToString(sum[:12])
+}
+
+// actionEvidence turns the stored findings of the repository's owning team(s)
+// into recommendation evidence. Nothing is generated: with no source, no
+// owner, no grant or no fired finding it returns none and the closed reason.
+func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest, scope contractsv1.ResolvedScope, asOf time.Time) ([]contractsv1.EvidenceRef, string, []string) {
+	if len(request.Options.RequestedCategories) > 0 && !slices.Contains(request.Options.RequestedCategories, contractsv1.CategoryAction) {
+		return nil, "", nil
+	}
+	if a.options.ActionFindings == nil {
+		return nil, ActionUnavailableNoSource, nil
+	}
+	if request.Scope.AsOf != nil {
+		return nil, ActionUnavailableHistorical, nil
+	}
+	if scope.RepoID == "" || strings.HasPrefix(scope.RepoID, "unresolved:") {
+		return nil, ActionUnavailableNoOwner, nil
+	}
+	result, err := a.options.ActionFindings.ActionFindings(ctx, principal, scope.RepoID)
+	if err != nil {
+		return nil, ActionUnavailableReadFailed, nil
+	}
+	served := []contractsv1.EvidenceRef{}
+	findingsRead := 0
+	for _, team := range result.Teams {
+		findingsRead += len(team.Findings)
+		if ref, ok := actionFindingEvidence(team, asOf); ok {
+			served = append(served, ref)
+		}
+	}
+	reason := ""
+	if len(served) == 0 {
+		reason = result.Reason
+	}
+	var notes []string
+	if result.WithheldTeams > 0 {
+		notes = append(notes, "action_items_partial:"+ActionUnavailableNoGrant+":"+strconv.Itoa(result.WithheldTeams))
+	}
+	if result.NotEvaluatedTeams > 0 {
+		notes = append(notes, "action_items_partial:"+ActionUnavailableNotEvaluated+":"+strconv.Itoa(result.NotEvaluatedTeams))
+	}
+	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "withheld_teams", result.WithheldTeams, "not_evaluated_teams", result.NotEvaluatedTeams, "reason", reason)
+	return served, reason, notes
+}
+
+// markActionSourceUnavailable records, in the packet's own coverage, that the
+// action category is not served because no stored source was read, so an
+// absent category is never read as zero or complete. The packet is partial
+// only when the request names the action category.
+func markActionSourceUnavailable(packet *contractsv1.ContextPacket, request contractsv1.ContextPacketRequest, reason string) {
+	packet.Coverage.SourcesUnavailable = append(packet.Coverage.SourcesUnavailable, contractsv1.UnavailableSource{Source: actionCoverageSource, Reason: reason})
+	for _, category := range request.Options.RequestedCategories {
+		if category == contractsv1.CategoryAction {
+			packet.Coverage.Partial = true
+		}
+	}
+}
+
+// markActionPartial makes the packet partial when the request names the action
+// category and some owning team's findings were withheld or never evaluated.
+func markActionPartial(packet *contractsv1.ContextPacket, request contractsv1.ContextPacketRequest) {
+	if slices.Contains(request.Options.RequestedCategories, contractsv1.CategoryAction) {
+		packet.Coverage.Partial = true
+	}
 }

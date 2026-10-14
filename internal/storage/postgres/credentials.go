@@ -14,6 +14,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -272,6 +273,9 @@ func mapNotFound(operation string, err error) error {
 }
 
 func sanitizeDatabaseError(err error) error {
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
+	}
 	if err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrUnavailable) {
 		return err
 	}

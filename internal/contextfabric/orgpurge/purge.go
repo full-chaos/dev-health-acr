@@ -10,10 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
@@ -63,6 +66,10 @@ type Purger struct {
 	Entitlements Entitlements
 	Locker       Locker
 	Now          func() time.Time
+	Logger       *slog.Logger
+	// WriteFenceLockTimeout bounds the wait for the write fence. Zero means
+	// DefaultWriteFenceLockTimeout.
+	WriteFenceLockTimeout time.Duration
 }
 
 type Options struct {
@@ -142,7 +149,11 @@ func PurgedTables() []string {
 	return names
 }
 
-func KeptTables() []string { return []string{"audit_events"} }
+// KeptTables are org-keyed tables the purge never deletes: the audit trail,
+// and the purge marker, which is the fence that outlives the purge.
+func KeptTables() []string {
+	return []string{"audit_events", "context_fabric_org_purge_markers"}
+}
 
 // CascadedTables are org-keyed tables whose rows go with their
 // device_authorizations parent (ON DELETE CASCADE).
@@ -200,7 +211,7 @@ func (p *Purger) Run(ctx context.Context, orgID string, opts Options) (Report, e
 		report.Status = StatusIncomplete
 		report.Rows, report.TotalRows, report.TableOrderApplied = map[string]int64{}, 0, nil // the rolled-back transaction removed nothing
 		report.AuditRowWritten = p.writeIncompleteAudit(ctx, orgID, report)
-		return report, fmt.Errorf("%w: graphs may be gone and database rows may remain; run it again: %v", ErrIncomplete, err)
+		return report, fmt.Errorf("%w: graphs may be gone and database rows may remain; run it again: %w", ErrIncomplete, err)
 	}
 	report.Status = StatusPurged
 	if opts.DryRun {
@@ -243,6 +254,11 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 		return fmt.Errorf("begin purge transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if !opts.DryRun {
+		if err := p.lockWriteFence(ctx, tx, orgID); err != nil {
+			return err
+		}
+	}
 	for _, spec := range purgeTables {
 		var n int64
 		for _, child := range spec.CascadedByDeviceCode {
@@ -285,8 +301,79 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 		}
 		report.AuditRowWritten = true
 	}
+	if err := p.writePurgeMarker(ctx, tx, orgID); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit purge transaction: %w", err)
+	}
+	p.logger().InfoContext(ctx, "projection organization purge marker set", "org_key", contextfabric.SanitizeLogAttr(report.OrgKey))
+	return nil
+}
+
+// WriteFenceLockClass is the advisory lock class of the organization write
+// fence. The trigger function of migration 0052 takes the same class in
+// shared mode before it reads the purge marker.
+const WriteFenceLockClass = 20261014
+
+// DefaultWriteFenceLockTimeout bounds the wait for writers that are in flight
+// when the purge starts.
+const DefaultWriteFenceLockTimeout = 30 * time.Second
+
+// ErrWriteFenceTimeout means writers of the organization held the write fence
+// for longer than the timeout. Nothing was deleted from the database.
+var ErrWriteFenceTimeout = errors.New("orgpurge: timed out waiting for in-flight writers of the organization")
+
+// lockWriteFence takes the organization's write fence in exclusive mode for
+// the rest of the delete transaction, before any delete. It waits for writers
+// already in flight and stops new ones until the marker is committed. The
+// purge never continues without the lock.
+func (p *Purger) lockWriteFence(ctx context.Context, tx *sql.Tx, orgID string) error {
+	timeout := p.WriteFenceLockTimeout
+	if timeout <= 0 {
+		timeout = DefaultWriteFenceLockTimeout
+	}
+	var previous string
+	if err := tx.QueryRowContext(ctx, `SELECT current_setting('lock_timeout')`).Scan(&previous); err != nil {
+		return fmt.Errorf("read lock timeout: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('lock_timeout', $1, true)`, fmt.Sprintf("%dms", timeout.Milliseconds())); err != nil {
+		return fmt.Errorf("set write fence lock timeout: %w", err)
+	}
+	started := time.Now()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, WriteFenceLockClass, orgID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+			p.logger().ErrorContext(ctx, "projection organization purge stopped: write fence lock timed out", "org_key", contextfabric.SanitizeLogAttr(OrgKey(orgID)), "waited_ms", time.Since(started).Milliseconds())
+			return fmt.Errorf("%w (waited %s)", ErrWriteFenceTimeout, timeout)
+		}
+		return fmt.Errorf("take write fence lock: %w", err)
+	}
+	p.logger().DebugContext(ctx, "projection organization purge took the write fence", "org_key", contextfabric.SanitizeLogAttr(OrgKey(orgID)), "waited_ms", time.Since(started).Milliseconds())
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('lock_timeout', $1, true)`, previous); err != nil {
+		return fmt.Errorf("restore lock timeout: %w", err)
+	}
+	return nil
+}
+
+func (p *Purger) logger() *slog.Logger {
+	if p.Logger != nil {
+		return p.Logger
+	}
+	return slog.Default()
+}
+
+// writePurgeMarker records the fence in the purge's own transaction: either
+// the rows are gone and the marker is set, or neither happened. The marker
+// is the canonical lowercase UUID, which is what the coordinator checks, and
+// its time is the database clock, the one a discovery compares it with.
+func (p *Purger) writePurgeMarker(ctx context.Context, tx *sql.Tx, orgID string) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at)
+VALUES ($1, clock_timestamp())
+ON CONFLICT (org_id) DO UPDATE SET purged_at = EXCLUDED.purged_at`, orgID)
+	if err != nil {
+		return fmt.Errorf("write purge marker: %w", err)
 	}
 	return nil
 }

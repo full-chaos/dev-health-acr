@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,7 +65,7 @@ SELECT `+repoUUIDExpr("number % 11")+`, ?, toUInt32(intDiv(number, 11) + 1), 'pr
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT `+repoUUIDExpr("(number * 7) % 11")+`, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 14017), 12, '0')), toUInt32((number * 31) % 705 + 1), 1, multiIf(number % 3 = 0, 'native', number % 3 = 1, 'explicit_text', 'heuristic'), '', ?, ? FROM numbers(23905)`, at, org)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
-SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', if(number % 9 = 0, ? - toIntervalHour(1), ?), ? - toIntervalDay(number % 90) FROM numbers(2103)`, org, at, at, at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', 'blocks', if(number % 9 = 0, ? - toIntervalHour(1), ?), if(number % 4 = 0, NULL, ? - toIntervalDay(number % 90)) FROM numbers(2103)`, org, at, at, at)
 	exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at)
 SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 11 + 3) % 17000), 12, '0')), 'relates_to', 'relates', ?, NULL FROM numbers(21142)`, org, at)
 	exec(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at)
@@ -73,6 +74,11 @@ SELECT ?, `+repoUUIDExpr("number % 11")+`, concat('linear:7a1e4b0c-5d2f-4c8a-9e3
 SELECT ?, NULL, `+repoUUIDExpr("number % 11")+`, 'work_item', concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 17000), 12, '0')), 'linear', concat('proj-', toString(number % 33)), concat('proj-', toString((number + 1) % 33)), '', '', '', ? + toIntervalMinute(number), ? + toIntervalMinute(number), concat('event-', toString(number)) FROM numbers(9075)`, org, at, at)
 	exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at)
 SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(number % 1602), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString((number * 37 + 5 + intDiv(number, 1602)) % 1602), 12, '0')), 'blocks', ? - toIntervalDay(number % 120) FROM numbers(2103)`, org, at)
+	// First-seen rows of links that no longer exist (the table is append-only):
+	// about five times the production count, so the unrestricted first-seen read
+	// is measured with retained history, not only with the current edges.
+	exec(`INSERT INTO work_item_dependency_first_seen (org_id, source_work_item_id, target_work_item_id, relationship_type, first_seen_at)
+SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(100000 + number), 12, '0')), concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(200000 + number), 12, '0')), 'blocks', ? - toIntervalDay(number % 200) FROM numbers(10000)`, org, at)
 }
 
 // The production statements peaked at 61.4 MiB (the age statement) and 53.7 MiB
@@ -192,6 +198,20 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 		return result
 	}
+	projectSubjects := make([]contextfabric.SubjectRef, 0, 33)
+	for project := 0; project < 33; project++ {
+		projectSubjects = append(projectSubjects, projectRollupRef(t, fmt.Sprintf("proj-%d", project)))
+	}
+	readProjects := func(principal storage.Principal) contextfabric.FactProviderResult {
+		t.Helper()
+		result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: projectSubjects,
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts (projects): %v: %s", err, readFailureCause(err))
+		}
+		return result
+	}
 	orgWide := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}
 	restricted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"acme/repo-0", "acme/repo-1", "acme/repo-2", "acme/repo-3", "acme/repo-4", "acme/repo-5"}}
 
@@ -204,6 +224,14 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	mark = serverNowMicros(t, ctx, direct)
 	restrictedResult := read(restricted)
 	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
+
+	readProjects(orgWide)
+	orgWideProjectsResult := readProjects(orgWide)
+	readProjects(restricted)
+	restrictedProjectsResult := readProjects(restricted)
+	if len(orgWideProjectsResult.Facts) == 0 {
+		t.Error("the production shape served no project blocker fact: the project statements are not measured")
+	}
 
 	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
 	inStatement := read(restricted)
@@ -242,6 +270,37 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
+	// Block-size experiment (logged): the same reads with the server default
+	// block size, to show what the setting buys on this shape.
+	for _, rows := range []int{0, 2048} {
+		restoreBlock := devhealthfacts.SetBlockerMaxBlockSizeForTest(rows)
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+			want      contextfabric.FactProviderResult
+		}{{"org-wide", orgWide, orgWideResult}, {"restricted", restricted, restrictedResult}} {
+			got := read(caller.principal)
+			if len(got.Facts) != len(caller.want.Facts) {
+				t.Fatalf("block size %d, %s: %d facts, want %d", rows, caller.label, len(got.Facts), len(caller.want.Facts))
+			}
+			for index := range got.Facts {
+				if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
+					t.Errorf("block size %d, %s: fact %d differs from the default block size: %+v vs %+v", rows, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
+				}
+			}
+		}
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+		}{{"org-wide", orgWide}, {"restricted", restricted}} {
+			_, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
+			for key, peak := range high {
+				t.Logf("PRODSHAPE block size %d [%s] highest %.1f MiB: %s", rows, caller.label, float64(peak)/(1<<20), key)
+			}
+		}
+		restoreBlock()
+	}
+
 	// Ceilings: the HIGHEST peak of each statement over three warm reads, as
 	// seeded and after the parts are merged, for both callers, must be under the
 	// statement's ceiling (a cap is hit by the worst read). A single cold read is
@@ -268,16 +327,52 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			}
 		}
 		for _, caller := range []struct {
-			label     string
-			principal storage.Principal
-		}{{"org-wide", orgWide}, {"restricted", restricted}} {
-			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
+			label string
+			read  func()
+		}{
+			{"org-wide", func() { read(orgWide) }},
+			{"restricted", func() { read(restricted) }},
+			{"projects, org-wide", func() { readProjects(orgWide) }},
+			{"projects, restricted", func() { readProjects(restricted) }},
+		} {
+			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, caller.read)
 			for key := range low {
 				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
 				if ceiling := blockerProdShapeCeilingFor(key); high[key] >= ceiling {
 					t.Errorf("%s, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, high[key], ceiling)
 				}
 			}
+		}
+		// First-seen narrowing: the shipped form must serve every value the
+		// legacy form (endpoint-set narrowing) serves, for both callers, in this
+		// part state; the legacy memory is logged beside it.
+		for _, variant := range []string{"legacy"} {
+			restoreVariant := devhealthfacts.SetBlockerStartVariantForTest(variant)
+			for _, caller := range []struct {
+				label string
+				read  func() contextfabric.FactProviderResult
+				want  contextfabric.FactProviderResult
+			}{
+				{"org-wide", func() contextfabric.FactProviderResult { return read(orgWide) }, orgWideResult},
+				{"restricted", func() contextfabric.FactProviderResult { return read(restricted) }, restrictedResult},
+				{"projects, org-wide", func() contextfabric.FactProviderResult { return readProjects(orgWide) }, orgWideProjectsResult},
+				{"projects, restricted", func() contextfabric.FactProviderResult { return readProjects(restricted) }, restrictedProjectsResult},
+			} {
+				got := caller.read()
+				if len(got.Facts) != len(caller.want.Facts) {
+					t.Fatalf("first-seen form %s, %s: %d facts, want %d", variant, caller.label, len(got.Facts), len(caller.want.Facts))
+				}
+				for index := range got.Facts {
+					if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
+						t.Errorf("first-seen form %s, %s: fact %d differs from the shipped form: %+v vs %+v", variant, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
+					}
+				}
+				low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { caller.read() })
+				for key := range low {
+					t.Logf("PRODSHAPE age variant %s [%s, %s] min %.1f max %.1f MiB: %s", variant, caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+				}
+			}
+			restoreVariant()
 		}
 	}
 
