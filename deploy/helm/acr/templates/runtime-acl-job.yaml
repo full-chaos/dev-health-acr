@@ -85,6 +85,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.credentials.runtime.existingSecret | quote }}
                   key: {{ .Values.credentials.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" | quote }}
+            # Which optional runtime features hold their table privileges: the
+            # same settings the workloads read (templates/configmap.yaml).
+            - name: ACR_ENABLE_EPISODE_WRITEBACK
+              value: {{ .Values.config.enableEpisodeWriteback | quote }}
+            {{- if .Values.workloadTokenExchange.enabled }}
+            - name: ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
+              value: {{ .Values.workloadTokenExchange.audience | quote }}
+            - name: ACR_WORKLOAD_TRUST_DOMAIN
+              value: {{ .Values.workloadTokenExchange.trustDomain | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:

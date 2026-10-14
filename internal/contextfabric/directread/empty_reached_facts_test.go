@@ -63,7 +63,7 @@ func readReachedPullRequests(t *testing.T, tables string) (FactsResponse, int) {
 	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, pullRequestStateProvider())
 	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{
 		Kinds: []string{"pull_requests"}, Tables: tables,
-		Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}},
+		Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}},
 	})
 	if err != nil {
 		t.Fatal(err)

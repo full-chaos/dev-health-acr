@@ -424,3 +424,22 @@ func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.P
 		decision.Outcomes[index].ActiveTwinID = twin
 	}
 }
+
+// AdmittedTeams takes one live decision for the requested team subjects and
+// returns the canonical ids it admitted. It is the SAME decision read_facts
+// takes (Authorize), taken fresh per call with the caller's principal; callers
+// outside read_facts (the context packet's stored findings) use it so no second
+// team rule exists. A nil gate admits nothing.
+func (g *SubjectGate) AdmittedTeams(ctx context.Context, principal storage.Principal, teams []contextfabric.SubjectRef) map[string]bool {
+	admitted := map[string]bool{}
+	if g == nil {
+		return admitted
+	}
+	_, decision := g.Authorize(ctx, principal, teams)
+	for _, gated := range decision.Outcomes {
+		if gated.Outcome == SubjectAdmitted && gated.Subject.Kind == contextfabric.SubjectTeam {
+			admitted[gated.Subject.CanonicalID] = true
+		}
+	}
+	return admitted
+}

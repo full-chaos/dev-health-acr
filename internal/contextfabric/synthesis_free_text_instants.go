@@ -82,13 +82,19 @@ func (d instantDays) holds(year int, month time.Month, day int) bool {
 // ISO date or datetime or as a month-name date. A year of 0 means none was
 // stated. A bare month or year names no day and is not visited.
 func scanInstantDays(text string, emit func(year int, month time.Month, day int)) {
-	visit := func(year int, month time.Month, day int) {
-		// Year 0 is a leap year, so a yearless Feb 29 stays a day.
-		if time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Day() != day {
-			return
-		}
-		emit(year, month, day)
+	scanISODays(text, emit)
+	scanMonthNameDays(text, emit)
+}
+
+func visitInstantDay(year int, month time.Month, day int, emit func(year int, month time.Month, day int)) {
+	// Year 0 is a leap year, so a yearless Feb 29 stays a day.
+	if time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Day() != day {
+		return
 	}
+	emit(year, month, day)
+}
+
+func scanISODays(text string, emit func(year int, month time.Month, day int)) {
 	for _, m := range isoDayPattern.FindAllStringSubmatch(text, -1) {
 		year, _ := strconv.Atoi(m[1])
 		month, _ := strconv.Atoi(m[2])
@@ -99,20 +105,23 @@ func scanInstantDays(text string, emit func(year int, month time.Month, day int)
 				year, month, day = utc.Year(), int(utc.Month()), utc.Day()
 			}
 		}
-		visit(year, time.Month(month), day)
+		visitInstantDay(year, time.Month(month), day, emit)
 	}
+}
+
+func scanMonthNameDays(text string, emit func(year int, month time.Month, day int)) {
 	for _, m := range monthFirstPattern.FindAllStringSubmatch(text, -1) {
 		if m[3] != "" {
 			continue
 		}
 		day, _ := strconv.Atoi(m[2])
 		year, _ := strconv.Atoi(m[4])
-		visit(year, monthNumberByPrefix[m[1][:3]], day)
+		visitInstantDay(year, monthNumberByPrefix[m[1][:3]], day, emit)
 	}
 	for _, m := range dayFirstPattern.FindAllStringSubmatch(text, -1) {
 		day, _ := strconv.Atoi(m[1])
 		year, _ := strconv.Atoi(m[3])
-		visit(year, monthNumberByPrefix[m[2][:3]], day)
+		visitInstantDay(year, monthNumberByPrefix[m[2][:3]], day, emit)
 	}
 }
 
@@ -122,12 +131,21 @@ func synthesisInputInstantDays(input SynthesisInput) (instantDays, error) {
 	if err != nil {
 		return days, fmt.Errorf("synthesis input could not be read for instants: %w", err)
 	}
-	scanInstantDays(string(encoded), days.add)
-	for _, m := range isoDatetimePattern.FindAllStringSubmatch(string(encoded), -1) {
-		if at, err := time.Parse(time.RFC3339, m[1]+zoneOrUTC(m[2])); err == nil {
-			days.addAdjacent(at)
+	// No pattern matches across a JSON string's quotes, so each string leaf is
+	// scanned alone, and only by the patterns whose shape it can hold.
+	forEachJSONStringLeaf(string(encoded), func(leaf string) {
+		if hasISODayShape(leaf) {
+			scanISODays(leaf, days.add)
+			for _, m := range isoDatetimePattern.FindAllStringSubmatch(leaf, -1) {
+				if at, err := time.Parse(time.RFC3339, m[1]+zoneOrUTC(m[2])); err == nil {
+					days.addAdjacent(at)
+				}
+			}
 		}
-	}
+		if hasMonthNameAndDigit(leaf) {
+			scanMonthNameDays(leaf, days.add)
+		}
+	})
 	if window := input.EvidenceWindow; window != nil {
 		if window.Start != nil {
 			days.addTime(*window.Start)
@@ -141,6 +159,76 @@ func synthesisInputInstantDays(input SynthesisInput) (instantDays, error) {
 		days.addAdjacent(input.ReadTimeClamp.At)
 	}
 	return days, nil
+}
+
+// forEachJSONStringLeaf calls fn with the raw, still-escaped content of every
+// string in compact JSON text, object keys included.
+func forEachJSONStringLeaf(text string, fn func(string)) {
+	for i := 0; i < len(text); {
+		open := strings.IndexByte(text[i:], '"')
+		if open < 0 {
+			return
+		}
+		start := i + open + 1
+		end := start
+		for end < len(text) {
+			next := strings.IndexAny(text[end:], `"\`)
+			if next < 0 {
+				end = len(text)
+				break
+			}
+			end += next
+			if text[end] == '"' {
+				break
+			}
+			end += 2
+		}
+		if end > len(text) {
+			end = len(text)
+		}
+		fn(text[start:end])
+		i = end + 1
+	}
+}
+
+// hasISODayShape reports whether text holds dddd-dd-dd, which every ISO
+// date and datetime match contains.
+func hasISODayShape(text string) bool {
+	for i := 0; i < len(text); {
+		dash := strings.IndexByte(text[i:], '-')
+		if dash < 0 {
+			return false
+		}
+		at := i + dash
+		if at >= 4 && at+6 <= len(text) && text[at+3] == '-' && allASCIIDigits(text[at-4:at]) && allASCIIDigits(text[at+1:at+3]) && allASCIIDigits(text[at+4:at+6]) {
+			return true
+		}
+		i = at + 1
+	}
+	return false
+}
+
+func allASCIIDigits(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// hasMonthNameAndDigit reports whether text holds a digit and a month-name
+// prefix, which every month-name date match contains.
+func hasMonthNameAndDigit(text string) bool {
+	if strings.IndexAny(text, "0123456789") < 0 {
+		return false
+	}
+	for prefix := range monthNumberByPrefix {
+		if strings.Contains(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d SynthesisDraft) freeText() []string {
@@ -166,11 +254,7 @@ func (d SynthesisDraft) freeText() []string {
 // day the input does not hold. The text of the rejection never carries the
 // day the draft wrote.
 func (d SynthesisDraft) requireGroundedInstants(input SynthesisInput) error {
-	held, err := synthesisInputInstantDays(input)
-	if err != nil {
-		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "%w", err)
-	}
-	ungrounded := 0
+	var stated []calendarDay
 	for _, text := range d.freeText() {
 		if strings.TrimSpace(text) == "" {
 			continue
@@ -179,10 +263,23 @@ func (d SynthesisDraft) requireGroundedInstants(input SynthesisInput) error {
 			if month < time.January || month > time.December || day < 1 || day > 31 {
 				return
 			}
-			if !held.holds(year, month, day) {
-				ungrounded++
-			}
+			stated = append(stated, calendarDay{year, month, day})
 		})
+	}
+	// Scanning the whole encoded input costs time linear in its size, so a
+	// draft that states no day does not pay for it.
+	if len(stated) == 0 {
+		return nil
+	}
+	held, err := synthesisInputInstantDays(input)
+	if err != nil {
+		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "%w", err)
+	}
+	ungrounded := 0
+	for _, day := range stated {
+		if !held.holds(day.year, day.month, day.day) {
+			ungrounded++
+		}
 	}
 	if ungrounded > 0 {
 		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "synthesis free text states %d calendar day(s) the investigation input does not hold", ungrounded)

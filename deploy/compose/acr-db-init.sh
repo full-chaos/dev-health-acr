@@ -8,6 +8,8 @@ set -eu
 : "${ACR_RUNTIME_DB_USER:?ACR_RUNTIME_DB_USER is required}"
 : "${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}"
 : "${ACR_ENABLE_EPISODE_WRITEBACK:=false}"
+: "${ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE:=}"
+: "${ACR_WORKLOAD_TRUST_DOMAIN:=}"
 
 secret_value() {
   name="$1"
@@ -80,6 +82,15 @@ case "$ACR_ENABLE_EPISODE_WRITEBACK" in
   *) printf 'ACR_ENABLE_EPISODE_WRITEBACK must be true or false\n' >&2; exit 2 ;;
 esac
 
+# Workload token exchange is configured when both of its settings are set to
+# something other than whitespace, the same rule the hosted runtime applies
+# (workloadTokenExchangeConfigured trims both).
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+workload_token_exchange=false
+if [ -n "$(trim "$ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE")" ] && [ -n "$(trim "$ACR_WORKLOAD_TRUST_DOMAIN")" ]; then
+  workload_token_exchange=true
+fi
+
 export PGPASSWORD="$POSTGRES_PASSWORD"
 attempts=0
 until pg_isready -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d postgres >/dev/null 2>&1; do
@@ -127,7 +138,7 @@ SQL
 if [ "$mode" = runtime-acl ]; then
   psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
     -v runtime_user="$ACR_RUNTIME_DB_USER" -v migration_user="$ACR_MIGRATION_DB_USER" \
-    -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" <<'SQL'
+    -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" -v workload_token_exchange="$workload_token_exchange" <<'SQL'
 REVOKE USAGE, CREATE ON SCHEMA acr FROM PUBLIC;
 REVOKE USAGE, CREATE ON SCHEMA acr FROM :"runtime_user";
 ALTER SCHEMA acr OWNER TO :"migration_user";
@@ -142,137 +153,129 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM :"runtime_user";
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM :"runtime_user";
 GRANT USAGE ON SCHEMA acr TO :"runtime_user";
 
+-- BEGIN GENERATED RUNTIME GRANTS (internal/dbacl; regenerate with DBACL_WRITE=1 go test ./internal/dbacl)
+-- readiness check and migration verification read it: internal/runtime/hosted/postgres_readiness.go:20
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.schema_migrations FROM :"runtime_user";
 GRANT SELECT ON TABLE acr.schema_migrations TO :"runtime_user";
 
+-- SELECT internal/storage/postgres/credentials.go:61, INSERT credentials.go:167, UPDATE credentials.go:115 and credentials_audit.go:72
+-- DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.client_credentials FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.client_credentials TO :"runtime_user";
+\if :workload_token_exchange
+GRANT DELETE ON TABLE acr.client_credentials TO :"runtime_user";
+\endif
 
+-- read only, no write path; the resolver is built only when workload token exchange is configured: internal/storage/postgres/workload_bindings.go:36, internal/runtime/hosted/workload_token_exchange.go:57
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.workload_bindings FROM :"runtime_user";
+\if :workload_token_exchange
+GRANT SELECT ON TABLE acr.workload_bindings TO :"runtime_user";
+\endif
+
+-- SELECT internal/storage/postgres/packet.go:69, INSERT packet.go:49, DELETE packet_retention.go:28; UPDATE because the purge locks rows with FOR UPDATE SKIP LOCKED (packet_retention.go:20), which Postgres checks as UPDATE; the readiness check asserts it
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_packet_snapshots FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots TO :"runtime_user";
 
+-- INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.audit_events FROM :"runtime_user";
-GRANT INSERT ON TABLE acr.audit_events TO :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.audit_events TO :"runtime_user";
 
+-- SELECT internal/storage/postgres/episodes.go:92, INSERT episodes.go:63, UPDATE episodes.go:126
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.agent_episodes FROM :"runtime_user";
 \if :episode_writeback
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 \endif
 
--- DELETE (CHAOS-7229) is the OAuth purge loop's: device authorizations past
--- expires_at + grace that back no live credential. Deleting one cascades to its
--- oauth_authorization_requests and oauth_device_grants rows as the tables'
--- owner, so those two need no DELETE for it.
+-- SELECT internal/storage/postgres/device_authorization.go:88, INSERT device_authorization.go:61, UPDATE device_authorization.go:132, DELETE oauth_purge.go:167
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.device_authorizations TO :"runtime_user";
 
--- OAuth 2.1 authorization-code login (migration 0040): dynamically
--- registered clients and pending/completed /authorize requests, both
--- read and written on the hosted request path exactly like
--- device_authorizations immediately above. DELETE (CHAOS-6191) is the
--- bounded purge loop's: expired requests, and idle dynamic clients.
+-- SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:109; UPDATE because the idle-client purge locks rows with FOR UPDATE OF c SKIP LOCKED (oauth_purge.go:103), which Postgres checks as UPDATE
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_clients FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_clients TO :"runtime_user";
 
+-- SELECT internal/storage/postgres/oauth.go:165, INSERT oauth.go:68, UPDATE oauth.go:185, DELETE oauth_purge.go:59
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_authorization_requests FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_authorization_requests TO :"runtime_user";
 
--- RFC 8628 device authorization grant (CHAOS-6233, migration 0042): the
--- client/resource/scope POST /device_authorization stores alongside its
--- reused device_authorizations row. Read at /token, written once at
--- /device_authorization, never updated (the referenced device_authorizations
--- row carries state).
+-- SELECT internal/storage/postgres/oauth.go:308, INSERT oauth.go:79; removed with its device_authorizations parent by cascade
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_device_grants FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO :"runtime_user";
 
--- Used web-assertion ids (migration 0049), shared by every acr-api pod: one
--- INSERT ... ON CONFLICT DO NOTHING per assertion, and the bounded expiry
--- sweep (SELECT for its subquery, DELETE). Never updated.
+-- INSERT internal/storage/postgres/web_assertion_replay.go:24, SELECT and DELETE web_assertion_replay.go:33
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.web_assertion_replays FROM :"runtime_user";
 GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO :"runtime_user";
 
--- CHAOS-3859 (sol review F1): the hosted runtime writes clarification-
--- selection capture events through pgclarification.Sink -- INSERT only,
--- mirroring audit_events immediately above exactly: this table has no
--- read path yet (capture-only phase), so no SELECT grant either. The
--- table needs no sequence grant at all: its primary key is an
--- application-generated UUID string (migrations/postgres/0016, matching
--- 0010's context_fabric_model_execution_receipts idiom), not a
--- database-generated BIGSERIAL/IDENTITY.
+-- insert-only capture sink: internal/contextfabric/pgclarification/sink.go:387
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"runtime_user";
 GRANT INSERT ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
 
--- CHAOS-3876: auditing every OTHER context_fabric_* table found the exact
--- same gap the clarification-selections fix immediately above closed for
--- one table. The hosted API and acr-projector (including its "priors"
--- operator subcommands, cmd/acr-projector/priors.go's openPriorsDB) each
--- open exactly ONE Postgres connection, as :"runtime_user" -- so a table
--- absent from this list was not merely under-privileged, it was completely
--- unwritable in production: every INSERT/UPDATE/SELECT against it fails
--- permission-denied, silently swallowed by whichever caller's fail-open
--- error handling sits above the store (the "fails-toward-fine" class this
--- ticket named). acr_db_init_integration_test.go extends the CHAOS-3859
--- proof seam with one real INSERT per table below, under this exact ACL.
+-- SELECT internal/contextfabric/pgprojection/checkpoints.go:38, INSERT checkpoints.go:99, UPDATE checkpoints.go:80, DELETE checkpoints.go:258
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_checkpoints FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_projection_checkpoints TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pgprojection/rebuild_marker.go:63, INSERT rebuild_marker.go:43, DELETE rebuild_marker.go:79
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_rebuild_markers FROM :"runtime_user";
 GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pgprojection/org_purge_marker.go:46 (the tick's check), DELETE org_purge_marker.go:86 (discovery's clear); only the purge writes it
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_purge_markers FROM :"runtime_user";
--- Only the purge writes a marker, so the runtime role reads it (the tick's check)
--- and deletes it (discovery's clear), nothing else.
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pginvestigation/store.go:491, INSERT store.go:345
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_supersession_claims FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_supersession_claims TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pginvestigation/store.go:748, INSERT and upsert store.go:1290
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_reuse_invalidations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_reuse_invalidations TO :"runtime_user";
 
--- context_fabric_org_model_config.generation DEFAULTs to nextval() on its
--- own explicit sequence (migration 0010, NOT a GENERATED ... AS IDENTITY
--- column) -- an INSERT/UPSERT needs USAGE on that sequence in addition to
--- INSERT on the table itself; Postgres does not imply one grant from the
--- other for a plain sequence-backed column DEFAULT.
+-- SELECT internal/contextfabric/pgmodelconfig/store.go:138, INSERT and upsert store.go:95, DELETE store.go:195; generation draws from an explicit sequence
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_model_config FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_org_model_config TO :"runtime_user";
 GRANT USAGE ON SEQUENCE acr.context_fabric_org_model_config_generation_seq TO :"runtime_user";
 
+-- insert-only: internal/contextfabric/pgmodelreceipts/store.go:80
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_model_execution_receipts FROM :"runtime_user";
 GRANT INSERT ON TABLE acr.context_fabric_model_execution_receipts TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pglifecycle/store.go:83, INSERT store.go:114, UPDATE store.go:240
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_lifecycle FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_lifecycle TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pglifecycle/store.go:469, INSERT store.go:328, UPDATE store.go:496
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_epoch_retirements FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_epoch_retirements TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pglifecycle/store.go:172, INSERT and upsert store.go:153
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_build_source_progress FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_build_source_progress TO :"runtime_user";
 
+-- INSERT internal/contextfabric/pgstructureselection/sink.go:423, SELECT structurepriorcuration/curate.go:104
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_selections FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_selections TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pgstructurepriors/store.go:130, INSERT store.go:221
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_priors FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_priors TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pgstructurepriors/store.go:113, INSERT store.go:463, UPDATE store.go:366
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_pointer FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_structure_prior_pointer TO :"runtime_user";
 
--- context_fabric_structure_prior_pointer_history.id is BIGSERIAL (migration
--- 0028) -- the one exception among these tables to the app-generated-key
--- convention every other table here follows -- so its owned sequence needs
--- the same explicit USAGE grant as the org_model_config sequence above.
+-- insert-only history: internal/contextfabric/pgstructurepriors/store.go:374; id is BIGSERIAL
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_pointer_history FROM :"runtime_user";
 GRANT INSERT ON TABLE acr.context_fabric_structure_prior_pointer_history TO :"runtime_user";
 GRANT USAGE ON SEQUENCE acr.context_fabric_structure_prior_pointer_history_id_seq TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pgstructurepriors/store.go:169, INSERT store.go:499
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_revocations FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_prior_revocations TO :"runtime_user";
+-- END GENERATED RUNTIME GRANTS
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON TABLES FROM :"runtime_user";

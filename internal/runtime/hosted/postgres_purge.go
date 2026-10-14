@@ -2,11 +2,14 @@ package hosted
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
@@ -37,11 +40,30 @@ const (
 type packetPurgeFunc func(ctx context.Context, before time.Time, limit int) (int, error)
 
 // packetPurgeFailureObserver is invoked once for every purge tick that
-// fails. It receives only a fixed, redacted message — never the underlying
-// error — so a database error that might embed a DSN, credential, or other
-// sensitive operational detail is never propagated past this boundary. A
-// nil observer is a valid no-op.
-type packetPurgeFailureObserver func(ctx context.Context, message string)
+// fails. It receives a fixed, redacted message and, for a Postgres failure,
+// only the error class, SQLSTATE and table name (purgeFailureAttrs) — never
+// the underlying error text — so a database error that might embed a DSN,
+// credential, or other sensitive operational detail is never propagated past
+// this boundary. A nil observer is a valid no-op.
+type packetPurgeFailureObserver func(ctx context.Context, message string, attrs ...slog.Attr)
+
+var purgeTablePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// purgeFailureAttrs is what a failed purge tick may log about its error: the
+// class and SQLSTATE the store attached and the table it named, so a refused
+// DELETE grant shows as insufficient_privilege on a table rather than as a
+// bare failure.
+func purgeFailureAttrs(err error) []slog.Attr {
+	var class *storage.DependencyErrorClass
+	if !errors.As(err, &class) {
+		return nil
+	}
+	attrs := []slog.Attr{slog.String("db_error_class", class.Class), slog.String("db_sqlstate", class.SQLState)}
+	if purgeTablePattern.MatchString(class.Table) {
+		attrs = append(attrs, slog.String("db_table", class.Table))
+	}
+	return attrs
+}
 
 // packetPurgeFailureMessage is the message startPacketPurgeLoop passes to
 // runPurgeTickLoop; startWorkloadCredentialPurgeLoop passes its own.
@@ -65,7 +87,7 @@ func runPurgeTickLoop(ctx context.Context, tick <-chan time.Time, now func() tim
 				return
 			}
 			if _, err := purge(ctx, now().UTC(), limit); err != nil && observe != nil {
-				observe(ctx, message)
+				observe(ctx, message, purgeFailureAttrs(err)...)
 			}
 		}
 	}
@@ -197,8 +219,8 @@ func packetPurgeSlogObserver(logger *slog.Logger) packetPurgeFailureObserver {
 	if logger == nil {
 		return nil
 	}
-	return func(ctx context.Context, message string) {
-		logger.WarnContext(ctx, message)
+	return func(ctx context.Context, message string, attrs ...slog.Attr) {
+		logger.LogAttrs(ctx, slog.LevelWarn, message, attrs...)
 	}
 }
 

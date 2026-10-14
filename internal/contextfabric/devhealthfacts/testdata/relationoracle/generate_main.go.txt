@@ -1,0 +1,98 @@
+package main
+
+// Generator of relation_current_golden.json: it executes the ops
+// RelationWriters / RelationEndedBy / BlockingRelation.RelationWritersOf
+// functions over a fixed matrix and prints what they return. Run it with
+// scripts/oracle/relation-current-golden.sh, which copies the ops file
+// blocked.go (stdlib only) beside this file.
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+
+	"oraclegen/workitemmetrics"
+)
+
+type pair struct{ Source, Target string }
+
+type goldenCase struct {
+	Name             string  `json:"name"`
+	Source           string  `json:"source"`
+	Target           string  `json:"target"`
+	Raw              string  `json:"raw"`
+	Writer           *string `json:"writer"`
+	RelationSynced   int64   `json:"relation_synced"`
+	SourceSynced     int64   `json:"source_synced"`
+	TargetSynced     int64   `json:"target_synced"`
+	SourceWrites     bool    `json:"source_writes"`
+	TargetWrites     bool    `json:"target_writes"`
+	Current          bool    `json:"current"`
+}
+
+func main() {
+	pairs := []pair{
+		{"jira:OPS-1", "jira:OPS-2"},
+		{"linear:PLAT-1", "linear:PLAT-2"},
+		{"gh:acme/api#7", "gh:acme/api#12"},
+		{"ghpr:acme/api#7", "gh:acme/api#12"},
+		{"gitlab:acme/api#7", "gitlab:acme/api#12"},
+		{"gh:acme/api#7", "gitlab:acme/api#12"},
+		{"jira:OPS-1", "gh:acme/api#12"},
+		{"gh:acme/api#7", "extkey:OPS-2"},
+		{"gitlab:acme/api#7", "extkey:OPS-2"},
+		{"jira:OPS-1", "extkey:OPS-2"},
+		{"plain-source", "plain-target"},
+	}
+	raws := []string{
+		"blocks", "blocked by #12", "depends on #12", "blocks #7", "Blocked  By #3", "blocked by #4",
+		"DEPENDS ON #5", "blocked by", "blocking", "external_issue_key", "", "somethingelse", " blocks　#9",
+	}
+	writers := []*string{nil, ptr("source"), ptr("target"), ptr("both"), ptr("bogus")}
+	times := [][2]int64{{1000, 1000}, {2000, 1000}, {1000, 2000}, {2000, 2000}, {500, 500}, {500, 2000}, {2000, 500}}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	at := func(offset int64) time.Time { return base.Add(time.Duration(offset) * time.Second) }
+	var out []goldenCase
+	for _, p := range pairs {
+		for _, raw := range raws {
+			for _, writer := range writers {
+				if writer != nil && raw != "blocks" && raw != "blocked by #12" && raw != "external_issue_key" {
+					continue
+				}
+				for _, tm := range times {
+					relation := workitemmetrics.BlockingRelation{
+						SourceID: p.Source, TargetID: p.Target, RelationshipType: "blocks", Raw: raw,
+						SemanticsVersion: workitemmetrics.CanonicalBlocksSemantics, LastSynced: at(1000), Writer: writer,
+					}
+					sourceWrites, targetWrites := relation.RelationWritersOf()
+					var synced []time.Time
+					if sourceWrites {
+						synced = append(synced, at(tm[0]))
+					}
+					if targetWrites {
+						synced = append(synced, at(tm[1]))
+					}
+					stored := "nil"
+					if writer != nil {
+						stored = *writer
+					}
+					out = append(out, goldenCase{
+						Name:   fmt.Sprintf("%s>%s|%q|%s|%d/%d", p.Source, p.Target, raw, stored, tm[0], tm[1]),
+						Source: p.Source, Target: p.Target, Raw: raw, Writer: writer,
+						RelationSynced: 1000, SourceSynced: tm[0], TargetSynced: tm[1],
+						SourceWrites: sourceWrites, TargetWrites: targetWrites,
+						Current: workitemmetrics.RelationIsCurrent(at(1000), synced...),
+					})
+				}
+			}
+		}
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", " ")
+	if err := encoder.Encode(out); err != nil {
+		panic(err)
+	}
+}
+
+func ptr(s string) *string { return &s }
