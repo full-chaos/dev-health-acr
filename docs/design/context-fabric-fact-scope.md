@@ -747,6 +747,8 @@ refused at the gate, never answered with today's rows.
 | incidents | project | `project_issue_pull_request_incidents_v1` | incident | the repositories above -> deployment-incident edges | activity_proxy |
 | operational_deficiencies | project | `project_team_ownership_operational_deficiencies_v1` | team | project -> `team_project_ownership` -> team | direct |
 
+One further named row is disclosure-only and is NOT enabled: commitment from a team origin, `team_project_ownership_commitment_v1`, target project, chain team -> `team_project_ownership` -> project, basis direct. It names the reach so a team commitment question is disclosed, never pruned; commitment is read per project subject and is never rolled up to a team.
+
 What these rows never use: an issue's own repository column, an issue-key
 prefix, or a computed team attribution. A repository is the **pull request's**
 (`work_graph_issue_pr.repo_id`); a project issue with no link row is a counted

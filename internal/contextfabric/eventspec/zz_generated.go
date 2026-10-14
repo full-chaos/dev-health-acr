@@ -701,6 +701,7 @@ type CompletenessAuthorityFields struct {
 	ClaimedFactsFlow                    int
 	ClaimedFactsLandscape               int
 	ClaimedFactsSecurityAlerts          int
+	ClaimedFactsCommitment              int
 	RequestID                           string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every CompletenessAuthorityFields uniformly, set ONLY by NewCompletenessAuthorityFields below. A caller
@@ -715,7 +716,7 @@ type CompletenessAuthorityFields struct {
 
 // NewCompletenessAuthorityFields is the generated constructor for CompletenessAuthorityFields -- every
 // field CompletenessAuthority.Fields declares is a required parameter.
-func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, statusCorrectionDisclosed bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, claimedFactsSecurityAlerts int, requestID string) CompletenessAuthorityFields {
+func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, statusCorrectionDisclosed bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, claimedFactsSecurityAlerts int, claimedFactsCommitment int, requestID string) CompletenessAuthorityFields {
 	return CompletenessAuthorityFields{
 		OrgID:                               orgID,
 		ModelStatus:                         modelStatus,
@@ -764,6 +765,7 @@ func NewCompletenessAuthorityFields(orgID string, modelStatus string, dispositio
 		ClaimedFactsFlow:                    claimedFactsFlow,
 		ClaimedFactsLandscape:               claimedFactsLandscape,
 		ClaimedFactsSecurityAlerts:          claimedFactsSecurityAlerts,
+		ClaimedFactsCommitment:              claimedFactsCommitment,
 		RequestID:                           requestID,
 		constructed:                         true,
 	}
@@ -829,6 +831,7 @@ func (f CompletenessAuthorityFields) SlogArgs() []any {
 		"claimed_facts_flow", f.ClaimedFactsFlow,
 		"claimed_facts_landscape", f.ClaimedFactsLandscape,
 		"claimed_facts_security_alerts", f.ClaimedFactsSecurityAlerts,
+		"claimed_facts_commitment", f.ClaimedFactsCommitment,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -1552,6 +1555,7 @@ type FrameValidationFields struct {
 	RequirementComputedInputKindUnplannedFlow                    int
 	RequirementComputedInputKindUnplannedLandscape               int
 	RequirementComputedInputKindUnplannedSecurityAlerts          int
+	RequirementComputedInputKindUnplannedCommitment              int
 	RequirementQuantifierAtLeastOne                              int
 	RequirementQuantifierCorroborated                            int
 	RequirementQuantifierExact                                   int
@@ -1587,6 +1591,7 @@ type FrameValidationFields struct {
 	RequirementComputedInputKindFlow                             int
 	RequirementComputedInputKindLandscape                        int
 	RequirementComputedInputKindSecurityAlerts                   int
+	RequirementComputedInputKindCommitment                       int
 	RequirementComputedStepServerExecuted                        int
 	RequirementComputedStepDeclaredOnly                          int
 	RequestID                                                    string
@@ -1603,7 +1608,7 @@ type FrameValidationFields struct {
 
 // NewFrameValidationFields is the generated constructor for FrameValidationFields -- every
 // field FrameValidation.Fields declares is a required parameter.
-func NewFrameValidationFields(orgID string, outcome string, failedInvariant string, failedPhase string, failureDetail string, proposedKind string, proposedGoals []string, acceptedGoals []string, acceptedJudgment string, orderingPresent bool, predictedStrippedObligations []string, derivedObligationCount int, widenedObligationCount int, shapeDiverged bool, emittedShape string, derivedShape string, frameVersion string, cohortDiscoverability string, frameGate string, refuseBasis string, requestedGroupHint string, groupHintSource string, requestedMemberHint string, proposedGroupKind string, proposedMemberKind string, groupAxis string, repairDecision string, repair string, repairInvariant string, repairKindBefore string, repairKindAfter string, repairMemberKind string, repairTermsMatch string, repairAttempts int, repairCarryScopeAnchorKind string, requirementDerivationVersion string, requirementCellsDerived int, requirementCellsServed int, requirementCellsUnserved int, requirementAccounting string, requirementUnavailableSubjectKindUnsupported int, requirementUnavailableNoDeclaringProducer int, requirementUnavailableTableShapeUndeclared int, requirementUnavailableComputedPopulationAbsent int, requirementComputedPopulationAbsentNotAPopulation int, requirementComputedPopulationAbsentUnresolvableMemberSet int, requirementComputedPopulationAbsentNonComputedRow int, requirementComputedInputKindUnplannedIdentity int, requirementComputedInputKindUnplannedMembership int, requirementComputedInputKindUnplannedStatus int, requirementComputedInputKindUnplannedActualCompletion int, requirementComputedInputKindUnplannedWork int, requirementComputedInputKindUnplannedBlockers int, requirementComputedInputKindUnplannedRequiredChildren int, requirementComputedInputKindUnplannedPullRequests int, requirementComputedInputKindUnplannedReviews int, requirementComputedInputKindUnplannedContinuousIntegration int, requirementComputedInputKindUnplannedDeployments int, requirementComputedInputKindUnplannedIncidents int, requirementComputedInputKindUnplannedMetrics int, requirementComputedInputKindUnplannedHealth int, requirementComputedInputKindUnplannedWorkload int, requirementComputedInputKindUnplannedInvestment int, requirementComputedInputKindUnplannedReadiness int, requirementComputedInputKindUnplannedOperationalDeficiencies int, requirementComputedInputKindUnplannedSourceHealth int, requirementComputedInputKindUnplannedEvidence int, requirementComputedInputKindUnplannedFlow int, requirementComputedInputKindUnplannedLandscape int, requirementComputedInputKindUnplannedSecurityAlerts int, requirementQuantifierAtLeastOne int, requirementQuantifierCorroborated int, requirementQuantifierExact int, requirementQuantifierAll int, requirementQuantifierNone int, requirementRoleSubject int, requirementRoleMember int, requirementRoleGroup int, requirementRoleOperand int, requirementComputedRowsWithInputs int, requirementComputedInputClassFactKinds int, requirementComputedInputClassResolvedMemberSet int, requirementComputedInputKindIdentity int, requirementComputedInputKindMembership int, requirementComputedInputKindStatus int, requirementComputedInputKindActualCompletion int, requirementComputedInputKindWork int, requirementComputedInputKindBlockers int, requirementComputedInputKindRequiredChildren int, requirementComputedInputKindPullRequests int, requirementComputedInputKindReviews int, requirementComputedInputKindContinuousIntegration int, requirementComputedInputKindDeployments int, requirementComputedInputKindIncidents int, requirementComputedInputKindMetrics int, requirementComputedInputKindHealth int, requirementComputedInputKindWorkload int, requirementComputedInputKindInvestment int, requirementComputedInputKindReadiness int, requirementComputedInputKindOperationalDeficiencies int, requirementComputedInputKindSourceHealth int, requirementComputedInputKindEvidence int, requirementComputedInputKindFlow int, requirementComputedInputKindLandscape int, requirementComputedInputKindSecurityAlerts int, requirementComputedStepServerExecuted int, requirementComputedStepDeclaredOnly int, requestID string) FrameValidationFields {
+func NewFrameValidationFields(orgID string, outcome string, failedInvariant string, failedPhase string, failureDetail string, proposedKind string, proposedGoals []string, acceptedGoals []string, acceptedJudgment string, orderingPresent bool, predictedStrippedObligations []string, derivedObligationCount int, widenedObligationCount int, shapeDiverged bool, emittedShape string, derivedShape string, frameVersion string, cohortDiscoverability string, frameGate string, refuseBasis string, requestedGroupHint string, groupHintSource string, requestedMemberHint string, proposedGroupKind string, proposedMemberKind string, groupAxis string, repairDecision string, repair string, repairInvariant string, repairKindBefore string, repairKindAfter string, repairMemberKind string, repairTermsMatch string, repairAttempts int, repairCarryScopeAnchorKind string, requirementDerivationVersion string, requirementCellsDerived int, requirementCellsServed int, requirementCellsUnserved int, requirementAccounting string, requirementUnavailableSubjectKindUnsupported int, requirementUnavailableNoDeclaringProducer int, requirementUnavailableTableShapeUndeclared int, requirementUnavailableComputedPopulationAbsent int, requirementComputedPopulationAbsentNotAPopulation int, requirementComputedPopulationAbsentUnresolvableMemberSet int, requirementComputedPopulationAbsentNonComputedRow int, requirementComputedInputKindUnplannedIdentity int, requirementComputedInputKindUnplannedMembership int, requirementComputedInputKindUnplannedStatus int, requirementComputedInputKindUnplannedActualCompletion int, requirementComputedInputKindUnplannedWork int, requirementComputedInputKindUnplannedBlockers int, requirementComputedInputKindUnplannedRequiredChildren int, requirementComputedInputKindUnplannedPullRequests int, requirementComputedInputKindUnplannedReviews int, requirementComputedInputKindUnplannedContinuousIntegration int, requirementComputedInputKindUnplannedDeployments int, requirementComputedInputKindUnplannedIncidents int, requirementComputedInputKindUnplannedMetrics int, requirementComputedInputKindUnplannedHealth int, requirementComputedInputKindUnplannedWorkload int, requirementComputedInputKindUnplannedInvestment int, requirementComputedInputKindUnplannedReadiness int, requirementComputedInputKindUnplannedOperationalDeficiencies int, requirementComputedInputKindUnplannedSourceHealth int, requirementComputedInputKindUnplannedEvidence int, requirementComputedInputKindUnplannedFlow int, requirementComputedInputKindUnplannedLandscape int, requirementComputedInputKindUnplannedSecurityAlerts int, requirementComputedInputKindUnplannedCommitment int, requirementQuantifierAtLeastOne int, requirementQuantifierCorroborated int, requirementQuantifierExact int, requirementQuantifierAll int, requirementQuantifierNone int, requirementRoleSubject int, requirementRoleMember int, requirementRoleGroup int, requirementRoleOperand int, requirementComputedRowsWithInputs int, requirementComputedInputClassFactKinds int, requirementComputedInputClassResolvedMemberSet int, requirementComputedInputKindIdentity int, requirementComputedInputKindMembership int, requirementComputedInputKindStatus int, requirementComputedInputKindActualCompletion int, requirementComputedInputKindWork int, requirementComputedInputKindBlockers int, requirementComputedInputKindRequiredChildren int, requirementComputedInputKindPullRequests int, requirementComputedInputKindReviews int, requirementComputedInputKindContinuousIntegration int, requirementComputedInputKindDeployments int, requirementComputedInputKindIncidents int, requirementComputedInputKindMetrics int, requirementComputedInputKindHealth int, requirementComputedInputKindWorkload int, requirementComputedInputKindInvestment int, requirementComputedInputKindReadiness int, requirementComputedInputKindOperationalDeficiencies int, requirementComputedInputKindSourceHealth int, requirementComputedInputKindEvidence int, requirementComputedInputKindFlow int, requirementComputedInputKindLandscape int, requirementComputedInputKindSecurityAlerts int, requirementComputedInputKindCommitment int, requirementComputedStepServerExecuted int, requirementComputedStepDeclaredOnly int, requestID string) FrameValidationFields {
 	valid := true
 	if proposedGoals == nil {
 		valid = false
@@ -1685,6 +1690,7 @@ func NewFrameValidationFields(orgID string, outcome string, failedInvariant stri
 		RequirementComputedInputKindUnplannedFlow:                    requirementComputedInputKindUnplannedFlow,
 		RequirementComputedInputKindUnplannedLandscape:               requirementComputedInputKindUnplannedLandscape,
 		RequirementComputedInputKindUnplannedSecurityAlerts:          requirementComputedInputKindUnplannedSecurityAlerts,
+		RequirementComputedInputKindUnplannedCommitment:              requirementComputedInputKindUnplannedCommitment,
 		RequirementQuantifierAtLeastOne:                              requirementQuantifierAtLeastOne,
 		RequirementQuantifierCorroborated:                            requirementQuantifierCorroborated,
 		RequirementQuantifierExact:                                   requirementQuantifierExact,
@@ -1720,6 +1726,7 @@ func NewFrameValidationFields(orgID string, outcome string, failedInvariant stri
 		RequirementComputedInputKindFlow:                             requirementComputedInputKindFlow,
 		RequirementComputedInputKindLandscape:                        requirementComputedInputKindLandscape,
 		RequirementComputedInputKindSecurityAlerts:                   requirementComputedInputKindSecurityAlerts,
+		RequirementComputedInputKindCommitment:                       requirementComputedInputKindCommitment,
 		RequirementComputedStepServerExecuted:                        requirementComputedStepServerExecuted,
 		RequirementComputedStepDeclaredOnly:                          requirementComputedStepDeclaredOnly,
 		RequestID:                                                    requestID,
@@ -1810,6 +1817,7 @@ func (f FrameValidationFields) SlogArgs() []any {
 		"requirement_computed_input_kind_unplanned_flow", f.RequirementComputedInputKindUnplannedFlow,
 		"requirement_computed_input_kind_unplanned_landscape", f.RequirementComputedInputKindUnplannedLandscape,
 		"requirement_computed_input_kind_unplanned_security_alerts", f.RequirementComputedInputKindUnplannedSecurityAlerts,
+		"requirement_computed_input_kind_unplanned_commitment", f.RequirementComputedInputKindUnplannedCommitment,
 		"requirement_quantifier_at_least_one", f.RequirementQuantifierAtLeastOne,
 		"requirement_quantifier_corroborated", f.RequirementQuantifierCorroborated,
 		"requirement_quantifier_exact", f.RequirementQuantifierExact,
@@ -1845,6 +1853,7 @@ func (f FrameValidationFields) SlogArgs() []any {
 		"requirement_computed_input_kind_flow", f.RequirementComputedInputKindFlow,
 		"requirement_computed_input_kind_landscape", f.RequirementComputedInputKindLandscape,
 		"requirement_computed_input_kind_security_alerts", f.RequirementComputedInputKindSecurityAlerts,
+		"requirement_computed_input_kind_commitment", f.RequirementComputedInputKindCommitment,
 		"requirement_computed_step_server_executed", f.RequirementComputedStepServerExecuted,
 		"requirement_computed_step_declared_only", f.RequirementComputedStepDeclaredOnly,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
