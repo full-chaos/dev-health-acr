@@ -1150,13 +1150,19 @@ import (
 // v225 -> v226: the file_hotspots fact kind is served for a repository. An
 // answer saved under v225 cannot carry it.
 //
-// v226 -> v227: the team and project commit counters (commits_count,
+// v226 -> v227: every blocker read (team, project, work item) keeps only the
+// links the provider still reports; a link it removed is no longer counted or
+// named the oldest blocker. Team and project blockers facts carry
+// blocker_dependencies_writer_unresolved_current. An answer saved under v226
+// can count a removed link.
+//
+// v227 -> v228: the team and project commit counters (commits_count,
 // after_hours_commits_count, weekend_commits_count, and the same three columns
 // of the project team_breakdown table) are served as numbers instead of
 // integers, because a team that co-owns a repository holds a share of the
-// counters and can carry a fraction of a commit. An answer saved under v226
+// counters and can carry a fraction of a commit. An answer saved under v227
 // carries integer counters and is not reused as one produced by this version.
-const QueryVersion = "devhealthfacts.clickhouse.v227"
+const QueryVersion = "devhealthfacts.clickhouse.v228"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

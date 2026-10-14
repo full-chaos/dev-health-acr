@@ -317,6 +317,7 @@ func blockersFields() []fieldDecl {
 			declCallerScoped(fInt("blocked_work_items_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
+			declCallerScoped(fInt("blocker_dependencies_writer_unresolved_current", "count")),
 			fStr("blocker_status_basis"),
 			// Age of the oldest open blocker edge in whole days at read time,
 			// from the link's start (the provider's time, else the first sync
@@ -361,6 +362,7 @@ func blockersFields() []fieldDecl {
 			declCallerScoped(fInt("blocked_work_items_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_current", "count")),
 			declCallerScoped(fInt("blocker_dependencies_excluded_by_status_current", "count")),
+			declCallerScoped(fInt("blocker_dependencies_writer_unresolved_current", "count")),
 			declCallerScoped(fInt("oldest_blocked_age_days", "days")),
 			fStr("oldest_blocked_age_basis"),
 			fStr("oldest_blocked_age_unavailable_reason"),

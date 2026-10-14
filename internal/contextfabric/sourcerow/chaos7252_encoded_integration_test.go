@@ -92,8 +92,8 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		fmt.Sprintf(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES
 			('jira:A:B', 'jira:C', 'blocks', 'Grant dependency', %[1]s, '%[2]s'),
 			('jira:A', 'B:jira:C', 'blocks', 'Secret dependency', %[1]s, '%[2]s'),
-			('jira:T1', 'jira:T2', 'blocks', 'Older twin', '2026-08-01 00:00:00.000', '%[2]s'),
-			('jira:T1', 'jira:T2', 'BLOCKS ', 'Newer twin', %[1]s, '%[2]s'),
+			('jira:T1', 'jira:T2', 'blocks', 'Older twin', %[1]s, '%[2]s'),
+			('jira:T1', 'jira:T2', 'BLOCKS ', 'Newer twin', '2026-09-01 12:00:01.000', '%[2]s'),
 			('jira:A:B', 'EXT-1', 'relates_to', 'Stub target', %[1]s, '%[2]s'),
 			('jira:L:M', 'jira:N', 'blocks', 'Collider', %[1]s, '%[2]s'),
 			('pct%%3A:1', 'pct%%25', 'relates_to', 'Percent ids', %[1]s, '%[2]s'),

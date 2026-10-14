@@ -72,7 +72,7 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -151,7 +151,7 @@ SELECT concat('unrelated-%d-', lpad(toString(number), 12, '0')), toUUID('0000000
 func TestDependencyBlockerStatusIsCarriedOnlyForTheRepositoryAndTheCurrentAxisOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_dependencies") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_dependencies", "work_item_relations_read") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
