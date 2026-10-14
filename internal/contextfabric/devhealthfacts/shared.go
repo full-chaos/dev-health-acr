@@ -1105,7 +1105,7 @@ import (
 // the statements hold the owned projects' candidates and not every linked work
 // item. The rows are unchanged; the statements and their memory are not, so an
 // answer saved under v218 is not reused as one produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v219"
+const QueryVersion = "devhealthfacts.clickhouse.v220"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

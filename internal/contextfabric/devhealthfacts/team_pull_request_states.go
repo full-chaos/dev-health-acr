@@ -165,14 +165,46 @@ func pullRequestsByStateRows(repoID, repoName, reachBasis, linkTier string, coun
 	return rows
 }
 
-func pullRequestsByStateFactValue(rows []contextfabric.FactValueRow, grain contextfabric.TemporalGrain) (value contextfabric.FactValue, omitted int, ok bool) {
+func (c pullRequestStateCounts) add(other pullRequestStateCounts) {
+	for state, n := range other {
+		c[state] += n
+	}
+}
+
+// pullRequestsByStateTotalRows lays one row per state over everything the
+// team reaches. A multi-team read serves this grain: the per-repository
+// tables are omitted there, the counts are not.
+func pullRequestsByStateTotalRows(counts pullRequestStateCounts) []contextfabric.FactValueRow {
+	states := make([]string, 0, len(counts))
+	for state := range counts {
+		states = append(states, state)
+	}
+	sort.Strings(states)
+	rows := make([]contextfabric.FactValueRow, 0, len(states))
+	for _, state := range states {
+		rows = append(rows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+			"state":              contextfabric.StringFactValue(state),
+			"pull_request_count": contextfabric.IntegerFactValue(counts[state]),
+			"reach_basis":        contextfabric.StringFactValue(repositoryReachTeamTotal),
+		}})
+	}
+	return rows
+}
+
+const repositoryReachTeamTotal = "team_total"
+
+func pullRequestsByStateFactValue(rows []contextfabric.FactValueRow, grain contextfabric.TemporalGrain, perRepository bool) (value contextfabric.FactValue, omitted int, ok bool) {
 	if len(rows) == 0 {
 		return contextfabric.FactValue{}, 0, false
 	}
 	rows, omitted = capFactValueRows(rows)
+	key := []string{"repository_id", "state"}
+	if !perRepository {
+		key = []string{"state"}
+	}
 	return contextfabric.TableFactValue(contextfabric.FactTable{
 		Shape:        contextfabric.FactTableBreakdown,
-		Key:          []string{"repository_id", "state"},
+		Key:          key,
 		Measures:     []string{"pull_request_count"},
 		Observations: []string{"repository_name", "reach_basis", "link_tier"},
 		Grain:        grain,

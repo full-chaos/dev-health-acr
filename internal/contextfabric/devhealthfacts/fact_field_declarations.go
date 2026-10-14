@@ -447,11 +447,13 @@ func pullRequestFields() []fieldDecl {
 			// bounded historical read derives merged / closed / open). A
 			// state with no pull request has no row: absent is not zero. Not
 			// windowed. Served in place of one fact per pull request unless
-			// the question asks for the pull requests themselves.
-			fInt("pull_requests_by_state_omitted_count", "count"),
+			// the question asks for the pull requests themselves. A multi-team
+			// read serves one row per state over everything the team reaches
+			// (no repository_id, reach_basis team_total).
+			declAggregate(fInt("pull_requests_by_state_omitted_count", "count")),
 			fStr("pull_requests_by_state_basis"),
 			fTable("pull_requests_by_state",
-				cRef(declRepositoryRef, cStr("repository_id")),
+				cNullable(cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),
 				cStr("state"),
 				cInt("pull_request_count", "count"),

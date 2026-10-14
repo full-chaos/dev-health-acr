@@ -260,15 +260,13 @@ ORDER BY repo_id`
 	tables := teamRollupTablesIncluded(len(teamIDs))
 	var ownedStates map[string]pullRequestStateCounts
 	var reachedStates map[string]pullRequestStateCounts
-	if tables {
-		ownedStates, err = ownedPullRequestStateCounts(ctx, p.facts.client, orgID, repoKeysOf(owned), timeBound)
-		if err != nil {
-			return outcome, err
-		}
-		reachedStates, err = teamLinkedPullRequestStateCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, timeBound)
-		if err != nil {
-			return outcome, err
-		}
+	ownedStates, err = ownedPullRequestStateCounts(ctx, p.facts.client, orgID, repoKeysOf(owned), timeBound)
+	if err != nil {
+		return outcome, err
+	}
+	reachedStates, err = teamLinkedPullRequestStateCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, timeBound)
+	if err != nil {
+		return outcome, err
 	}
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
@@ -304,10 +302,12 @@ ORDER BY repo_id`
 			}
 		}
 		var byState []contextfabric.FactValueRow
-		if tables {
-			for _, repo := range repos {
+		teamStates := pullRequestStateCounts{}
+		for _, repo := range repos {
+			if tables {
 				byState = append(byState, pullRequestsByStateRows(repo.key, repo.name, repositoryReachOwned, "", ownedStates[repo.key])...)
 			}
+			teamStates.add(ownedStates[repo.key])
 		}
 		var reachedWithData int64
 		teamLinkUnwindowed := false
@@ -329,6 +329,7 @@ ORDER BY repo_id`
 			if weakestRank == 0 || repo.linkRank < weakestRank {
 				weakestRank = repo.linkRank
 			}
+			teamStates.add(reachedStates[teamID+blockerPairSeparator+repo.key])
 			if tables {
 				byState = append(byState, pullRequestsByStateRows(repo.key, repo.name, repositoryReachOwnedProject, blockerLinkTierName(repo.linkRank), reachedStates[teamID+blockerPairSeparator+repo.key])...)
 				cells := map[string]contextfabric.FactValue{
@@ -374,7 +375,11 @@ ORDER BY repo_id`
 				fields["owned_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 			}
 		}
-		if table, omitted, ok := pullRequestsByStateFactValue(byState, grainExact); ok && tables {
+		perRepository := tables
+		if !perRepository {
+			byState = pullRequestsByStateTotalRows(teamStates)
+		}
+		if table, omitted, ok := pullRequestsByStateFactValue(byState, grainExact, perRepository); ok {
 			fields["pull_requests_by_state"] = table
 			fields["pull_requests_by_state_basis"] = contextfabric.StringFactValue(pullRequestsByStateBasis)
 			if omitted > 0 {
