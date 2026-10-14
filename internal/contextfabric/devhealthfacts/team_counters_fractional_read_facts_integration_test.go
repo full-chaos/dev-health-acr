@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -32,10 +33,15 @@ func TestReadFactsServesFractionalTeamCountersOnBothColumnTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			query, direct := newCHAOS3780IntegrationClient(t, ctx)
 			createCHAOS4347Tables(t, ctx, direct)
-			if tc.counterType != "UInt32" {
-				if err := direct.Exec(ctx, "ALTER TABLE team_metrics_daily MODIFY COLUMN commits_count "+tc.counterType+", MODIFY COLUMN after_hours_commits_count "+tc.counterType+", MODIFY COLUMN weekend_commits_count "+tc.counterType); err != nil {
-					t.Fatalf("set counter columns to %s: %v", tc.counterType, err)
-				}
+			// Recreate the table with the counters at this case's type, from the
+			// snapshot's declared alternates.
+			if err := direct.Exec(ctx, "DROP TABLE team_metrics_daily"); err != nil {
+				t.Fatalf("drop team_metrics_daily: %v", err)
+			}
+			if err := direct.Exec(ctx, devhealthschema.DDLWithColumnTypes("", "team_metrics_daily", map[string]string{
+				"commits_count": tc.counterType, "after_hours_commits_count": tc.counterType, "weekend_commits_count": tc.counterType,
+			})); err != nil {
+				t.Fatalf("create team_metrics_daily with %s counters: %v", tc.counterType, err)
 			}
 			const orgID = "org-fractional-team-counters"
 			day := date(2026, 8, 12)
