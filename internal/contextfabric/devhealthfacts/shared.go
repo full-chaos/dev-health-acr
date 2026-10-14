@@ -1086,12 +1086,16 @@ import (
 // unchanged; the statements and their memory are not, so an answer saved under
 // v214 is not reused as one produced by the new statements.
 //
-// v215 -> v216: a team whose owned repositories hold work units that all have
+// v215 -> v216: a project subject serves the commitment kind (target date,
+// sprint ends and the raw issue counts beside them). An answer saved under
+// v215 has no commitment fact.
+//
+// v216 -> v217: a team whose owned repositories hold work units that all have
 // zero persisted effort is named investment_team_effort_not_measurable, with
 // the unit count, instead of investment_team_no_unit_in_window. Still no fact
-// and no zero mix. An answer saved under v215 states the false reason that no
+// and no zero mix. An answer saved under v216 states the false reason that no
 // effort was persisted.
-const QueryVersion = "devhealthfacts.clickhouse.v216"
+const QueryVersion = "devhealthfacts.clickhouse.v217"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1544,7 +1548,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// raw work counts, and estimate coverage (readiness.go: "how much of
 	// this team's backlog is estimated") are all about whether committed
 	// work is actually landing.
-	case contextfabric.FactStatus, contextfabric.FactActualCompletion, contextfabric.FactWork, contextfabric.FactReadiness:
+	case contextfabric.FactStatus, contextfabric.FactActualCompletion, contextfabric.FactWork, contextfabric.FactReadiness, contextfabric.FactCommitment:
 		return contextfabric.HealthDimensionExecutionCompletion
 	// dependencies_and_blockers: named for exactly this dimension.
 	case contextfabric.FactBlockers, contextfabric.FactRequiredChildren:
@@ -1745,6 +1749,10 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 	case contextfabric.FactBlockers, contextfabric.FactRequiredChildren:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectWorkItem: {contextfabric.ObligationRemainingWork},
+		}
+	case contextfabric.FactCommitment:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectProject: {contextfabric.ObligationRemainingWork},
 		}
 	// Identity is the CHAOS-4347 REPOSITORY composition's third member:
 	// for a repository, "who owns and identifies this" is part of the

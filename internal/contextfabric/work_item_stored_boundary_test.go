@@ -41,12 +41,13 @@ func boundaryCoverage(n int) Coverage {
 
 func TestWorkItemStoredCoverageValidationPreservesTruth(t *testing.T) {
 	p := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"org/repo"}}
-	for _, mode := range []string{"99", "100", "existing", "exact", "unmeasured", "unauthorized", "unavailable_invalid_coverage"} {
+	bound := contractsv1.ContextFabricCoverageEntriesMaxCount
+	for _, mode := range []string{"below_bound", "at_bound", "existing", "exact", "unmeasured", "unauthorized", "unavailable_invalid_coverage"} {
 		t.Run(mode, func(t *testing.T) {
 			result := workItemTuplePayloadFixture(t)
-			result.Coverage = boundaryCoverage(100)
-			if mode == "99" {
-				result.Coverage = boundaryCoverage(99)
+			result.Coverage = boundaryCoverage(bound)
+			if mode == "below_bound" {
+				result.Coverage = boundaryCoverage(bound - 1)
 			}
 			state := workItemTupleSemanticStateFixture()
 			state.WorkItemCensus = validStoredWorkItemCensus(t, p, WorkItemMembershipCensusFloor, 2000, 1, p.RepositoryScopes)
@@ -68,7 +69,7 @@ func TestWorkItemStoredCoverageValidationPreservesTruth(t *testing.T) {
 			if mode == "unavailable_invalid_coverage" {
 				// Direct historical-carrier guard: this malformed coverage is not
 				// claimed to pass the current persistence write validator.
-				result.Coverage = boundaryCoverage(101)
+				result.Coverage = boundaryCoverage(bound + 1)
 				before, _ = json.Marshal(result)
 				state.WorkItemCensus = nil
 				current.RepositoryScopes = []string{"*"}
@@ -81,8 +82,8 @@ func TestWorkItemStoredCoverageValidationPreservesTruth(t *testing.T) {
 				if got.Disposition != WorkItemTupleByIDNotFound || got.Err != nil || got.Event.Basis != "digest_changed" {
 					t.Fatalf("authorization priority=%+v", got)
 				}
-			} else if mode == "100" || mode == "unavailable_invalid_coverage" {
-				if !errors.Is(got.Err, ErrInvalidResult) || got.Event.Basis != "coverage_invalid" || got.Event.DetailsAfter != 101 || got.Event.ReasonsAfter != 101 {
+			} else if mode == "at_bound" || mode == "unavailable_invalid_coverage" {
+				if !errors.Is(got.Err, ErrInvalidResult) || got.Event.Basis != "coverage_invalid" || got.Event.DetailsAfter != bound+1 || got.Event.ReasonsAfter != bound+1 {
 					t.Fatalf("capacity failure=%+v", got)
 				}
 			} else {
@@ -123,7 +124,8 @@ func TestWorkItemStoredServingConfiguredInfo(t *testing.T) {
 
 func TestWorkItemStoredReuseCoverageErrorDoesNotRestart(t *testing.T) {
 	principal, request, stored, current := tupleReuseFixture(t)
-	stored.Result.Coverage = boundaryCoverage(100)
+	bound := contractsv1.ContextFabricCoverageEntriesMaxCount
+	stored.Result.Coverage = boundaryCoverage(bound)
 	stored.SemanticState.WorkItemCensus.State = WorkItemMembershipCensusFloor
 	stored.SemanticState.WorkItemCensus.Value = WorkItemMembershipCensusLimit
 	current.Census.State = WorkItemMembershipCensusFloor
@@ -164,7 +166,7 @@ func TestWorkItemStoredReuseCoverageErrorDoesNotRestart(t *testing.T) {
 		var event map[string]any
 		if json.Unmarshal(line, &event) == nil && event["msg"] == WorkItemStoredServingLogMessage {
 			decisions++
-			if event["level"] != "INFO" || event["basis"] != "coverage_invalid" || event["surface"] != "reuse" || event["coverage_details_before"] != float64(100) || event["coverage_details_after"] != float64(101) || event["coverage_bound"] != float64(100) {
+			if event["level"] != "INFO" || event["basis"] != "coverage_invalid" || event["surface"] != "reuse" || event["coverage_details_before"] != float64(bound) || event["coverage_details_after"] != float64(bound+1) || event["coverage_bound"] != float64(bound) {
 				t.Errorf("accepted failure decision=%v", event)
 			}
 		}
