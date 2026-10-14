@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// devhealthschema:not-a-production-replica the table names here are only inputs to the row-count SQL builder, no fixture DDL
 // TestRowCountSQL_FinalOnlyWhenSupported covers the concrete failure the team lead described:
 // a plain MergeTree table rejects FINAL outright, so the query built for it must omit it while
 // a ReplacingMergeTree table's query must include it. file_hotspot_daily is the plain one this

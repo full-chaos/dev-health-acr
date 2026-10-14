@@ -114,6 +114,12 @@
 // work_items (due_at, sprint_id, status) and the sprints their sprint_id
 // names (ended_at): raw dates and counts as of the request, no judgment.
 //
+// FactFileHotspots (file_hotspots.go) serves a repository subject from
+// file_hotspot_daily: the files of the repository's latest stored run inside
+// the window, at most ten by stored risk score, with the run size. A
+// repository with no row says so, and one with no complexity snapshot serves
+// the cyclomatic fields null; no score is recomputed and no person is named.
+//
 // Neither FactMetrics nor FactEvidence is a target of
 // contractsv1.ContextFabricDriverCategoryRequiresClaimedFact's closed
 // category->kind table (internal/contracts/v1/context_fabric_types.go) --

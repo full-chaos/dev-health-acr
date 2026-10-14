@@ -45,7 +45,7 @@ func TestDirectReadServesTeamBlockersThroughTheRealScopeExpander(t *testing.T) {
 	ctx := context.Background()
 	orgID := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
-	for _, statement := range devhealthschema.DDL("work_item_dependencies", "work_item_dependency_first_seen") {
+	for _, statement := range devhealthschema.DDL("work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

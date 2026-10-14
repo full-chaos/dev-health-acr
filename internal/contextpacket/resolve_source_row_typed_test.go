@@ -14,7 +14,7 @@ import (
 // columns, so the scan must be as wide as the statement: ten standard columns
 // plus the typed ones.
 func TestResolveSourceRowScansTheTypedColumnsOfACatalogStatement(t *testing.T) {
-	client := &resolveRowClient{values: []any{"acr:v1:deployment:dep-1", "dev_health", "deployment", "dep-1", "production deployment", "", "native", 1.0, "status=failure", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), "failure", "42"}}
+	client := &resolveRowClient{values: []any{"acr:v1:deployment:dep-1", "dev_health", "deployment", "dep-1", "production deployment", "", "native", 1.0, "status=failure", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), "failure", "42", "exact_merge_sha"}}
 	rows := contextpacket.NewCatalogClickHouseRows(client)
 	references, err := rows.ResolveSourceRow(context.Background(), "org", contractsv1.ResolvedScope{RepoID: "00000000-0000-4000-8000-000000000001", RepoSlug: "acme/api"},
 		contextpacket.SourceRowRead{QueryID: "deployments.v1", Locator: "acr:v1:deployment:dep-1"})

@@ -215,6 +215,7 @@ const (
 	FactLandscape               = contractsv1.ContextFabricFactLandscape
 	FactSecurityAlerts          = contractsv1.ContextFabricFactSecurityAlerts
 	FactCommitment              = contractsv1.ContextFabricFactCommitment
+	FactFileHotspots            = contractsv1.ContextFabricFactFileHotspots
 )
 
 type InvestigationRequest = contractsv1.ContextFabricInvestigationRequest
@@ -432,6 +433,11 @@ type CanonicalFactRequest struct {
 	// to pull requests reads only the pull requests that hold it, inside the
 	// read and so before its limit. Engine dispatch state, never a model field.
 	PullRequestStatus string `json:"-"`
+	// PullRequestFacts asks a team root's pull_requests read to serve one fact
+	// per pull request beside the team rollup. Unset, the team fact alone
+	// answers, with its pull_requests_by_state table. Engine dispatch state,
+	// never a model field.
+	PullRequestFacts bool `json:"-"`
 	// LinkScopedSubjects are the work items this request's link predicate
 	// admitted under the requested repository scope (the repository walk's
 	// members, the satisfier the scoped census admitted): each is in the scope

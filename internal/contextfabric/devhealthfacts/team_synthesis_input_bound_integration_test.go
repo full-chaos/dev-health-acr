@@ -34,7 +34,7 @@ func seedTeamAtTheExpansionCap(t *testing.T, ctx context.Context, direct interfa
 	Exec(ctx context.Context, query string, args ...any) error
 }, at time.Time) {
 	t.Helper()
-	for _, statement := range devhealthschema.DDL("work_item_dependencies", "work_item_dependency_first_seen") {
+	for _, statement := range devhealthschema.DDL("work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -159,6 +159,8 @@ func TestATeamAtTheExpansionCapIsSynthesizedWithinTheModelInputBound(t *testing.
 		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
 		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
 		Requirements: requirements,
+		// The bound is measured over the per pull request facts.
+		PullRequestFacts: true,
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts error = %v", err)
@@ -305,6 +307,8 @@ func TestABoundedTeamInputKeepsTheFactsTheQuestionNamesNotTheFirstRead(t *testin
 		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
 		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
 		Requirements: requirements,
+		// The bound is measured over the per pull request facts.
+		PullRequestFacts: true,
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts error = %v", err)

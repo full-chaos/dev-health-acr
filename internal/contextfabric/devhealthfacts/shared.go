@@ -1125,7 +1125,37 @@ import (
 // tables instead of inlining the link chain four times and the ids in its text.
 // The rows are unchanged; the statements and their memory are not, so an answer
 // saved under v221 is not reused as one produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v222"
+//
+// v222 -> v223: the team and project blocker statements read in blocks of
+// 8,192 rows instead of the server default of 65,536, and the age
+// statements read the first-seen rows of the organization without
+// narrowing them to the blocker edges. The rows are unchanged; the
+// statements served are not, so an answer saved under v222 is not reused as
+// one produced by them.
+//
+// v223 -> v224: a team pull_requests read serves its pull requests counted by
+// stored state (pull_requests_by_state) and no fact per pull request unless the
+// question asks for the pull requests themselves. The answer changes; an answer
+// saved under v223 is not reused as one produced by the new read.
+//
+// v224 -> v225: repository and team metrics serve the change failure rate by
+// the ops rule that counts a deployment's own failed status: the failed count
+// includes failures by status, a window with final-status deployments and no
+// incident evidence is a measured rate (basis status, over the deployments with
+// a final status), and change_failure_unknown_reason, change_failure_evidence_basis,
+// the two status counts and change_failure_status_coverage are served. A
+// candidate saved under v224 may hold an unknown rate that is now measured and
+// must not be reused.
+//
+// v225 -> v226: the file_hotspots fact kind is served for a repository. An
+// answer saved under v225 cannot carry it.
+//
+// v226 -> v227: every blocker read (team, project, work item) keeps only the
+// links the provider still reports; a link it removed is no longer counted or
+// named the oldest blocker. Team and project blockers facts carry
+// blocker_dependencies_writer_unresolved_current. An answer saved under v226
+// can count a removed link.
+const QueryVersion = "devhealthfacts.clickhouse.v227"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1598,7 +1628,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// code_ownership_risk: health.go's compounding_risk formula is
 	// literally w_churn/w_complexity/w_ownership/w_review-weighted risk --
 	// its own doc comment names ownership as one of the weighted inputs.
-	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts:
+	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts, contextfabric.FactFileHotspots:
 		return contextfabric.HealthDimensionCodeOwnershipRisk
 	// cognitive_workload_pressure: capacity forecasts (workload.go),
 	// IC-level churn/cycle/WIP throughput scatter (landscape.go), and
@@ -1839,6 +1869,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 	// Stored security alert counts explain a repository's risk: a driver,
 	// never a state or a score.
 	case contextfabric.FactSecurityAlerts:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
+		}
+	// Stored file hotspot rows explain where churn and complexity sit in a
+	// repository: a driver, never a state or a score.
+	case contextfabric.FactFileHotspots:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
 		}

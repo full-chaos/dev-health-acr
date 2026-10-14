@@ -34,11 +34,11 @@ const (
 	//
 	// v29 -> v30: the closed fact-kind set, the glossary and the word rules
 	// name commitment, and "on track", "behind" and "at risk" list it.
-	PromptVersion = "context-fabric-interpretation.v30"
+	PromptVersion = "context-fabric-interpretation.v31"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v10 -> v11: the fact_requirements kind enum names commitment.
-	OutputVersion = "context-fabric-model-output.v11"
+	OutputVersion = "context-fabric-model-output.v12"
 )
 
 type interpretationInput struct {
