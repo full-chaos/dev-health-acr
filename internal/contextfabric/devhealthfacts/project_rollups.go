@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -186,9 +187,9 @@ func splitProjectKey(key string) (provider, id string) {
 // rows of the requested projects' issues, with whether the blocker is open.
 // Both work_items reads are narrowed to the blocker edge endpoints; both ends
 // pass the work-item authorization rule.
-func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
+func projectBlockerEdgeRowsSQL(authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open` + startOutput + `
+	return `SELECT t.project_key AS project_key, d.target_work_item_id AS tgt, d.source_work_item_id AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
@@ -197,7 +198,7 @@ func projectBlockerEdgeRowsSQL(authorized string, withStart bool) string {
     WHERE w.org_id = {org_id:String} AND ` + workItemIsIssueSQL("w") + ` AND w.work_item_id IN ` + blockerEndpointIDsSQL + `
   ) AS t ON t.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'
+  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + current + `
     AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY project_key, tgt, src, is_open`
 }
@@ -215,20 +216,20 @@ func (p *BlockersProvider) readProjectRollup(ctx context.Context, principal stor
 	if err != nil {
 		return rejected, err
 	}
-	authorized, authorizationBindings, err := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+	authorized, current, authorizationBindings, err := p.blockerScope(ctx, principal, orgID, requestedScope, settings)
 	if err != nil {
 		return rejected, err
 	}
-	statement := blockerStatement(`SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 0))
-FROM (`+projectBlockerEdgeRowsSQL(authorized, false)+`)
+	statement := blockerStatement(`SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 0)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND writer_unresolved = 1))
+FROM (`+projectBlockerEdgeRowsSQL(authorized, current, false)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
-	type totals struct{ blocked, edges, excluded int64 }
+	type totals struct{ blocked, edges, excluded, unresolved int64 }
 	byProject := map[string]totals{}
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectBlockerRollup", statement, orgID, ids, func(row readers.RowScanner) error {
 		var key string
 		var t totals
-		if err := row.Scan(&key, &t.blocked, &t.edges, &t.excluded); err != nil {
+		if err := row.Scan(&key, &t.blocked, &t.edges, &t.excluded, &t.unresolved); err != nil {
 			return err
 		}
 		byProject[key] = t
@@ -239,7 +240,7 @@ ORDER BY project_key`, settings)
 	}
 	ageStatement := blockerStatement(`SELECT project_key, toInt64(uniqExactIf((tgt, src), is_open = 1)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open = 1 AND start_exact = 1)),
   ifNull(toInt64(minIf(start_unix, is_open = 1)), 0)
-FROM (`+projectBlockerEdgeRowsSQL(authorized, true)+`)
+FROM (`+projectBlockerEdgeRowsSQL(authorized, current, true)+`)
 GROUP BY project_key
 ORDER BY project_key`, settings)
 	ages := map[string]blockerTeamAge{}
@@ -272,6 +273,7 @@ ORDER BY project_key`, settings)
 			"blocked_work_items_current":                      contextfabric.IntegerFactValue(t.blocked),
 			"blocker_dependencies_current":                    contextfabric.IntegerFactValue(t.edges),
 			"blocker_dependencies_excluded_by_status_current": contextfabric.IntegerFactValue(t.excluded),
+			"blocker_dependencies_writer_unresolved_current":  contextfabric.IntegerFactValue(t.unresolved),
 		}
 		if days, basis, reason, ok := blockerOldestAgeOrUnavailable(ages[key], clock(), ageUnavailable); ok {
 			fields["oldest_blocked_age_days"] = contextfabric.IntegerFactValue(days)
