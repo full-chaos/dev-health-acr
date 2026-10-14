@@ -10,7 +10,9 @@
   "expected_packet_status": "complete",
   "expected_scope_resolution": "branch_filtered",
   "status_reasoning": "Branch-filtered sources apply branch=main. Repository-scoped sources also execute and label their items repository-wide. git_commits.v1 and git_commit_files.v1 support an empty commit_sha as a repository-wide read. Every catalog source has evidence in the fixture, so the packet is complete with no unavailable sources.",
-  "expected_unavailable_sources": [],
+  "expected_unavailable_sources": [
+    {"source": "action_findings.v1", "reason": "no_stored_recommendation_source"}
+  ],
   "expected_unavailable_sources_exact": true,
   "expected_unavailable_sources_note": "Exactly zero. The five branch-filtered sources have main-branch rows, and repository-wide sources remain eligible on a branch request.",
   "required_evidence": [

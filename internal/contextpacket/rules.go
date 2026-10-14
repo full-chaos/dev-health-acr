@@ -16,6 +16,7 @@ type rule struct {
 	severity     contractsv1.Severity
 	categoryRank int
 	why          string
+	cites        []string
 }
 
 func evidenceRule(ref contractsv1.EvidenceRef) rule {
@@ -33,39 +34,39 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	// Rows whose entity type or text is free-form producer content never
 	// choose a role by that text.
 	if ref.SourceVersion == aiArtifactSourceVersion {
-		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, ""}
+		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil}
 	}
 	switch strings.ToLower(ref.Source.EntityType) {
 	case "ci_pipeline_run", "check", "check_run", "workflow_run", "build", "alert":
 		if citationShowsFailure(ref.Citation) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil}
 		}
 	case "deployment":
 		if deploymentFailed(ref) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil}
 		}
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, ""}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil}
 	case "incident":
 		if incidentIsOpen(ref.Citation) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
+			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil}
 		}
 	case "recommendation", "review_action", "task":
 		if ref.SourceVersion != storedFindingsSourceVersion {
 			break
 		}
-		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, ""}
+		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, "", nil}
 	case "state", "release":
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, ""}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil}
 	}
-	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, ""}
+	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil}
 }
 
 func pressureRule() rule {
-	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
+	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil}
 }
 
 func causeRule() rule {
-	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, ""}
+	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, "", nil}
 }
 
 const (
@@ -83,7 +84,7 @@ var explicitRuleIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,240}$`)
 func explicitRuleOutcome(metadata map[string]any) (ruleOutcome, bool) {
 	ruleID, ruleIDOK := metadata["acr_rule_id"].(string)
 	claim, claimOK := metadata["acr_claim_kind"].(string)
-	if !ruleIDOK || !claimOK || !explicitRuleIDPattern.MatchString(ruleID) {
+	if !ruleIDOK || !claimOK || !explicitRuleIDPattern.MatchString(ruleID) || strings.HasPrefix(ruleID, "evidence.observed.") {
 		return ruleOutcome{}, false
 	}
 	switch contractsv1.ClaimKind(claim) {
@@ -108,6 +109,8 @@ func explicitRuleRejection(metadata map[string]any) (reason string, idLength int
 		return "rule_id_not_string", 0, true
 	case !explicitRuleIDPattern.MatchString(id):
 		return "rule_id_grammar", len(id), true
+	case strings.HasPrefix(id, "evidence.observed."):
+		return "reserved_rule_id", len(id), true
 	default:
 		return "claim_kind", len(id), true
 	}

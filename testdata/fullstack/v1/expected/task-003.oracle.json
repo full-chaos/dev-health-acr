@@ -15,7 +15,8 @@
     {"source": "pull_requests.v1", "reason": "no_evidence"},
     {"source": "pull_request_reviews.v1", "reason": "no_evidence"},
     {"source": "ci_pipeline_runs.v1", "reason": "no_evidence"},
-    {"source": "file_complexity.v1", "reason": "no_evidence"}
+    {"source": "file_complexity.v1", "reason": "no_evidence"},
+    {"source": "action_findings.v1", "reason": "no_stored_recommendation_source"}
   ],
   "expected_unavailable_sources_exact": true,
   "expected_unavailable_sources_note": "Exactly the five branch-filtered sources are unavailable. Repository-wide sources remain eligible and label their returned evidence repository-wide.",

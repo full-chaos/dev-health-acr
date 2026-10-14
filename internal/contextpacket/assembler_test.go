@@ -159,9 +159,9 @@ func testEvidence(id, system string, observed time.Time) contractsv1.EvidenceRef
 	if system == "github_pr" {
 		entityType = "review_action"
 	}
-	citation := "fixture"
+	citation := "an observed row"
 	if entityType == "check" {
-		citation = "fixture failed"
+		citation = "failed"
 	}
 	return contractsv1.EvidenceRef{SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, Source: contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: id, DisplayLabel: id}, Provenance: "native", Confidence: 0.9, Citation: citation, ObservedAt: observed, Availability: contractsv1.EvidenceAvailable}
 }
@@ -191,10 +191,19 @@ func contains(values []string, want string) bool {
 }
 
 func TestAssembler_gives_each_rule_its_own_check_and_step_labels(t *testing.T) {
-	assembler := fixtureAssembler(t)
-	request := fixtureRequest("req-actions-once", "main", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2")
+	request := fixtureRequest("req-actions-once", "main", "")
+	at := time.Date(2026, 1, 14, 10, 0, 0, 0, time.UTC)
+	failedCheck := testEvidence("ev-check-failed", "ci", at)
+	commit := testEvidence("ev-commit-plain", "git", at)
+	deployment := roleRow("ev-deploy-state", "deployment", "dep-1", "production deployment", "status=success", at)
+	deployment.Metadata = map[string]any{"deployment_status": "success", "pull_request_number": ""}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{failedCheck, commit, deployment},
+		QueryVersion:  contextpacket.QueryVersionV1,
+	}}
 
-	packet, err := assembler.Assemble(context.Background(), fixturePrincipal(), request)
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
 
 	if err != nil {
 		t.Fatalf("assemble: %v", err)

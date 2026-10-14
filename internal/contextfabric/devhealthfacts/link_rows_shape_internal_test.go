@@ -17,12 +17,12 @@ func TestAdmittedLinkedPullRequestRowsReadNoWorkItems(t *testing.T) {
 	}
 }
 
-func TestTeamProjectLinkRowsReadWorkItemsOnceForTheOwnedProjects(t *testing.T) {
+func TestTeamProjectLinkRowsReadWorkItemsForTheOwnedProjectsInTwoPasses(t *testing.T) {
 	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
-	if got := strings.Count(statement, "FROM work_items"); got != 1 {
-		t.Fatalf("team project link rows read work_items %d times, want 1:\n%s", got, statement)
+	if got := strings.Count(statement, "FROM work_items"); got != 2 {
+		t.Fatalf("team project link rows read work_items %d times, want 2 (unmerged candidates, then FINAL):\n%s", got, statement)
 	}
-	for _, want := range []string{admittedLinkedPullRequestRowsSQL, "cw.work_item_id IN " + linkedWorkItemIDsSQL, "(cw.provider, cw.project_id) IN", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{admittedLinkedPullRequestRowsSQL, "cp.work_item_id IN " + linkedWorkItemIDsSQL, "cw.work_item_id IN (", "(cw.provider, cw.project_id) IN", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}

@@ -116,6 +116,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	actionEvidence, actionReason := a.actionEvidence(ctx, principal, scope, packet.Freshness.AsOf)
 	if actionReason != "" {
 		packet.Warnings = sortedUnique(append(packet.Warnings, "action_items_unavailable:"+actionReason))
+		markActionSourceUnavailable(&packet, request, actionReason)
 	}
 	bundle.Evidence = append(bundle.Evidence, actionEvidence...)
 	applyEvidenceQuarantine(&packet, validation)
@@ -274,4 +275,17 @@ func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Princi
 	}
 	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "reason", reason)
 	return served, reason
+}
+
+// markActionSourceUnavailable records, in the packet's own coverage, that the
+// action category is not served because no stored source was read, so an
+// absent category is never read as zero or complete. The packet is partial
+// only when the request names the action category.
+func markActionSourceUnavailable(packet *contractsv1.ContextPacket, request contractsv1.ContextPacketRequest, reason string) {
+	packet.Coverage.SourcesUnavailable = append(packet.Coverage.SourcesUnavailable, contractsv1.UnavailableSource{Source: actionCoverageSource, Reason: reason})
+	for _, category := range request.Options.RequestedCategories {
+		if category == contractsv1.CategoryAction {
+			packet.Coverage.Partial = true
+		}
+	}
 }

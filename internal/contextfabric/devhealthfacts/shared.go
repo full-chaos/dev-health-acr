@@ -1099,7 +1099,13 @@ import (
 // v217 -> v218: the team linked pull request mix takes a unit's reference
 // count once per unit, not from the unit's reference array on every expanded
 // row. The rows are unchanged; the statement and its memory are not.
-const QueryVersion = "devhealthfacts.clickhouse.v218"
+//
+// v218 -> v219: the team project link rows intersect the organization's linked
+// work item ids with the owned projects' work items before the FINAL read, so
+// the statements hold the owned projects' candidates and not every linked work
+// item. The rows are unchanged; the statements and their memory are not, so an
+// answer saved under v218 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v219"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

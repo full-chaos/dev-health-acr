@@ -60,9 +60,9 @@ func (s rowsStore) ResolveEvidence(context.Context, storage.Principal, string) (
 }
 
 // A failed deployment row as the real GitHub and GitLab normalizers store it
-// serves its pull request as cause and itself as pressure, through the real
-// catalog statements on ClickHouse; a successful deployment's pull request is
-// evidence.
+// is served as pressure and its stored pull request as a relation (the match
+// tier is not stored, so never a cause), through the real catalog statements
+// on ClickHouse; the two stored links are counted as demoted.
 func TestRealNormalizerDeploymentRowsServeFailedDeploymentsAsPressureAndTheirPullRequestAsRelation(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)

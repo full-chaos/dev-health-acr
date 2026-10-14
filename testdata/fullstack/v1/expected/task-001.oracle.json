@@ -10,7 +10,9 @@
   "expected_packet_status": "complete",
   "expected_scope_resolution": "exact_commit",
   "status_reasoning": "task-001 is commit-pinned with no branch, so it executes every catalog scope class. The fixture seeds every catalog source, including operational_incidents. incidents.v1 reads the canonical operational_incidents table and scanEvidenceRow reads the catalog's normalized Float32 confidence projection, so all sources are available and the packet is complete.",
-  "expected_unavailable_sources": [],
+  "expected_unavailable_sources": [
+    {"source": "action_findings.v1", "reason": "no_stored_recommendation_source"}
+  ],
   "expected_unavailable_sources_exact": true,
   "expected_unavailable_sources_note": "Exact empty-set semantics prevent any catalog query failure or missing seeded source from silently degrading task-001.",
   "required_evidence": [
