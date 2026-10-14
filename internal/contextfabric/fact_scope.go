@@ -177,6 +177,11 @@ const (
 	FactScopePolicyProjectIssuePullRequestDeployments           FactScopePolicy = "project_issue_pull_request_deployments_v1"
 	FactScopePolicyProjectIssuePullRequestIncidents             FactScopePolicy = "project_issue_pull_request_incidents_v1"
 	FactScopePolicyProjectTeamOwnershipOperationalDeficiencies  FactScopePolicy = "project_team_ownership_operational_deficiencies_v1"
+
+	// FactScopePolicyTeamProjectOwnershipCommitment is disclosure-only: a team
+	// reaches commitment through the projects it owns, and commitment is read
+	// per project subject, never as a team rollup.
+	FactScopePolicyTeamProjectOwnershipCommitment FactScopePolicy = "team_project_ownership_commitment_v1"
 )
 
 // FactScopeBasis names the EPISTEMIC standing of an expansion path -- what
@@ -887,6 +892,14 @@ var factScopeEligibility = []factScopeEligibilityRow{
 			Policy:     FactScopePolicyTeamPrimaryAttributionPullRequestReview,
 			TargetKind: contractsv1.ContextFabricSubjectPullRequestReview,
 			Basis:      FactScopeBasisActivityProxy, Chain: factScopeChainReview, Enabled: true,
+		},
+	},
+
+	{
+		Requirement: FactCommitment, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyTeamProjectOwnershipCommitment, TargetKind: SubjectProject,
+			Basis: FactScopeBasisDirect, CurrentAxisOnly: true, Chain: factScopeChainProjectTeamOwnership,
 		},
 	},
 

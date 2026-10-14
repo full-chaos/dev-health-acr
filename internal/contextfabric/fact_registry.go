@@ -450,6 +450,9 @@ type FactReadFailure struct {
 	// Cause is the error the read failed with. It is for logs and tests only:
 	// Error() returns Reason alone, so a served answer never carries it.
 	Cause error
+	// RequestNote is a sentence true of the request whether or not this read
+	// succeeded (ownership of the requested teams); the ledger keeps it.
+	RequestNote string
 }
 
 // Unwrap exposes Cause to errors.Is / errors.As.
@@ -1069,7 +1072,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// the empty-states rule forbids.
 			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(plannedForFailedRead(planned, registered.capability), reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
-			bundle.recordOutcome(planned.Kind, factReadFailed, planned.Subjects, query.Subjects, nil)
+			bundle.recordOutcome(planned.Kind, factReadFailed, planned.Subjects, query.Subjects, failedReadResult(err))
 			bundle.noteUnreachedRoot(planned.Kind, planned, registered.capability)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadFailed, state, query.Subjects, 0, false)
 			continue
@@ -2091,6 +2094,7 @@ func factKindOrder(kind FactKind) int {
 		FactIncidents: 11, FactMetrics: 12, FactHealth: 13, FactWorkload: 14,
 		FactInvestment: 15, FactReadiness: 16, FactOperationalDeficiencies: 17,
 		FactSourceHealth: 18, FactEvidence: 19, FactFlow: 20, FactLandscape: 21, FactSecurityAlerts: 22,
+		FactCommitment: 23,
 	}
 	if value, ok := order[kind]; ok {
 		return value
@@ -2152,7 +2156,7 @@ func validFactSourceState(state SourceState) bool {
 
 func validFactCapabilityKind(kind FactKind) bool {
 	switch kind {
-	case FactIdentity, FactMembership, FactStatus, FactActualCompletion, FactWork, FactBlockers, FactRequiredChildren, FactPullRequests, FactReviews, FactContinuousIntegration, FactDeployments, FactIncidents, FactMetrics, FactHealth, FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies, FactSourceHealth, FactEvidence, FactFlow, FactLandscape, FactSecurityAlerts:
+	case FactIdentity, FactMembership, FactStatus, FactActualCompletion, FactWork, FactBlockers, FactRequiredChildren, FactPullRequests, FactReviews, FactContinuousIntegration, FactDeployments, FactIncidents, FactMetrics, FactHealth, FactWorkload, FactInvestment, FactReadiness, FactOperationalDeficiencies, FactSourceHealth, FactEvidence, FactFlow, FactLandscape, FactSecurityAlerts, FactCommitment:
 		return true
 	default:
 		return false
@@ -2268,4 +2272,14 @@ func CombineRequestNote(reason, note string) string {
 		return reason
 	}
 	return note + "; " + reason
+}
+
+// failedReadResult carries what a failed read still knows to the ledger: the
+// request-level note a provider attached to its failure, or nothing.
+func failedReadResult(err error) *FactProviderResult {
+	var failure *FactReadFailure
+	if !errors.As(err, &failure) || strings.TrimSpace(failure.RequestNote) == "" {
+		return nil
+	}
+	return &FactProviderResult{RequestNote: failure.RequestNote}
 }

@@ -10,6 +10,11 @@ import (
 
 //go:generate go run ./gen
 
+// ToolAvailabilityNote opens every guide that names tools. The text is served
+// to callers whose tool catalogue differs, so it says that a named tool may be
+// absent for them.
+const ToolAvailabilityNote = "Tool availability: every tool named in this guide is optional. A tool exists for you only when `tools/list` shows it; where a step names a tool you do not see, skip that step."
+
 // MIMEType is the media type of every guide resource.
 const MIMEType = "text/markdown"
 
@@ -46,7 +51,7 @@ var resources = []Resource{
 	},
 	{
 		URI: URIData, File: "data.md", Name: "guide-data", Title: "Plan the reads yourself: the data tools",
-		Description: "How to use data_catalog, find_subjects, run_operation and graphql_query: the rules, the operation and root field lists for each caller class and worked examples. Read before you plan a data investigation.",
+		Description: "How to use the data tools (data_catalog, find_subjects, run_operation and graphql_query, each when listed): the rules, the operation and root field lists for each caller class and worked examples. Read before you plan a data investigation.",
 	},
 	{
 		URI: URIClientInterpretation, File: "client-interpretation.md", Name: "guide-client-interpretation", Title: "Interpret on your own model",
