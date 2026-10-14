@@ -1248,7 +1248,7 @@ func hasOwnNamingSentence(basis contractsv1.ContextFabricRefusalBasis) bool {
 		{declaredKindTerminalBasis, declaredKindTerminalLimitation},
 		{contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable, contractsv1.ContextFabricContinuationContextUnverifiableLimitation},
 		{subjectIdentityUnconfirmedTerminalBasis, subjectIdentityUnconfirmedTerminalLimitation},
-		{organizationScopeTerminalBasis, organizationScopeTerminalLimitation},
+		{contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported, contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation},
 	} {
 		if terminal.basis == basis && contractsv1.IsContextFabricServiceAuthoredLimitation(terminal.sentence) {
 			return true

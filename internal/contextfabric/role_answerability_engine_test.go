@@ -555,16 +555,13 @@ func roleOrgFrameWithGoals(member *SubjectKind, goals ...InvestigationGoal) *Que
 	return frame
 }
 
-// TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis pins the D48 terminal by
-// the corpus rows it names (ids only): an organization-scope question that
-// counts nothing is refused on organization_scope_unsupported, with that
-// basis's own sentence, on every turn shape the rows produced -- with offers,
-// without offers, and for a caller that declined clarification. A counting
-// question keeps the role decision, and a refusing frame gate keeps its own
-// basis.
-func TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis(t *testing.T) {
+// TestOrganizationScopeTerminalsKeepTheirOwnBasis holds the two terminals an
+// organization-scope frame can still reach when no interpreter repaired it: a
+// counting question whose offers advance no role keeps the declared-kind
+// basis, and a refusing frame gate keeps its own basis. Neither carries the
+// retired organization-scope sentence.
+func TestOrganizationScopeTerminalsKeepTheirOwnBasis(t *testing.T) {
 	t.Parallel()
-	organization := SubjectOrganization
 	project := SubjectProject
 	mixedPool := SubjectResolution{Candidates: []SubjectCandidate{
 		roleCandidate("subr_role_review", contractsv1.ContextFabricSubjectPullRequestReview, "pull_request_review:1"),
@@ -582,45 +579,11 @@ func TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis(t *testing.T) {
 		reason             string
 	}{
 		{
-			// corpus row cv-b5-org-health, second turn: an organization member
-			// kind and a pool of reviews, CI runs and projects.
-			cell: "cv-b5-org-health: offers of other kinds", frame: roleOrgFrameWithGoals(&organization, GoalAssessState),
-			resolution: mixedPool, allowClarification: true,
-			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
-		},
-		{
-			// corpus row cv-b5-org-health, first turn: no member kind, the
-			// offer pool emptied by the vector-only exclusion.
-			cell: "cv-b5-org-health: offer pool emptied", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
-			resolution:         SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, ClarificationPrompt: OfferPoolEmptiedClarificationPrompt},
-			allowClarification: true,
-			basis:              organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
-		},
-		{
-			// corpus row cv-c7-org-drivers: an organization-scope drivers
-			// question.
-			cell: "cv-c7-org-drivers: offers of other kinds", frame: roleOrgFrameWithGoals(nil, GoalExplainDrivers),
-			resolution: mixedPool, allowClarification: true,
-			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
-		},
-		{
-			cell: "a caller that declined clarification is refused the same way", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
-			resolution: mixedPool, allowClarification: false,
-			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
-		},
-		{
 			// The control: counts ARE supported, so a counting question keeps
 			// the role decision and its declared-kind basis.
 			cell: "a counting question keeps the role decision", frame: roleOrgFrameWithGoals(&project, GoalCountOrAggregate),
 			resolution: mixedPool, allowClarification: true,
 			basis: declaredKindTerminalBasis, limitation: declaredKindTerminalLimitation, reason: declaredKindTerminalReason,
-		},
-		{
-			// A count beside a non-count goal is outside the served envelope:
-			// the non-count goal is the unsupported part the sentence names.
-			cell: "a count beside an assessment is refused on the organization basis", frame: roleOrgFrameWithGoals(&project, GoalCountOrAggregate, GoalAssessState),
-			resolution: mixedPool, allowClarification: true,
-			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
 		},
 		{
 			cell: "a refusing frame gate keeps its own basis", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
@@ -650,8 +613,8 @@ func TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis(t *testing.T) {
 			if !roleContains(result.Limitations, testCase.limitation) {
 				t.Fatalf("limitations = %#v, want %q", result.Limitations, testCase.limitation)
 			}
-			if testCase.basis != organizationScopeTerminalBasis && roleContains(result.Limitations, organizationScopeTerminalLimitation) {
-				t.Fatalf("limitations = %#v carry the organization-scope sentence on a turn refused on %q", result.Limitations, testCase.basis)
+			if roleContains(result.Limitations, contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation) {
+				t.Fatalf("limitations = %#v carry the retired organization-scope sentence on a turn refused on %q", result.Limitations, testCase.basis)
 			}
 			if want := []string{testCase.reason}; !stringSlicesEqual(telemetry.subjectlessTerminalReasons, want) {
 				t.Fatalf("emitted reasons = %#v, want %#v", telemetry.subjectlessTerminalReasons, want)
