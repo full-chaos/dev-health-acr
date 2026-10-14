@@ -141,6 +141,12 @@ credentials:
     postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
     # Optional PgBouncer admin DSN key for transaction-pool validation.
     poolerAdminDsnKey: ""
+  # Optional Postgres DSN of the org purge's own role (acr-projector purge
+  # connects with it). When set, the grant Job reads it for the role name only and
+  # gives that role exactly the purge's privileges. MUST NOT be the runtime role.
+  purge:
+    existingSecret: ""
+    postgresDsnKey: ACR_POSTGRES_PURGE_DSN
   # Bearer token used to authenticate to the Dev Health Ops entitlement service.
   entitlementToken:
     existingSecret: ""

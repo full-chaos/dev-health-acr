@@ -9,29 +9,36 @@ import (
 
 const composeScript = "../../deploy/compose/acr-db-init.sh"
 
-// TestComposeScriptCarriesTheGeneratedGrants fails when the generated block of
-// acr-db-init.sh differs from the declaration. DBACL_WRITE=1 rewrites it.
+// TestComposeScriptCarriesTheGeneratedGrants fails when a generated block of
+// acr-db-init.sh differs from the declaration. DBACL_WRITE=1 rewrites them.
 func TestComposeScriptCarriesTheGeneratedGrants(t *testing.T) {
 	raw, err := os.ReadFile(composeScript)
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(raw)
-	begin := strings.Index(script, ComposeBeginMarker)
-	end := strings.Index(script, ComposeEndMarker)
-	if begin < 0 || end < begin {
-		t.Fatalf("%s has no generated runtime grants block between %q and %q", composeScript, ComposeBeginMarker, ComposeEndMarker)
+	for _, block := range []struct{ begin, end, want string }{
+		{ComposeBeginMarker, ComposeEndMarker, RenderCompose()},
+		{ComposePurgeBeginMarker, ComposePurgeEndMarker, RenderComposePurge()},
+	} {
+		begin := strings.Index(script, block.begin)
+		end := strings.Index(script, block.end)
+		if begin < 0 || end < begin {
+			t.Fatalf("%s has no generated block between %q and %q", composeScript, block.begin, block.end)
+		}
+		end += len(block.end) + 1
+		if os.Getenv("DBACL_WRITE") == "1" {
+			script = script[:begin] + block.want + script[end:]
+			continue
+		}
+		if got := script[begin:end]; got != block.want {
+			t.Fatalf("a generated block of %s differs from internal/dbacl; run DBACL_WRITE=1 go test ./internal/dbacl\n--- script\n%s\n--- declaration\n%s", composeScript, got, block.want)
+		}
 	}
-	end += len(ComposeEndMarker) + 1
-	want := RenderCompose()
 	if os.Getenv("DBACL_WRITE") == "1" {
-		if err := os.WriteFile(composeScript, []byte(script[:begin]+want+script[end:]), 0o755); err != nil {
+		if err := os.WriteFile(composeScript, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		return
-	}
-	if got := script[begin:end]; got != want {
-		t.Fatalf("the generated block of %s differs from internal/dbacl; run DBACL_WRITE=1 go test ./internal/dbacl\n--- script\n%s\n--- declaration\n%s", composeScript, got, want)
 	}
 }
 

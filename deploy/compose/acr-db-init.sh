@@ -10,6 +10,8 @@ set -eu
 : "${ACR_ENABLE_EPISODE_WRITEBACK:=false}"
 : "${ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE:=}"
 : "${ACR_WORKLOAD_TRUST_DOMAIN:=}"
+# The org purge runs as its own role. It exists only when an operator names one.
+: "${ACR_PURGE_DB_USER:=}"
 
 secret_value() {
   name="$1"
@@ -70,6 +72,12 @@ secret_value() {
 
 POSTGRES_PASSWORD="$(secret_value POSTGRES_PASSWORD)"
 ACR_RUNTIME_DB_PASSWORD="$(secret_value ACR_RUNTIME_DB_PASSWORD)"
+ACR_PURGE_DB_PASSWORD=""
+purge_enabled=false
+if [ -n "$ACR_PURGE_DB_USER" ]; then
+  ACR_PURGE_DB_PASSWORD="$(secret_value ACR_PURGE_DB_PASSWORD)"
+  purge_enabled=true
+fi
 ACR_MIGRATION_DB_PASSWORD="$(secret_value ACR_MIGRATION_DB_PASSWORD)"
 
 mode="${1:-roles}"
@@ -105,7 +113,8 @@ done
 psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d postgres \
   -v acr_db_name="$ACR_DB_NAME" \
   -v runtime_user="$ACR_RUNTIME_DB_USER" -v runtime_password="$ACR_RUNTIME_DB_PASSWORD" \
-  -v migration_user="$ACR_MIGRATION_DB_USER" -v migration_password="$ACR_MIGRATION_DB_PASSWORD" <<'SQL'
+  -v migration_user="$ACR_MIGRATION_DB_USER" -v migration_password="$ACR_MIGRATION_DB_PASSWORD" \
+  -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" -v purge_password="$ACR_PURGE_DB_PASSWORD" <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'runtime_user', :'runtime_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'runtime_user') \gexec
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'migration_user', :'migration_password')
@@ -119,6 +128,13 @@ SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC', :'acr_db_name'
 SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I', :'acr_db_name', :'runtime_user') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'runtime_user') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'migration_user') \gexec
+\if :purge_enabled
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'purge_user', :'purge_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'purge_user') \gexec
+SELECT format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', :'purge_user', :'purge_password') \gexec
+SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I', :'acr_db_name', :'purge_user') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'purge_user') \gexec
+\endif
 SQL
 
 psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
@@ -138,7 +154,8 @@ SQL
 if [ "$mode" = runtime-acl ]; then
   psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
     -v runtime_user="$ACR_RUNTIME_DB_USER" -v migration_user="$ACR_MIGRATION_DB_USER" \
-    -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" -v workload_token_exchange="$workload_token_exchange" <<'SQL'
+    -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" -v workload_token_exchange="$workload_token_exchange" \
+    -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" <<'SQL'
 REVOKE USAGE, CREATE ON SCHEMA acr FROM PUBLIC;
 REVOKE USAGE, CREATE ON SCHEMA acr FROM :"runtime_user";
 ALTER SCHEMA acr OWNER TO :"migration_user";
@@ -152,6 +169,11 @@ REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM PUBLIC;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM :"runtime_user";
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM :"runtime_user";
 GRANT USAGE ON SCHEMA acr TO :"runtime_user";
+\if :purge_enabled
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM :"purge_user";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM :"purge_user";
+GRANT USAGE ON SCHEMA acr TO :"purge_user";
+\endif
 
 -- BEGIN GENERATED RUNTIME GRANTS (internal/dbacl; regenerate with DBACL_WRITE=1 go test ./internal/dbacl)
 -- readiness check and migration verification read it: internal/runtime/hosted/postgres_readiness.go:20
@@ -276,6 +298,89 @@ GRANT USAGE ON SEQUENCE acr.context_fabric_structure_prior_pointer_history_id_se
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_revocations FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_prior_revocations TO :"runtime_user";
 -- END GENERATED RUNTIME GRANTS
+
+-- BEGIN GENERATED PURGE GRANTS (internal/dbacl; regenerate with DBACL_WRITE=1 go test ./internal/dbacl)
+\if :purge_enabled
+-- the purge command verifies the schema when it opens its runtime: cmd/acr-projector/runtime.go:261
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.schema_migrations FROM :"purge_user";
+GRANT SELECT ON TABLE acr.schema_migrations TO :"purge_user";
+-- DELETE of the organization's credentials (purge table list), SELECT in the device authorization predicate: internal/contextfabric/orgpurge/purge.go purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.client_credentials FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.client_credentials TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.workload_bindings FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.workload_bindings TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_packet_snapshots FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_packet_snapshots TO :"purge_user";
+-- the kept-events count (auditCountSQL) and the org_purged and org_purge_incomplete events (purgedAuditInsertSQL, incompleteAuditInsertSQL); never deleted
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.audit_events FROM :"purge_user";
+GRANT SELECT, INSERT ON TABLE acr.audit_events TO :"purge_user";
+-- DELETE of non-legal-hold episodes, SELECT for the kept legal-hold count (legalHoldCountSQL)
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.agent_episodes FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.agent_episodes TO :"purge_user";
+-- purge table list: orgpurge purgeTables; cascades to its requests and grants as the owner
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.device_authorizations TO :"purge_user";
+-- read by the device authorization predicate and the cascade count; removed by cascade
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_authorization_requests FROM :"purge_user";
+GRANT SELECT ON TABLE acr.oauth_authorization_requests TO :"purge_user";
+-- cascade count; removed by cascade
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_device_grants FROM :"purge_user";
+GRANT SELECT ON TABLE acr.oauth_device_grants TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_checkpoints FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_checkpoints TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_rebuild_markers FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_results TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_model_execution_receipts FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_model_execution_receipts TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_model_config FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_model_config TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_reuse_invalidations FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_reuse_invalidations TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_clarification_selections TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_selections FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_selections TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_supersession_claims FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_supersession_claims TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_pointer_history FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_prior_pointer_history TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_pointer FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_prior_pointer TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_prior_revocations FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_prior_revocations TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_priors FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_priors TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_build_source_progress FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_graph_build_source_progress TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_epoch_retirements FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_graph_epoch_retirements TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_lifecycle FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_graph_lifecycle TO :"purge_user";
+-- the purge's marker upsert (markerUpsertSQL: INSERT, UPDATE, SELECT); DELETE because the discovery the purge command runs first clears markers of organizations that returned (internal/contextfabric/pgprojection/org_purge_marker.go)
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_purge_markers FROM :"purge_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"purge_user";
+\endif
+-- END GENERATED PURGE GRANTS
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON TABLES FROM :"runtime_user";

@@ -136,7 +136,17 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 		if runtimeDSN == "" {
 			return fmt.Errorf("%s or %s_FILE is required", runtimeDSNEnvironment, runtimeDSNEnvironment)
 		}
-		return grantRuntimeACL(ctx, db, runtimeDSN, runtimeFeatures(lookup), output)
+		if err := grantRuntimeACL(ctx, db, runtimeDSN, runtimeFeatures(lookup), output); err != nil {
+			return err
+		}
+		purgeDSN, err := config.SecretValue(lookup, purgeDSNEnvironment)
+		if err != nil {
+			return err
+		}
+		if purgeDSN == "" {
+			return nil
+		}
+		return grantPurgeACL(ctx, db, purgeDSN, runtimeDSN, output)
 	}
 	runner, err := migrations.Embedded()
 	if err != nil {
