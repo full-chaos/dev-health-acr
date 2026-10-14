@@ -3,9 +3,11 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -49,6 +51,8 @@ func (p *changeFailureStatusColumnsProbe) availableAt(ctx context.Context, clien
 	}
 	count, err := countStatusColumns(ctx, client)
 	if err != nil {
+		slog.WarnContext(ctx, "change_failure_status_columns_probe_failed: the change failure statement reads the older table form for this call",
+			"cause_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)), "shape_known", p.known)
 		return p.known && p.available
 	}
 	p.known, p.available, p.checkedAt = true, count == uint64(len(changeFailureStatusColumns)), now
