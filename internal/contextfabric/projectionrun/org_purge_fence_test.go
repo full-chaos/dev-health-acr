@@ -13,6 +13,7 @@ import (
 )
 
 type fakePurgeMarker struct {
+	clearErr    error
 	mu          sync.Mutex
 	clock       int64
 	begins      int
@@ -61,6 +62,9 @@ func (m *fakePurgeMarker) BeginDiscovery(context.Context) (func(context.Context,
 	clear := func(_ context.Context, orgs []string) ([]string, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if m.clearErr != nil {
+			return nil, m.clearErr
+		}
 		var cleared []string
 		for _, org := range orgs {
 			if _, ok := m.purged[org]; ok && time.Unix(m.visibleSince(org), 0).Before(started) {
@@ -368,5 +372,108 @@ func TestOrgLockKey_EverySpellingOfOneUUIDSharesOneKey(t *testing.T) {
 	}
 	if got := projectionrun.OrgLockKey("org-1"); got != "org-1" {
 		t.Fatalf("a non-UUID id is used as given, got %q", got)
+	}
+}
+
+// The purge fence invariants. Each has at least one test, named for its number.
+//
+//  1. LIFT: only a successful discovery that lists the organization lifts its
+//     marker. A static allowlist entry, a deny-listed organization, a failed
+//     discovery and a failed clear never do.
+//  2. WRITE: only the purge writes a marker, in the same transaction as its
+//     deletes, under the per-organization lock; a dry run writes none.
+//  3. EXCLUSION: a tick, a rebuild and a purge of one organization exclude each
+//     other through one advisory lock whose key is the canonical UUID, whatever
+//     spelling reached it (case, braces, urn prefix, no hyphens, whitespace).
+//  4. CHECK: the marker is read under that lock before any projection work, in
+//     the tick and in a rebuild; an unreadable marker skips the organization.
+//  5. SPELLING: marker lookup and clear match every spelling of one UUID.
+//  6. STALE: a discovery that began before a purge committed, however late the
+//     purge committed after writing its row, cannot clear that purge's marker.
+//  7. WINDOW: between the purge's marker write and its commit the lock is held,
+//     so no tick runs; a tick that locks afterwards sees the committed marker.
+//  8. REDISCOVERY: a listed organization is cleared and projects in the same
+//     tick; a purge after that fences it again; a failed clear keeps it fenced.
+
+func TestPurgeFenceInvariant1_ADeniedOrAFailedDiscoveryNeverLiftsTheFence(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		results []fakeOrgResult
+		deny    []string
+	}{
+		"deny-listed organization":       {results: []fakeOrgResult{{orgs: []string{"org-denied", "org-other"}}}, deny: []string{"org-denied"}},
+		"failed discovery":               {results: []fakeOrgResult{{err: errors.New("directory down")}}},
+		"discovery without the org":      {results: []fakeOrgResult{{orgs: []string{"org-other"}}}},
+		"discovery lists it, clear dies": {results: []fakeOrgResult{{orgs: []string{"org-denied"}}}},
+	} {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := newFakeBackend()
+			marker := newFakePurgeMarker("org-denied")
+			if name == "discovery lists it, clear dies" {
+				marker.clearErr = errors.New("serialization failure")
+			}
+			coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+				OrgSource: &fakeOrgSource{results: tc.results}, OrgDiscoveryDeny: tc.deny,
+				Sources: []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+				Backend: backend, Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+				PurgeMarkers: marker, DrainBatchBudget: -1, Logger: discardLogger(),
+			})
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			ctx := context.Background()
+			coordinator.Tick(ctx)
+			coordinator.Tick(ctx)
+			if appliedOrgs(backend)["org-denied"] != 0 {
+				t.Fatalf("a fenced organization must not project: %v", appliedOrgs(backend))
+			}
+			if purged, _ := marker.IsPurged(ctx, "org-denied"); !purged {
+				t.Fatal("the marker must stay")
+			}
+		})
+	}
+}
+
+func TestPurgeFenceInvariant8_APurgeAfterRediscoveryFencesTheOrgAgain(t *testing.T) {
+	t.Parallel()
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	marker := newFakePurgeMarker("org-back")
+	orgs := &fakeOrgSource{results: []fakeOrgResult{{orgs: []string{"org-back"}}, {orgs: []string{"org-other"}}}}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgSource: orgs,
+		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend:   backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		PurgeMarkers: marker, DrainBatchBudget: -1, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	ctx := context.Background()
+	coordinator.Tick(ctx)
+	if appliedOrgs(backend)["org-back"] == 0 {
+		t.Fatalf("a rediscovered organization projects in the same tick: %v", appliedOrgs(backend))
+	}
+	applied := appliedOrgs(backend)["org-back"]
+	marker.set("org-back")
+	coordinator.Tick(ctx)
+	if got := appliedOrgs(backend)["org-back"]; got != applied {
+		t.Fatalf("a second purge must fence the organization again, applied %d -> %d", applied, got)
+	}
+}
+
+func TestPurgeFenceInvariant3_EverySpellingReachesOneLockKey(t *testing.T) {
+	t.Parallel()
+	const canonical = "f00d1234-5678-4abc-8def-0123456789ab"
+	for _, spelling := range []string{
+		canonical, "F00D1234-5678-4ABC-8DEF-0123456789AB", "{f00d1234-5678-4abc-8def-0123456789ab}",
+		"urn:uuid:f00d1234-5678-4abc-8def-0123456789ab", "f00d123456784abc8def0123456789ab", "F00D123456784ABC8DEF0123456789AB",
+		" f00d1234-5678-4abc-8def-0123456789ab", "f00d1234-5678-4abc-8def-0123456789ab\t", "\nF00D1234-5678-4ABC-8DEF-0123456789AB ",
+	} {
+		if got := projectionrun.OrgLockKey(spelling); got != canonical {
+			t.Fatalf("OrgLockKey(%q) = %q, want %q", spelling, got, canonical)
+		}
 	}
 }

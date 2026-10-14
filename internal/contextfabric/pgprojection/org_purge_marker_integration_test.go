@@ -28,9 +28,11 @@ func TestOrgPurgeMarkerStore_clearsOnlyMarkedOrganizationsInAnyUUIDSpelling(t *t
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at) VALUES ($1, now())`, purgeMarkerOrg)
 	require.NoError(t, err)
 
-	purged, err = store.IsPurged(ctx, strings.ToUpper(purgeMarkerOrg))
-	require.NoError(t, err)
-	require.True(t, purged, "the check reads any spelling of the id")
+	for _, spelling := range []string{strings.ToUpper(purgeMarkerOrg), "{" + purgeMarkerOrg + "}", "urn:uuid:" + purgeMarkerOrg, strings.ReplaceAll(purgeMarkerOrg, "-", ""), " " + purgeMarkerOrg + " "} {
+		purged, err = store.IsPurged(ctx, spelling)
+		require.NoError(t, err)
+		require.True(t, purged, "the check reads the spelling %q", spelling)
+	}
 	purged, err = store.IsPurged(ctx, "org-not-a-uuid")
 	require.NoError(t, err)
 	require.False(t, purged)
