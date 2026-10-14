@@ -47,8 +47,26 @@ func TestPullRequestFactsWantedByFrame(t *testing.T) {
 	if pullRequestFactsWanted(nil) {
 		t.Fatal("no frame must not ask for per pull request facts")
 	}
-	frame := &QuestionFrame{}
-	if pullRequestFactsWanted(frame) {
+	if pullRequestFactsWanted(&QuestionFrame{}) {
 		t.Fatal("a frame with no member kind must not ask for per pull request facts")
+	}
+	status := pullRequestStatusQuestionFrame(PullRequestStatusOpen)
+	if !pullRequestFactsWanted(&status) {
+		t.Fatal("a pull request status filter must ask for per pull request facts")
+	}
+	members := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind:   SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{AnchorTerms: []string{"Vesper"}, MemberKind: SubjectPullRequest},
+		},
+	}
+	if !pullRequestFactsWanted(&members) {
+		t.Fatal("pull requests as the member kind must ask for per pull request facts")
+	}
+	repositories := members
+	repositories.SubjectExpression.Scoped = &ScopedSetExpression{AnchorTerms: []string{"Vesper"}, MemberKind: SubjectRepository}
+	if pullRequestFactsWanted(&repositories) {
+		t.Fatal("repository members must not ask for per pull request facts")
 	}
 }
