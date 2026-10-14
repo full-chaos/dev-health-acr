@@ -70,12 +70,20 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 	}{
 		{"i-moved-away", "proj-a", ts(2026, 9, 1, 0, 0, 0)}, {"i-moved-away", "proj-other", ts(2026, 9, 20, 0, 0, 0)},
 		{"i-moved-in", "proj-other", ts(2026, 9, 1, 0, 0, 0)}, {"i-moved-in", "proj-a", ts(2026, 9, 20, 0, 0, 0)},
+		// Equal versions: which row FINAL keeps is the engine's, so these two items
+		// pin only that the statements before and after the change agree on it.
+		{"i-tie-project", "proj-a", ts(2026, 9, 10, 0, 0, 0)}, {"i-tie-project", "proj-other", ts(2026, 9, 10, 0, 0, 0)},
+		{"i-tie-type", "proj-a", ts(2026, 9, 10, 0, 0, 0)}, {"i-tie-type", "proj-a", ts(2026, 9, 10, 0, 0, 0)},
 	}
-	for _, v := range versions {
-		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, type, last_synced) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL, 'issue', ?)`,
-			v.id, repoUUID("repo-x"), org, "t", at, v.project, v.lastSynced)
+	for index, v := range versions {
+		itemType := "issue"
+		if v.id == "i-tie-type" && index%2 == 1 {
+			itemType = "pr"
+		}
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, type, last_synced) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL, ?, ?)`,
+			v.id, repoUUID("repo-x"), org, "t", at, v.project, itemType, v.lastSynced)
 	}
-	for _, id := range []string{"i-moved-away", "i-moved-in"} {
+	for _, id := range []string{"i-moved-away", "i-moved-in", "i-tie-project", "i-tie-type"} {
 		// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoUUID("repo-y"), id, uint32(1), float32(1), "native", "", at, org)
