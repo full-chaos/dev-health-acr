@@ -47,7 +47,7 @@ var sourceSchemaTables = []string{
 	// project_membership_presence VIEW reads (createProjectMembershipPresenceView
 	// creates the view itself -- DDL() only ever renders CREATE TABLE).
 	"teams", "projects", "work_item_team_attributions", "team_project_ownership",
-	"project_membership_transitions",
+	"project_membership_transitions", "work_item_relations_read",
 	// CHAOS-4390: queryTeams now LEFT JOINs team_repo_ownership
 	// (ownedRepositoriesJoinSQL) to derive a team's real, current
 	// repository-ownership authorization scope.

@@ -649,6 +649,13 @@ watermark:
   `review` ref `<repository id>:<review id>`, which named one ref for a review
   id on several pull requests of one repository. Reviews projected before v10
   carry the retired ref, which expands from a stored result's record only.
+- `ClickHouseSourceVersion` v10 → v11
+  (`internal/contextfabric/devhealthsource/clickhouse.go`): a `blocks` link the
+  provider removed keeps its `work_item_dependencies` row, and the producer now
+  retracts its edge (a relationship tombstone, at the time the link ended)
+  instead of asserting it, by the same relation-current rule the blocker facts
+  use (`internal/contextfabric/relationcurrent`). Edges projected before v11
+  for links removed earlier stay until the rebuild.
 - `TeamsProjectsSourceVersion` v13 → v14: a team owning more than 200
   repositories is no longer quarantined (the entity authorization bound is
   5000), so its `team_repo_ownership` edges project.
@@ -1723,6 +1730,10 @@ Run it with the projector `serve` process for that organization stopped, or run 
 Kept on purpose: `audit_events` (no retention rule exists in this repository), and episodes with `retention_class = legal_hold`. A purge that deletes any row adds one `org_purged` audit event holding counts only. A second run is a no-op.
 
 Write fence: from the moment the purge commits until the organization returns to discovery, the database refuses every write of a row keyed by it. A trigger on each purged table (migration 0052) takes the organization's write-fence advisory lock in shared mode and then reads the purge marker; the purge takes the same lock in exclusive mode at the start of its delete transaction. A request that was already in flight when the purge ran gets `401 invalid_token`, the answer every later request of that organization gets. A fenced write (an insert, or an update that sets the organization) that was open when the purge started is waited for (30 seconds at most) and then deleted with the rest; if that wait times out, the verb fails with `timed out waiting for in-flight writers`, reports `incomplete`, deletes no database row, and is safe to run again. The 30 seconds bound only that wait: once the purge holds the fence, its deletes wait for row locks as they did before (for example an open update of a kept legal-hold episode), with no added timeout. The fence also refuses `acr-projector priors` writes for a purged organization. A write that names an organization in a fenced table, in a transaction above READ COMMITTED, is refused whatever the value. The fence recognises an organization id in exactly the spellings the purge deletes.
+
+### Runtime database role grants
+
+The table privileges the runtime database role holds are declared once, in `internal/dbacl/runtime_grants.go`. Each row names the privileges and cites the runtime code that needs them. `acr-migrate grant-runtime-acl` (the Kubernetes path, run by the Helm pre-install and pre-upgrade Job) applies the declaration as idempotent `GRANT` statements and never revokes; the `runtime-acl` mode of `deploy/compose/acr-db-init.sh` carries a block generated from the same declaration (a test fails when they differ; `DBACL_WRITE=1 go test ./internal/dbacl` rewrites the block). Rows for optional features apply only when the feature is on: agent episodes when `ACR_ENABLE_EPISODE_WRITEBACK` is `true`, and `DELETE` on client credentials when both `ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE` and `ACR_WORKLOAD_TRUST_DOMAIN` are set. The Job reads those from the chart values. A table that a migration creates must be declared or named as having no runtime access, or `TestRuntimeGrantDeclaration_coversEveryMigrationTable` fails. A refused grant shows in the credential-lookup and OAuth dependency logs as `db_table` beside the error class.
 
 ### CHAOS-3916 production graph cutover runbook
 

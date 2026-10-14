@@ -136,7 +136,7 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 		if runtimeDSN == "" {
 			return fmt.Errorf("%s or %s_FILE is required", runtimeDSNEnvironment, runtimeDSNEnvironment)
 		}
-		return grantRuntimeACL(ctx, db, runtimeDSN, output)
+		return grantRuntimeACL(ctx, db, runtimeDSN, runtimeFeatures(lookup), output)
 	}
 	runner, err := migrations.Embedded()
 	if err != nil {

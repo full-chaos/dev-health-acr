@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -340,6 +341,21 @@ var postgresErrorClassNames = map[string]string{
 	"57014": "query_canceled",
 }
 
+// refusedGrantPattern matches the whole of Postgres's privilege-refusal message.
+// The server does not put the table in the error's table field for a refused
+// grant, only in this sentence, so the sentence is the source. Anything else in
+// the message (a query, a value) fails the match and yields no table.
+var refusedGrantPattern = regexp.MustCompile(`^permission denied for (?:table|sequence|view) ([a-z_][a-z0-9_]{0,62})$`)
+
+// refusedGrantTable returns the table named by a Postgres privilege-refusal
+// message, or "" when the message is anything else.
+func refusedGrantTable(message string) string {
+	if match := refusedGrantPattern.FindStringSubmatch(message); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
 // classifyDatabaseError builds the safe classification CHAOS-6278's
 // dependency-failure logging needs from err. Handles these shapes, all of
 // which are the SAME class -- "a Postgres failure the driver hands back in
@@ -382,11 +398,15 @@ func classifyDatabaseError(err error) *storage.DependencyErrorClass {
 		if !ok {
 			name = "unclassified"
 		}
+		table := pgErr.TableName
+		if table == "" && pgErr.Code == "42501" {
+			table = refusedGrantTable(pgErr.Message)
+		}
 		return &storage.DependencyErrorClass{
 			SQLState:   pgErr.Code,
 			Class:      name,
 			Constraint: pgErr.ConstraintName,
-			Table:      pgErr.TableName,
+			Table:      table,
 		}
 	}
 	var connErr *pgconn.ConnectError

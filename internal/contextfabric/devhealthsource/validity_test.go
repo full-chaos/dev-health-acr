@@ -274,7 +274,7 @@ func TestF5_DependencyEdgeIntersectsBothEndpoints(t *testing.T) {
 	for index, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded, "repo-1"}}
+				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded, "repo-1", uint8(0), zeroTime, at}}
 			continue
 		}
 		tables[index].rows = nil
@@ -339,7 +339,7 @@ func TestF5_DependencyEdgeStubsAnUnresolvedTarget(t *testing.T) {
 		if table.match == "FROM work_item_dependencies AS d" {
 			// uint8(0) on both target flags: the LEFT JOIN found nothing.
 			tables[index].rows = [][]any{{"WIDGET-101", "ghpr:owner/repo#7", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, ""}}
+				sourceCreated, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "", uint8(0), zeroTime, at}}
 			continue
 		}
 		tables[index].rows = nil
@@ -397,7 +397,7 @@ func TestF5_DependencyEdgeHealsRefStubOnceTargetResolves(t *testing.T) {
 	for index, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(0), zeroTime, uint8(1), targetCreated, uint8(0), zeroTime, "repo-1"}}
+				sourceCreated, uint8(0), zeroTime, uint8(1), targetCreated, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, at}}
 			continue
 		}
 		tables[index].rows = nil
@@ -567,7 +567,7 @@ func TestDisjointDependencyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	for index, table := range tables {
 		if table.match == "FROM work_item_dependencies AS d" {
 			tables[index].rows = [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at,
-				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded, "repo-1"}}
+				sourceCreated, uint8(1), sourceEnded, uint8(1), targetCreated, uint8(1), targetEnded, "repo-1", uint8(0), zeroTime, at}}
 			continue
 		}
 		tables[index].rows = nil

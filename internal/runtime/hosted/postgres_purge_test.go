@@ -111,7 +111,7 @@ func TestRunPurgeTickLoop_notifiesObserverWithRedactedMessage_onPurgeFailure(t *
 	purge := func(context.Context, time.Time, int) (int, error) { return 0, sensitiveErr }
 	var mu sync.Mutex
 	var notifications []string
-	observe := func(_ context.Context, message string) {
+	observe := func(_ context.Context, message string, _ ...slog.Attr) {
 		mu.Lock()
 		notifications = append(notifications, message)
 		mu.Unlock()
@@ -182,7 +182,7 @@ func TestRunPurgeTickLoop_notifiesOnceForEachIndependentFailure(t *testing.T) {
 		return 0, errors.New("connection refused: postgres://user:secret@host/db")
 	}
 	notified := make(chan string, 4)
-	observe := func(_ context.Context, message string) { notified <- message }
+	observe := func(_ context.Context, message string, _ ...slog.Attr) { notified <- message }
 	ctx, cancel := context.WithCancel(context.Background())
 	tick := make(chan time.Time)
 	loopDone := make(chan struct{})
