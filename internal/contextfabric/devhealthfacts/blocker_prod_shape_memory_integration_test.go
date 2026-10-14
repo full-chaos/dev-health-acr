@@ -127,14 +127,16 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 }
 
 // blockerProdShapeMinOfReads runs read three times warm and asserts, per
-// statement, the MINIMUM peak of the three against the ceilings: ageCeiling for
-// every statement, totalsCeiling for the team totals statement. A single cold
-// read is only logged: one noisy read must neither fail nor excuse a statement.
+// statement, the HIGHEST peak of the three against the absolute ceilings:
+// ageCeiling for every statement, totalsCeiling for the team totals statement.
+// The lowest is logged beside it (a slope comparison would use that one). The
+// cold read before the three is only logged.
 func blockerProdShapeMinOfReads(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, read func(), ageCeiling, totalsCeiling uint64) {
 	t.Helper()
 	const reads = 3
 	read()
-	minimum := map[uint64]blockerProdShapeStatement{}
+	lowest := map[uint64]blockerProdShapeStatement{}
+	highest := map[uint64]blockerProdShapeStatement{}
 	for i := 0; i < reads; i++ {
 		mark := serverNowMicros(t, ctx, direct)
 		read()
@@ -144,19 +146,22 @@ func blockerProdShapeMinOfReads(t *testing.T, ctx context.Context, direct clickh
 		}
 		for _, st := range measured {
 			t.Logf("PRODSHAPE[%s read %d] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, i+1, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
-			if best, ok := minimum[st.hash]; !ok || st.peak < best.peak {
-				minimum[st.hash] = st
+			if best, ok := lowest[st.hash]; !ok || st.peak < best.peak {
+				lowest[st.hash] = st
+			}
+			if best, ok := highest[st.hash]; !ok || st.peak > best.peak {
+				highest[st.hash] = st
 			}
 		}
 	}
-	for _, st := range minimum {
+	for hash, st := range highest {
 		ceiling := ageCeiling
 		if strings.HasPrefix(st.head, blockerProdShapeTotalsHead) {
 			ceiling = totalsCeiling
 		}
-		t.Logf("PRODSHAPE[%s min of %d] statement %d peak %d bytes (%.1f MiB) ceiling %d", label, reads, st.hash, st.peak, float64(st.peak)/(1<<20), ceiling)
+		t.Logf("PRODSHAPE[%s of %d reads] statement %d lowest %.1f MiB highest %.1f MiB ceiling %.1f MiB", label, reads, hash, float64(lowest[hash].peak)/(1<<20), float64(st.peak)/(1<<20), float64(ceiling)/(1<<20))
 		if st.peak >= ceiling {
-			t.Errorf("%s: statement %d min peak of %d reads is %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, reads, st.peak, ceiling, st.head)
+			t.Errorf("%s: statement %d highest peak of %d warm reads is %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, hash, reads, st.peak, ceiling, st.head)
 		}
 	}
 }
