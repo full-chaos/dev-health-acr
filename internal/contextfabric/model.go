@@ -394,12 +394,15 @@ type GraphContext struct {
 	MemberStatusPoolCut MemberStatusPoolCut `json:"-"`
 	// StatusMeasuredZero: a status read reached members of the kind and kept
 	// none (statusMeasuredZero). The answer is a count of zero, never no_match.
-	StatusMeasuredZero bool               `json:"-"`
-	Paths              []RelationshipPath `json:"paths"`
-	DriverCandidates   []DriverJudgment   `json:"driver_candidates"`
-	EvidenceRefIDs     []string           `json:"evidence_ref_ids"`
-	FactRequirements   []FactRequirement  `json:"fact_requirements"`
-	Coverage           Coverage           `json:"coverage"`
+	StatusMeasuredZero bool `json:"-"`
+	// OrganizationSubjectRead: the engine read the caller's organization
+	// subject because no subject resolved (organizationSubjectAnswers).
+	OrganizationSubjectRead bool               `json:"-"`
+	Paths                   []RelationshipPath `json:"paths"`
+	DriverCandidates        []DriverJudgment   `json:"driver_candidates"`
+	EvidenceRefIDs          []string           `json:"evidence_ref_ids"`
+	FactRequirements        []FactRequirement  `json:"fact_requirements"`
+	Coverage                Coverage           `json:"coverage"`
 }
 
 type CanonicalFactRequest struct {

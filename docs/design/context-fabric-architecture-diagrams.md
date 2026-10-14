@@ -2605,6 +2605,35 @@ carry the same repository grant (`repoAuthorization`), so the rollup reveals
 nothing the cohort list does not. The repository and team cohorts do not ask
 for the rollups.
 
+An `organization_scope` frame that counts nothing ("what is our biggest
+delivery risk", "where is delivery stuck across the organization") is answered,
+never refused. The organization as one subject has only the investment and
+source-health facts, so the bounded repair `organization_scope_survey`
+(`frame_repair.go`) re-reads the frame as a `discovered_kind` survey of the
+organization's own members, with `rank_or_survey` added: the frame's own member
+kind when servable, else the interpretation's requested kind when servable,
+else `team` (the ownership unit every burden composite fact serves). The answer
+then carries the cohort's evidence, coverage and uncertainty like any cohort
+survey, and a fixed sentence that names its basis: a roll-up over the
+organization's teams (or projects, repositories, ...), not an organization-wide
+measure. The repair stamps `QuestionFrame.OrganizationSurveyMemberKind` so the
+served answer, and a carried frame, can say so; the sentence is attached only
+when the served member set is that kind, has members and no subject was
+committed in its place. When the survey finds no
+member, the engine reads the caller's organization subject instead of ending in
+`no_match`, and the answer says no member was found: a missing member set is
+not a healthy one. An organization-scope investment question
+(`allocate_investment`) is not repaired: when no subject resolves, the engine
+reads the caller's organization subject, whose investment fact covers every
+repository once, and the answer names that roll-up only when the fact was read
+(else it says the fact was not found). An answer read from the organization
+subject is served `partial`, never `complete`, while any requirement it derived
+is unavailable (`applyOrganizationSubjectStatusFloor`), and the decision line
+`context fabric organization subject read` records the reason and the facts
+read. The former
+`organization_scope_unsupported` refusal has no producer; the basis stays in
+the contract only so stored results that carry it still validate.
+
 The FOURTH reason is a runtime fact nobody can decide at derivation time: a
 perfectly servable kind whose search retains no members. `DiscoveredCohort`
 returns a nil cohort in that case, so the correction belongs on the served

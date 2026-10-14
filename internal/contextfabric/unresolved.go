@@ -527,12 +527,6 @@ func (e *Engine) terminalResult(
 	if declaredKind.Unsatisfiable && status == InvestigationNoMatch && limitation == declaredKindTerminalLimitation {
 		refusalBasis = declaredKindTerminalBasis
 	}
-	// D48: the organization-scope terminal discloses its own
-	// basis, under the same after-the-gate rule: a refusing gate replaced the
-	// limitation above, so its basis is never written over.
-	if declaredKind.OrganizationScopeUnsupported && status == InvestigationNoMatch && limitation == organizationScopeTerminalLimitation {
-		refusalBasis = organizationScopeTerminalBasis
-	}
 	// The subject-substitution guard's non-clarifying refusal discloses its
 	// own basis, same after-the-gate rule -- both the guard's
 	// own typed outcome and the limitation sentinel must agree, so a future
@@ -871,11 +865,6 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	// the candidate list being non-empty -- a turn can offer handle and
 	// candidate options of the wrong kind with no subject candidate at all,
 	// which is exactly what the measured rows did on their odd turns.
-	// D48: ahead of the declared-kind arm, because it is the
-	// decision the status and basis were taken on for such a turn.
-	if declaredKind.OrganizationScopeUnsupported {
-		return organizationScopeTerminalReason
-	}
 	if declaredKind.Unsatisfiable {
 		return declaredKindTerminalReason
 	}
@@ -964,14 +953,6 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// The sentence is the declared_kind_unmatched basis's own fixed one;
 	// terminalResult attaches the matching basis to the served document a few
 	// lines below, from this same decision.
-	// D48, AHEAD of the declared-kind arm and of
-	// AllowClarification: an organization-scope question that counts nothing
-	// has no capability behind it, so no exchange can advance it and a
-	// caller who declined clarification is refused the same way. The
-	// sentence is the organization_scope_unsupported basis's own.
-	if declaredKind.OrganizationScopeUnsupported {
-		return InvestigationNoMatch, organizationScopeTerminalLimitation
-	}
 	if declaredKind.Unsatisfiable && request.Options.AllowClarification {
 		return InvestigationNoMatch, declaredKindTerminalLimitation
 	}
@@ -994,7 +975,7 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// The AllowClarification check is redundant with the outcome today
 	// (decideSubjectSubstitution only ever produces these two members when
 	// AllowClarification is false) and kept anyway, belt and braces, same
-	// discipline the declaredKind/organizationScope arms above use: a future
+	// discipline the declaredKind arm above uses: a future
 	// change to one side alone cannot silently widen who this arm refuses.
 	if !request.Options.AllowClarification &&
 		(substitutionOutcome == SubjectSubstitutionRefused || substitutionOutcome == SubjectSubstitutionRefusedRememberedUnavailable) {

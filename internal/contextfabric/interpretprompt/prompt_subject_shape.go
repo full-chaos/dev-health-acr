@@ -69,7 +69,7 @@ var interpretationShapeRules = func() string {
 // interpretationRequestedSubjectKindRule replaces "emit it whenever the
 // question makes it clear": the field follows a kind word that is said.
 const interpretationRequestedSubjectKindRule = `requested_subject_kind: the kind of thing the ANSWER is about, from the same closed set as group_kind. It is the counterpart to scope_anchor_kind: in "the fullchaos team's projects" the anchor kind is "team" and requested_subject_kind is "project", and it is that DIFFERENCE that identifies the question as being about a scoped group of members rather than about the named subject itself.
-- Emit it only when a kind word is said in the question ("projects", "teams", "repositories"). Plain nouns count as kind words: "task" and "what work" say work_item; "company" and "across the organization" say organization.
+- Emit it only when a kind word is said in the question ("projects", "teams", "repositories"). Plain nouns count as kind words: "task" and "what work" say work_item; "system", "service" and "codebase" say repository; "company" and "across the organization" say organization.
 - Omit it for a bare name, a bare ticket key and a bare "our".
 - When the question refers back to an earlier subject ("it", "that", "which", "its", "the same", or an elided reference such as a bare "Why?"), take the kind word from the conversation turn that names that subject.
 - In a count, the counted kind word decides it, also when organization wording is present: "how many repositories are in the organization" says repository. Never organization there, and never omit it there.

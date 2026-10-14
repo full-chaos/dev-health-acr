@@ -3471,6 +3471,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the caller's organization, answered like an anchored one.
 		subjects = []SubjectRef{callerOrganizationSubject(principal)}
 	}
+	if len(subjects) == 0 && !workItemTuple && organizationSubjectAnswers(familyOutcome.Frame) {
+		subjects = []SubjectRef{callerOrganizationSubject(principal)}
+		graphContext.OrganizationSubjectRead = true
+	}
 	if len(subjects) == 0 && !workItemTuple {
 		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		return terminal, terminalErr
@@ -3695,6 +3699,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		if err == nil {
 			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort, graphContext.CohortPopulation)
+		}
+		if err == nil && graphContext.OrganizationSubjectRead {
+			if recorder, ok := e.telemetry.(OrganizationSubjectReadRecorder); ok {
+				recorder.RecordOrganizationSubjectRead(ctx, principal, OrganizationSubjectReadEventOf(familyOutcome.Frame, facts))
+			}
 		}
 		if err != nil {
 			subjectKinds := make([]string, 0, len(subjects))

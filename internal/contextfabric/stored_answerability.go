@@ -45,14 +45,11 @@ import (
 //     gate raises the window need before any terminal runs, so fresh
 //     composition serves it whatever the reading and whatever other options
 //     its offers-only material added. It is answerable as stored.
-//  2. The organization scope. An available reading of an organization-scope
-//     question that asks for anything besides a count is refused on
-//     organization_scope_unsupported whatever the document offers (D48).
-//  3. The role decision. Offers that carry a subject kind are judged against
+//  2. The role decision. Offers that carry a subject kind are judged against
 //     the reading's roles; with no reading the determination is unavailable.
-//  4. No subject offer. A clarification whose offers carry no subject kind is
+//  3. No subject offer. A clarification whose offers carry no subject kind is
 //     answerable without the reading when it still offers something.
-//  5. Offer-less. A clarification that offers nothing on any channel is
+//  4. Offer-less. A clarification that offers nothing on any channel is
 //     unanswerable on its offers alone, and is repaired the way every earlier
 //     offer-less row is (chaos5637_answerable_clarification.go).
 
@@ -110,8 +107,6 @@ const (
 	StoredAnswerabilityStepNone StoredAnswerabilityStep = "none"
 	// StoredAnswerabilityStepWindowGate: the window gate's clarification.
 	StoredAnswerabilityStepWindowGate StoredAnswerabilityStep = "window_gate"
-	// StoredAnswerabilityStepOrganizationScope: the organization-scope check.
-	StoredAnswerabilityStepOrganizationScope StoredAnswerabilityStep = "organization_scope"
 	// StoredAnswerabilityStepRole: the role decision over subject-kind offers.
 	StoredAnswerabilityStepRole StoredAnswerabilityStep = "role"
 	// StoredAnswerabilityStepNoSubjectOffer: offers that carry no subject kind.
@@ -124,7 +119,7 @@ const (
 // order after the not-a-clarification member.
 func StoredAnswerabilitySteps() []StoredAnswerabilityStep {
 	return []StoredAnswerabilityStep{
-		StoredAnswerabilityStepNone, StoredAnswerabilityStepWindowGate, StoredAnswerabilityStepOrganizationScope,
+		StoredAnswerabilityStepNone, StoredAnswerabilityStepWindowGate,
 		StoredAnswerabilityStepRole, StoredAnswerabilityStepNoSubjectOffer, StoredAnswerabilityStepOfferLess,
 	}
 }
@@ -209,10 +204,6 @@ func decideStoredAnswerability(result InvestigationResult, state *PersistedSeman
 		return StoredAnswerability{Determination: StoredAnswerabilityAnswerable, Reading: storedReadingNotRead, Step: StoredAnswerabilityStepWindowGate, decision: withoutReading}
 	}
 	available := reading == string(SemanticStateReadAvailable) && state != nil
-	if available && organizationScopeUnsupported(state.Frame) {
-		decision := decideAnswerability(answerabilityReadingOf(state.Frame, state.ScopeAnchor.Kind), offers)
-		return StoredAnswerability{Determination: StoredAnswerabilityUnanswerable, Reading: reading, Step: StoredAnswerabilityStepOrganizationScope, decision: decision}
-	}
 	if withoutReading.OffersEvaluated > 0 {
 		if !available {
 			if reading == string(SemanticStateReadAvailable) {
@@ -303,9 +294,6 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 		return answerability
 	}
 	basis, sentence := declaredKindTerminalBasis, declaredKindTerminalLimitation
-	if answerability.Step == StoredAnswerabilityStepOrganizationScope {
-		basis, sentence = organizationScopeTerminalBasis, organizationScopeTerminalLimitation
-	}
 	// In place, the way the offer-less repair replaces its sentence: the copy
 	// served is decoded per read, and a replacement keeps the list's length,
 	// so the limitation bound cannot move. A row carrying no clarification
