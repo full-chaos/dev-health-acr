@@ -28,6 +28,7 @@ const historicalReadRowsMargin = 1.10
 // historicalReadRowsStatements names the two scoped historical statements by a
 // fragment only each carries, the table query_log lists for it, and the tables
 // whose rows the fixture adds between the two sizes and the statement reads.
+// devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows and the tables whose rows are counted; they declare no table.
 var historicalReadRowsStatements = []struct {
 	label, table, fragment string
 	grownTables            []string
@@ -66,6 +67,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 	}
 	fixture := seedEveryRootFixture(t, ctx, direct, "5b8e3a17-6c24-4d09-9f71-2e0a4c6d8b53")
 	since := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	// devhealthschema:not-a-production-replica: test seed over a table the shared DDL creates; it declares no column, type or engine.
 	if err := direct.Exec(ctx, `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', 'issue-Q', 'linear', '', 'Q', '', '', '', ?, ?, 'linear:issue-Q-add')`,
 		fixture.orgID, fixture.shared, since, since); err != nil {
 		t.Fatalf("seed transition: %v", err)
