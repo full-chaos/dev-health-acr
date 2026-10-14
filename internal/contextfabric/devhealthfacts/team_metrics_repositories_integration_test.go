@@ -52,6 +52,12 @@ func TestTeamMetricsSumRepositoriesAgainstRealClickHouse(t *testing.T) {
 		}
 		return result.Facts[0]
 	}
+	wantNum := func(t *testing.T, fact contextfabric.CanonicalFact, name string, want float64) {
+		t.Helper()
+		if got := fact.Fields[name].Number; !approx(got, want) || fact.Fields[name].Integer != nil {
+			t.Fatalf("%s = %#v, want the number %v", name, fact.Fields[name], want)
+		}
+	}
 	wantInt := func(t *testing.T, fact contextfabric.CanonicalFact, name string, want int64) {
 		t.Helper()
 		if got := fact.Fields[name].Integer; got == nil || *got != want {
@@ -65,9 +71,9 @@ func TestTeamMetricsSumRepositoriesAgainstRealClickHouse(t *testing.T) {
 		insertTeamMetricsRepoRow(t, ctx, direct, orgID, "team-1", "repo-1", day, 10, 2, 1, 0.77)
 		insertTeamMetricsRepoRow(t, ctx, direct, orgID, "team-1", "repo-2", day, 20, 7, 3, 0.66)
 		fact := read(t, orgID, teamSubject("team-1"))
-		wantInt(t, fact, "commits_count", 30)
-		wantInt(t, fact, "after_hours_commits_count", 9)
-		wantInt(t, fact, "weekend_commits_count", 4)
+		wantNum(t, fact, "commits_count", 30)
+		wantNum(t, fact, "after_hours_commits_count", 9)
+		wantNum(t, fact, "weekend_commits_count", 4)
 		// 9/30 and 4/30, never the stored 0.77/0.66 and never an average.
 		if got := fact.Fields["after_hours_commit_ratio"].Number; !approx(got, 0.3) {
 			t.Fatalf("after_hours_commit_ratio = %#v, want 0.3", fact.Fields["after_hours_commit_ratio"])
@@ -83,16 +89,16 @@ func TestTeamMetricsSumRepositoriesAgainstRealClickHouse(t *testing.T) {
 		insertTeamMetricsRepoRow(t, ctx, direct, orgID, "team-1", "repo-1", day, 10, 2, 1, 0.5)
 		insertTeamMetricsRepoRow(t, ctx, direct, orgID, "team-1", "repo-2", day, 20, 7, 3, 0.5)
 		fact := read(t, orgID, teamSubject("team-1"))
-		wantInt(t, fact, "commits_count", 30)
-		wantInt(t, fact, "after_hours_commits_count", 9)
-		wantInt(t, fact, "weekend_commits_count", 4)
+		wantNum(t, fact, "commits_count", 30)
+		wantNum(t, fact, "after_hours_commits_count", 9)
+		wantNum(t, fact, "weekend_commits_count", 4)
 	})
 
 	t.Run("single_repository_team_keeps_its_counts_and_recomputes_ratio", func(t *testing.T) {
 		const orgID = "org-team-one-repo"
 		insertTeamMetricsRepoRow(t, ctx, direct, orgID, "team-1", "repo-1", day, 8, 2, 0, 0.9)
 		fact := read(t, orgID, teamSubject("team-1"))
-		wantInt(t, fact, "commits_count", 8)
+		wantNum(t, fact, "commits_count", 8)
 		if got := fact.Fields["after_hours_commit_ratio"].Number; !approx(got, 0.25) {
 			t.Fatalf("after_hours_commit_ratio = %#v, want 2/8", fact.Fields["after_hours_commit_ratio"])
 		}
@@ -120,9 +126,9 @@ func TestTeamMetricsSumRepositoriesAgainstRealClickHouse(t *testing.T) {
 		}
 		fact := read(t, orgID, projectSubject("linear", "proj-1-internal-id"))
 		wantInt(t, fact, "team_count", 2)
-		wantInt(t, fact, "commits_count", 38)
-		wantInt(t, fact, "after_hours_commits_count", 11)
-		wantInt(t, fact, "weekend_commits_count", 4)
+		wantNum(t, fact, "commits_count", 38)
+		wantNum(t, fact, "after_hours_commits_count", 11)
+		wantNum(t, fact, "weekend_commits_count", 4)
 		if _, ok := fact.Fields["after_hours_commit_ratio"]; ok {
 			t.Fatalf("project fact carries a top-level ratio %#v; ratios are never averaged across teams", fact.Fields["after_hours_commit_ratio"])
 		}
@@ -140,7 +146,7 @@ func TestTeamMetricsSumRepositoriesAgainstRealClickHouse(t *testing.T) {
 			if !ok {
 				t.Fatalf("unexpected team %q in breakdown", team)
 			}
-			if got := row.Fields["commits_count"].Integer; got == nil || *got != w.commits {
+			if got := row.Fields["commits_count"].Number; !approx(got, float64(w.commits)) {
 				t.Fatalf("%s commits_count = %#v, want %d", team, row.Fields["commits_count"], w.commits)
 			}
 			if got := row.Fields["after_hours_commit_ratio"].Number; !approx(got, w.ratio) {

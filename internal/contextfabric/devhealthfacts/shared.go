@@ -1155,6 +1155,18 @@ import (
 // named the oldest blocker. Team and project blockers facts carry
 // blocker_dependencies_writer_unresolved_current. An answer saved under v226
 // can count a removed link.
+//
+// v227 -> v228: the team and project commit counters (commits_count,
+// after_hours_commits_count, weekend_commits_count, and the same three columns
+// of the project team_breakdown table) are served as numbers instead of
+// integers, because a team that co-owns a repository holds a share of the
+// counters and can carry a fraction of a commit. An answer saved under v227
+// carries integer counters and is not reused as one produced by this version.
+//
+// v228 -> v231: every Investment weight is one per work unit (a unit with no
+// size counts one); the served weighted_effort, share_in_scope, unit_effort_value
+// and effort_unit_count are counts of work units, not lines of code. An answer
+// saved under v228 carries the old weights and is not reused.
 const QueryVersion = "devhealthfacts.clickhouse.v231"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

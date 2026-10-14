@@ -75,14 +75,6 @@ github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeO
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/firebase/genkit/go v1.11.0 h1:dmf219fDGP6IcKwPkJoTnXpcTEya7o5Bi+z5iP+FuTk=
 github.com/firebase/genkit/go v1.11.0/go.mod h1:x9h3TsbMLiuK1hgbwnkUmKQ9bmTNPORHaqG9XQhI0K8=
-github.com/full-chaos/dev-health-go v0.15.3 h1:AeR7LQYy1y67rWb0OOSajUYin6u/Ii5WYIVGkGIYfB8=
-github.com/full-chaos/dev-health-go v0.15.3/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
-github.com/full-chaos/dev-health-go v0.15.4-0.20261013105116-bf1bda4d0070 h1:rVVxfbQXDJpcaWb9MLturdGyv//tE4QeaSO1E+T8C10=
-github.com/full-chaos/dev-health-go v0.15.4-0.20261013105116-bf1bda4d0070/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
-github.com/full-chaos/dev-health-go v0.15.4-0.20261013105455-94f0fe31a2a5 h1:9QaSITlyIr5Aj8phygxmhUmxy+ItfYEbwc4vOylQTYY=
-github.com/full-chaos/dev-health-go v0.15.4-0.20261013105455-94f0fe31a2a5/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
-github.com/full-chaos/dev-health-go v0.16.0 h1:qAOG7nsy+x5tKzxP7s7lbOEN8FZbN9VkbZzaUtOPapk=
-github.com/full-chaos/dev-health-go v0.16.0/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
 github.com/full-chaos/dev-health-go v0.18.0 h1:trelcvhmsFhU8UO8vUDr7G3bH4mcjELK949NpKxe82I=
 github.com/full-chaos/dev-health-go v0.18.0/go.mod h1:vk7pO0dVR4HSrA5Ehf3KJcVFin5oNQwt0FVfcxtckBY=
 github.com/go-faster/city v1.0.1 h1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=
