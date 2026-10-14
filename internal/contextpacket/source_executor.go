@@ -164,6 +164,7 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 // columns after the standard ten, in this order; each lands in the evidence's
 // Metadata under its own name.
 var typedEvidenceColumns = map[string][]string{
+	"work_item_dependencies.v1":         {metadataRelationKey, metadataBlockerID, metadataBlockerStatus},
 	"deployments.v1":                    {metadataDeploymentStatus, metadataPullRequestNumber},
 	"deployment_incident_provenance.v1": {metadataDeploymentID, metadataIncidentID},
 }

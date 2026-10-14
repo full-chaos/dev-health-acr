@@ -466,3 +466,25 @@ func TestSubjectGateKindClassMatrix(t *testing.T) {
 		t.Fatalf("matrix ran %d cells, want %d (at least 15 kinds x 3 classes)", cells, len(kinds)*len(classes))
 	}
 }
+
+func TestAdmittedTeamsGivesTheSameAnswerAsAuthorizeForARestrictedCaller(t *testing.T) {
+	graph := graphOfOrgA()
+	gate := NewSubjectGate(graph, nil)
+	principal := restrictedToA()
+	teams := []contextfabric.SubjectRef{teamT, teamU, teamW}
+	_, decision := gate.Authorize(context.Background(), principal, teams)
+	got := gate.AdmittedTeams(context.Background(), principal, teams)
+	for _, team := range teams {
+		want := outcomeOf(t, decision, team) == SubjectAdmitted
+		if got[team.CanonicalID] != want {
+			t.Errorf("%s: AdmittedTeams = %v, Authorize admitted = %v", team.CanonicalID, got[team.CanonicalID], want)
+		}
+	}
+	if !got[teamT.CanonicalID] || got[teamU.CanonicalID] || got[teamW.CanonicalID] {
+		t.Fatalf("admitted = %v, want only team T for a caller restricted to repository A", got)
+	}
+	var nilGate *SubjectGate
+	if len(nilGate.AdmittedTeams(context.Background(), principal, teams)) != 0 {
+		t.Fatal("a nil gate admitted a team")
+	}
+}
