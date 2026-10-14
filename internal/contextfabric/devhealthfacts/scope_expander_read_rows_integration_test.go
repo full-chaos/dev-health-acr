@@ -18,11 +18,12 @@ import (
 )
 
 // historicalReadRowsMargin is the room above a statement's measured reads per
-// added row. A scan reports whole granules (index_granularity 8192 rows): the
-// touch statement reads work_items and project_membership_transitions once for
-// each of six evaluations of its candidate set, 12 scans, so rounding moves it
-// by at most 12 x 8192 = 98k of the 1.8M rows it reads more at the larger size,
-// 5.5%. 10% is about twice that and below the 16.7% one more evaluation adds.
+// added row. A scan reports whole granules (index_granularity 8192 rows): each
+// statement reads the candidate set once, a scan of work_items and one of
+// project_membership_transitions, so rounding moves it by at most 2 x 8192 =
+// 16k of the 300k rows it reads more at the larger size, 5.5%. 10% is about
+// twice that, and far below the 100% one more evaluation of the candidate set
+// adds (the statements sent twice, below, read twice the rows per added row).
 const historicalReadRowsMargin = 1.10
 
 // historicalReadRowsStatements names the two scoped historical statements by a
@@ -33,11 +34,13 @@ var historicalReadRowsStatements = []struct {
 	label, table, fragment string
 	grownTables            []string
 	// readsPerAddedRow is the measured (larger - smaller) read_rows over the
-	// rows added to grownTables, from hosted CI (spread 0 across runs).
+	// rows added to grownTables, from hosted CI (spread 0 across runs): drop 0.5745
+	// and touch 1.0000 with the candidate set read once, from 5.1898 and 6.0000
+	// when each of the six references to it scanned the tables again.
 	readsPerAddedRow float64
 }{
-	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr", "git_pull_requests"}, 0},
-	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 0},
+	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr", "git_pull_requests"}, 0.5745},
+	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 1.0},
 }
 
 // historicalReadRowsRuns is the number of warm reads per size; the smallest
