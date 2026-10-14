@@ -109,8 +109,12 @@ func TestDirectReadPullRequestsForSeveralTeamsServesCountsByStateNotOneFactPerPu
 			}
 			counts["open"] += n
 		}
-		if counts["open"] != perTeam {
-			t.Fatalf("%s open pull requests = %d, want %d (table %+v)", fact.Subject.CanonicalID, counts["open"], perTeam, table.Rows)
+		want := int64(perTeam)
+		if fact.Subject.CanonicalID == teamSubject(teams[0]).CanonicalID {
+			want++ // the linked pull request sits in this team's own repository
+		}
+		if counts["open"] != want {
+			t.Fatalf("%s open pull requests = %d, want %d (table %+v)", fact.Subject.CanonicalID, counts["open"], want, table.Rows)
 		}
 	}
 	if teamsServed != len(teams) {

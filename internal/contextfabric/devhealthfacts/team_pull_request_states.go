@@ -78,7 +78,7 @@ func ownedPullRequestStateCounts(ctx context.Context, client contextpacket.Click
 FROM (
 	SELECT toString(p.repo_id) AS repo, ` + pullRequestStateExpression("p", bound) + ` AS st, toInt64(count()) AS c
 	FROM git_pull_requests AS p FINAL
-	WHERE p.org_id = {org_id:String} AND toString(p.repo_id) IN {ids:Array(String)}` + bound.neutral().ExistencePredicate("p.created_at") + `
+	WHERE p.org_id = {org_id:String} AND p.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({ids:Array(String)}) AS id))` + bound.neutral().ExistencePredicate("p.created_at") + `
 	GROUP BY repo, st
 )
 GROUP BY repo
