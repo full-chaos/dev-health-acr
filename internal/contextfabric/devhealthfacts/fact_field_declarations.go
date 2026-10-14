@@ -849,14 +849,19 @@ func metricsFields() []fieldDecl {
 		cRef(declTeamRef, cStr("team_id")),
 		cStr("team_name"),
 		cStr("day"),
-		cInt("commits_count", "count"),
-		cInt("after_hours_commits_count", "count"),
-		cInt("weekend_commits_count", "count"),
+		cNum("commits_count", "count"),
+		cNum("after_hours_commits_count", "count"),
+		cNum("weekend_commits_count", "count"),
 		cNum("after_hours_commit_ratio", "ratio"),
 		cNum("weekend_commit_ratio", "ratio"),
 	)
 	return declJoin(
-		declOn(declRepoTeam, declFresh(fStr("day")), fInt("commits_count", "count")),
+		declOn(declRepoTeam, declFresh(fStr("day"))),
+		// A repository's commit count is a whole number. A team's counters are
+		// sums of its shares of the repositories it owns, so a co-owning team
+		// can hold a fraction of a commit: they are numbers (a whole value
+		// still serves as a number, never as an integer).
+		declOn(declRepositoryOnly, fInt("commits_count", "count")),
 		// The median of (merged_at - created_at) over every pull request
 		// merged in the window, one weight per pull request, with the count
 		// it stands on; both absent when no pull request merged. Never
@@ -891,17 +896,18 @@ func metricsFields() []fieldDecl {
 			declAggregate(fStr("change_failure_link_tier")),
 		),
 		declOn(declTeamOnly,
-			fInt("after_hours_commits_count", "count"),
-			fInt("weekend_commits_count", "count"),
+			fNum("commits_count", "count"),
+			fNum("after_hours_commits_count", "count"),
+			fNum("weekend_commits_count", "count"),
 			fNum("after_hours_commit_ratio", "ratio"),
 			fNum("weekend_commit_ratio", "ratio"),
 		),
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),
 			declAggregate(fInt("team_count", "count")),
-			declAggregate(fInt("commits_count", "count")),
-			declAggregate(fInt("after_hours_commits_count", "count")),
-			declAggregate(fInt("weekend_commits_count", "count")),
+			declAggregate(fNum("commits_count", "count")),
+			declAggregate(fNum("after_hours_commits_count", "count")),
+			declAggregate(fNum("weekend_commits_count", "count")),
 			teamBreakdown,
 		),
 	)
