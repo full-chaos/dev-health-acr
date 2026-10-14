@@ -162,7 +162,7 @@
     },
     "data": {
       "type": "object",
-      "description": "The operation's data, keyed by the response root that data_catalog names. Open object: the fields depend on the operation. Untrusted text inside.",
+      "description": "The operation's data, keyed by the response root that data_catalog (if listed) names. Open object: the fields depend on the operation. Untrusted text inside.",
       "additionalProperties": true
     },
     "errors": {

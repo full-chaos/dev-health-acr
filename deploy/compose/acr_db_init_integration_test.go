@@ -451,4 +451,19 @@ func TestAcrDbInit_RuntimeRoleCanInsertIntoEveryOtherContextFabricTable(t *testi
 			require.Equalf(t, 1, landedCount, "case %s: the INSERTed row must be visible via the migration role", tc.name)
 		})
 	}
+
+	t.Run("purge marker is read and deleted by the runtime role, never written", func(t *testing.T) {
+		const org = "0f7c2d4e-8a31-4b6d-9c15-2e7a6b9d1f03"
+		_, err := migrationDB.ExecContext(ctx, `INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at) VALUES ($1, $2)`, org, now)
+		require.NoError(t, err)
+		var present bool
+		require.NoError(t, runtimeDB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM acr.context_fabric_org_purge_markers WHERE org_id = $1)`, org).Scan(&present))
+		require.True(t, present)
+		_, err = runtimeDB.ExecContext(ctx, `INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at) VALUES ('other-org', $1)`, now)
+		require.ErrorContains(t, err, "42501")
+		_, err = runtimeDB.ExecContext(ctx, `UPDATE acr.context_fabric_org_purge_markers SET purged_at = $2 WHERE org_id = $1`, org, now)
+		require.ErrorContains(t, err, "42501")
+		_, err = runtimeDB.ExecContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, org)
+		require.NoError(t, err)
+	})
 }

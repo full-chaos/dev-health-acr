@@ -109,6 +109,11 @@
 //
 // See flow.go and landscape.go for the full design and SQL.
 //
+// FactCommitment (commitment.go) serves a project subject from
+// projects.target_date/state/state_source, the project's issues in
+// work_items (due_at, sprint_id, status) and the sprints their sprint_id
+// names (ended_at): raw dates and counts as of the request, no judgment.
+//
 // Neither FactMetrics nor FactEvidence is a target of
 // contractsv1.ContextFabricDriverCategoryRequiresClaimedFact's closed
 // category->kind table (internal/contracts/v1/context_fabric_types.go) --

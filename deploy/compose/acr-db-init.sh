@@ -220,7 +220,9 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :"runtime_user";
 
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_purge_markers FROM :"runtime_user";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"runtime_user";
+-- Only the purge writes a marker, so the runtime role reads it (the tick's check)
+-- and deletes it (discovery's clear), nothing else.
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"runtime_user";
 
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";

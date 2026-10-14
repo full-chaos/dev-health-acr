@@ -253,7 +253,7 @@ func TestTheValidationStageDegradeKeepsTheCoverageAtTheBound(t *testing.T) {
 	}
 }
 
-// 100 degrading details fill the bound and the failure detail never yields:
+// Degrading details fill the bound and the failure detail never yields:
 // the last degrading entry goes with its reason, the answer says how many were
 // left out, the degrading rows still pair with the reasons, and the bound holds.
 func TestTheCoverageCapNeverDropsAProtectedRowAndDisclosesTheDegradingRowsItDrops(t *testing.T) {
@@ -284,7 +284,8 @@ func TestTheCoverageCapNeverDropsAProtectedRowAndDisclosesTheDegradingRowsItDrop
 			raws = append(raws, detail.Raw)
 		}
 	}
-	if len(raws) != 99 || !slices.Equal(raws, result.Coverage.DegradedReasons) || slices.Contains(raws, details[99].Raw) {
+	last := contractsv1.ContextFabricCoverageEntriesMaxCount - 1
+	if len(raws) != last || !slices.Equal(raws, result.Coverage.DegradedReasons) || slices.Contains(raws, details[last].Raw) {
 		t.Fatalf("degrading rows = %d, reasons = %d: want the last one dropped from both, the rest paired in order", len(raws), len(result.Coverage.DegradedReasons))
 	}
 	if !slices.Contains(result.Limitations, contractsv1.ContextFabricCoverageEntriesDroppedLimitation(1)) || !contractsv1.IsContextFabricServiceAuthoredLimitation(contractsv1.ContextFabricCoverageEntriesDroppedLimitation(1)) {

@@ -558,7 +558,7 @@ const (
 	// constant, mirrored here so the fixture tracks what is ENFORCED.
 	subjectCandidatesMaxCount = 50  // validate_context_fabric_result.go:54
 	committedSubjectsMaxCount = 250 // same predicate
-	coverageEntriesMaxCount   = 100 // contextFabricWriteBounds.coverageEntries
+	coverageEntriesMaxCount   = ContextFabricCoverageEntriesMaxCount
 	sourceNameMaxRunes        = 128 // validate_context_fabric_result.go:970
 	watermarkMaxRunes         = 512 // same predicate
 	matchedTermsMaxCount      = 32  // contextFabricWriteBounds.matchedTerms

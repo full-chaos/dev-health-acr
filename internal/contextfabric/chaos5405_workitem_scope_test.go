@@ -163,9 +163,9 @@ func TestChaos5405_TheRuledActivationSetIsExactlyTwentyFive(t *testing.T) {
 	}
 	seen := map[FactScopePolicy]bool{}
 	for _, row := range factScopeEligibility {
-		if row.Rule.Policy == FactScopePolicyNone {
+		if row.Rule.Policy == FactScopePolicyNone || row.Rule.Policy == FactScopePolicyTeamProjectOwnershipCommitment {
 			if row.Rule.Enabled {
-				t.Fatalf("%s is enabled with no policy to name it", row.Requirement)
+				t.Fatalf("%s is enabled under a disclosure-only rule %q", row.Requirement, row.Rule.Policy)
 			}
 			continue
 		}
