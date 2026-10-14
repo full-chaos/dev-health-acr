@@ -1096,11 +1096,15 @@ import (
 // and no zero mix. An answer saved under v216 states the false reason that no
 // effort was persisted.
 //
-// v217 -> v218: the team and project blocker statements read in blocks of
+// v217 -> v218: the team linked pull request mix takes a unit's reference
+// count once per unit, not from the unit's reference array on every expanded
+// row. The rows are unchanged; the statement and its memory are not.
+//
+// v218 -> v219: the team and project blocker statements read in blocks of
 // 8,192 rows instead of the server default of 65,536. The rows are unchanged;
-// the statements served are not, so an answer saved under v217 is not reused as
+// the statements served are not, so an answer saved under v218 is not reused as
 // one produced by them.
-const QueryVersion = "devhealthfacts.clickhouse.v218"
+const QueryVersion = "devhealthfacts.clickhouse.v219"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
