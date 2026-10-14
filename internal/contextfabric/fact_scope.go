@@ -1708,6 +1708,9 @@ type factScopeResolveInput struct {
 	// PullRequestStatus is the request's PullRequestStatus, carried to every
 	// expansion.
 	PullRequestStatus string
+	// PullRequestFacts is the request's PullRequestFacts flag: the caller
+	// needs the per-pull-request facts of a team root, not only its counts.
+	PullRequestFacts bool
 }
 
 // newFactScopeResolveInput narrows a fact request down to what scope
@@ -1725,6 +1728,7 @@ func newFactScopeResolveInput(request CanonicalFactRequest) factScopeResolveInpu
 		Requirements:      requirements,
 		TimeContext:       request.Question.TimeContext,
 		PullRequestStatus: request.PullRequestStatus,
+		PullRequestFacts:  request.PullRequestFacts,
 	}
 }
 
@@ -1771,7 +1775,7 @@ func (r *FactReadScopeResolver) Resolve(
 			// additiveRollupExpansionKinds: the root's direct rollup is the
 			// summary, and the per-item facts its enabled policy reaches
 			// stay served beside it.
-			additive := r.additiveRollupRoots(requirement.Kind, roots)
+			additive := r.additiveRollupRoots(requirement.Kind, roots, input.PullRequestFacts)
 			if len(additive) == 0 {
 				continue
 			}
@@ -1797,7 +1801,7 @@ func (r *FactReadScopeResolver) Resolve(
 					unsupportedRoots = append(unsupportedRoots, root)
 				}
 			}
-			unsupportedRoots = append(unsupportedRoots, r.additiveRollupRoots(requirement.Kind, supported)...)
+			unsupportedRoots = append(unsupportedRoots, r.additiveRollupRoots(requirement.Kind, supported, input.PullRequestFacts)...)
 			roots = unsupportedRoots
 		}
 		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext, input.PullRequestStatus)
@@ -1819,12 +1823,21 @@ var additiveRollupOrigins = []SubjectKind{SubjectTeam, SubjectProject}
 // additiveRollupRoots returns the team and project roots, among roots, that
 // still owe an expansion decision although their kind is directly readable.
 // Only an enabled rule qualifies: with none, the direct answer stands alone.
-func (r *FactReadScopeResolver) additiveRollupRoots(kind FactKind, roots []SubjectRef) []SubjectRef {
+//
+// A team root's per-pull-request facts cost one served row per pull request
+// for one state string, so the team rollup (its pull_requests_by_state table
+// and window counts) stands alone unless the request says it needs the
+// per-pull-request facts (perPullRequest): a status filter or a pull request
+// member list. A project root keeps its additive expansion.
+func (r *FactReadScopeResolver) additiveRollupRoots(kind FactKind, roots []SubjectRef, perPullRequest bool) []SubjectRef {
 	if !additiveRollupExpansionKinds[kind] {
 		return nil
 	}
 	var out []SubjectRef
 	for _, origin := range additiveRollupOrigins {
+		if kind == FactPullRequests && origin == SubjectTeam && !perPullRequest {
+			continue
+		}
 		rule, eligible := r.lookupFactScopePolicy(kind, origin)
 		if !eligible || !rule.Enabled {
 			continue

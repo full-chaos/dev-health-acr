@@ -55,9 +55,19 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 		"team:repository_breakdown_limitation":    "project reach, exercised by team_project_reach_integration_test.go",
 	},
 	contextfabric.FactPullRequests: {
-		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",
-		"team:repository_link_basis":            "project reach, exercised by team_project_reach_integration_test.go",
-		"team:repository_breakdown.link_tier":   "project reach, exercised by team_project_reach_integration_test.go",
+		"team:project_reached_repository_count":          "project reach, exercised by team_project_reach_integration_test.go",
+		"team:repository_link_basis":                     "project reach, exercised by team_project_reach_integration_test.go",
+		"team:repository_breakdown.link_tier":            "project reach, exercised by team_project_reach_integration_test.go",
+		"team:pull_requests_without_state_count":         "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state":                    "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state_basis":              "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state_omitted_count":      "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state.repository_id":      "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state.repository_name":    "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state.state":              "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state.pull_request_count": "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state.reach_basis":        "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
+		"team:pull_requests_by_state.link_tier":          "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
 	},
 	contextfabric.FactDeployments: {
 		"team:project_reached_repository_count": "project reach, exercised by team_project_reach_integration_test.go",
@@ -320,11 +330,24 @@ func t4Cases() []t4Case {
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", int64(3), float64(1)}}},
 		{match: "FROM repo_change_failure_daily", rows: [][]any{{"repo-1", int64(2), int64(4), int64(1), int64(1), int64(1), int64(0)}}},
 	}})
+	add(t4Case{name: "metrics/repository status columns", kind: contextfabric.FactMetrics, subjects: repo, tables: []fakeTable{
+		{match: "system.columns", rows: [][]any{{uint64(2)}}},
+		{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}},
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", int64(3), float64(1)}}},
+		{match: "FROM repo_change_failure_daily", rows: [][]any{{"repo-1", int64(2), int64(4), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0)}}},
+	}})
 	add(t4Case{name: "metrics/team", kind: contextfabric.FactMetrics, subjects: team, tables: []fakeTable{
 		{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("CHAOS")}},
 		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "repo-a", "acme/a"}}},
 		{match: "FROM git_pull_requests", rows: [][]any{{"", int64(3), float64(1)}}},
 		{match: "FROM repo_change_failure_daily", rows: [][]any{{"", int64(2), int64(4), int64(1), int64(1), int64(1), int64(0)}}},
+	}})
+	add(t4Case{name: "metrics/team status columns", kind: contextfabric.FactMetrics, subjects: team, tables: []fakeTable{
+		{match: "system.columns", rows: [][]any{{uint64(2)}}},
+		{match: "FROM team_metrics_daily", rows: [][]any{teamMetricsRow("CHAOS")}},
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "repo-a", "acme/a"}}},
+		{match: "FROM git_pull_requests", rows: [][]any{{"", int64(3), float64(1)}}},
+		{match: "FROM repo_change_failure_daily", rows: [][]any{{"", int64(2), int64(4), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0)}}},
 	}})
 	add(t4Case{name: "metrics/project", kind: contextfabric.FactMetrics, subjects: proj, tables: []fakeTable{
 		{match: "FROM team_project_ownership", rows: [][]any{

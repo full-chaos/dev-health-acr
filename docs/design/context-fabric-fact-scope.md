@@ -203,6 +203,8 @@ Rows: `{project} × {metrics, pull_requests, reviews, health}` and
 required_children, identity, membership}`, plus
 `{team} × {metrics, pull_requests, reviews}`.
 
+The team `pull_requests` row expands only when the request asks for pull requests themselves (a pull request status filter, or pull requests as the member kind): `CanonicalFactRequest.PullRequestFacts`, set by the engine from the frame. A default team read is answered by the team fact alone, whose `pull_requests_by_state` table counts the pull requests by stored state per repository. A project origin keeps its additive expansion.
+
 **Deliberately absent:**
 
 - Team-target families from a *project* origin (workload, investment,
