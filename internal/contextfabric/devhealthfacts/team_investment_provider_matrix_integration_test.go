@@ -21,6 +21,13 @@ type matrixUnit struct {
 	id, team, evidence string
 }
 
+func effortOf(u matrixUnit) float64 {
+	if u.id == "zero-out" {
+		return 0
+	}
+	return 1.0
+}
+
 func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -106,6 +113,18 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		{"both-jira", "team-jira", `{"issues":["jira:SUP-1"],"prs":[]}`},
 		{"both-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
 	}
+	zeroOut := []matrixUnit{
+		{"zero-out", "team-gitlab", `{"issues":["gitlab:chaos-gl/data/pipeline#1"],"prs":[]}`},
+		{"zero-gh", "team-github", `{"issues":["gh:acme/payments#1"],"prs":[]}`},
+		{"zero-jira", "team-jira", `{"issues":["jira:SUP-1"],"prs":[]}`},
+		{"zero-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
+	}
+	scenarios = append(scenarios, scenario{
+		name: "all-zero-effort units outside the run name the run, not the effort", org: "org-matrix-zero-out", units: zeroOut,
+		runs:  [][]string{{"zero-gh", "zero-jira", "zero-lin"}},
+		want:  map[string]float64{"team-gitlab": 0, "team-github": 1, "team-jira": 1, "team-linear": 1},
+		token: map[string]string{"team-gitlab": "investment_team_units_outside_membership_run"},
+	})
 	scenarios = append(scenarios, scenario{
 		name: "a team with a unit outside the run and an unresolved reference names the run first", org: "org-matrix-both", units: both,
 		runs:  [][]string{{"both-unres", "both-gh", "both-jira", "both-lin"}},
@@ -135,7 +154,7 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 					evidence = strings.ReplaceAll(evidence, repoUUID(tm.repoLabel), repoUUID(tm.repoLabel+sc.org))
 				}
 				exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-					u.id, from, to, repoUUID(repoOf[u.team]+sc.org), 1.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, evidence, to, sc.org)
+					u.id, from, to, repoUUID(repoOf[u.team]+sc.org), effortOf(u), map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, evidence, to, sc.org)
 			}
 			for i, run := range sc.runs {
 				runID := fmt.Sprintf("run-%d", i+1)

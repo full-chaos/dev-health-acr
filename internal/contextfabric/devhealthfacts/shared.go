@@ -1089,7 +1089,20 @@ import (
 // v215 -> v216: a project subject serves the commitment kind (target date,
 // sprint ends and the raw issue counts beside them). An answer saved under
 // v215 has no commitment fact.
-const QueryVersion = "devhealthfacts.clickhouse.v216"
+//
+// v216 -> v217: a team whose owned repositories hold work units that all have
+// zero persisted effort is named investment_team_effort_not_measurable, with
+// the unit count, instead of investment_team_no_unit_in_window. Still no fact
+// and no zero mix. An answer saved under v216 states the false reason that no
+// effort was persisted.
+//
+// v217 -> v218: a team with owned repositories and no mix is named by its
+// cause: investment_team_units_outside_membership_run when a work unit on an
+// owned repository is outside the latest complete membership run, or
+// investment_team_units_unattributed when positive-effort units in scope were
+// dropped by a reference that resolves to no repository. Still no fact. An
+// answer saved under v217 names only the generic no-unit reason.
+const QueryVersion = "devhealthfacts.clickhouse.v218"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
