@@ -97,7 +97,7 @@ func assertReadonlyInForce(t *testing.T, ctx context.Context, client contextpack
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadonlyProbe", "SELECT 1 SETTINGS readonly = 0", orgID, nil, func(readers.RowScanner) error { return nil })
 	var exception *clickhousedriver.Exception
 	if !errors.As(err, &exception) || exception.Code != 164 {
-		t.Fatalf("readonly is not in force on the served client: lifting it returned %v, want code 164 (READONLY)", err)
+		t.Errorf("readonly is not in force on the served client: lifting it returned %v, want code 164 (READONLY)", err)
 	}
 	t.Logf("readonly=2 in force on the served client: lifting readonly refused (code 164)")
 }
@@ -164,7 +164,8 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 		setPeaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_graph_issue_pr", QueryContains: "groupArray(r), groupArray(n), groupArray(t)"}, mark)
 		mixPeaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExact(m.repo_uuid)"}, mark)
 		if len(setPeaks) != 1 || len(mixPeaks) != 1 {
-			t.Fatalf("measurement did not happen: %d linked set and %d linked mix statements logged on a served read, want 1 and 1", len(setPeaks), len(mixPeaks))
+			t.Errorf("measurement did not happen: %d linked set and %d linked mix statements logged on a served read, want 1 and 1", len(setPeaks), len(mixPeaks))
+			continue
 		}
 		if run == 0 {
 			continue
@@ -176,17 +177,22 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 		for _, p := range mixPeaks {
 			read.mixMiB = float64(p) / (1 << 20)
 		}
-		var readonlyRuns, served uint64
+		var setRuns, mixRuns uint64
+		var setReadonly, mixReadonly string
 		if err := direct.QueryRow(ctx, `SELECT
-	maxIf(query_duration_ms, position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0),
-	maxIf(query_duration_ms, position(query, 'uniqExact(m.repo_uuid)') > 0),
-	countIf(Settings['readonly'] = '2'), count()
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND NOT has(databases, 'system')
-	AND (position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0 OR position(query, 'uniqExact(m.repo_uuid)') > 0)`, mark).Scan(&read.setMs, &read.mixMs, &readonlyRuns, &served); err != nil {
+	maxIf(query_duration_ms, is_set), maxIf(query_duration_ms, is_mix),
+	countIf(is_set), countIf(is_mix),
+	anyIf(Settings['readonly'], is_set), anyIf(Settings['readonly'], is_mix)
+FROM (
+	SELECT query_duration_ms, Settings,
+		has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0 AS is_set,
+		has(tables, concat(currentDatabase(), '.work_unit_investments')) AND position(query, 'uniqExact(m.repo_uuid)') > 0 AS is_mix
+	FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+)`, mark).Scan(&read.setMs, &read.mixMs, &setRuns, &mixRuns, &setReadonly, &mixReadonly); err != nil {
 			t.Fatalf("read the served statements' durations (measurement did not happen): %v", err)
 		}
-		if served != 2 || readonlyRuns != served {
-			t.Fatalf("the served linked set and mix statements did not both run under readonly=2: %d of %d", readonlyRuns, served)
+		if setRuns != 1 || mixRuns != 1 || setReadonly != "2" || mixReadonly != "2" {
+			t.Errorf("the served linked set and mix statements did not each run once under readonly=2: set %d run(s) readonly %q, mix %d run(s) readonly %q", setRuns, setReadonly, mixRuns, mixReadonly)
 		}
 		out = append(out, read)
 	}
@@ -299,7 +305,7 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	}
 	compareLinkedMixRows(t, "all teams", got, want)
 	if len(want) < 2 {
-		t.Fatalf("value equality did not happen: the rev 88 form returned %d team rows", len(want))
+		t.Errorf("value equality did not happen: the rev 88 form returned %d team rows", len(want))
 	}
 	if share := got[linkedShapeRepeatedTeam].Theme["feature_delivery"]; share < linkedShapeRepeatedEffort/2 || share > linkedShapeRepeatedEffort/2+1e6 {
 		t.Errorf("production: team %s feature_delivery effort %v, want half of the repeated-key unit", linkedShapeRepeatedTeam, share)
@@ -311,9 +317,10 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	inlineIDs := devhealthfacts.LinkedMixFragment{Name: "inline_sets", SQL: devhealthfacts.TeamLinkedMixInlineStatementForTest(false), Bindings: bindings}
 	gotNone, err := devhealthfacts.TeamLinkedMixRowsForTest(ctx, provider, orgID, []string{noLinks})
 	if err != nil {
-		t.Fatalf("production linked mix read for a team without links: %v", err)
+		t.Errorf("production linked mix read for a team without links: %v", err)
+	} else {
+		compareLinkedMixRows(t, "empty linked set", gotNone, readLinkedMixRows(t, ctx, query, orgID, []string{noLinks}, inlineIDs))
 	}
-	compareLinkedMixRows(t, "empty linked set", gotNone, readLinkedMixRows(t, ctx, query, orgID, []string{noLinks}, inlineIDs))
 
 	// A newer complete membership run with no unit: the scope resolves to the
 	// scope subqueries (an empty run is never sent as ids), and the production
@@ -324,9 +331,10 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	inlineSubquery := devhealthfacts.LinkedMixFragment{Name: "inline_sets_subquery_scope", SQL: devhealthfacts.TeamLinkedMixInlineStatementForTest(true)}
 	gotEmptyRun, err := devhealthfacts.TeamLinkedMixRowsForTest(ctx, provider, orgID, teams)
 	if err != nil {
-		t.Fatalf("production linked mix read under an empty membership run: %v", err)
+		t.Errorf("production linked mix read under an empty membership run: %v", err)
+	} else {
+		compareLinkedMixRows(t, "empty membership run", gotEmptyRun, readLinkedMixRows(t, ctx, query, orgID, teams, inlineSubquery))
 	}
-	compareLinkedMixRows(t, "empty membership run", gotEmptyRun, readLinkedMixRows(t, ctx, query, orgID, teams, inlineSubquery))
 }
 
 // compareLinkedMixRows holds the production read's rows equal to a reference
