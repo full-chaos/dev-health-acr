@@ -15,10 +15,11 @@ import (
 )
 
 // The write fence on a database built the way Kubernetes builds it: migrate,
-// then grant-runtime-acl, with the writes made by the restricted runtime
-// role. That path grants the runtime role nothing on the purge marker table,
-// so a fence that read the marker with the writer's own privileges would fail
-// every write of every organization with permission denied.
+// then grant-runtime-acl, with the writes made by a restricted role. The fence
+// reads the marker with its owner's privileges, so it holds for a writer role
+// that has no grant on the marker table at all: grant-runtime-acl gives the
+// runtime role SELECT and DELETE there for the projector, and the fence must
+// not depend on that grant.
 func TestWriteFenceWorksForARuntimeRoleWithNoGrantOnTheMarkerTable(t *testing.T) {
 	ctx := context.Background()
 	migrationDSN := newTestPostgresDSN(t, ctx)
@@ -43,6 +44,12 @@ func TestWriteFenceWorksForARuntimeRoleWithNoGrantOnTheMarkerTable(t *testing.T)
 		migrationDSNEnvironment: migrationDSN,
 		runtimeDSNEnvironment:   "postgres://acr_fence_runtime:unused@runtime-dsn-is-never-dialed.invalid:5432/acr",
 	}), &output))
+
+	var grantedForTheProjector bool
+	require.NoError(t, owner.QueryRowContext(ctx, `SELECT has_table_privilege('acr_fence_runtime', 'acr.context_fabric_org_purge_markers', 'SELECT')`).Scan(&grantedForTheProjector))
+	require.True(t, grantedForTheProjector, "grant-runtime-acl gives the runtime role SELECT on the marker for the projector's check")
+	_, err = owner.ExecContext(ctx, `REVOKE ALL ON TABLE acr.context_fabric_org_purge_markers FROM acr_fence_runtime`)
+	require.NoError(t, err)
 
 	runtimeConfig, err := pgx.ParseConfig(migrationDSN)
 	require.NoError(t, err)
@@ -70,7 +77,7 @@ func TestWriteFenceWorksForARuntimeRoleWithNoGrantOnTheMarkerTable(t *testing.T)
 SELECT has_table_privilege('acr_fence_runtime', 'acr.context_fabric_org_purge_markers', 'SELECT'),
        has_function_privilege('acr_fence_runtime', 'acr.context_fabric_refuse_purged_org()', 'EXECUTE'),
        (SELECT pg_get_userbyid(proowner) = current_user FROM pg_proc WHERE oid = 'acr.context_fabric_refuse_purged_org()'::regprocedure)`).Scan(&mayReadMarkers, &mayExecute, &ownerIsMigrationRole))
-	require.False(t, mayReadMarkers, "this path grants the runtime role nothing on the marker table")
+	require.False(t, mayReadMarkers, "the writer role under test holds nothing on the marker table")
 	require.False(t, mayExecute, "the runtime role may not call the fence function")
 	require.True(t, ownerIsMigrationRole, "the fence function is owned by the role that ran the migrations")
 
