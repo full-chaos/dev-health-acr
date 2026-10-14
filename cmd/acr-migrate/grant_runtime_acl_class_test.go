@@ -140,6 +140,13 @@ func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testin
 				}
 			}
 			require.Empty(t, mismatches)
+			// A literal check, not derived from the declaration: agent episodes are
+			// granted SELECT, INSERT and UPDATE exactly when writeback is on.
+			for privilege, wantHeld := range map[string]bool{"SELECT": features[dbacl.EpisodeWriteback], "INSERT": features[dbacl.EpisodeWriteback], "UPDATE": features[dbacl.EpisodeWriteback], "DELETE": false} {
+				var has bool
+				require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT has_table_privilege($1, 'acr.agent_episodes', $2)`, database.Role, privilege).Scan(&has))
+				require.Equal(t, wantHeld, has, "agent_episodes %s with writeback %v", privilege, features[dbacl.EpisodeWriteback])
+			}
 			for _, grant := range dbacl.RuntimeGrants {
 				if !features[grant.Feature] && grant.Feature != dbacl.AlwaysOn {
 					continue
