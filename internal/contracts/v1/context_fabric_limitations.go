@@ -654,6 +654,40 @@ const ContextFabricDeclaredKindUnmatchedLimitation = "No option found for this q
 // limitation.
 const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was read as being about the organization as a whole. Organization-wide analysis of status, health or drivers is not supported; organization-wide counts of one kind of subject, such as how many repositories or teams there are, are supported. No canonical facts were read."
 
+// The organization roll-up sentences: an answer to an organization-scope
+// question that was answered as a survey of the organization's members carries
+// the one for the member kind it read, so a reader sees the answer is a
+// roll-up over those members, not an organization-wide measure.
+const (
+	ContextFabricOrganizationSurveyTeamLimitation        = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's teams: the stored facts of each team were read, so the answer is a survey of the teams, not an organization-wide measure. Its coverage is the coverage of the teams that were read."
+	ContextFabricOrganizationSurveyProjectLimitation     = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's projects: the stored facts of each project were read, so the answer is a survey of the projects, not an organization-wide measure. Its coverage is the coverage of the projects that were read."
+	ContextFabricOrganizationSurveyRepositoryLimitation  = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's repositories: the stored facts of each repository were read, so the answer is a survey of the repositories, not an organization-wide measure. Its coverage is the coverage of the repositories that were read."
+	ContextFabricOrganizationSurveyPullRequestLimitation = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's pull requests: the stored facts of each pull request were read, so the answer is a survey of the pull requests, not an organization-wide measure. Its coverage is the coverage of the pull requests that were read."
+	ContextFabricOrganizationSurveyIncidentLimitation    = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's incidents: the stored facts of each incident were read, so the answer is a survey of the incidents, not an organization-wide measure. Its coverage is the coverage of the incidents that were read."
+	ContextFabricOrganizationSurveyNoMembersLimitation   = "This question was read as being about the organization as a whole. No members of the organization were found to roll up, so only the organization's own facts were read. A missing member set is not a healthy one."
+	ContextFabricOrganizationInvestmentRollUpLimitation  = "This question was read as being about the organization as a whole. It was answered from the organization's investment fact, a roll-up that counts the work of each repository once, never a sum of team values."
+)
+
+// ContextFabricOrganizationSurveyLimitation returns the roll-up sentence for
+// the member kind an organization survey read, and false for a kind no survey
+// reads.
+func ContextFabricOrganizationSurveyLimitation(kind ContextFabricSubjectKind) (string, bool) {
+	switch kind {
+	case ContextFabricSubjectTeam:
+		return ContextFabricOrganizationSurveyTeamLimitation, true
+	case ContextFabricSubjectProject:
+		return ContextFabricOrganizationSurveyProjectLimitation, true
+	case ContextFabricSubjectRepository:
+		return ContextFabricOrganizationSurveyRepositoryLimitation, true
+	case ContextFabricSubjectPullRequest:
+		return ContextFabricOrganizationSurveyPullRequestLimitation, true
+	case ContextFabricSubjectIncident:
+		return ContextFabricOrganizationSurveyIncidentLimitation, true
+	default:
+		return "", false
+	}
+}
+
 // ContextFabricSubjectIdentityUnconfirmedLimitation is the sentence a
 // follow-up carries when the subject-substitution guard fired and this
 // caller declined (or cannot accept) a clarification
@@ -752,6 +786,13 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricContinuationContextUnverifiableLimitation,
 		ContextFabricDeclaredKindUnmatchedLimitation,
 		ContextFabricOrganizationScopeUnsupportedLimitation,
+		ContextFabricOrganizationSurveyTeamLimitation,
+		ContextFabricOrganizationSurveyProjectLimitation,
+		ContextFabricOrganizationSurveyRepositoryLimitation,
+		ContextFabricOrganizationSurveyPullRequestLimitation,
+		ContextFabricOrganizationSurveyIncidentLimitation,
+		ContextFabricOrganizationSurveyNoMembersLimitation,
+		ContextFabricOrganizationInvestmentRollUpLimitation,
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,

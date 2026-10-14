@@ -1083,6 +1083,7 @@ func repairOrganizationScopeSurvey(receipt ModelExecutionReceipt, proposed Quest
 	discovered := organizationSurveyMembers(receipt, result.Frame.SubjectExpression.Org)
 	repaired := proposed
 	repaired.SubjectExpression = SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &discovered}
+	repaired.OrganizationSurveyMemberKind = discovered.MemberKind
 	if !repaired.HasGoal(GoalRankOrSurvey) {
 		repaired.Goals = append(append([]InvestigationGoal(nil), proposed.Goals...), GoalRankOrSurvey)
 	}

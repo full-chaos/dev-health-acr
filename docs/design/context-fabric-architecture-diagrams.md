@@ -2614,10 +2614,16 @@ organization's own members, with `rank_or_survey` added: the frame's own member
 kind when servable, else the interpretation's requested kind when servable,
 else `team` (the ownership unit every burden composite fact serves). The answer
 then carries the cohort's evidence, coverage and uncertainty like any cohort
-survey; an empty member set is disclosed, never read as healthy. An
-organization-scope investment question (`allocate_investment`) is not
-repaired: when no subject resolves, the engine reads the caller's organization
-subject, whose investment fact covers every repository once. The former
+survey, and a fixed sentence that names its basis: a roll-up over the
+organization's teams (or projects, repositories, ...), not an organization-wide
+measure. The repair stamps `QuestionFrame.OrganizationSurveyMemberKind` so the
+served answer, and a carried frame, can say so. When the survey finds no
+member, the engine reads the caller's organization subject instead of ending in
+`no_match`, and the answer says no member was found: a missing member set is
+not a healthy one. An organization-scope investment question
+(`allocate_investment`) is not repaired: when no subject resolves, the engine
+reads the caller's organization subject, whose investment fact covers every
+repository once, and the answer names that roll-up. The former
 `organization_scope_unsupported` refusal has no producer; the basis stays in
 the contract only so stored results that carry it still validate.
 

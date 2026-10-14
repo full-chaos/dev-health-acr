@@ -250,6 +250,30 @@ func organizationInvestmentQuestion(frame *QuestionFrame) bool {
 	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope && frame.HasGoal(GoalAllocateInvestment)
 }
 
+// organizationSubjectAnswers reports whether a turn that resolved no subject
+// is answered from the caller's organization subject: an organization
+// investment question, or an organization survey that found no members (the
+// answer then says so instead of ending in no_match).
+func organizationSubjectAnswers(frame *QuestionFrame) bool {
+	return organizationInvestmentQuestion(frame) || (frame != nil && frame.OrganizationSurveyMemberKind != "")
+}
+
+// organizationRollUpLimitation is the sentence that names an organization
+// answer's basis: a survey of the members the organization-scope repair chose,
+// or the organization's own investment fact.
+func organizationRollUpLimitation(frame *QuestionFrame, graph GraphContext) (string, bool) {
+	survey := frame != nil && frame.OrganizationSurveyMemberKind != ""
+	switch {
+	case graph.OrganizationSubjectRead && survey:
+		return contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation, true
+	case graph.OrganizationSubjectRead:
+		return contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, true
+	case !survey:
+		return "", false
+	}
+	return contractsv1.ContextFabricOrganizationSurveyLimitation(frame.OrganizationSurveyMemberKind)
+}
+
 // callerOrganizationSubject is the caller's organization as a subject, in the
 // graph's key form.
 func callerOrganizationSubject(principal storage.Principal) SubjectRef {

@@ -16,6 +16,9 @@ import (
 type organizationMemberGraph struct {
 	retrievalRecordingGraph
 	discovered []*QuestionFrame
+	// noMembers makes every discovery find no member, as in an organization
+	// with nothing synced of the kind.
+	noMembers bool
 }
 
 func (g *organizationMemberGraph) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
@@ -23,7 +26,7 @@ func (g *organizationMemberGraph) DiscoverContext(_ context.Context, _ storage.P
 	graph := g.context
 	graph.Cohort = nil
 	if request.Frame != nil {
-		if kind, _, reason := CohortMemberKindForFrame(*request.Frame); reason == CohortDiscoverable {
+		if kind, _, reason := CohortMemberKindForFrame(*request.Frame); reason == CohortDiscoverable && !g.noMembers {
 			graph.Cohort = organizationMembers(kind, 3)
 		}
 	}
@@ -54,6 +57,11 @@ type organizationAnswerRun struct {
 // result with what retrieval and the fact read received.
 func runOrganizationQuestion(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, facts []FactRequirement, allowClarification bool) organizationAnswerRun {
 	t.Helper()
+	return runOrganizationQuestionOver(t, receipt, proposal, facts, allowClarification, false)
+}
+
+func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, facts []FactRequirement, allowClarification, noMembers bool) organizationAnswerRun {
+	t.Helper()
 	logs := captureEngineLogger(t)
 	receipt.QuestionFrame = &proposal
 	graph := &organizationMemberGraph{retrievalRecordingGraph: retrievalRecordingGraph{graphReaderStub: graphReaderStub{
@@ -63,7 +71,7 @@ func runOrganizationQuestion(t *testing.T, receipt ModelExecutionReceipt, propos
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		},
-	}}}
+	}}, noMembers: noMembers}
 	run := organizationAnswerRun{graph: graph}
 	readFacts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 		run.subjects = append(run.subjects, append([]SubjectRef(nil), request.Subjects...))
@@ -220,6 +228,11 @@ func TestOrganizationScopeQuestionsAreAnsweredOverTheOrganizationsMembers(t *tes
 			if result.Cohort == nil || result.Cohort.Kind != testCase.wantMember || len(result.Cohort.Members) != 3 {
 				t.Fatalf("served cohort = %+v, want the three %s members", result.Cohort, testCase.wantMember)
 			}
+			sentence, _ := contractsv1.ContextFabricOrganizationSurveyLimitation(testCase.wantMember)
+			survey := testCase.wantExpression == SubjectExpressionDiscoveredKind
+			if roleContains(result.Limitations, sentence) != survey {
+				t.Fatalf("limitations = %#v, want the %s roll-up sentence present=%v", result.Limitations, testCase.wantMember, survey)
+			}
 		})
 	}
 }
@@ -238,6 +251,103 @@ func TestAnOrganizationInvestmentQuestionReadsTheOrganizationSubject(t *testing.
 		if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionOrganizationScope {
 			t.Fatalf("discovery call %d received %+v, want the organization-scope frame", call, frame)
 		}
+	}
+	if !roleContains(result.Limitations, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation) {
+		t.Fatalf("limitations = %#v, want the investment roll-up sentence", result.Limitations)
+	}
+	want := SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:org_role", Label: "org_role"}
+	if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != want {
+		t.Fatalf("fact read subjects = %+v, want only %+v", run.subjects, want)
+	}
+}
+
+// TestTheDemoOrganizationQuestionsAreNeverRefused drives the demo set, each
+// question as the frame the interpretation prompt asks for, through the
+// production interpreter and the engine: every one is served, none ends in
+// no_match or a clarification, and every roll-up names its basis. The model
+// is a fixture: the frames are what the prompt rules state for each question,
+// including the system -> repository kind word.
+func TestTheDemoOrganizationQuestionsAreNeverRefused(t *testing.T) {
+	repository := SubjectRepository
+	for _, testCase := range []struct {
+		question  string
+		requested SubjectKind
+		frame     QuestionFrame
+		facts     []FactRequirement
+		basis     string
+	}{
+		{
+			question: "what is our biggest delivery risk",
+			frame:    organizationProposal(nil, GoalAssessState, GoalExplainDrivers),
+			facts:    []FactRequirement{{Kind: FactHealth}, {Kind: FactFlow}},
+			basis:    contractsv1.ContextFabricOrganizationSurveyTeamLimitation,
+		},
+		{
+			question: "where is delivery stuck across the org", requested: SubjectOrganization,
+			frame: organizationProposal(nil, GoalAssessState, GoalExplainDrivers),
+			facts: []FactRequirement{{Kind: FactFlow}, {Kind: FactBlockers}},
+			basis: contractsv1.ContextFabricOrganizationSurveyTeamLimitation,
+		},
+		{
+			question: "which systems are most at risk (read as an organization question)", requested: SubjectRepository,
+			frame: organizationProposal(nil, GoalAssessState),
+			facts: []FactRequirement{{Kind: FactHealth}},
+			basis: contractsv1.ContextFabricOrganizationSurveyRepositoryLimitation,
+		},
+		{
+			question: "which systems are most at risk (read as a repository cohort)", requested: SubjectRepository,
+			frame: QuestionFrame{Goals: []InvestigationGoal{GoalAssessState, GoalRankOrSurvey}, SubjectExpression: discoveredExpression(SubjectRepository), Temporal: TemporalIntentCurrent},
+			facts: []FactRequirement{{Kind: FactHealth}},
+		},
+		{
+			question: "how is the org investing its effort", requested: SubjectOrganization,
+			frame: organizationProposal(nil, GoalAllocateInvestment),
+			facts: []FactRequirement{{Kind: FactInvestment}},
+			basis: contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation,
+		},
+		{
+			question: "how many repositories are in the organization", requested: SubjectRepository,
+			frame: organizationProposal(&repository, GoalCountOrAggregate),
+			facts: []FactRequirement{},
+		},
+	} {
+		t.Run(testCase.question, func(t *testing.T) {
+			receipt := validModelReceiptFixture(ModelOperationInterpret)
+			receipt.RequestedSubjectKind = testCase.requested
+			for _, allowClarification := range []bool{true, false} {
+				result := runOrganizationQuestion(t, receipt, testCase.frame, testCase.facts, allowClarification).result
+				t.Logf("allow_clarification=%v served status=%s", allowClarification, result.Status)
+				if (result.Status != InvestigationComplete && result.Status != InvestigationPartial) || result.RefusalBasis != "" {
+					t.Fatalf("status/basis = %q/%q, want complete or partial", result.Status, result.RefusalBasis)
+				}
+				if roleContains(result.Limitations, contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation) {
+					t.Fatalf("limitations = %#v carry the retired refusal", result.Limitations)
+				}
+				if testCase.basis != "" && !roleContains(result.Limitations, testCase.basis) {
+					t.Fatalf("limitations = %#v, want the roll-up basis %q", result.Limitations, testCase.basis)
+				}
+			}
+		})
+	}
+}
+
+// TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused holds the empty
+// organization: a survey whose discovery finds no member reads the
+// organization's own subject and says that no member was found, instead of
+// ending in no_match. Missing is disclosed, never served as healthy.
+func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	run := runOrganizationQuestionOver(t, receipt, organizationProposal(nil, GoalAssessState, GoalExplainDrivers), []FactRequirement{{Kind: FactHealth}}, true, true)
+	result := run.result
+	t.Logf("served status=%s", result.Status)
+	if result.Status == InvestigationNoMatch || result.Status == InvestigationClarificationRequired || result.RefusalBasis != "" {
+		t.Fatalf("status/basis = %q/%q, want an answered turn", result.Status, result.RefusalBasis)
+	}
+	if !roleContains(result.Limitations, contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation) {
+		t.Fatalf("limitations = %#v, want the no-members sentence", result.Limitations)
+	}
+	if roleContains(result.Limitations, contractsv1.ContextFabricOrganizationSurveyTeamLimitation) {
+		t.Fatalf("limitations = %#v claim a roll-up over teams that were never read", result.Limitations)
 	}
 	want := SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:org_role", Label: "org_role"}
 	if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != want {
