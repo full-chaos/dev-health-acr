@@ -240,7 +240,16 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 
 	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
 	inStatement := read(restricted)
+	inStatementProjects := readProjects(restricted)
 	restore()
+	if len(inStatementProjects.Facts) != len(restrictedProjectsResult.Facts) {
+		t.Fatalf("restricted projects, authorization read once vs inside each statement: %d facts vs %d", len(restrictedProjectsResult.Facts), len(inStatementProjects.Facts))
+	}
+	for index := range inStatementProjects.Facts {
+		if !reflect.DeepEqual(inStatementProjects.Facts[index].Fields, restrictedProjectsResult.Facts[index].Fields) {
+			t.Errorf("restricted projects, authorization read once vs inside each statement: fact %d differs: %+v vs %+v", index, restrictedProjectsResult.Facts[index].Fields, inStatementProjects.Facts[index].Fields)
+		}
+	}
 	for _, pair := range []struct {
 		label     string
 		got, want contextfabric.FactProviderResult
@@ -366,54 +375,40 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 				t.Errorf("restricted in-statement, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (main's in-statement peak plus 2 MiB)", state, key, fallbackHigh[key], ceiling)
 			}
 		}
-		// First-seen narrowing: the shipped form must serve every value the
-		// legacy form (endpoint-set narrowing) serves, for both callers, in this
-		// part state; the legacy memory is logged beside it.
-		for _, variant := range []string{"legacy"} {
-			restoreVariant := devhealthfacts.SetBlockerStartVariantForTest(variant)
-			for _, caller := range []struct {
-				label string
-				read  func() contextfabric.FactProviderResult
-				want  contextfabric.FactProviderResult
-			}{
-				{"org-wide", func() contextfabric.FactProviderResult { return read(orgWide) }, orgWideResult},
-				{"restricted", func() contextfabric.FactProviderResult { return read(restricted) }, restrictedResult},
-				{"projects, org-wide", func() contextfabric.FactProviderResult { return readProjects(orgWide) }, orgWideProjectsResult},
-				{"projects, restricted", func() contextfabric.FactProviderResult { return readProjects(restricted) }, restrictedProjectsResult},
-			} {
-				got := caller.read()
-				if len(got.Facts) != len(caller.want.Facts) {
-					t.Fatalf("first-seen form %s, %s: %d facts, want %d", variant, caller.label, len(got.Facts), len(caller.want.Facts))
-				}
-				for index := range got.Facts {
-					if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
-						t.Errorf("first-seen form %s, %s: fact %d differs from the shipped form: %+v vs %+v", variant, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
-					}
-				}
-				low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { caller.read() })
-				for key := range low {
-					t.Logf("PRODSHAPE age variant %s [%s, %s] min %.1f max %.1f MiB: %s", variant, caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
-				}
-			}
-			restoreVariant()
+	}
+
+	// Value equality: the library authorization forced back in (the shape before
+	// the organization-wide fast path) serves the same values as the shipped
+	// shape; only its memory differs.
+	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
+	forced := read(orgWide)
+	restoreLibrary()
+	if len(forced.Facts) != len(orgWideResult.Facts) {
+		t.Fatalf("library authorization forced: %d facts, want %d", len(forced.Facts), len(orgWideResult.Facts))
+	}
+	for index := range forced.Facts {
+		if !reflect.DeepEqual(forced.Facts[index].Fields, orgWideResult.Facts[index].Fields) {
+			t.Errorf("library authorization forced: fact %d differs from the shipped shape: %+v vs %+v", index, forced.Facts[index].Fields, orgWideResult.Facts[index].Fields)
 		}
 	}
 
-	// Negative control: with the library authorization forced back in (the shape
-	// before the organization-wide fast path) even the LOWEST of three warm reads
-	// must exceed a ceiling, the harder side of the same assertion.
-	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
-	lowForced, _ := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
-	restoreLibrary()
+	// Planted defect, absolute: the first-seen rows narrowed to the blocker edge
+	// endpoints before the join (the form the shipped statements dropped for
+	// memory) must put some statement's LOWEST of three warm reads at or over its
+	// frozen ceiling. If it does not, the ceilings could not catch the defect
+	// they exist for.
+	restoreVariant := devhealthfacts.SetBlockerStartVariantForTest("legacy")
+	lowPlanted, highPlanted := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
+	restoreVariant()
 	exceeded := false
-	for key, peak := range lowForced {
+	for key, peak := range lowPlanted {
 		if peak >= blockerProdShapeCeilingFor(key) {
 			exceeded = true
 		}
-		t.Logf("PRODSHAPE negative control [org-wide, library authorization forced] min %.1f MiB: %s", float64(peak)/(1<<20), key)
+		t.Logf("PRODSHAPE planted defect [org-wide, first-seen narrowed to the endpoints] min %.1f max %.1f MiB (ceiling %.1f): %s", float64(peak)/(1<<20), float64(highPlanted[key])/(1<<20), float64(blockerProdShapeCeilingFor(key))/(1<<20), key)
 	}
 	if !exceeded {
-		t.Error("with the library authorization forced back in, no statement exceeded its ceiling: the ceilings cannot catch the defect they exist for")
+		t.Error("with the first-seen rows narrowed to the endpoints, no statement reached its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
