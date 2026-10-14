@@ -285,7 +285,7 @@ func (r *CatalogClickHouseRows) ResolveSourceRow(ctx context.Context, orgID stri
 	for index, component := range read.Components {
 		bindings = append(bindings, ClickHouseBinding{Name: "component_" + strconv.Itoa(index+1), Value: component})
 	}
-	statement := `SELECT * FROM (` + query.Statement + `) WHERE evidence_ref_id = {evidence_locator:String} LIMIT 2`
+	statement := `SELECT * FROM (` + resolveStatement(ctx, r.client, *query) + `) WHERE evidence_ref_id = {evidence_locator:String} LIMIT 2`
 	// A catalog statement selects its typed columns; a row-only statement selects the standard ten.
 	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 3, catalogSourceQuery(query.ID) != nil)
 }
