@@ -225,8 +225,21 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	// from the minimum and the maximum seen here.
 	for _, state := range []string{"parts as seeded", "parts merged (OPTIMIZE FINAL)"} {
 		if strings.Contains(state, "OPTIMIZE") {
-			for _, table := range []string{"work_item_dependencies", "work_items", "work_graph_issue_pr", "team_project_ownership", "team_repo_ownership", "projects", "repos", "git_pull_requests"} {
-				if err := direct.Exec(ctx, "OPTIMIZE TABLE "+table+" FINAL"); err != nil {
+			tableRows, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree' AND name NOT LIKE '.%'`)
+			if err != nil {
+				t.Fatalf("list tables: %v", err)
+			}
+			var tables []string
+			for tableRows.Next() {
+				var name string
+				if err := tableRows.Scan(&name); err != nil {
+					t.Fatal(err)
+				}
+				tables = append(tables, name)
+			}
+			tableRows.Close()
+			for _, table := range tables {
+				if err := direct.Exec(ctx, "OPTIMIZE TABLE `"+table+"` FINAL"); err != nil {
 					t.Fatalf("optimize %s: %v", table, err)
 				}
 			}
