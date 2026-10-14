@@ -1,5 +1,5 @@
 // Code generated from dev-health-ops internal/jobs/metrics/changefailure/changefailure.go
-// at commit c69c341aa545f6cf15a702bd84965d584cc9ba22 (CHAOS-9621). DO NOT EDIT: the
+// at commit 6f14383751a5f95f41ffb44daba0bd49c0bfc2b5 (CHAOS-9621). DO NOT EDIT: the
 // file is the differential oracle of the change failure rule; the digest test
 // in devhealthfacts pins its bytes, and the rule test executes it.
 
