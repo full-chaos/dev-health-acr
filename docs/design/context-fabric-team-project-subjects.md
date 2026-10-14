@@ -82,6 +82,10 @@ Live types: `id String`, `org_id String`, `provider String`,
 `team_ids Array(String)`, `team_keys Array(String)`,
 `updated_at DateTime64(3,'UTC')`.
 
+Declared from the ops migrations, not live-verified here: `state_source
+LowCardinality(String)` (ops 123, after `state`) and `target_date
+Nullable(Date)` (ops 073); the commitment fact reads both.
+
 56 raw rows for the ground-truth org, **20 after `FINAL`**. The dedup key
 includes `provider`, so `id` is only unique per provider in principle — checked
 across all orgs: zero `(org_id, id)` pairs carry more than one provider, so

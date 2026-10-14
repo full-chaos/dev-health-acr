@@ -211,8 +211,11 @@ func (p *BlockersProvider) readProjectRollup(ctx context.Context, principal stor
 	if len(ids) == 0 {
 		return rejected, nil
 	}
-	authorized, authorizationBindings := workItemAuthorizedIDsAmongSQL(workItemRepositoryAuthorization(principal, requestedScope), blockerEndpointIDsSQL)
 	settings, err := workItemReaderSettings(ctx)
+	if err != nil {
+		return rejected, err
+	}
+	authorized, authorizationBindings, err := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
 	if err != nil {
 		return rejected, err
 	}

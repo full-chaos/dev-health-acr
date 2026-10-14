@@ -183,8 +183,8 @@ func TestCapCoverageEntriesToWriteBoundDropsSyntheticKindsPastTheCapDeterministi
 	if got := len(result.Coverage.Details); got != contractsv1.ContextFabricCoverageEntriesMaxCount {
 		t.Fatalf("details after cap = %d, want exactly the bound %d", got, contractsv1.ContextFabricCoverageEntriesMaxCount)
 	}
-	if omitted != 10 {
-		t.Fatalf("omitted = %d, want 10 (110 total - 100 bound)", omitted)
+	if want := len(original) - contractsv1.ContextFabricCoverageEntriesMaxCount; omitted != want {
+		t.Fatalf("omitted = %d, want %d (%d total - %d bound)", omitted, want, len(original), contractsv1.ContextFabricCoverageEntriesMaxCount)
 	}
 
 	// DEGRADING NEVER YIELDS: all 70 degrading rows survive, in their
@@ -197,9 +197,10 @@ func TestCapCoverageEntriesToWriteBoundDropsSyntheticKindsPastTheCapDeterministi
 	}
 
 	// DETERMINISTIC: the kept non-degrading rows are the PREFIX of the
-	// original non-degrading order (the first 30 of the 40), never a
+	// original non-degrading order (every retained one of the 40), never a
 	// random or arrival-order subset.
-	for i := 0; i < 30; i++ {
+	retained := contractsv1.ContextFabricCoverageEntriesMaxCount - 70
+	for i := 0; i < retained; i++ {
 		got := result.Coverage.Details[70+i]
 		want := original[70+i]
 		if got.Source != want.Source || got.Degrading {
