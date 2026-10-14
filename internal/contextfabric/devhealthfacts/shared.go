@@ -1096,13 +1096,17 @@ import (
 // and no zero mix. An answer saved under v216 states the false reason that no
 // effort was persisted.
 //
-// v217 -> v218: a team that owns repositories and has no work unit in the
+// v217 -> v218: the team linked pull request mix takes a unit's reference
+// count once per unit, not from the unit's reference array on every expanded
+// row. The rows are unchanged; the statement and its memory are not.
+//
+// v218 -> v219: a team that owns repositories and has no work unit in the
 // window is named investment_team_prs_without_linked_work, with the pull
 // request count, when it has pull requests in the window and none has an
 // admitted link to tracked work. A team with no pull request, or with any
 // linked pull request, keeps investment_team_no_unit_in_window. An answer
-// saved under v217 gives both the old reason.
-const QueryVersion = "devhealthfacts.clickhouse.v218"
+// saved under v218 gives both the old reason.
+const QueryVersion = "devhealthfacts.clickhouse.v219"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
