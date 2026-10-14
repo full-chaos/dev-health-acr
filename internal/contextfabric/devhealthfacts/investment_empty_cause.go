@@ -18,7 +18,7 @@ const (
 
 const (
 	investmentTeamUnitsOutsideRunReason = investmentTeamUnitsOutsideRun + ": the team's owned repositories have persisted work units in the requested window, and none of them is in the latest complete membership run"
-	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository, or zero effort; the counts follow)"
+	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository; the count follows)"
 )
 
 // ownedUnitCountStatement counts, per repository, the distinct latest work
@@ -114,8 +114,8 @@ func (p *InvestmentProvider) teamEmptyCauses(ctx context.Context, orgID string, 
 		switch {
 		case all > in:
 			causes[teamID] = emptyCause{token: investmentTeamUnitsOutsideRun, outside: all - in}
-		case in > 0:
-			causes[teamID] = emptyCause{token: investmentTeamUnitsUnattrib, positive: positive, zero: in - positive}
+		case in > 0 && positive > 0:
+			causes[teamID] = emptyCause{token: investmentTeamUnitsUnattrib, positive: positive}
 		}
 	}
 	return causes, nil
@@ -123,9 +123,9 @@ func (p *InvestmentProvider) teamEmptyCauses(ctx context.Context, orgID string, 
 
 // emptyCause is a team's named cause with the counts behind it.
 type emptyCause struct {
-	token          string
-	outside        uint64
-	positive, zero uint64
+	token    string
+	outside  uint64
+	positive uint64
 }
 
 func (c emptyCause) reason() string {
@@ -133,7 +133,7 @@ func (c emptyCause) reason() string {
 	case investmentTeamUnitsOutsideRun:
 		return fmt.Sprintf("%s (%d units outside the run)", investmentTeamUnitsOutsideRunReason, c.outside)
 	case investmentTeamUnitsUnattrib:
-		return fmt.Sprintf("%s (%d units with positive effort and an unresolved reference, %d units with zero effort)", investmentTeamUnitsUnattribReason, c.positive, c.zero)
+		return fmt.Sprintf("%s (%d units with positive effort dropped by a reference that resolves to no repository)", investmentTeamUnitsUnattribReason, c.positive)
 	}
 	return investmentTeamNoUnitReason
 }
@@ -144,7 +144,7 @@ func (c emptyCause) summary() string {
 	case investmentTeamUnitsOutsideRun:
 		return "owned repositories have persisted work units in the requested window, and at least one is outside the latest complete membership run"
 	case investmentTeamUnitsUnattrib:
-		return "owned repositories have persisted work units in scope, and none reached a positive share (a reference that resolves to no repository, or zero effort; counts per team in the subject reason)"
+		return "owned repositories have persisted work units in scope, and none reached a positive share because a reference resolves to no repository (counts per team in the subject reason)"
 	}
 	return investmentTeamNoUnitReason
 }
