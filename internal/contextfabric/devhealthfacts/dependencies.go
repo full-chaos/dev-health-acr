@@ -428,9 +428,6 @@ func blockerWorkItemsSQL(alias string) string {
 	return `(SELECT org_id, work_item_id, status, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + `) AS ` + alias
 }
 
-// blockerStartJoinSQL is the left join that gives a blocker edge its first
-// sync time. The subselect reads the first-seen rows of the blocker edge
-// endpoints only, so its cost follows the blocker edges.
 // blockerStartJoinFor is the left join that gives a blocker edge its first
 // sync time. The shipped form ("") reads the organization's first-seen rows of
 // the blocker relationship type and joins them on the edge key: narrowing them

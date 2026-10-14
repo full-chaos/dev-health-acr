@@ -11,7 +11,6 @@ import (
 // The blocker statements carry their reader settings and the block size in ONE
 // trailing SETTINGS clause; a second SETTINGS keyword is a syntax error.
 func TestBlockerStatementCarriesOneSettingsClause(t *testing.T) {
-	t.Parallel()
 	settings := readers.Settings{MaxExecutionTimeSeconds: 5, MaxRowsToRead: 3000000, MaxMemoryUsage: 64 << 20, MaxThreads: 1, MaxResultRows: 201}
 	for _, c := range []struct {
 		name     string
