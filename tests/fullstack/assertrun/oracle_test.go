@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var task001UnavailableSources = []string{}
+var task001UnavailableSources = []string{"action_findings.v1"}
 
 // TestLoadOracle_RealFixtureFiles decodes the actual testdata/fullstack/v1/expected/task-*
 // oracle files landed by the fixture owner. It exists to catch silent decode drift: if the

@@ -77,7 +77,11 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 	}()
 	evidence := []contractsv1.EvidenceRef{}
 	for len(evidence) < sourceEvidenceRowLimit && rows.Next() {
-		ref, scanErr := scanEvidenceRow(rows)
+		scan := scanEvidenceRow
+		if names, typed := typedEvidenceColumns[query.ID]; typed {
+			scan = scanTypedEvidenceRow(names)
+		}
+		ref, scanErr := scan(rows)
 		if scanErr != nil {
 			return nil, &sourceExecutionError{phase: SourceQueryPhaseScan, sourceID: query.ID, cause: scanErr}
 		}
@@ -154,4 +158,43 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 		ObservedAt:    observedAt.UTC(),
 		Availability:  contractsv1.EvidenceAvailable,
 	}, nil
+}
+
+// typedEvidenceColumns are the catalog sources whose statement returns typed
+// columns after the standard ten, in this order; each lands in the evidence's
+// Metadata under its own name.
+var typedEvidenceColumns = map[string][]string{
+	"deployments.v1":                    {metadataDeploymentStatus, metadataPullRequestNumber},
+	"deployment_incident_provenance.v1": {metadataDeploymentID, metadataIncidentID},
+}
+
+func scanTypedEvidenceRow(names []string) func(ClickHouseRowScanner) (contractsv1.EvidenceRef, error) {
+	return func(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error) {
+		var id, system, entityType, entityID, label, safeURI, provenance, citation string
+		var confidence float64
+		var observedAt time.Time
+		typed := make([]string, len(names))
+		destinations := []any{&id, &system, &entityType, &entityID, &label, &safeURI, &provenance, &confidence, &citation, &observedAt}
+		for index := range typed {
+			destinations = append(destinations, &typed[index])
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return contractsv1.EvidenceRef{}, err
+		}
+		metadata := make(map[string]any, len(names))
+		for index, name := range names {
+			metadata[name] = typed[index]
+		}
+		return contractsv1.EvidenceRef{
+			SchemaVersion: contractsv1.EvidenceRefSchema,
+			EvidenceRefID: id,
+			Source:        contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: entityID, DisplayLabel: label, SafeURI: safeURI},
+			Provenance:    provenance,
+			Confidence:    confidence,
+			Citation:      citation,
+			ObservedAt:    observedAt.UTC(),
+			Availability:  contractsv1.EvidenceAvailable,
+			Metadata:      metadata,
+		}, nil
+	}
 }

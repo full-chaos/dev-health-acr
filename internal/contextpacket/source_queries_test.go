@@ -21,7 +21,7 @@ func TestDeploymentsSourceQuery_usesTruthfulCitationWhenReleaseReferenceIsEmpty(
 	}
 
 	// When
-	const expectedCitation = "if(d.release_ref != '', concat('release_ref=', d.release_ref), concat('deployment_id=', d.deployment_id)) citation"
+	const expectedCitation = "if(d.release_ref != '', concat('status=', ifNull(d.status, ''), ', release_ref=', d.release_ref, ', release_ref_confidence=', toString(d.release_ref_confidence)), concat('status=', ifNull(d.status, ''), ', deployment_id=', d.deployment_id)) citation"
 	citationIsTruthy := strings.Contains(deploymentQuery.Statement, expectedCitation)
 	citationUsesNullableStatus := strings.Contains(deploymentQuery.Statement, "ifNull(d.status, '') citation")
 
