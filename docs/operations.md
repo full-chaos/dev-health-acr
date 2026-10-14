@@ -1722,6 +1722,10 @@ Run it with the projector `serve` process for that organization stopped, or run 
 
 Kept on purpose: `audit_events` (no retention rule exists in this repository), and episodes with `retention_class = legal_hold`. A purge that deletes any row adds one `org_purged` audit event holding counts only. A second run is a no-op.
 
+### Runtime database role grants
+
+The table privileges the runtime database role holds are declared once, in `internal/dbacl/runtime_grants.go`. Each row names the privileges and cites the runtime code that needs them. `acr-migrate grant-runtime-acl` (the Kubernetes path, run by the Helm pre-install and pre-upgrade Job) applies the declaration as idempotent `GRANT` statements and never revokes; the `runtime-acl` mode of `deploy/compose/acr-db-init.sh` carries a block generated from the same declaration (a test fails when they differ; `DBACL_WRITE=1 go test ./internal/dbacl` rewrites the block). Rows for optional features apply only when the feature is on: agent episodes when `ACR_ENABLE_EPISODE_WRITEBACK` is `true`, and `DELETE` on client credentials when both `ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE` and `ACR_WORKLOAD_TRUST_DOMAIN` are set. The Job reads those from the chart values. A table that a migration creates must be declared or named as having no runtime access, or `TestRuntimeGrantDeclaration_coversEveryMigrationTable` fails. A refused grant shows in the credential-lookup and OAuth dependency logs as `db_table` beside the error class.
+
 ### CHAOS-3916 production graph cutover runbook
 
 This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,

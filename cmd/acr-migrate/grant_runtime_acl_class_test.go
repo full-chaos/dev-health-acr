@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,106 +10,146 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	"github.com/stretchr/testify/require"
 )
 
-// outOfBandGranted lists the tables whose runtime-role grants on Kubernetes
-// were applied by the operator's out-of-band bootstrap (deploy/README.md,
-// "Documented gaps": the chart never holds the admin credential), before
-// grant-runtime-acl existed. Each entry names why it is allowed to be absent
-// from grant_runtime_acl.go. A table created by a LATER migration has no such
-// history and must be granted in grant_runtime_acl.go, so it cannot be added
-// here: the test below rejects an entry created after migration 0040.
-// Emptied by the follow-up that makes one grant declaration.
-var outOfBandGranted = map[string]string{
-	"agent_episodes":                                 "granted out of band by the operator bootstrap, before migration 0042 (created in 0001)",
-	"audit_events":                                   "granted out of band by the operator bootstrap, before migration 0042 (created in 0001)",
-	"client_credentials":                             "granted out of band by the operator bootstrap, before migration 0042 (created in 0001)",
-	"context_packet_snapshots":                       "granted out of band by the operator bootstrap, before migration 0042 (created in 0001)",
-	"device_authorizations":                          "granted out of band by the operator bootstrap, before migration 0042 (created in 0004); grant-runtime-acl adds DELETE",
-	"context_fabric_projection_checkpoints":          "granted out of band by the operator bootstrap, before migration 0042 (created in 0006)",
-	"context_fabric_projection_rebuild_markers":      "granted out of band by the operator bootstrap, before migration 0042 (created in 0007)",
-	"context_fabric_investigation_results":           "granted out of band by the operator bootstrap, before migration 0042 (created in 0009)",
-	"context_fabric_model_execution_receipts":        "granted out of band by the operator bootstrap, before migration 0042 (created in 0010)",
-	"context_fabric_org_model_config":                "granted out of band by the operator bootstrap, before migration 0042 (created in 0010)",
-	"context_fabric_reuse_invalidations":             "granted out of band by the operator bootstrap, before migration 0042 (created in 0011)",
-	"context_fabric_clarification_selections":        "granted out of band by the operator bootstrap, before migration 0042 (created in 0016)",
-	"context_fabric_graph_build_source_progress":     "granted out of band by the operator bootstrap, before migration 0042 (created in 0019)",
-	"context_fabric_graph_epoch_retirements":         "granted out of band by the operator bootstrap, before migration 0042 (created in 0019)",
-	"context_fabric_graph_lifecycle":                 "granted out of band by the operator bootstrap, before migration 0042 (created in 0019)",
-	"context_fabric_structure_supersession_claims":   "granted out of band by the operator bootstrap, before migration 0042 (created in 0023)",
-	"context_fabric_structure_selections":            "granted out of band by the operator bootstrap, before migration 0042 (created in 0024)",
-	"context_fabric_structure_prior_pointer":         "granted out of band by the operator bootstrap, before migration 0042 (created in 0028)",
-	"context_fabric_structure_prior_pointer_history": "granted out of band by the operator bootstrap, before migration 0042 (created in 0028)",
-	"context_fabric_structure_prior_revocations":     "granted out of band by the operator bootstrap, before migration 0042 (created in 0028)",
-	"context_fabric_structure_priors":                "granted out of band by the operator bootstrap, before migration 0042 (created in 0028)",
-	"workload_bindings":                              "created in 0030; no runtime grant in acr-db-init.sh either, tracked as its own gap",
-	"oauth_authorization_requests":                   "granted out of band by the operator bootstrap, before migration 0042 (created in 0040); grant-runtime-acl adds DELETE",
-	"oauth_clients":                                  "granted out of band by the operator bootstrap, before migration 0042 (created in 0040); grant-runtime-acl adds DELETE",
-}
-
-const lastOutOfBandMigration = 40
-
 var (
-	createTablePattern = regexp.MustCompile(`(?i)CREATE TABLE(?: IF NOT EXISTS)?\s+acr\.([a-z0-9_]+)`)
-	grantTablePattern  = regexp.MustCompile("(?s)GRANT [A-Z, ]+ ON TABLE ((?:acr\\.[a-z0-9_]+(?:,\\s*)?)+)\\s+TO")
+	createTablePattern       = regexp.MustCompile(`(?i)CREATE TABLE(?: IF NOT EXISTS)?\s+acr\.([a-z0-9_]+)`)
+	readinessPrivilegePatten = regexp.MustCompile(`has_table_privilege\(current_user, 'acr\.([a-z0-9_]+)', '([A-Z]+)'\)`)
 )
 
-// TestGrantRuntimeACL_everyMigrationTableHasAKubernetesGrant is the class test:
-// every table the migrations create is either granted to the runtime role in
-// grant_runtime_acl.go or is listed above with the reason it is not. A new
-// table with neither fails here, so it cannot ship ungranted on Kubernetes.
-func TestGrantRuntimeACL_everyMigrationTableHasAKubernetesGrant(t *testing.T) {
-	created := map[string]int{}
+func migrationTables(t *testing.T) []string {
+	t.Helper()
 	files, err := filepath.Glob("../../migrations/postgres/*.sql")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "no migration files found")
+	seen := map[string]bool{}
 	for _, file := range files {
-		version, err := strconv.Atoi(strings.SplitN(filepath.Base(file), "_", 2)[0])
+		_, err := strconv.Atoi(strings.SplitN(filepath.Base(file), "_", 2)[0])
 		require.NoError(t, err, file)
 		body, err := os.ReadFile(file)
 		require.NoError(t, err)
 		for _, match := range createTablePattern.FindAllStringSubmatch(string(body), -1) {
-			if _, seen := created[match[1]]; !seen {
-				created[match[1]] = version
-			}
+			seen[match[1]] = true
 		}
 	}
-	require.NotEmpty(t, created)
-
-	source, err := os.ReadFile("grant_runtime_acl.go")
-	require.NoError(t, err)
-	granted := map[string]bool{}
-	for _, match := range grantTablePattern.FindAllStringSubmatch(string(source), -1) {
-		for _, table := range strings.Split(match[1], ",") {
-			granted[strings.TrimPrefix(strings.TrimSpace(table), "acr.")] = true
-		}
+	tables := make([]string, 0, len(seen))
+	for table := range seen {
+		tables = append(tables, table)
 	}
-	require.NotEmpty(t, granted, "no GRANT statements parsed from grant_runtime_acl.go")
+	sort.Strings(tables)
+	return tables
+}
 
-	var ungranted, staleAllow, lateAllow []string
-	for table, version := range created {
-		if granted[table] {
-			continue
-		}
-		reason, allowed := outOfBandGranted[table]
-		if !allowed || strings.TrimSpace(reason) == "" {
+// TestRuntimeGrantDeclaration_coversEveryMigrationTable is the class test: every
+// table a migration creates is declared in internal/dbacl (and so granted on
+// both the compose and Kubernetes paths) or is named there as having no runtime
+// access, with a reason. There is no allowlist: a new table with neither fails.
+func TestRuntimeGrantDeclaration_coversEveryMigrationTable(t *testing.T) {
+	declared := map[string]bool{}
+	for _, table := range dbacl.Tables() {
+		declared[table] = true
+	}
+	created := map[string]bool{}
+	var ungranted, withoutReason, bothWays []string
+	for _, table := range migrationTables(t) {
+		created[table] = true
+		reason, noAccess := dbacl.NoRuntimeAccess[table]
+		switch {
+		case declared[table] && noAccess:
+			bothWays = append(bothWays, table)
+		case !declared[table] && !noAccess:
 			ungranted = append(ungranted, table)
-			continue
-		}
-		if version > lastOutOfBandMigration {
-			lateAllow = append(lateAllow, table)
+		case noAccess && strings.TrimSpace(reason) == "":
+			withoutReason = append(withoutReason, table)
 		}
 	}
-	for table := range outOfBandGranted {
-		if _, exists := created[table]; !exists {
-			staleAllow = append(staleAllow, table)
+	var stale []string
+	for table := range declared {
+		if table != "schema_migrations" && !created[table] {
+			stale = append(stale, table)
 		}
 	}
-	sort.Strings(ungranted)
-	sort.Strings(staleAllow)
-	sort.Strings(lateAllow)
-	require.Empty(t, ungranted, "tables created by a migration with no grant in grant_runtime_acl.go and no out-of-band entry: the runtime role cannot use them on Kubernetes")
-	require.Empty(t, lateAllow, "tables created after migration 0040 cannot be allowed out of band: grant them in grant_runtime_acl.go")
-	require.Empty(t, staleAllow, "out-of-band entries for tables no migration creates")
+	for table := range dbacl.NoRuntimeAccess {
+		if !created[table] {
+			stale = append(stale, table)
+		}
+	}
+	sort.Strings(stale)
+	require.Empty(t, ungranted, "tables created by a migration that internal/dbacl neither grants to the runtime role nor lists in NoRuntimeAccess")
+	require.Empty(t, bothWays, "tables both declared and listed as no runtime access")
+	require.Empty(t, withoutReason, "NoRuntimeAccess entries need a reason")
+	require.Empty(t, stale, "internal/dbacl names tables no migration creates")
+}
+
+// TestRuntimeGrantDeclaration_includesWhatTheReadinessCheckAsserts keeps the
+// readiness check's privilege assertions inside the declaration: a privilege the
+// check demands that the runtime role is never granted would fail readiness.
+func TestRuntimeGrantDeclaration_includesWhatTheReadinessCheckAsserts(t *testing.T) {
+	source, err := os.ReadFile("../../internal/runtime/hosted/postgres_readiness.go")
+	require.NoError(t, err)
+	matches := readinessPrivilegePatten.FindAllStringSubmatch(string(source), -1)
+	require.NotEmpty(t, matches, "no privilege assertions parsed from the readiness check")
+	declared := map[string]bool{}
+	for _, grant := range dbacl.RuntimeGrants {
+		for _, privilege := range grant.Privileges {
+			declared[grant.Table+"/"+privilege] = true
+		}
+	}
+	var missing []string
+	for _, match := range matches {
+		if !declared[match[1]+"/"+match[2]] {
+			missing = append(missing, match[2]+" on "+match[1])
+		}
+	}
+	require.Empty(t, missing, "the readiness check asserts privileges the declaration does not grant")
+}
+
+// TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration runs the
+// Kubernetes path on a fresh database without default privileges and compares,
+// for every table a migration creates and every table privilege, what the
+// runtime role holds with what internal/dbacl declares, under each feature
+// setting.
+func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testing.T) {
+	for name, features := range map[string]dbacl.Features{
+		"no optional feature":    {},
+		"every optional feature": {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true},
+	} {
+		features := features
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			database := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_declaration_test", Features: features})
+			want := map[string]map[string]bool{}
+			for _, statement := range dbacl.GrantStatements(dbacl.QuoteIdent(database.Role), features) {
+				if want[statement.Table] == nil {
+					want[statement.Table] = map[string]bool{}
+				}
+				for _, privilege := range statement.Privileges {
+					want[statement.Table][privilege] = true
+				}
+			}
+			var mismatches []string
+			for _, table := range migrationTables(t) {
+				for _, privilege := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {
+					var has bool
+					require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT has_table_privilege($1, $2, $3)`, database.Role, "acr."+table, privilege).Scan(&has))
+					if has != want[table][privilege] {
+						mismatches = append(mismatches, privilege+" on "+table+": holds "+strconv.FormatBool(has)+", declared "+strconv.FormatBool(want[table][privilege]))
+					}
+				}
+			}
+			require.Empty(t, mismatches)
+			for _, grant := range dbacl.RuntimeGrants {
+				if !features[grant.Feature] && grant.Feature != dbacl.AlwaysOn {
+					continue
+				}
+				for _, sequence := range grant.Sequences {
+					var has bool
+					require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT has_sequence_privilege($1, $2, 'USAGE')`, database.Role, "acr."+sequence).Scan(&has))
+					require.True(t, has, "USAGE on acr.%s", sequence)
+				}
+			}
+		})
+	}
 }
