@@ -307,3 +307,46 @@ func TestTeamWithUnitsOutsideTheRunAndUnlinkedPullRequestsNamesTheRunCause(t *te
 		t.Errorf("team-prsonly reason = %q, want %s and not %s", only, prsCause, runCause)
 	}
 }
+
+// A work item id is not unique across repositories. A pull request linked to
+// an issue must count as linked whatever another repository's work item of the
+// same id is typed, so the token is never wrongly given: the type of the
+// linked work item is not read.
+func TestAWorkItemIDSharedByAPullRequestTypedItemInAnotherRepositoryNeverMakesTheTokenWrong(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	const orgID = "org-pr-link-same-id"
+	s := newPRLinkSeed(t, ctx, direct, orgID)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
+	inWindow := ts(2026, 9, 10, 0, 0, 0)
+	workItem := func(id, typ, repo string) {
+		s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, '', 'linear', '', NULL, ?)`,
+			id, repoUUID(repo), s.org, "title "+id, typ, "open", s.at, s.at, s.at)
+	}
+	// team-linked has a pull request linked to issue "shared-1", stored in a repository
+	// nobody asks about. team-other owns the repository that stores a work item of
+	// the same id typed pr.
+	s.team("team-linked", "repo-linked")
+	s.pullRequest("repo-linked", 1, inWindow, nil)
+	s.link("repo-linked", "shared-1", 1, "native")
+	workItem("shared-1", "issue", "repo-issue-home")
+	s.team("team-other", "repo-other")
+	s.pullRequest("repo-other", 1, inWindow, nil)
+	workItem("shared-1", "pr", "repo-other")
+
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("team-linked"), teamSubject("team-other")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	const token = "investment_team_prs_without_linked_work"
+	if linked := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("team-linked"))]; strings.Contains(linked, token) || !strings.Contains(linked, "none of them has persisted work unit effort") {
+		t.Errorf("team-linked reason = %q, want the no-unit sentence and never %s (its pull request is linked)", linked, token)
+	}
+	if other := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("team-other"))]; !strings.Contains(other, token) {
+		t.Errorf("team-other reason = %q, want %s (its pull request has no link)", other, token)
+	}
+}

@@ -1156,13 +1156,13 @@ import (
 // blocker_dependencies_writer_unresolved_current. An answer saved under v226
 // can count a removed link.
 //
-// v227 -> v228: a team that owns repositories and has no work unit in the
+// v230 -> v231: a team that owns repositories and has no work unit in the
 // window is named investment_team_prs_without_linked_work, with the pull
 // request count, when it has pull requests in the window and none has an
 // admitted link to tracked work. A team with no pull request, or with any
 // linked pull request, keeps investment_team_no_unit_in_window. An answer
-// saved under v227 gives both the old reason.
-const QueryVersion = "devhealthfacts.clickhouse.v228"
+// saved under v230 gives both the old reason.
+const QueryVersion = "devhealthfacts.clickhouse.v231"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
