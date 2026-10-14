@@ -515,10 +515,10 @@ func TestBlockerStatementsSelectEverySpellingAndNeverDoubleCount(t *testing.T) {
 	}
 	blockers, children := client.queries[0].statement, client.queries[1].statement
 	pred := dependencyrelation.KeySQL("d.relationship_type") + " IN ('" + dependencyrelation.Key("blocks") + "', '" + dependencyrelation.Key("blocked_by") + "')"
-	if !strings.Contains(blockers, dependencyrelation.KeySQL("r.relationship_type")+" AS rk") || !strings.Contains(blockers, "x.rk IN ('"+dependencyrelation.Key("blocks")+"', '"+dependencyrelation.Key("blocked_by")+"')") || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
+	if !strings.Contains(blockers, dependencyrelation.KeySQL("d_r.relationship_type")+" AS rk") || !strings.Contains(blockers, "d_x.rk IN ('"+dependencyrelation.Key("blocks")+"', '"+dependencyrelation.Key("blocked_by")+"')") || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
 		t.Fatalf("blockers statement does not select by the shared spelling map:\n%s", blockers)
 	}
-	if strings.Contains(blockers, "FINAL AS ") || !strings.Contains(blockers, "work_item_dependencies AS r FINAL") {
+	if strings.Contains(blockers, "FINAL AS ") || !strings.Contains(blockers, "work_item_dependencies AS d_r FINAL") {
 		t.Fatalf("blockers statement puts an alias after FINAL (a ClickHouse syntax error):\n%s", blockers)
 	}
 	if !strings.Contains(children, "NOT ("+pred+")") {

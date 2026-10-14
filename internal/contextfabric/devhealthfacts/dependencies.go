@@ -378,7 +378,7 @@ func ageReadFailure(ctx context.Context, subject string, err error) error {
 	if ctx.Err() != nil {
 		return err
 	}
-	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error", contextfabric.SanitizeLogAttr(err.Error()))
+	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error", contextfabric.SanitizeLogAttr(err.Error()), "error_tail", contextfabric.SanitizeLogAttr(errorTail(err.Error(), 240)))
 	return nil
 }
 
@@ -423,7 +423,7 @@ const blockerPairSeparator = "\x1f"
 // edges. The team blocker statements read work items, their link rows and
 // their authorization for these ids only, so a statement's cost follows the
 // blocker edges, not the size of the organization's work item table.
-var blockerEndpointIDsSQL = `(SELECT arrayJoin([be.blocker_id, be.blocked_id]) FROM ` + blockerRowsSQL("be", "work_item_dependencies AS r FINAL", false, "") + `)`
+var blockerEndpointIDsSQL = `(SELECT arrayJoin([be.blocker_id, be.blocked_id]) FROM ` + blockerRowsSQL("be", "work_item_dependencies", " FINAL", false, nil) + `)`
 
 // blockerWorkItemsSQL is the work_items rows of the blocker edge endpoints
 // under alias, with the columns the team blocker statements read.
@@ -435,7 +435,7 @@ func blockerWorkItemsSQL(alias string) string {
 // sync time. The subselect reads the first-seen rows of the blocker edge
 // endpoints only, so its cost follows the blocker edges.
 var blockerStartJoinSQL = ` LEFT JOIN (SELECT f.blocker_id AS blocker_id, f.blocked_id AS blocked_id, min(f.first_seen_at) AS first_seen, 1 AS seen
-    FROM ` + blockerRowsSQL("f", "work_item_dependency_first_seen AS r", false, "r.source_work_item_id IN "+blockerEndpointIDsSQL+" AND r.target_work_item_id IN "+blockerEndpointIDsSQL, "first_seen_at") + `
+    FROM ` + blockerRowsSQL("f", "work_item_dependency_first_seen", "", false, rawEndsIn(blockerEndpointIDsSQL), "first_seen_at") + `
     GROUP BY blocker_id, blocked_id) AS fs
     ON fs.blocker_id = d.blocker_id AND fs.blocked_id = d.blocked_id`
 
@@ -824,36 +824,50 @@ func blockerRelationPredicateSQL(keyColumn string) string {
 // merge (a condition on the derived ids cannot); alias names the result. The
 // spelling map is evaluated once, in the innermost select, and the organization
 // is fixed there.
-func blockerRowsSQL(alias, from string, stored bool, rawFilter string, extraColumns ...string) string {
+func blockerRowsSQL(alias, table, finalClause string, stored bool, rawFilter func(r string) string, extraColumns ...string) string {
+	r, x := alias+"_r", alias+"_x"
 	extra := ""
 	outerExtra := ""
 	for _, column := range extraColumns {
-		extra += ", r." + column
-		outerExtra += ", x." + column + " AS " + column
+		extra += ", " + r + "." + column
+		outerExtra += ", " + x + "." + column + " AS " + column
 	}
-	key := "x." + blockerRelationKeyColumn
+	key := x + "." + blockerRelationKeyColumn
 	storedInner, storedOuter := "", ""
 	if stored {
-		storedInner = ", r.relationship_type"
-		storedOuter = ", x.source_work_item_id AS source_work_item_id, x.target_work_item_id AS target_work_item_id, x.relationship_type AS relationship_type, " + key + " AS " + blockerRelationKeyColumn
+		storedInner = ", " + r + ".relationship_type"
+		storedOuter = ", " + x + ".source_work_item_id AS source_work_item_id, " + x + ".target_work_item_id AS target_work_item_id, " + x + ".relationship_type AS relationship_type, " + key + " AS " + blockerRelationKeyColumn
 	}
-	inner := "SELECT r.source_work_item_id, r.target_work_item_id" + storedInner + extra + ", " + dependencyrelation.KeySQL("r.relationship_type") + " AS " + blockerRelationKeyColumn +
-		" FROM " + from + " WHERE r.org_id = {org_id:String}"
-	if rawFilter != "" {
-		inner += " AND " + rawFilter
+	inner := "SELECT " + r + ".source_work_item_id, " + r + ".target_work_item_id" + storedInner + extra + ", " + dependencyrelation.KeySQL(r+".relationship_type") + " AS " + blockerRelationKeyColumn +
+		" FROM " + table + " AS " + r + finalClause + " WHERE " + r + ".org_id = {org_id:String}"
+	if rawFilter != nil {
+		inner += " AND " + rawFilter(r)
 	}
-	return "(SELECT if(" + key + " = '" + blockerInverseKey + "', x.target_work_item_id, x.source_work_item_id) AS blocker_id" +
-		", if(" + key + " = '" + blockerInverseKey + "', x.source_work_item_id, x.target_work_item_id) AS blocked_id" + storedOuter + outerExtra +
-		" FROM (" + inner + ") AS x WHERE " + blockerRelationPredicateSQL(key) + ") AS " + alias
+	return "(SELECT if(" + key + " = '" + blockerInverseKey + "', " + x + ".target_work_item_id, " + x + ".source_work_item_id) AS blocker_id" +
+		", if(" + key + " = '" + blockerInverseKey + "', " + x + ".source_work_item_id, " + x + ".target_work_item_id) AS blocked_id" + storedOuter + outerExtra +
+		" FROM (" + inner + ") AS " + x + " WHERE " + blockerRelationPredicateSQL(key) + ") AS " + alias
+}
+
+func rawEndsIn(set string) func(string) string {
+	return func(r string) string {
+		return r + ".source_work_item_id IN " + set + " AND " + r + ".target_work_item_id IN " + set
+	}
 }
 
 // blockerDependenciesSQL is blockerRowsSQL over work_item_dependencies.
 func blockerDependenciesSQL(alias, authorized string) string {
-	return blockerRowsSQL(alias, "work_item_dependencies AS r FINAL", false, "r.source_work_item_id IN "+authorized+" AND r.target_work_item_id IN "+authorized, "relation_started_at")
+	return blockerRowsSQL(alias, "work_item_dependencies", " FINAL", false, rawEndsIn(authorized), "relation_started_at")
 }
 
 // blockerReaderRowsSQL is the same rows with the stored columns the work item
 // blocker reader cites its evidence from.
 func blockerReaderRowsSQL(alias, authorized string) string {
-	return blockerRowsSQL(alias, "work_item_dependencies AS r FINAL", true, "r.source_work_item_id IN "+authorized+" AND r.target_work_item_id IN "+authorized)
+	return blockerRowsSQL(alias, "work_item_dependencies", " FINAL", true, rawEndsIn(authorized))
+}
+
+func errorTail(message string, n int) string {
+	if len(message) <= n {
+		return ""
+	}
+	return message[len(message)-n:]
 }
