@@ -229,6 +229,43 @@ func fakeRun(t *testing.T, root string, planes Planes, configure func(*Oracle)) 
 	return report
 }
 
+// A root retired on the ops side asks ops nothing and says so; a root with no
+// pair that reads acr only cannot be retired.
+func TestARetiredOpsSideAsksOpsNothingAndIsReported(t *testing.T) {
+	manifest, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	planes := fakePlanes{
+		graphQL:   func(Shape, map[string]any) (json.RawMessage, error) { asked++; return nil, context.Canceled },
+		operation: func(Shape, map[string]any) (json.RawMessage, error) { asked++; return nil, context.Canceled },
+		facts:     noFacts,
+	}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"analytics"},
+		Planes: planes, OpsRetired: map[string]string{"analytics": retiredInvestmentOrgReason}}
+	report, err := oracle.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := report.Root("analytics")
+	if rr == nil || asked != 0 || rr.ShapesRun != 0 || rr.Compared == 0 {
+		t.Fatalf("a retired ops side asked ops %d times or compared nothing: %+v", asked, rr)
+	}
+	if len(rr.Retired) != 1 || !strings.Contains(rr.Retired[0], "RETIRED (9699)") || !strings.Contains(report.Details(), "RETIRED analytics: ") {
+		t.Fatalf("the retirement is not reported: %v", rr.Retired)
+	}
+
+	oracle.OnlyRoots, oracle.OpsRetired = []string{"hotspots"}, map[string]string{"hotspots": "x"}
+	if _, err := oracle.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "no pair that reads acr only") {
+		t.Fatalf("a root with no acr-only pair was retired: %v", err)
+	}
+}
+
 // A generated shape that is not run is not a pass: the run stops.
 func TestRunStopsWhenAGeneratedShapeHasNoCase(t *testing.T) {
 	manifest, _, extract, err := LoadCapture(captureDir)

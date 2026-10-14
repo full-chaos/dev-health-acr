@@ -180,7 +180,13 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 	}
 	rr.touch("analytics.breakdowns[*].dimension", "analytics.breakdowns[*].measure")
 	rr.Retired = append(rr.Retired, "investment_org (ops value): "+retiredInvestmentOrgReason)
+	return compareInvestmentFacts(ctx, o, rr)
+}
 
+// compareInvestmentFacts is what root analytics compares without an ops
+// answer: the acr repository investment facts against the store rows, and the
+// acr team mix against the repositories the team owns.
+func compareInvestmentFacts(ctx context.Context, o *Oracle, rr *RootReport) error {
 	repoFacts, err := o.facts(ctx, "investment", "repository", o.Store.RepositoryIDs())
 	if err != nil {
 		return err

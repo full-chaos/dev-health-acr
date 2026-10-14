@@ -24,12 +24,15 @@ type rootPair struct {
 	Reason string
 	// compare runs the value pairs of the root.
 	compare func(ctx context.Context, o *Oracle, report *RootReport) error
+	// acrOnly runs the pairs of the root that read no ops answer. A root in
+	// Oracle.OpsRetired runs only these.
+	acrOnly func(ctx context.Context, o *Oracle, report *RootReport) error
 }
 
 // rootPairs covers every allowed root field. Run fails when the policy
 // serves a root that is not in this table.
 var rootPairs = map[string]rootPair{
-	"analytics":            {Mode: ModeValue, compare: compareInvestment},
+	"analytics":            {Mode: ModeValue, compare: compareInvestment, acrOnly: compareInvestmentFacts},
 	"capacityForecast":     {Mode: ModeShape, Reason: "no acr fact, by design (design r5 A1.1): the on-demand forecast draws a fresh seed per request and acr has no on-demand forecast; class forecast_by_design, shape, echo and limits only"},
 	"capacityForecasts":    {Mode: ModeValue, compare: compareWorkload},
 	"catalog":              {Mode: ModeValue, compare: compareCatalog},
@@ -75,6 +78,13 @@ type Oracle struct {
 	// OnlyRoots, when set, limits the run to these root fields (the
 	// acceptance gate runs one root).
 	OnlyRoots []string
+	// OpsRetired names, per root field, why the run asks ops nothing for it:
+	// no shape, no run_operation and no ops value is read, and only the
+	// pairs of the root that read acr and the store (rootPair.acrOnly) run.
+	// A retired root is reported with RootReport.Retired and is not a
+	// measurement of the ops side. The recorded mode sets it for a root whose
+	// recorded replies the policy no longer lets the oracle ask for.
+	OpsRetired map[string]string
 	// RepositoryEffort is, after Run, the acr repository mix per repository
 	// id and theme.
 	RepositoryEffort map[string]map[string]float64
@@ -430,6 +440,23 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 		}
 		rr := &RootReport{Root: root.Field, Mode: pair.Mode, Reason: pair.Reason, Listener: "served", ByClass: map[Class]int{}}
 		report.Roots = append(report.Roots, rr)
+		if why, retired := o.OpsRetired[root.Field]; retired {
+			if pair.acrOnly == nil {
+				return nil, fmt.Errorf("root %s is retired on the ops side and has no pair that reads acr only", root.Field)
+			}
+			rr.Retired = append(rr.Retired, "ops side of "+root.Field+": "+why)
+			rr.Excluded = excludedPaths(root.Field)
+			if err := pair.acrOnly(ctx, o, rr); err != nil {
+				return nil, fmt.Errorf("root %s: %w", root.Field, err)
+			}
+			rr.NotJoined = append(rr.NotJoined, o.deniedNotes...)
+			o.deniedNotes = nil
+			if rr.Compared == 0 {
+				rr.invalid("a retired root compared nothing with the acr facts")
+			}
+			sort.Strings(rr.NotJoined)
+			continue
+		}
 		candidates := map[string]bool{}
 		for _, name := range root.Operations() {
 			candidates[name] = true
