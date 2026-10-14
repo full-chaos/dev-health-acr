@@ -55,7 +55,9 @@ func (s *OrgPurgeMarkerStore) IsPurged(ctx context.Context, orgID string) (bool,
 // so a marker committed after the discovery began is invisible to it and
 // survives. A purge that touches a marker after the snapshot makes the delete
 // fail with a serialization error, which leaves the marker in place. The
-// returned release must be called once, after the clear or on any failure.
+// returned release must be called after the clear or on any failure; it is
+// safe to call more than once. The snapshot is held for the length of one
+// discovery listing at most, and the database ends it after 120 seconds idle.
 func (s *OrgPurgeMarkerStore) BeginDiscovery(ctx context.Context) (clear func(context.Context, []string) ([]string, error), release func(), err error) {
 	if s == nil || s.db == nil {
 		return nil, nil, errors.New("pgprojection: org purge marker store is not configured")
@@ -65,7 +67,8 @@ func (s *OrgPurgeMarkerStore) BeginDiscovery(ctx context.Context) (clear func(co
 		return nil, nil, fmt.Errorf("begin org purge discovery snapshot: %w", sanitizeError(err))
 	}
 	var one int
-	if err := tx.QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+	var applied string
+	if err := tx.QueryRowContext(ctx, `SELECT 1, set_config('idle_in_transaction_session_timeout', '120000', true)`).Scan(&one, &applied); err != nil {
 		_ = tx.Rollback()
 		return nil, nil, fmt.Errorf("take org purge discovery snapshot: %w", sanitizeError(err))
 	}

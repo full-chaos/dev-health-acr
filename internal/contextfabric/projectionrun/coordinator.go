@@ -684,13 +684,14 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	defer c.refreshMu.Unlock()
 
 	var clearMarkers func(context.Context, []string) ([]string, error)
+	releaseMarkers := func() {}
 	var markerErr error
 	if c.purgeMarkers != nil {
-		var release func()
-		clearMarkers, release, markerErr = c.purgeMarkers.BeginDiscovery(ctx)
-		if release != nil {
-			defer release()
+		clearMarkers, releaseMarkers, markerErr = c.purgeMarkers.BeginDiscovery(ctx)
+		if releaseMarkers == nil {
+			releaseMarkers = func() {}
 		}
+		defer releaseMarkers()
 	}
 	discovery, listErr := c.orgSource.ListOrgs(ctx)
 	// The deny list is applied HERE rather than inside the adapter so it
@@ -724,6 +725,7 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	if listErr == nil {
 		c.clearPurgeMarkers(ctx, effective, clearMarkers, markerErr)
 	}
+	releaseMarkers()
 
 	skipCounts := countOrgSkips(skipped)
 	attrs := []any{

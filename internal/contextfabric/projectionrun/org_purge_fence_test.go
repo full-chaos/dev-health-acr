@@ -13,14 +13,18 @@ import (
 )
 
 type fakePurgeMarker struct {
-	mu      sync.Mutex
-	clock   int64
-	purged  map[string]int64
-	readErr error
+	mu          sync.Mutex
+	clock       int64
+	begins      int
+	release     int
+	purged      map[string]int64
+	staged      map[string]int64
+	committedAt map[string]int64
+	readErr     error
 }
 
 func newFakePurgeMarker(orgs ...string) *fakePurgeMarker {
-	m := &fakePurgeMarker{purged: map[string]int64{}}
+	m := &fakePurgeMarker{purged: map[string]int64{}, committedAt: map[string]int64{}}
 	for _, org := range orgs {
 		m.set(org)
 	}
@@ -52,20 +56,25 @@ func (m *fakePurgeMarker) IsPurged(_ context.Context, org string) (bool, error) 
 func (m *fakePurgeMarker) BeginDiscovery(context.Context) (func(context.Context, []string) ([]string, error), func(), error) {
 	m.mu.Lock()
 	started := m.tick()
+	m.begins++
 	m.mu.Unlock()
 	clear := func(_ context.Context, orgs []string) ([]string, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		var cleared []string
 		for _, org := range orgs {
-			if stamp, ok := m.purged[org]; ok && time.Unix(stamp, 0).Before(started) {
+			if _, ok := m.purged[org]; ok && time.Unix(m.visibleSince(org), 0).Before(started) {
 				delete(m.purged, org)
 				cleared = append(cleared, org)
 			}
 		}
 		return cleared, nil
 	}
-	return clear, func() {}, nil
+	return clear, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.release++
+	}, nil
 }
 
 // purgeDuringDiscovery models a purge that commits after a discovery began and
@@ -78,8 +87,33 @@ type purgeDuringDiscovery struct {
 
 func (s *purgeDuringDiscovery) ListOrgs(ctx context.Context) (contextfabric.OrgDiscoveryResult, error) {
 	result, err := s.inner.ListOrgs(ctx)
-	s.marker.set(s.org)
+	s.marker.commitStaged(s.org)
 	return result, err
+}
+
+// stage records that a purge transaction has written its marker row but not
+// committed it: the row is invisible to every reader, and to a discovery that
+// begins now, until commitStaged. Its stamp is the time of the write, which
+// precedes the discovery.
+func (m *fakePurgeMarker) stage(org string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tick()
+	if m.staged == nil {
+		m.staged = map[string]int64{}
+	}
+	m.staged[org] = m.clock
+}
+
+// commitStaged makes the staged marker visible, as a commit does. The marker
+// keeps its earlier write stamp, which is what a clock-compared clear got wrong.
+func (m *fakePurgeMarker) commitStaged(org string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tick()
+	m.purged[org] = m.staged[org]
+	m.committedAt[org] = m.clock
+	delete(m.staged, org)
 }
 
 // purgeBetweenSelectAndLock models a purge that lands after a tick selected
@@ -205,6 +239,7 @@ func TestPurgeFence_AStaleDiscoveryAnswerCannotEraseAPurgeThatCommittedAfterItBe
 	checkpoints := newFakeCheckpointStore()
 	marker := newFakePurgeMarker()
 	orgs := &purgeDuringDiscovery{inner: &fakeOrgSource{results: []fakeOrgResult{{orgs: []string{"org-stale"}}}}, marker: marker, org: "org-stale"}
+	marker.stage("org-stale")
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgSource: orgs,
 		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
@@ -250,5 +285,43 @@ func TestPurgeFence_RebuildRefusesAPurgedOrganizationAndTouchesNothing(t *testin
 	defer checkpoints.mu.Unlock()
 	if len(checkpoints.data) != 0 {
 		t.Fatalf("Rebuild of a purged organization must not write checkpoint rows, rows=%d", len(checkpoints.data))
+	}
+}
+
+// visibleSince is when the marker became visible to readers: its commit, or
+// its write for a marker set directly.
+func (m *fakePurgeMarker) visibleSince(org string) int64 {
+	if at, ok := m.committedAt[org]; ok {
+		return at
+	}
+	return m.purged[org]
+}
+
+func TestPurgeFence_TheDiscoverySnapshotIsReleasedOnEveryPath(t *testing.T) {
+	t.Parallel()
+	for name, results := range map[string][]fakeOrgResult{
+		"listing succeeds": {{orgs: []string{"org-a"}}},
+		"listing fails":    {{err: errors.New("directory down")}},
+	} {
+		results := results
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			marker := newFakePurgeMarker()
+			coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+				OrgSource: &fakeOrgSource{results: results},
+				Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+				Backend:   newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+				PurgeMarkers: marker, DrainBatchBudget: -1, Logger: discardLogger(),
+			})
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			coordinator.Tick(context.Background())
+			marker.mu.Lock()
+			defer marker.mu.Unlock()
+			if marker.begins == 0 || marker.release < marker.begins {
+				t.Fatalf("every discovery snapshot must be released at least once: begins=%d releases=%d", marker.begins, marker.release)
+			}
+		})
 	}
 }
