@@ -51,6 +51,32 @@ func TestReadFactsServesFractionalTeamCountersOnBothColumnTypes(t *testing.T) {
 					t.Fatalf("seed team metrics: %v", err)
 				}
 			}
+			// The same team owns a project, so the project aggregate carries the
+			// team's counters.
+			if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+				"proj-share", orgID, "linear", "SHARE", "Project share", uint8(1), "active", "", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+				t.Fatalf("seed projects row: %v", err)
+			}
+			if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+				orgID, "linear", "team-share", "proj-share", "SHARE", "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
+				t.Fatalf("seed team ownership: %v", err)
+			}
+			projectResult, err := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactMetrics).ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-share")},
+			})
+			if err != nil {
+				t.Fatalf("project ReadFacts: %v", err)
+			}
+			if len(projectResult.Facts) != 1 {
+				t.Fatalf("project facts = %#v, want exactly 1", projectResult.Facts)
+			}
+			for i, field := range []string{"commits_count", "after_hours_commits_count", "weekend_commits_count"} {
+				value := projectResult.Facts[0].Fields[field]
+				if value.Integer != nil || value.Number == nil || math.Abs(*value.Number-tc.want[i]) > 1e-9 {
+					t.Fatalf("project %s = %#v, want the number %v", field, value, tc.want[i])
+				}
+			}
 			registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 			if err != nil {
 				t.Fatalf("fact registry: %v", err)
