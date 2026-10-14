@@ -221,7 +221,7 @@ func clockTestRules() []stringRule {
 		{"SELECT w.work_item_id, isNotNull(w.completed_at", []string{"item1", "r1"}, nil},
 		{"SELECT w.work_item_id, ifNull(w.title", []string{"item1", "a title", "r1"}, nil},
 		{"SELECT concat(p.provider, ':', p.id), count()", []string{"linear:P1"}, []float64{10, 1, 0, 5}},
-		{"SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)", []string{"item2", "item1", "r1", "r1"}, nil},
+		{"SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(t.repo_id)", []string{"item2", "item1", "blocks", "r1", "r1"}, nil},
 		{"SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type", []string{"item1", "item2", "parent_of", "r1", "r1"}, nil},
 		{"SELECT toString(p.repo_id), p.number", []string{"r1", "open"}, nil},
 		{"SELECT r.review_id", []string{"review1", "approved", "r1"}, nil},

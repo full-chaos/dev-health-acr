@@ -1163,7 +1163,12 @@ import (
 // counters and can carry a fraction of a commit. An answer saved under v227
 // carries integer counters and is not reused as one produced by this version.
 //
-// v228 -> v231: every Investment weight is one per work unit (a unit with no
+// v228 -> v229: the blocker facts (work item, team and project) read a blocker
+// stored under any spelling the graph projection maps onto a blocks edge
+// (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
+// the direction the row states. An answer saved under v228 omits those pairs.
+//
+// v229 -> v231: every Investment weight is one per work unit (a unit with no
 // size counts one); the served weighted_effort, share_in_scope, unit_effort_value
 // and effort_unit_count are counts of work units, not lines of code. An answer
 // saved under v228 carries the old weights and is not reused.
