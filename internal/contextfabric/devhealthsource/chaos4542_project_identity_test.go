@@ -116,7 +116,7 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	// its project_key is the only column tying it to a project -- caught
 	// live by the "tied assertions resolve deterministically" fixture,
 	// which seeds exactly that shape.
-	if !strings.Contains(statement, "'key' AS required_scope_kind") || !strings.Contains(statement, "p.scope_kind = o.required_scope_kind") {
+	if !strings.Contains(statement, "(project_key, 'key')") || !strings.Contains(statement, "p.scope_kind = o.required_scope_kind") {
 		t.Errorf("the producer dropped the key-to-key case; ownership rows keyed only by project_key would vanish\n%s", statement)
 	}
 	// CHAOS-4750 collapsed the four CHAOS-4566 arms into two (asserting,
@@ -132,8 +132,13 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	// out with ARRAY JOIN. So the identity expansion contributes ZERO
 	// unions per arm, by construction rather than by arithmetic.
 	// (arms - 1) + arms = 2*arms - 1, still general in the arm count.
-	if want := 2*len(projectTeamsArms()) - 1; strings.Count(statement, "UNION ALL") != want {
-		t.Errorf("UNION ALL count = %d, want %d (arm-level, plus one ownership-side union and one identity-expansion union per arm)\n%s", strings.Count(statement, "UNION ALL"), want, statement)
+	//
+	// The ownership-side unions are gone too (CHAOS-9546): each arm reads the
+	// collapsed ownership history once and fans the match variants out in the
+	// row itself (ARRAY JOIN for the asserting arm, one if() for the
+	// retraction arm), so only the union between the arms is left.
+	if want := len(projectTeamsArms()) - 1; strings.Count(statement, "UNION ALL") != want {
+		t.Errorf("UNION ALL count = %d, want %d (the unions between the arms only)\n%s", strings.Count(statement, "UNION ALL"), want, statement)
 	}
 }
 
@@ -276,7 +281,7 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 			if strings.Contains(arm, "p.key_resolution_count") || strings.Contains(arm, "p.key_project_count") {
 				t.Errorf("arm %d can ASSERT and gates on a key-ambiguity count -- an asserting arm must never depend on ambiguity", i)
 			}
-			if !strings.Contains(arm, "'' AS required_scope_kind") || !strings.Contains(arm, "'key' AS required_scope_kind") {
+			if !strings.Contains(arm, "[(project_ref, ''), (project_key, 'key')]") || !strings.Contains(arm, "scope_match.2 AS required_scope_kind") {
 				t.Errorf("arm %d must carry both the unrestricted (scope) and 'key' (key) match variants, unioned at the ownership row level", i)
 			}
 		case strings.Contains(arm, "toUInt8(1) AS retraction_only"):
@@ -310,11 +315,11 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 			if strings.Contains(arm, "p.key_resolution_count") {
 				t.Errorf("arm %d gates ambiguity on key_resolution_count, which the pinned expansion makes permanently false for an ambiguous key (id rows hard-code 1; key rows exist only at 1) -- the arm would match nothing and every test but the real-ClickHouse one would stay green", i)
 			}
-			if !strings.Contains(arm, "project_key AS match_value") || !strings.Contains(arm, "project_ref AS match_value") {
+			if !strings.Contains(arm, "if(project_key != '', project_key, project_ref) AS match_value") {
 				t.Errorf("arm %d must carry both the own-key and project_ref (CHAOS-4566 R4 P2) match variants, unioned at the ownership row level", i)
 			}
-			if !strings.Contains(arm, "WHERE project_key != ''") || !strings.Contains(arm, "WHERE project_key = ''") {
-				t.Errorf("arm %d's two match variants must stay mutually exclusive on the ownership row's own project_key, or they would double-match the same row", i)
+			if !strings.Contains(arm, "SELECT count() FROM") || !strings.Contains(arm, "WHERE p.key_project_count > 1) > 0") {
+				t.Errorf("arm %d must read no ownership history when the organization has no ambiguous project key (the gate), or it scans the table for an arm that cannot return a row", i)
 			}
 		default:
 			t.Errorf("arm %d declares no retraction_only literal, so nothing here can tell whether it may assert", i)

@@ -1105,7 +1105,14 @@ import (
 // the statements hold the owned projects' candidates and not every linked work
 // item. The rows are unchanged; the statements and their memory are not, so an
 // answer saved under v218 is not reused as one produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v219"
+//
+// v219 -> v220: the team project link rows resolve the owned projects once, with
+// the team restriction on the ownership rows, and prune both work item passes by
+// the identity values the named teams' ownership rows name instead of resolving
+// the owned set again in each pass. The rows are unchanged; the statements and
+// their memory are not, so an answer saved under v219 is not reused as one
+// produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v220"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
