@@ -186,7 +186,8 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 		t.Run(layout, func(t *testing.T) {
 			m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000030%d", i), layout, 767)
 			capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
-			peaks := measureProjectTeamsFragments(t, m.f, m.query, capped, "prod-"+layout, nil)
+			only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true, "legacy_paged_statement": true}
+			peaks := measureProjectTeamsFragments(t, m.f, m.query, capped, "prod-"+layout, only)
 			report(t, fmt.Sprintf("%d active parts\n%s", m.parts, fragmentTable(layout, peaks)))
 			paged := peakOf(t, peaks, "paged_statement")
 			raw := peakOf(t, peaks, "ownership_raw_final_x1")
