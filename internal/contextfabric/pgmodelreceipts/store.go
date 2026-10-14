@@ -22,6 +22,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 // Store is the production contextfabric.ModelReceiptSink. The caller owns
@@ -106,6 +107,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 func sanitizeError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
 	}
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled

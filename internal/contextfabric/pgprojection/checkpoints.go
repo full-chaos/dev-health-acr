@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 // CheckpointStore is the production contextfabric.ProjectionCheckpointStore.
@@ -359,6 +360,9 @@ var (
 )
 
 func sanitizeError(err error) error {
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
+	}
 	if err == nil {
 		return nil
 	}
