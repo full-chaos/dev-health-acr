@@ -474,15 +474,11 @@ func t4Cases() []t4Case {
 		{match: "lp.project_key", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1), int64(0)}, {"linear:proj-1", int64(1), int64(1), int64(0), int64(0), int64(1)}}},
 	}})
 	add(t4Case{name: "blockers/project", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
-		{match: "arrayJoin([(1, de.source_work_item_id)", rows: nil},
 		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1), int64(0)}}},
-		{match: "arrayJoin([(1, de.source_work_item_id)", rows: nil},
 		{match: "is_open = 1 AND start_unix IS NOT NULL", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1760000000000)}}},
 	}})
 	add(t4Case{name: "blockers/project_without_relation_start", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
-		{match: "arrayJoin([(1, de.source_work_item_id)", rows: nil},
 		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1), int64(0)}}},
-		{match: "arrayJoin([(1, de.source_work_item_id)", rows: nil},
 		{match: "is_open = 1 AND start_unix IS NOT NULL", rows: [][]any{{"linear:proj-1", int64(3), int64(0), int64(0), int64(0)}}},
 	}})
 	add(t4Case{name: "reviews/pull_request_review", kind: contextfabric.FactReviews, subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")}, tables: []fakeTable{
