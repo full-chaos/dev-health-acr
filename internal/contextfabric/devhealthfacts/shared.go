@@ -1133,12 +1133,17 @@ import (
 // statements served are not, so an answer saved under v222 is not reused as
 // one produced by them.
 //
-// v223 -> v224: every blocker read (team, project, work item) keeps only the
+// v223 -> v224: a team pull_requests read serves its pull requests counted by
+// stored state (pull_requests_by_state) and no fact per pull request unless the
+// question asks for the pull requests themselves. The answer changes; an answer
+// saved under v223 is not reused as one produced by the new read.
+//
+// v224 -> v225: every blocker read (team, project, work item) keeps only the
 // links the provider still reports; a link it removed is no longer counted or
 // named the oldest blocker. Team and project blockers facts carry
-// blocker_dependencies_writer_unresolved_current. An answer saved under v223
+// blocker_dependencies_writer_unresolved_current. An answer saved under v224
 // can count a removed link.
-const QueryVersion = "devhealthfacts.clickhouse.v224"
+const QueryVersion = "devhealthfacts.clickhouse.v225"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
