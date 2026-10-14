@@ -112,7 +112,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
-	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), warnings(bundle)
+	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(warnings(bundle), roleWarnings(bundle.Evidence)...))
 	actionEvidence, actionReason := a.actionEvidence(ctx, principal, scope, packet.Freshness.AsOf)
 	if actionReason != "" {
 		packet.Warnings = sortedUnique(append(packet.Warnings, "action_items_unavailable:"+actionReason))

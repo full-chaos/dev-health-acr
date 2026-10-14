@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func (s rowsStore) ResolveEvidence(context.Context, storage.Principal, string) (
 // serves its pull request as cause and itself as pressure, through the real
 // catalog statements on ClickHouse; a successful deployment's pull request is
 // evidence.
-func TestRealNormalizerDeploymentRowsServeFailedDeploymentsAsPressureAndTheirPullRequestAsCause(t *testing.T) {
+func TestRealNormalizerDeploymentRowsServeFailedDeploymentsAsPressureAndTheirPullRequestAsRelation(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
 	for _, statement := range devhealthschema.DDL("repos", "deployments", "git_pull_requests") {
@@ -125,8 +126,11 @@ func TestRealNormalizerDeploymentRowsServeFailedDeploymentsAsPressureAndTheirPul
 	want := map[string]contractsv1.PacketCategory{
 		"deployment:9001": contractsv1.CategoryState, "deployment:9002": contractsv1.CategoryPressure,
 		"deployment:7001": contractsv1.CategoryState, "deployment:7002": contractsv1.CategoryPressure,
-		"pull_request:41": contractsv1.CategoryEvidence, "pull_request:42": contractsv1.CategoryCause,
-		"pull_request:6": contractsv1.CategoryEvidence, "pull_request:7": contractsv1.CategoryCause,
+		"pull_request:41": contractsv1.CategoryEvidence, "pull_request:42": contractsv1.CategoryEvidence,
+		"pull_request:6": contractsv1.CategoryEvidence, "pull_request:7": contractsv1.CategoryEvidence,
+	}
+	if !slices.Contains(packet.Warnings, "cause_links_demoted:2:link_tier_not_stored") {
+		t.Errorf("the two stored pull request links are not counted as demoted: %v", packet.Warnings)
 	}
 	for key, category := range want {
 		if served[key] != category {

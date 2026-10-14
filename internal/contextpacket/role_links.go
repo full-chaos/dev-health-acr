@@ -2,6 +2,7 @@ package contextpacket
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -49,7 +50,7 @@ var revertedCommitPattern = regexp.MustCompile(`(?i)\breverts? commit ([0-9a-f]{
 //
 // Time order alone never makes a cause. Providers store no deployed commit
 // sha on the deployment, so a commit is a cause only through a revert.
-func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]linkedCause {
+func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 	openIncidents := map[string]bool{}
 	for _, ref := range evidence {
 		if ref.Source.EntityType == "incident" && incidentIsOpen(ref.Citation) {
@@ -69,17 +70,26 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]linkedCause 
 			incidentLinked[deploymentID] = true
 		}
 	}
-	carriedPullRequests := map[string]bool{}
+	// The pull request a failed deployment carried is stored without the tier
+	// of the provider's match, so it is a relation, never a cause.
+	relatedPullRequests := map[string]string{}
 	for _, ref := range evidence {
 		if ref.Source.EntityType != "deployment" {
 			continue
 		}
-		if !deploymentFailed(ref) && !incidentLinked[ref.Source.EntityID] {
+		failed, linked := deploymentFailed(ref), incidentLinked[ref.Source.EntityID]
+		if !failed && !linked {
 			continue
 		}
-		if number, _ := ref.Metadata[metadataPullRequestNumber].(string); number != "" {
-			carriedPullRequests[number] = true
+		number, _ := ref.Metadata[metadataPullRequestNumber].(string)
+		if number == "" {
+			continue
 		}
+		what := "a failed deployment"
+		if !failed {
+			what = "a deployment linked to an open incident"
+		}
+		relatedPullRequests[number] = "The provider stored pull request " + number + " for " + what + "; the link's match tier is not stored, so it appears related and is not shown as the cause."
 	}
 	// A revert message names a hash prefix; it marks a commit only when exactly
 	// one commit of the set carries that prefix.
@@ -92,7 +102,8 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]linkedCause 
 			prefixes[strings.ToLower(match[1])] = true
 		}
 	}
-	revertedCommit := map[string]string{}
+	links := causeLinks{causes: map[string]linkedCause{}, demoted: map[string]string{}}
+	revertedCommit := map[string]bool{}
 	for prefix := range prefixes {
 		var matched []string
 		for _, ref := range evidence {
@@ -100,27 +111,35 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) map[string]linkedCause 
 				matched = append(matched, ref.EvidenceRefID)
 			}
 		}
-		if len(matched) == 1 {
-			revertedCommit[matched[0]] = prefix
+		switch {
+		case len(matched) == 1:
+			revertedCommit[matched[0]] = true
+		case len(matched) > 1:
+			links.ambiguousReverts++
 		}
 	}
-	causes := map[string]linkedCause{}
 	for _, ref := range evidence {
 		switch ref.Source.EntityType {
 		case "pull_request":
-			if carriedPullRequests[ref.Source.EntityID] {
-				causes[ref.EvidenceRefID] = linkedCause{
-					claim: contractsv1.ClaimInferred,
-					why:   "The provider stored pull request " + ref.Source.EntityID + " for the deployed commit of a failed or incident-linked deployment; the provider's match tier is not stored, so this appears to be the change that deployment carried.",
-				}
+			if why, ok := relatedPullRequests[ref.Source.EntityID]; ok {
+				links.demoted[ref.EvidenceRefID] = why
 			}
 		case "commit":
-			if _, ok := revertedCommit[ref.EvidenceRefID]; ok {
-				causes[ref.EvidenceRefID] = linkedCause{claim: contractsv1.ClaimObserved, why: "A later commit's message states that it reverts this commit."}
+			if revertedCommit[ref.EvidenceRefID] {
+				links.causes[ref.EvidenceRefID] = linkedCause{claim: contractsv1.ClaimObserved, why: "A later commit's message states that it reverts this commit."}
 			}
 		}
 	}
-	return causes
+	return links
+}
+
+// causeLinks is what the persisted links of one evidence set support: the
+// causes, the relations demoted from cause because the link tier is not
+// stored, and the revert messages whose prefix named more than one commit.
+type causeLinks struct {
+	causes           map[string]linkedCause
+	demoted          map[string]string
+	ambiguousReverts int
 }
 
 // linkedCause is one cause assignment: the claim kind the stored link
@@ -130,37 +149,26 @@ type linkedCause struct {
 	why   string
 }
 
+// roleWarnings discloses the links this pass withheld from the cause role, so
+// a demoted or ambiguous link is counted rather than dropped silently.
+func roleWarnings(evidence []contractsv1.EvidenceRef) []string {
+	links := linkedCauseRefs(evidence)
+	var out []string
+	if len(links.demoted) > 0 {
+		out = append(out, "cause_links_demoted:"+strconv.Itoa(len(links.demoted))+":link_tier_not_stored")
+	}
+	if links.ambiguousReverts > 0 {
+		out = append(out, "revert_links_ambiguous:"+strconv.Itoa(links.ambiguousReverts))
+	}
+	return out
+}
+
 // deploymentFailed reads the stored status the deployments statement carries as
 // a typed column.
 func deploymentFailed(ref contractsv1.EvidenceRef) bool {
 	status, _ := ref.Metadata[metadataDeploymentStatus].(string)
 	return failureTokens[strings.ToLower(strings.TrimSpace(status))]
 }
-
-type roleResolver map[string]rule
-
-func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
-	resolver := roleResolver{}
-	for id, link := range linkedCauseRefs(evidence) {
-		cause := causeRule()
-		cause.why, cause.claim = link.why, link.claim
-		resolver[id] = cause
-	}
-	for id := range activeBlockerRefs(evidence) {
-		resolver[id] = pressureRule()
-	}
-	return resolver
-}
-
-const (
-	metadataRelationKey       = "relation_key"
-	metadataBlockerID         = "blocker_work_item_id"
-	metadataBlockerStatus     = "blocker_status"
-	metadataDeploymentStatus  = "deployment_status"
-	metadataPullRequestNumber = "pull_request_number"
-	metadataDeploymentID      = "deployment_id"
-	metadataIncidentID        = "incident_id"
-)
 
 var closedWorkItemStatuses = map[string]bool{"done": true, "canceled": true, "cancelled": true, "closed": true, "resolved": true}
 
@@ -186,6 +194,36 @@ func activeBlockerRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
 	return active
 }
 
+type roleResolver map[string]rule
+
+const (
+	metadataDeploymentStatus  = "deployment_status"
+	metadataPullRequestNumber = "pull_request_number"
+	metadataDeploymentID      = "deployment_id"
+	metadataIncidentID        = "incident_id"
+	metadataRelationKey       = "relation_key"
+	metadataBlockerID         = "blocker_work_item_id"
+	metadataBlockerStatus     = "blocker_status"
+)
+
+func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
+	resolver := roleResolver{}
+	links := linkedCauseRefs(evidence)
+	for id, link := range links.causes {
+		cause := causeRule()
+		cause.why, cause.claim = link.why, link.claim
+		resolver[id] = cause
+	}
+	for id := range activeBlockerRefs(evidence) {
+		resolver[id] = pressureRule()
+	}
+	for id, why := range links.demoted {
+		relation := rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, why}
+		resolver[id] = relation
+	}
+	return resolver
+}
+
 func (r roleResolver) rule(ref contractsv1.EvidenceRef) rule {
 	base := evidenceRule(ref)
 	if linked, ok := r[ref.EvidenceRefID]; ok {
@@ -196,3 +234,8 @@ func (r roleResolver) rule(ref contractsv1.EvidenceRef) rule {
 	}
 	return base
 }
+
+// ActionItemsUnavailableWarning discloses that no persisted recommendation
+// source is read by context_for_task, so an empty action category means
+// "not served", never "nothing to do".
+const ActionItemsUnavailableWarning = "action_items_unavailable:no_stored_recommendation_source"
