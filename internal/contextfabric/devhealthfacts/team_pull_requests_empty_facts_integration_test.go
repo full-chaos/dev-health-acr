@@ -117,3 +117,71 @@ func TestDirectReadPullRequestsForSeveralTeamsServesCountsByStateNotOneFactPerPu
 		t.Fatalf("served %d team facts, want %d: %+v", teamsServed, len(teams), response.Facts)
 	}
 }
+
+// A team that owns a repository holding pull requests outside the window is
+// served a measured zero for the window counts beside its counts by state; a
+// team whose owned repository holds no pull request row at all is served
+// without data, with no by-state table (absent, never zero rows).
+func TestTeamPullRequestsByStateSeparatesMeasuredZeroFromNoData(t *testing.T) {
+	ctx := context.Background()
+	orgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
+	for _, statement := range devhealthschema.DDL("team_repo_ownership") {
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	at := time.Now().UTC().Truncate(time.Second)
+	old := at.AddDate(-3, 0, 0)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	const oldTeam, emptyTeam = "ZERO-OLD", "ZERO-NONE"
+	for _, team := range []string{oldTeam, emptyTeam} {
+		repo := repoUUID("zero-" + team)
+		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, orgID, "acme/"+strings.ToLower(team), "github", at)
+		exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			orgID, "github", team, repo, "acme/"+strings.ToLower(team), "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
+	}
+	exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoUUID("zero-"+oldTeam), orgID, uint32(1), "old", "merged", at, old, old.Add(time.Hour), old.Add(time.Hour), "feat/x", "")
+
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{ScopeExpander: devhealthfacts.NewScopeExpander(query)})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.CanonicalFactRequest{
+		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+		Subjects:     []contextfabric.SubjectRef{teamSubject(oldTeam), teamSubject(emptyTeam)},
+		Requirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	facts := map[string]contextfabric.CanonicalFact{}
+	for _, fact := range bundle.Facts {
+		facts[fact.Subject.CanonicalID] = fact
+	}
+	oldFact, ok := facts[teamSubject(oldTeam).CanonicalID]
+	if !ok {
+		t.Fatalf("the team with pull requests outside the window has no fact: %+v", bundle.Facts)
+	}
+	if v := oldFact.Fields["pull_requests_opened_window"]; v.Integer == nil || *v.Integer != 0 {
+		t.Fatalf("window count is not a measured zero: %+v", v)
+	}
+	table := oldFact.Fields["pull_requests_by_state"]
+	if table.Table == nil || len(table.Rows) != 1 || table.Rows[0].Fields["state"].String == nil || *table.Rows[0].Fields["state"].String != "merged" {
+		t.Fatalf("counts by state = %+v, want one merged row", table)
+	}
+	if emptyFact, served := facts[teamSubject(emptyTeam).CanonicalID]; served {
+		if _, has := emptyFact.Fields["pull_requests_by_state"]; has {
+			t.Fatalf("a team with no pull request row has a by-state table: %+v", emptyFact.Fields)
+		}
+		if v := emptyFact.Fields["repositories_without_data_count"]; v.Integer == nil || *v.Integer != 1 {
+			t.Fatalf("no-data repository not counted as without data: %+v", emptyFact.Fields)
+		}
+	}
+}

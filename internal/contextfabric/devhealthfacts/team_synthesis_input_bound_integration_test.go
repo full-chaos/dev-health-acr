@@ -159,8 +159,6 @@ func TestATeamAtTheExpansionCapIsSynthesizedWithinTheModelInputBound(t *testing.
 		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
 		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
 		Requirements: requirements,
-		// The bound is measured over the per pull request facts.
-		PullRequestFacts: true,
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts error = %v", err)
@@ -307,6 +305,8 @@ func TestABoundedTeamInputKeepsTheFactsTheQuestionNamesNotTheFirstRead(t *testin
 		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
 		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
 		Requirements: requirements,
+		// The bound is measured over the per pull request facts.
+		PullRequestFacts: true,
 	})
 	if err != nil {
 		t.Fatalf("ReadFacts error = %v", err)

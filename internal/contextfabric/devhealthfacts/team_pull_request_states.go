@@ -114,9 +114,9 @@ func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.
 		func(having string, limit int) string {
 			return `SELECT team_id, repo, ` + statePairsExpression() + `
 FROM (
-	SELECT lr.team_id AS team_id, toString(lr.pr_repo_id) AS repo, ` + pullRequestStateExpression("pr", bound) + ` AS st, toInt64(count()) AS c
+	SELECT lr.team_id AS team_id, toString(lr.pr_repo_id) AS repo, ` + pullRequestStateExpression("lp", bound) + ` AS st, toInt64(count()) AS c
 	FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
-	INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
+	INNER JOIN git_pull_requests AS lp FINAL ON lp.org_id = {org_id:String} AND lp.repo_id = lr.pr_repo_id AND lp.number = lr.pr_number
 	GROUP BY team_id, repo, st
 )
 GROUP BY team_id, repo
