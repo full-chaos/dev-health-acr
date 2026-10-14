@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,7 +56,7 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 	}
 
 	rows, err := query.Query(ctx,
-		"SELECT table, name, type, position FROM system.columns WHERE database = currentDatabase() AND table IN {tables:Array(String)}",
+		"SELECT table, name, type, position, default_kind, default_expression FROM system.columns WHERE database = currentDatabase() AND table IN {tables:Array(String)}",
 		[]contextpacket.ClickHouseBinding{{Name: "tables", Value: tables}})
 	if err != nil {
 		t.Fatalf("query live system.columns: %v", err)
@@ -64,16 +65,19 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 
 	liveTypes := map[string]map[string]string{}
 	livePositions := map[string]map[string]uint64{}
+	liveDefaults := map[string]map[string][2]string{}
 	for rows.Next() {
-		var table, name, chType string
+		var table, name, chType, defaultKind, defaultExpression string
 		var position uint64
-		if err := rows.Scan(&table, &name, &chType, &position); err != nil {
+		if err := rows.Scan(&table, &name, &chType, &position, &defaultKind, &defaultExpression); err != nil {
 			t.Fatalf("scan system.columns row: %v", err)
 		}
 		if liveTypes[table] == nil {
 			liveTypes[table] = map[string]string{}
 			livePositions[table] = map[string]uint64{}
+			liveDefaults[table] = map[string][2]string{}
 		}
+		liveDefaults[table][name] = [2]string{defaultKind, defaultExpression}
 		liveTypes[table][name] = chType
 		livePositions[table][name] = position
 	}
@@ -96,8 +100,23 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 			// A type in transition is declared with its alternates
 			// (Column.AlsoAccepts): a deployment carrying one of them is not
 			// drift, only a type outside the declaration is.
-			if !devhealthschema.AcceptsColumnType(table, column.Name, actual) {
-				t.Errorf("live %s.%s is %q but devhealthschema still says %q (also accepting %v) -- regenerate the snapshot, then check every Scan() destination for %s.%s against the new type", table, column.Name, actual, column.Type, column.AlsoAccepts, table, column.Name)
+			// system.columns.type never carries the DEFAULT/MATERIALIZED
+			// clause: the declaration's type is compared without it, and
+			// the clause is compared as its own field below.
+			base, kind, expression := splitDeclaredType(column.Type)
+			if !devhealthschema.AcceptsColumnType(table, column.Name, actual) && actual != base {
+				t.Errorf("live %s.%s is %q but devhealthschema still says %q (also accepting %v) -- regenerate the snapshot, then check every Scan() destination for %s.%s against the new type", table, column.Name, actual, base, column.AlsoAccepts, table, column.Name)
+			}
+			// A MATERIALIZED column is part of the production contract
+			// (the version a FINAL read picks); a DEFAULT in the
+			// declaration is TEST DDL that deliberately differs from
+			// production's insert-time default, so only MATERIALIZED
+			// is compared.
+			if kind == "MATERIALIZED" {
+				got := liveDefaults[table][column.Name]
+				if got[0] != kind || strings.ReplaceAll(got[1], " ", "") != strings.ReplaceAll(expression, " ", "") {
+					t.Errorf("live %s.%s is %s %q but devhealthschema declares %s %q -- regenerate the snapshot", table, column.Name, got[0], got[1], kind, expression)
+				}
 			}
 		}
 		// CHAOS-3781 round-3 F3: POSITION as well as type. The
@@ -110,6 +129,17 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 
 	assertEngineAndSortingKeyAreFresh(t, ctx, query)
 	assertDeclaredProjectionsAreFresh(t, ctx, query)
+}
+
+// splitDeclaredType separates a declared type from its trailing DEFAULT or
+// MATERIALIZED clause.
+func splitDeclaredType(declared string) (base, kind, expression string) {
+	for _, marker := range []string{" MATERIALIZED ", " DEFAULT "} {
+		if i := strings.Index(declared, marker); i >= 0 {
+			return declared[:i], strings.TrimSpace(marker), declared[i+len(marker):]
+		}
+	}
+	return declared, "", ""
 }
 
 // assertDeclaredProjectionsAreFresh compares each projection devhealthschema
