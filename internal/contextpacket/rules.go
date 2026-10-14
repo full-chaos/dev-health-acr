@@ -47,7 +47,9 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 		}
 		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil}
 	case "incident":
-		if incidentIsOpen(ref.Citation) {
+		// An incident reached through a heuristic repository mapping does not
+		// establish that the incident belongs to this repository.
+		if incidentIsOpen(ref.Citation) && ref.Provenance != contractsv1.EvidenceProvenanceHeuristic {
 			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil}
 		}
 	case "recommendation", "review_action", "task":
