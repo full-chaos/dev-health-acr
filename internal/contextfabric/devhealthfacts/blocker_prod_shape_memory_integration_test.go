@@ -315,8 +315,8 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 
 	// First-seen narrowing: the shipped form must serve every value the
 	// legacy form (endpoint-set narrowing) serves, for both callers, in both
-	// part states; the legacy and one_scan memory is logged beside it.
-	for _, variant := range []string{"legacy", "one_scan"} {
+	// part states; the legacy memory is logged beside it.
+	for _, variant := range []string{"legacy"} {
 		restoreVariant := devhealthfacts.SetBlockerStartVariantForTest(variant)
 		for _, caller := range []struct {
 			label     string

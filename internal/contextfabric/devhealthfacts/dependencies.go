@@ -437,14 +437,12 @@ func blockerWorkItemsSQL(alias string) string {
 // to the blocker endpoint set first (the "legacy" form) costs more memory than
 // the rows it saves, measured on the production shape (the key condition built
 // from the set), and the join keeps only the matching keys either way. The
-// other variants exist for the measurement and the value-equality row only.
+// "legacy" form exists for the value-equality row only.
 func blockerStartJoinFor(variant string) string {
 	restriction := ""
 	switch variant {
 	case "legacy":
 		restriction = ` AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL
-	case "one_scan":
-		restriction = ` AND (source_work_item_id, target_work_item_id, relationship_type) IN (SELECT source_work_item_id, target_work_item_id, relationship_type FROM work_item_dependencies FINAL WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `')`
 	}
 	return ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
     FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `'` + restriction + `
