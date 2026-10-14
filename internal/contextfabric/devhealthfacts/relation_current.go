@@ -72,7 +72,7 @@ func relationRowsSQL() string {
     FROM (SELECT de.source_work_item_id AS s, de.target_work_item_id AS t, de.relationship_type AS rt, de.last_synced AS ls, ` + relationWriterCodeSQL("de") + ` AS code,
         arrayJoin([(1, de.source_work_item_id), (2, de.target_work_item_id)]) AS end_pair, end_pair.1 AS side, end_pair.2 AS end_id
       FROM work_item_dependencies AS de FINAL
-      WHERE de.org_id = {org_id:String} AND ` + blockerPredicateSQL("de") + `) AS e
+      WHERE de.org_id = {org_id:String} AND lower(ifNull(de.relationship_type, '')) = 'blocks') AS e
     LEFT JOIN ` + relationItemReadSQL("w") + ` ON w.work_item_id = e.end_id
     GROUP BY e.s, e.t, e.rt, e.ls, e.code)`
 }
