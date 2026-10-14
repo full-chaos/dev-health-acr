@@ -124,6 +124,15 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 		)); err != nil {
 			return fmt.Errorf("grant acr.web_assertion_replays privileges to %s: %w", role, err)
 		}
+		// The purge marker (migration 0051): SELECT for the projector tick's
+		// check and DELETE for discovery's clear. Only the purge writes the
+		// marker, so the runtime role gets no INSERT or UPDATE.
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			`GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO %s`,
+			quotedRole,
+		)); err != nil {
+			return fmt.Errorf("grant acr.context_fabric_org_purge_markers privileges to %s: %w", role, err)
+		}
 	}
 	role := strings.Join(roles, ", ")
 	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role); err != nil {
@@ -135,6 +144,9 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 	if _, err = fmt.Fprintf(output, "granted DELETE on acr.device_authorizations to %s\n", role); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "granted SELECT, INSERT, DELETE on acr.web_assertion_replays to %s\n", role)
+	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT, DELETE on acr.web_assertion_replays to %s\n", role); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "granted SELECT, DELETE on acr.context_fabric_org_purge_markers to %s\n", role)
 	return err
 }

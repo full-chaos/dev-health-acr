@@ -208,6 +208,19 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 	logger.Debug("context_fabric: projection tick drain summary", attrs...)
 }
 
+// OrgPurgeMarker is the durable per-organization purge fence. IsPurged
+// reports whether `acr-projector purge` removed the organization and it has
+// not returned to discovery. BeginDiscovery is called before organizations are
+// listed and pins the store's view of the markers at that instant: the
+// returned clear removes only markers already committed then, so a discovery
+// answer that began before a purge committed can never erase that purge's
+// marker. clear returns the ids whose marker was removed. release must be
+// called once, whether or not clear ran.
+type OrgPurgeMarker interface {
+	IsPurged(ctx context.Context, orgID string) (bool, error)
+	BeginDiscovery(ctx context.Context) (clear func(context.Context, []string) ([]string, error), release func(), err error)
+}
+
 // RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
 // path may run incremental projection against a purged-but-not-reset
 // graph. PurgeOrganization and resetting every source's checkpoint are two
@@ -302,8 +315,14 @@ type Config struct {
 	Backend          contextfabric.ProjectionBackend
 	Checkpoints      contextfabric.ProjectionCheckpointStore
 	RebuildMarkers   RebuildMarker // required -- see RebuildMarker's doc comment
-	Locker           OrgLocker     // nil -> NoopOrgLocker (in-process mutex only)
-	Observer         Observer      // nil -> discarded
+	// PurgeMarkers is the durable purge fence. Optional: nil disables it.
+	// When set, every per-organization pass checks it right after taking
+	// the organization lock and skips a purged organization, and a
+	// successful discovery clears the marker of every organization in the
+	// effective set.
+	PurgeMarkers OrgPurgeMarker
+	Locker       OrgLocker // nil -> NoopOrgLocker (in-process mutex only)
+	Observer     Observer  // nil -> discarded
 	// ReuseInvalidator is optional (CHAOS-3782). When set, Coordinator
 	// calls InvalidateOrganizationReuse for orgID immediately after a
 	// rebuild (explicit or crash-resumed) completes -- see
@@ -459,6 +478,7 @@ type Coordinator struct {
 	backend            contextfabric.ProjectionBackend
 	checkpoints        contextfabric.ProjectionCheckpointStore
 	rebuildMarkers     RebuildMarker
+	purgeMarkers       OrgPurgeMarker
 	locker             OrgLocker
 	observer           Observer
 	reuseInvalidator   contextfabric.ReuseInvalidator
@@ -663,6 +683,16 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
 
+	var clearMarkers func(context.Context, []string) ([]string, error)
+	releaseMarkers := func() {}
+	var markerErr error
+	if c.purgeMarkers != nil {
+		clearMarkers, releaseMarkers, markerErr = c.purgeMarkers.BeginDiscovery(ctx)
+		if releaseMarkers == nil {
+			releaseMarkers = func() {}
+		}
+		defer releaseMarkers()
+	}
 	discovery, listErr := c.orgSource.ListOrgs(ctx)
 	// The deny list is applied HERE rather than inside the adapter so it
 	// governs every OrgSource identically, and so the static allowlist's
@@ -690,7 +720,13 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	added := countNewOrgs(previous, effective)
 	c.orgIDs = effective
 	staticCount, discoveredCount, effectiveCount := len(c.staticOrgIDs), len(c.discoveredOrgs), len(effective)
+	discoveredNow := append([]string(nil), c.discoveredOrgs...)
 	c.orgsMu.Unlock()
+
+	if listErr == nil {
+		c.clearPurgeMarkers(ctx, discoveredNow, clearMarkers, markerErr)
+	}
+	releaseMarkers()
 
 	skipCounts := countOrgSkips(skipped)
 	attrs := []any{
@@ -717,6 +753,39 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 		append(attrs, "skipped_truncated", len(skipped) > maxLoggedOrgSkipsPerTick)...)
 	c.logOrgSkips(ctx, skipped)
 	return nil
+}
+
+// orgPurged reports whether the organization carries a purge marker. Callers
+// hold the organization lock, so a purge cannot interleave with the answer.
+func (c *Coordinator) orgPurged(ctx context.Context, orgID string) (bool, error) {
+	if c.purgeMarkers == nil {
+		return false, nil
+	}
+	purged, err := c.purgeMarkers.IsPurged(ctx, orgID)
+	c.logger.DebugContext(ctx, "projection organization purge marker checked", "org_id", contextfabric.SanitizeLogAttr(orgID), "purged", purged, "read_failed", err != nil)
+	return purged, err
+}
+
+// clearPurgeMarkers lifts the fence for organizations this discovery listed.
+// A static allowlist entry is not discovery: it never lifts a fence, so an
+// operator removes a purged organization from the allowlist instead.
+// A failure leaves the marker in place, which keeps the organization fenced.
+func (c *Coordinator) clearPurgeMarkers(ctx context.Context, effective []string, clearMarkers func(context.Context, []string) ([]string, error), beginErr error) {
+	if c.purgeMarkers == nil || len(effective) == 0 {
+		return
+	}
+	err := beginErr
+	var cleared []string
+	if err == nil {
+		cleared, err = clearMarkers(ctx, effective)
+	}
+	if err != nil {
+		c.logger.WarnContext(ctx, "projection organization purge marker clear failed; organizations stay fenced", "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return
+	}
+	for _, orgID := range cleared {
+		c.logger.InfoContext(ctx, "projection organization purge marker cleared: organization returned to discovery", "org_id", contextfabric.SanitizeLogAttr(orgID))
+	}
 }
 
 // applyOrgDeny splits a discovered set into the organizations to admit and
@@ -980,7 +1049,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	return &Coordinator{
 		staticOrgIDs: staticOrgIDs, orgSource: cfg.OrgSource, orgDiscoveryDeny: orgDiscoveryDeny,
 		orgIDs: append([]string(nil), staticOrgIDs...), sourceNames: sourceNames, workers: workers, sources: sources,
-		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
+		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers, purgeMarkers: cfg.PurgeMarkers,
 		locker: cfg.Locker, observer: cfg.Observer, reuseInvalidator: cfg.ReuseInvalidator,
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
 		lifecycleTelem: cfg.LifecycleTelemetry, epochInvalidator: cfg.EpochResolverInvalidator, graceWindow: cfg.GraceWindow,
@@ -1016,6 +1085,11 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
+	if purged, err := c.orgPurged(ctx, orgID); err != nil {
+		return fmt.Errorf("projectionrun: read purge marker for rebuild: %w", err)
+	} else if purged {
+		return fmt.Errorf("projectionrun: organization %s was purged and has not returned to discovery", contextfabric.SanitizeLogAttr(orgID))
+	}
 	if c.lifecycle != nil {
 		_, err := c.beginLifecycleBuild(ctx, orgID)
 		return err
@@ -1474,6 +1548,11 @@ type tickFreshnessStats struct {
 	// Info. An organization the tick did not finish evaluating must never
 	// count as healthy.
 	orgsUnevaluated int64
+	// purgeFenced counts organizations this tick skipped because a purge
+	// marker is present or unreadable; purgeFencedHashes names them. They
+	// are also counted in the backoff bucket so the bucket identity holds.
+	purgeFenced       int64
+	purgeFencedHashes []string
 	// sourcesEvaluated/sourcesFailed count (org, source) PAIRS across the
 	// whole tick, and failedSources names the distinct sources behind
 	// sourcesFailed -- a count alone cannot tell an operator whether the
@@ -1796,6 +1875,19 @@ func (s *tickFreshnessStats) snapshotPairFailures() (count int64, names []string
 	copy(names, s.pairFailed)
 	return s.pairFailures, names
 }
+func (s *tickFreshnessStats) recordPurgeFenced(orgHash string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.purgeFenced++
+	s.purgeFencedHashes = append(s.purgeFencedHashes, orgHash)
+}
+
+func (s *tickFreshnessStats) snapshotPurgeFenced() (int64, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.purgeFenced, append([]string(nil), s.purgeFencedHashes...)
+}
+
 func (s *tickFreshnessStats) recordUnevaluated() { atomic.AddInt64(&s.orgsUnevaluated, 1) }
 
 // orgScope is one organization's evaluation, and the ONLY way a bucket is
@@ -2149,6 +2241,10 @@ func (c *Coordinator) Tick(ctx context.Context) {
 	buildSourcesFailed, buildFailedSources := stats.snapshotBuild()
 	pairFailures, pairFailedNames := stats.snapshotPairFailures()
 	sourcesCatchingUp, catchingUpSources, catchUpLagMax := stats.snapshotCatchUp()
+	if fenced, hashes := stats.snapshotPurgeFenced(); fenced > 0 {
+		c.logger.WarnContext(ctx, "context_fabric: projection tick skipped organizations fenced by a purge marker",
+			"orgs_purge_fenced", fenced, "org_id_hashes", contextfabric.SanitizeLogStrings(hashes))
+	}
 	c.logger.InfoContext(ctx, "context_fabric: projection tick freshness summary",
 		"orgs_ok", atomic.LoadInt64(&stats.orgsOK),
 		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
@@ -2331,6 +2427,25 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
+
+	var purged bool
+	err = scope.run(func(ctx context.Context) error {
+		var e error
+		purged, e = c.orgPurged(ctx, orgID)
+		return e
+	})
+	if err != nil {
+		scope.record(scope.stats.recordBackoff)
+		scope.stats.recordPurgeFenced(orgIDHash(orgID))
+		c.logger.WarnContext(scope.logCtx(), "projection organization purge marker read failed; skipping tick", "org_id_hash", contextfabric.SanitizeLogAttr(orgIDHash(orgID)), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return
+	}
+	if purged {
+		scope.record(scope.stats.recordBackoff)
+		scope.stats.recordPurgeFenced(orgIDHash(orgID))
+		c.logger.WarnContext(scope.logCtx(), "projection organization skipped: purge marker present", "org_id_hash", contextfabric.SanitizeLogAttr(orgIDHash(orgID)))
+		return
+	}
 
 	c.graphCounts.resetOrg(orgID, c.sourceNames)
 	if c.lifecycle != nil {
