@@ -393,6 +393,8 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Error("with the library authorization forced back in, no statement exceeded its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
+	t.Error("force the spread and negative-control log lines to print")
+
 	fragmentMark := serverNowMicros(t, ctx, direct)
 	repoKeys := make([]string, 0, 11)
 	for repo := 0; repo < 11; repo++ {
