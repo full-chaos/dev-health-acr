@@ -121,6 +121,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	var teamsRequested int
 	var teamsOwningNothing, teamsNoUnit []contextfabric.SubjectRef
 	var teamsZeroEffort []teamZeroEffort
+	var teamsNoLinked []teamNoLinkedWork
 	var teamsNoUnitCause map[string]emptyCause
 	var teamLinksUnwindowed bool
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
@@ -130,20 +131,20 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// beside the mix they buried it (the model answered from the day rows
 		// and said no shares existed), and without a mix they stood in for
 		// it. A team with no mix is disclosed as unavailable instead.
-		teamRejected, unavailable, noOwned, noUnit, noEffort, noUnitCause, linksUnwindowed, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
+		teamRejected, unavailable, noOwned, noUnit, noEffort, noUnitCause, noLinked, linksUnwindowed, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
 		}
 		rejectedCount += teamRejected
 		teamLinksUnwindowed = linksUnwindowed
-		teamsOwningNothing, teamsNoUnit, teamsZeroEffort, teamsNoUnitCause = noOwned, noUnit, noEffort, noUnitCause
+		teamsOwningNothing, teamsNoUnit, teamsZeroEffort, teamsNoUnitCause, teamsNoLinked = noOwned, noUnit, noEffort, noUnitCause, noLinked
 		teamsRequested = len(teamSubjects) - teamRejected
 		if unavailable > 0 {
 			watermark, watermarkErr := p.readInvestmentWatermark(ctx, orgID)
 			if watermarkErr != nil {
 				return contextfabric.FactProviderResult{}, readFailure("query investment watermark", watermarkErr)
 			}
-			mixUnavailable = investmentMixUnavailableReason(unavailable, len(noOwned), noEffort, len(teamSubjects)-teamRejected, watermark, causeCounts(noUnit, noUnitCause))
+			mixUnavailable = investmentMixUnavailableReason(unavailable, len(noOwned), noEffort, noLinked, len(teamSubjects)-teamRejected, watermark, causeCounts(noUnit, noUnitCause))
 		}
 	}
 
@@ -255,6 +256,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			cause := teamsNoUnitCause[strings.TrimPrefix(subject.CanonicalID, teamPrefix)]
 			addSubjectReasons(&result, []contextfabric.SubjectRef{subject}, cause.reason())
 		}
+		for _, n := range teamsNoLinked {
+			addSubjectReasons(&result, []contextfabric.SubjectRef{n.subject}, investmentTeamPRsWithoutLinkedWorkOwnReason(n.pullRequests))
+		}
 		for _, z := range teamsZeroEffort {
 			addSubjectReasons(&result, []contextfabric.SubjectRef{z.subject}, investmentTeamEffortNotMeasurableOwnReason(z.units))
 		}
@@ -331,10 +335,10 @@ var canonicalInvestmentThemes = [...]string{
 // exactly nothing" rather than "we have no mix to report". Such teams are
 // counted in unavailable so the caller can say so; shapeRejected counts
 // subjects whose id did not have the team shape (CHAOS-5026).
-func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, noOwned, noUnit []contextfabric.SubjectRef, noEffort []teamZeroEffort, noUnitCause map[string]emptyCause, linksUnwindowed bool, err error) {
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, noOwned, noUnit []contextfabric.SubjectRef, noEffort []teamZeroEffort, noUnitCause map[string]emptyCause, noLinked []teamNoLinkedWork, linksUnwindowed bool, err error) {
 	ids, bySubject, shapeRejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return shapeRejected, 0, nil, nil, nil, nil, false, nil
+		return shapeRejected, 0, nil, nil, nil, nil, nil, false, nil
 	}
 	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
 	// mixes of the repositories the team OWNS (team_repo_ownership), each
@@ -348,7 +352,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	}
 	current, prior, owned, ownedUnits, linked, projectTeams, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
-		return shapeRejected, 0, nil, nil, nil, nil, false, err
+		return shapeRejected, 0, nil, nil, nil, nil, nil, false, err
 	}
 	// A team also reaches repositories through its owned projects' linked
 	// pull requests: those count only their linked pull requests (linked), and
@@ -363,7 +367,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	if len(projectTeams) > 0 {
 		reachedRepos, reachErr := teamProjectReachedRepositories(ctx, p.facts.client, orgID, projectTeams, timeBound)
 		if reachErr != nil {
-			return shapeRejected, 0, nil, nil, nil, nil, false, reachErr
+			return shapeRejected, 0, nil, nil, nil, nil, nil, false, reachErr
 		}
 		reachedOnly = reachedOnlyRepositories(reachedRepos, ownedRepos)
 	}
@@ -447,7 +451,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		}
 		causes, causeErr := p.teamEmptyCauses(ctx, orgID, unitOwned, timeBound)
 		if causeErr != nil {
-			return shapeRejected, 0, nil, nil, nil, nil, false, causeErr
+			return shapeRejected, 0, nil, nil, nil, nil, nil, false, causeErr
 		}
 		// A named cause (outside the run, or positive-effort units dropped) outranks the zero-effort bucket.
 		keptEffort := noEffort[:0:0]
@@ -461,7 +465,21 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		noEffort = keptEffort
 		noUnitCause = causes
 	}
-	return shapeRejected, unavailable, noOwned, noUnit, noEffort, noUnitCause, linksUnwindowed, nil
+	if len(noUnit) > 0 {
+		// A team that already carries a more specific cause token is never read
+		// or moved here: the order of the empty-reason tokens holds.
+		caused := make(map[string]bool, len(noUnitCause))
+		for teamID, cause := range noUnitCause {
+			if cause.token != "" {
+				caused[teamID] = true
+			}
+		}
+		noUnit, noLinked, err = p.splitTeamsWithoutLinkedWork(ctx, orgID, noUnit, caused, bySubject, owned, reachedOnly, timeBound)
+		if err != nil {
+			return shapeRejected, 0, nil, nil, nil, nil, nil, false, err
+		}
+	}
+	return shapeRejected, unavailable, noOwned, noUnit, noEffort, noUnitCause, noLinked, linksUnwindowed, nil
 }
 
 // investmentWatermarkStatement reads the newest computed_at of the org's
@@ -569,7 +587,7 @@ func investmentTeamEffortNotMeasurableOwnReason(units int64) string {
 // investmentMixUnavailableReason is the disclosure for teams that have no
 // canonical mix: unknown is not healthy and is not a zero mix (North Star
 // check 12), and the watermark says how fresh the data that was searched is.
-func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZeroEffort, requested int, watermark string, caused map[string]int) string {
+func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZeroEffort, noLinked []teamNoLinkedWork, requested int, watermark string, caused map[string]int) string {
 	reason := fmt.Sprintf("investment mix unavailable for %d of %d requested teams", unavailable, requested)
 	if noOwned > 0 {
 		reason += fmt.Sprintf("; %s for %d: the team owns no repository", investmentTeamNoOwnedRepository, noOwned)
@@ -588,7 +606,14 @@ func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZer
 			reason += fmt.Sprintf("; %s for %d: %s", token, n, emptyCause{token: token}.summary())
 		}
 	}
-	if noUnit := unavailable - noOwned - len(noEffort) - causedTotal; noUnit > 0 {
+	if len(noLinked) > 0 {
+		prs := int64(0)
+		for _, n := range noLinked {
+			prs += n.pullRequests
+		}
+		reason += fmt.Sprintf("; %s for %d: %d pull request(s) counted per team (one in a repository two of these teams share counts for each) in the teams' repositories in the requested window; %s", investmentTeamPRsWithoutLinkedWork, len(noLinked), prs, investmentTeamPRsWithoutLinkedWorkRule)
+	}
+	if noUnit := unavailable - noOwned - len(noEffort) - len(noLinked) - causedTotal; noUnit > 0 {
 		reason += fmt.Sprintf("; %s for %d: no repository the team owns and no pull request linked to its owned projects has persisted work unit effort in the requested window", investmentTeamNoUnitInWindow, noUnit)
 	}
 	if watermark == "" {

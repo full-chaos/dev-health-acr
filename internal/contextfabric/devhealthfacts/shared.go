@@ -1167,7 +1167,14 @@ import (
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
 // the direction the row states. An answer saved under v228 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v229"
+//
+// v229 -> v230: a team that owns repositories and has no work unit in the
+// window is named investment_team_prs_without_linked_work, with the pull
+// request count, when it has pull requests in the window and none has an
+// admitted link to tracked work. A team with no pull request, or with any
+// linked pull request, keeps investment_team_no_unit_in_window. An answer
+// saved under v229 gives both the old reason.
+const QueryVersion = "devhealthfacts.clickhouse.v230"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
