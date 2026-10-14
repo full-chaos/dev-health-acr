@@ -2,7 +2,6 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -23,7 +22,8 @@ import (
 // project_membership_transitions, so rounding moves it by at most 2 x 8192 =
 // 16k of the 300k rows it reads more at the larger size, 5.5%. 10% is about
 // twice that, and far below the 100% one more evaluation of the candidate set
-// adds (the statements sent twice, below, read twice the rows per added row).
+// adds, and than the plain-subquery form the statements had before the
+// candidate set was read once, which reads six times the rows per added row.
 const historicalReadRowsMargin = 1.10
 
 // historicalReadRowsStatements names the two scoped historical statements by a
@@ -121,7 +121,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		_ = rows.Close()
 		return readRowsOf(t, ctx, direct, table, fragment, mark)
 	}
-	type reading struct{ rows, highest, spread, twice uint64 }
+	type reading struct{ rows, highest, spread, plain uint64 }
 	// sample reads a statement once unmeasured, then runs warm reads and keeps
 	// the smallest and the spread.
 	sample := func(t *testing.T, table, fragment string, captured capturedStatement) reading {
@@ -156,14 +156,19 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		readings := map[string]reading{}
 		for _, statement := range historicalReadRowsStatements {
 			r := sample(t, statement.table, statement.fragment, statements[statement.label])
-			// The control: the same statement sent twice in one query reads the
-			// tables twice over, and must break the bound.
+			// The control: the same statement with the candidate set referenced as
+			// a plain subquery at every reference (the form before it was read
+			// once) scans the tables at each reference, and must break the bound.
 			body := statements[statement.label].statement
 			if at := strings.LastIndex(body, "\nSETTINGS "); at >= 0 {
 				body = body[:at]
 			}
-			doubled := capturedStatement{statement: fmt.Sprintf("SELECT * FROM (%s) UNION ALL SELECT * FROM (%s)", body, body), bindings: statements[statement.label].bindings}
-			r.twice = sample(t, statement.table, statement.fragment, doubled).rows
+			plainCandidates, onceCandidates := devhealthfacts.HistoricalCandidateSetsForTest()
+			if !strings.Contains(body, onceCandidates) {
+				t.Fatalf("%s: the served statement does not carry the read-once candidate set", statement.label)
+			}
+			plainStatement := capturedStatement{statement: strings.ReplaceAll(body, onceCandidates, plainCandidates), bindings: statements[statement.label].bindings}
+			r.plain = sample(t, statement.table, statement.fragment, plainStatement).rows
 			readings[statement.label] = r
 		}
 		return readings, counts(t)
@@ -201,12 +206,12 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		}
 		t.Logf("READROWS %s slope on the lowest reads: %d more rows for %d added rows, bound %d rows (%.4f per row x %d, floor %d)", label, l.rows-s.rows, added, allowed, bound, added, floor)
 
-		// The guard must be able to fail on this data: the same statement sent
-		// twice in one query reads twice the rows per added row, and its lowest
-		// reads must still break the bound.
-		t.Logf("READROWS %s sent twice in one query: lowest small=%d large=%d", label, s.twice, l.twice)
-		if l.twice <= s.twice || l.twice-s.twice <= allowed {
-			t.Errorf("%s: the statement sent twice read %d more rows for %d added rows, not above the %d allowed: the guard cannot fail on this data", label, l.twice-min(l.twice, s.twice), added, allowed)
+		// The guard must be able to fail on this data: the statement with a
+		// plain candidate subquery at every reference reads many times the rows
+		// per added row, and its lowest reads must still break the bound.
+		t.Logf("READROWS %s with the plain candidate subquery: lowest small=%d large=%d", label, s.plain, l.plain)
+		if l.plain <= s.plain || l.plain-s.plain <= allowed {
+			t.Errorf("%s: the plain-subquery form read %d more rows for %d added rows, not above the %d allowed: the guard cannot fail on this data", label, l.plain-min(l.plain, s.plain), added, allowed)
 		}
 	}
 }
