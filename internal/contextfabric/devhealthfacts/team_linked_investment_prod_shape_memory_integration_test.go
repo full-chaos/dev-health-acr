@@ -88,8 +88,8 @@ const (
 	// held under 64 MiB (repoScopedSplitMemoryCeiling).
 	linkedShapeBoundMiB = 64.0
 	// The unit that names one pull request three times, and its effort: large
-	// enough that a team's feature_delivery effort shows whether it was
-	// counted once (a third of it), not at all, or twice.
+	// enough that a team's feature_delivery effort shows whether the repeated
+	// pull request was counted once (half of the effort) or per mention.
 	linkedShapeRepeatedUnit   = "wu-repeated-key"
 	linkedShapeRepeatedEffort = 9e8
 	linkedShapeRepeatedTeam   = "T-1"
@@ -193,10 +193,11 @@ FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
 SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?) WHERE number % 100 < ?`,
 		orgID, at.Add(time.Hour), uint64(s.units), uint64(s.scopePct))
-	// One unit names the same pull request three times: by repository id and
-	// twice through the same GitHub lookup, beside two tracker keys. Its
-	// distinct references are 3, so a third of its effort goes to the pull
-	// request, which is linked to an issue of a project the other teams own.
+	// One unit names the same pull request three times (by repository id and
+	// twice through the same GitHub lookup) and one other pull request, in a
+	// repository with no link. Its distinct references are 2, so half of its
+	// effort goes to the first pull request, which is linked to an issue of a
+	// project the other teams own. Counting the repeats would give 3 of 4.
 	item := s.teamLinkedItems
 	for item%(s.projects-s.teamProjects) != 0 {
 		item++
@@ -206,7 +207,7 @@ SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)
 	number := 1 + pr/s.ownedRepos
 	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,NULL,?,?,?,?,?,?)`,
 		linkedShapeRepeatedUnit, at, at, linkedShapeRepeatedEffort, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
-		fmt.Sprintf(`{"issues":["ghpr:acme/%s#%d","ghpr:acme/%s#%d","linear:DUP-1","linear:DUP-2"],"prs":["%s#pr%d"]}`, repoLabel, number, repoLabel, number, repoUUID(repoLabel), number),
+		fmt.Sprintf(`{"issues":["ghpr:acme/%s#%d","ghpr:acme/%s#%d"],"prs":["%s#pr%d","%s#pr1"]}`, repoLabel, number, repoLabel, number, repoUUID(repoLabel), number, repoUUID(fmt.Sprintf("shape-r-%d", s.repos-1))),
 		at, orgID)
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?, 'issue', 'n-repeated', ?, 'theme', 'feature_delivery', ?, 'run-1')`,
 		orgID, linkedShapeRepeatedUnit, at.Add(time.Hour))
@@ -437,14 +438,14 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 				}
 			}
 		}
-		// The repeated-key unit is counted once: a third of its effort.
+		// The repeated pull request is counted once: half of the unit's effort.
 		share := other[linkedShapeRepeatedTeam].theme["feature_delivery"]
-		if third := linkedShapeRepeatedEffort / 3; share < third || share > third+1e6 {
-			t.Errorf("%s: team %s feature_delivery effort %v, want the repeated-key unit's third (%v) plus the small units", name, linkedShapeRepeatedTeam, share, third)
+		if half := linkedShapeRepeatedEffort / 2; share < half || share > half+1e6 {
+			t.Errorf("%s: team %s feature_delivery effort %v, want half of the repeated-key unit (%v) plus the small units", name, linkedShapeRepeatedTeam, share, half)
 		}
 	}
-	if share, third := current[linkedShapeRepeatedTeam].theme["feature_delivery"], linkedShapeRepeatedEffort/3; share < third || share > third+1e6 {
-		t.Errorf("current statement: team %s feature_delivery effort %v, want the repeated-key unit's third (%v) plus the small units", linkedShapeRepeatedTeam, share, third)
+	if share, half := current[linkedShapeRepeatedTeam].theme["feature_delivery"], linkedShapeRepeatedEffort/2; share < half || share > half+1e6 {
+		t.Errorf("current statement: team %s feature_delivery effort %v, want half of the repeated-key unit (%v) plus the small units", linkedShapeRepeatedTeam, share, half)
 	}
 	for stage, peak := range map[string]float64{"unmerged": servedUnmerged, "optimized": servedOptimized} {
 		if peak > linkedShapeBoundMiB {
