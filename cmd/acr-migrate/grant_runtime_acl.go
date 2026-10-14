@@ -128,26 +128,66 @@ func runtimeFeatures(lookup lookupEnv) dbacl.Features {
 // like the runtime DSN, only for the user name it embeds, and never dials it.
 const purgeDSNEnvironment = "ACR_POSTGRES_PURGE_DSN"
 
-// grantPurgeACL gives the org purge's own role exactly the privileges the purge
-// statements need (internal/dbacl PurgeGrants), as bare idempotent GRANTs. The
-// purge role must not be the runtime role: the purge's DELETE grants are never
-// given to the role the API and the projector connect as.
-func grantPurgeACL(ctx context.Context, db *sql.DB, purgeDSN, runtimeDSN string, output io.Writer) error {
-	purge, err := pgx.ParseConfig(purgeDSN)
+// dsnRoles returns the database roles a DSN's connections run as: its login
+// user and, when the DSN carries a role parameter (applied as SET ROLE on
+// connect), that role too. Privileges are granted to all of them.
+func dsnRoles(dsn string) ([]string, error) {
+	parsed, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return errors.New("invalid purge DSN")
+		return nil, errors.New("invalid DSN")
 	}
-	if purge.User == "" || strings.ContainsRune(purge.User, 0) {
-		return errors.New("purge DSN has no usable username")
+	roles := []string{parsed.User}
+	if effective := parsed.RuntimeParams["role"]; effective != "" && effective != parsed.User {
+		roles = append(roles, effective)
 	}
-	if runtime, err := pgx.ParseConfig(runtimeDSN); err == nil && runtime.User == purge.User {
-		return fmt.Errorf("the purge role %q must not be the runtime role: the purge's privileges are not granted to the runtime role", purge.User)
-	}
-	for _, statement := range dbacl.PurgeGrantStatements(dbacl.QuoteIdent(purge.User)) {
-		if _, err := db.ExecContext(ctx, statement.SQL); err != nil {
-			return fmt.Errorf("grant privileges on acr.%s to the purge role: %w", statement.Table, err)
+	for _, role := range roles {
+		if role == "" {
+			return nil, errors.New("DSN has no username")
+		}
+		if strings.ContainsRune(role, 0) {
+			return nil, errors.New("DSN role name contains a NUL byte")
 		}
 	}
-	_, err = fmt.Fprintf(output, "granted the org purge privileges (%d tables) to %s\n", len(dbacl.PurgeGrants), purge.User)
+	return roles, nil
+}
+
+// purgeGrantTargets returns the roles that receive the purge privileges: every
+// role the purge DSN runs as. It refuses when any of them is a role the runtime
+// DSN runs as, so the purge's DELETE grants never reach the role the API and the
+// projector connect as, however either DSN names its roles.
+func purgeGrantTargets(purgeDSN, runtimeDSN string) ([]string, error) {
+	purge, err := dsnRoles(purgeDSN)
+	if err != nil {
+		return nil, fmt.Errorf("purge DSN: %w", err)
+	}
+	runtime, err := dsnRoles(runtimeDSN)
+	if err != nil {
+		return nil, fmt.Errorf("runtime DSN: %w", err)
+	}
+	for _, role := range purge {
+		for _, other := range runtime {
+			if role == other {
+				return nil, fmt.Errorf("the purge role %q must not be a role the runtime runs as: the purge's privileges are not granted to the runtime role", role)
+			}
+		}
+	}
+	return purge, nil
+}
+
+// grantPurgeACL gives the org purge's own role exactly the privileges the purge
+// statements need (internal/dbacl PurgeGrants), as bare idempotent GRANTs.
+func grantPurgeACL(ctx context.Context, db *sql.DB, purgeDSN, runtimeDSN string, output io.Writer) error {
+	roles, err := purgeGrantTargets(purgeDSN, runtimeDSN)
+	if err != nil {
+		return err
+	}
+	for _, role := range roles {
+		for _, statement := range dbacl.PurgeGrantStatements(dbacl.QuoteIdent(role)) {
+			if _, err := db.ExecContext(ctx, statement.SQL); err != nil {
+				return fmt.Errorf("grant privileges on acr.%s to the purge role: %w", statement.Table, err)
+			}
+		}
+	}
+	_, err = fmt.Fprintf(output, "granted the org purge privileges (%d tables) to %s\n", len(dbacl.PurgeGrants), strings.Join(roles, ", "))
 	return err
 }

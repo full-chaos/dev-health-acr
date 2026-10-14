@@ -49,12 +49,34 @@ func TestPurgeRoleHoldsExactlyThePurgeDeclaration(t *testing.T) {
 	require.False(t, purgeCanInsert, "the purge role cannot mint credentials")
 }
 
-// grant-runtime-acl refuses to give the purge privileges to the runtime role.
-func TestGrantRuntimeACLRefusesAPurgeRoleThatIsTheRuntimeRole(t *testing.T) {
-	ctx := context.Background()
-	database := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_same_role_test", SkipGrant: true})
-	err := grantPurgeACL(ctx, database.Owner, "postgres://acr_same_role_test:x@h/acr", "postgres://acr_same_role_test:y@h/acr", discardWriter{})
-	require.ErrorContains(t, err, "must not be the runtime role")
+// grant-runtime-acl refuses to give the purge privileges to a role the runtime
+// runs as, and gives them to every role the purge DSN runs as, however either
+// DSN names them (login user, or a role parameter applied as SET ROLE).
+func TestPurgeGrantTargetsFollowTheEffectiveRolesOfBothDSNs(t *testing.T) {
+	const runtimeDSN = "postgres://acr_runtime:x@h/acr"
+	for name, tc := range map[string]struct {
+		purge, runtime string
+		want           []string
+		refused        bool
+	}{
+		"distinct users":                  {purge: "postgres://acr_purge:x@h/acr", runtime: runtimeDSN, want: []string{"acr_purge"}},
+		"purge role parameter":            {purge: "postgres://acr_login:x@h/acr?role=acr_purge", runtime: runtimeDSN, want: []string{"acr_login", "acr_purge"}},
+		"same user":                       {purge: "postgres://acr_runtime:x@h/acr", runtime: runtimeDSN, refused: true},
+		"purge role parameter is runtime": {purge: "postgres://acr_login:x@h/acr?role=acr_runtime", runtime: runtimeDSN, refused: true},
+		"runtime role parameter is purge": {purge: "postgres://acr_purge:x@h/acr", runtime: "postgres://acr_login:x@h/acr?role=acr_purge", refused: true},
+		"both role parameters distinct":   {purge: "postgres://p:x@h/acr?role=acr_purge", runtime: "postgres://r:x@h/acr?role=acr_runtime", want: []string{"p", "acr_purge"}},
+		"login users equal, roles differ": {purge: "postgres://shared:x@h/acr?role=acr_purge", runtime: "postgres://shared:x@h/acr?role=acr_runtime", refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := purgeGrantTargets(tc.purge, tc.runtime)
+			if tc.refused {
+				require.ErrorContains(t, err, "must not be a role the runtime runs as")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 type discardWriter struct{}

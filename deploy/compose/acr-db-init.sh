@@ -72,10 +72,10 @@ secret_value() {
 
 POSTGRES_PASSWORD="$(secret_value POSTGRES_PASSWORD)"
 ACR_RUNTIME_DB_PASSWORD="$(secret_value ACR_RUNTIME_DB_PASSWORD)"
-ACR_PURGE_DB_PASSWORD=""
 purge_enabled=false
+purge_password=""
 if [ -n "$ACR_PURGE_DB_USER" ]; then
-  ACR_PURGE_DB_PASSWORD="$(secret_value ACR_PURGE_DB_PASSWORD)"
+  purge_password="$(secret_value ACR_PURGE_DB_PASSWORD)"
   purge_enabled=true
 fi
 ACR_MIGRATION_DB_PASSWORD="$(secret_value ACR_MIGRATION_DB_PASSWORD)"
@@ -114,7 +114,7 @@ psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_US
   -v acr_db_name="$ACR_DB_NAME" \
   -v runtime_user="$ACR_RUNTIME_DB_USER" -v runtime_password="$ACR_RUNTIME_DB_PASSWORD" \
   -v migration_user="$ACR_MIGRATION_DB_USER" -v migration_password="$ACR_MIGRATION_DB_PASSWORD" \
-  -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" -v purge_password="$ACR_PURGE_DB_PASSWORD" <<'SQL'
+  -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" -v purge_password="$purge_password" <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'runtime_user', :'runtime_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'runtime_user') \gexec
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'migration_user', :'migration_password')
