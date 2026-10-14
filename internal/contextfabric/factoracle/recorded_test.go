@@ -122,6 +122,13 @@ func loadedCapture(t *testing.T) (Manifest, Recording, *Extract) {
 // for (retiredReplyKeys).
 var recordedOpsRetired = map[string]string{"analytics": retiredInvestmentOrgReason}
 
+// retiredInvestmentOrgReason is why the recorded mode does not replay the ops
+// value of the Investment breakdown: the capture holds the CHURN_LOC replies
+// of a venue before ops dropped that measure, and no reply for COUNT. The live
+// mode compares the pair on COUNT; this entry goes with the next capture of the
+// venue (a replies file is never edited by hand).
+const retiredInvestmentOrgReason = "RETIRED (9699): the recorded capture holds no ops reply for the COUNT breakdown; the pair runs live on COUNT and returns here with the next capture"
+
 func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extract) *Oracle {
 	t.Helper()
 	policy, err := directread.DefaultGraphQLPolicy()

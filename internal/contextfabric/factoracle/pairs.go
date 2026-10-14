@@ -85,42 +85,60 @@ type investmentVerdict struct {
 	Matches     int
 	Differences []Difference
 	Findings    []string
+	// Residual is ops minus the acr repository sum, per theme.
+	Residual map[string]float64
 }
-
-// retiredInvestmentOrgReason says why the ops organization value of the
-// investment breakdown is not compared (pair investment_org, ops side). Ops
-// dropped the CHURN_LOC measure of Investment, so the breakdown is asked under
-// COUNT, a count of work units; acr's weighted_effort is still weighted by the
-// persisted effort_value, so the two are not comparable. The comparison comes
-// back with the follow-up that gives acr one weight per work unit (9699).
-const retiredInvestmentOrgReason = "RETIRED (9699): ops serves the Investment breakdown by work-unit count only, acr weighted_effort is still weighted by effort_value; the ops value is not compared until acr weights by work unit"
 
 // regressionClasses are the investment classes acr is aligned with ops on
 // (ruling K16). They appear only when the acr reader loses the rule.
 var regressionClasses = []Class{ClassSupersession, ClassMembershipScope, ClassNullableArgmax}
 
-// classifyInvestment compares, per theme, the sum of the acr repository mixes
-// with the sum the store rows give for those mixes (expected). The ops
-// organization value is not part of it: that side is retired (see
-// retiredInvestmentOrgReason).
+// classifyInvestment compares, per theme, the ops organization value, the
+// sum of the acr repository mixes and the sum the store rows give for those
+// mixes (expected).
 //
-// When acr is off expected, the difference is named only if it EQUALS the
-// witness of exactly one regression class in every theme; a difference a
-// witness merely bounds is not named. Everything else is a finding.
-func classifyInvestment(acr, expected map[string]float64, witnesses Witnesses) investmentVerdict {
-	var verdict investmentVerdict
-	themes := themeKeys(acr, expected)
+// When acr equals expected, what is left between ops and acr is the effort
+// that reaches no repository: the accepted class attribution_basis. When acr
+// is off expected, the difference is named only if it EQUALS the witness of
+// exactly one regression class in every theme; a difference a witness merely
+// bounds is not named. Everything else is a finding.
+func classifyInvestment(ops, acr, expected map[string]float64, witnesses Witnesses) investmentVerdict {
+	verdict := investmentVerdict{Residual: map[string]float64{}}
+	themes := themeKeys(ops, acr, expected)
+	opsRead := ops != nil
 	excess := map[string]float64{}
 	off := false
 	for _, theme := range themes {
+		if opsRead {
+			verdict.Residual[theme] = ops[theme] - acr[theme]
+		}
 		d := acr[theme] - expected[theme]
 		excess[theme] = d
 		if math.Abs(d) > sumTolerance(acr[theme], expected[theme]) {
 			off = true
 		}
 	}
-	if !off {
+	if !off && !opsRead {
 		verdict.Matches = len(themes)
+		return verdict
+	}
+	if !off {
+		for _, theme := range themes {
+			residual := verdict.Residual[theme]
+			tol := themeTolerance(ops[theme], acr[theme])
+			switch {
+			case residual > tol:
+				verdict.Differences = append(verdict.Differences, Difference{
+					Pair: "investment_org", Key: theme, Class: ClassAttributionBasis, Exact: true,
+					Detail: "ops organization value minus the sum of the acr repository mixes: effort that reaches no repository",
+					Values: map[string]float64{"residual": residual, "ops": ops[theme], "acr_repository_sum": acr[theme]},
+				})
+			case residual < -tol:
+				verdict.Findings = append(verdict.Findings, fmt.Sprintf("theme %s: the acr repository sum is above the ops organization value by %s", theme, formatFloat(-residual)))
+			default:
+				verdict.Matches++
+			}
+		}
 		return verdict
 	}
 	var named []Class
@@ -143,7 +161,7 @@ func classifyInvestment(acr, expected map[string]float64, witnesses Witnesses) i
 	}
 	verdict.Differences = append(verdict.Differences, Difference{
 		Pair: "investment_org", Key: "all themes", Class: named[0], Exact: true, Values: excess,
-		Detail: "the acr repository mixes hold effort the store rows leave out; it equals the store witness of this class",
+		Detail: "the acr repository mixes hold effort the ops reading leaves out; it equals the store witness of this class",
 	})
 	return verdict
 }
@@ -163,30 +181,57 @@ func formatThemes(values map[string]float64) string {
 
 const investmentShape = "analytics/investmentBreakdown/all"
 
-// compareInvestment is root analytics: the ops breakdown by theme is checked
-// for its echo (one THEME breakdown under COUNT); its values are not compared
-// (retiredInvestmentOrgReason). What is compared is the acr repository
-// investment facts against the store rows, and the acr team mix against the
-// repositories the team owns.
+// compareInvestment is root analytics: the ops organization breakdown by
+// theme under COUNT against the acr repository investment facts, and the
+// acr team mix against the repositories the team owns.
 func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 	root, ok, err := o.served(ctx, rr, "investment_org", investmentShape, investmentVariables(o.Window, "THEME"))
 	if err != nil || !ok {
 		return err
 	}
+	ops := map[string]float64{}
 	breakdowns := items(root["breakdowns"])
 	if len(breakdowns) != 1 || breakdowns[0]["dimension"] != "THEME" || breakdowns[0]["measure"] != "COUNT" {
 		rr.find(Finding{Pair: "investment_org", Detail: "echo: the answer is not one THEME breakdown under COUNT"})
 		return nil
 	}
 	rr.touch("analytics.breakdowns[*].dimension", "analytics.breakdowns[*].measure")
-	rr.Retired = append(rr.Retired, "investment_org (ops value): "+retiredInvestmentOrgReason)
-	return compareInvestmentFacts(ctx, o, rr)
+	for _, item := range items(breakdowns[0]["items"]) {
+		key, _ := item["key"].(string)
+		rr.touch("analytics.breakdowns[*].items[*].key", "analytics.breakdowns[*].items[*].value")
+		leaf, lerr := typedLeaf(LeafFloat, item["value"])
+		if lerr != nil || leaf.T == LeafNull {
+			rr.find(Finding{Pair: "investment_org", Key: key, Detail: "ops item value is not a number"})
+			return nil
+		}
+		ops[key], _ = leafFloat(leaf)
+	}
+
+	// The reply and the store must describe the same rows before anything
+	// is said about acr: the ops value is recomputed from the store rows.
+	fromStore := o.Store.OrgThemeEffort(o.Window)
+	for _, theme := range themeKeys(ops, fromStore) {
+		rr.Compared++
+		if math.Abs(ops[theme]-fromStore[theme]) <= themeTolerance(ops[theme], fromStore[theme]) {
+			rr.Matches++
+			continue
+		}
+		rr.find(Finding{Pair: "ops_reply_vs_store", Key: theme, Detail: fmt.Sprintf("ops answered %s, the store rows give %s", formatFloat(ops[theme]), formatFloat(fromStore[theme]))})
+	}
+	return compareInvestmentAcr(ctx, o, rr, ops)
 }
 
 // compareInvestmentFacts is what root analytics compares without an ops
 // answer: the acr repository investment facts against the store rows, and the
-// acr team mix against the repositories the team owns.
+// acr team mix against the repositories the team owns. The recorded mode runs
+// it for a capture that holds no reply for the COUNT breakdown.
 func compareInvestmentFacts(ctx context.Context, o *Oracle, rr *RootReport) error {
+	return compareInvestmentAcr(ctx, o, rr, nil)
+}
+
+// compareInvestmentAcr reads the acr repository facts; with ops nil the ops
+// organization value takes no part.
+func compareInvestmentAcr(ctx context.Context, o *Oracle, rr *RootReport, ops map[string]float64) error {
 	repoFacts, err := o.facts(ctx, "investment", "repository", o.Store.RepositoryIDs())
 	if err != nil {
 		return err
@@ -211,8 +256,8 @@ func compareInvestmentFacts(ctx context.Context, o *Oracle, rr *RootReport) erro
 			expected[theme] += value
 		}
 	}
-	verdict := classifyInvestment(acr, expected, o.Store.Witnesses(o.Window))
-	rr.Compared += len(themeKeys(acr, expected))
+	verdict := classifyInvestment(ops, acr, expected, o.Store.Witnesses(o.Window))
+	rr.Compared += len(themeKeys(ops, acr))
 	rr.Matches += verdict.Matches
 	for _, d := range verdict.Differences {
 		rr.differ(d)
@@ -220,9 +265,12 @@ func compareInvestmentFacts(ctx context.Context, o *Oracle, rr *RootReport) erro
 	for _, detail := range verdict.Findings {
 		rr.find(Finding{Pair: "investment_org", Detail: detail})
 	}
+	if ops != nil {
+		o.Residual, rr.Residual = verdict.Residual, verdict.Residual
+	}
 	// Repository by repository, when the sums agree: effort that moved from
 	// one repository to another is not seen in a sum.
-	if len(verdict.Differences) == 0 {
+	if len(verdict.Differences) == 0 || verdict.Differences[0].Class == ClassAttributionBasis {
 		moved := 0
 		for _, repo := range o.Store.RepositoryIDs() {
 			for _, theme := range themeKeys(byRepo[repo], expectedByRepo[repo]) {

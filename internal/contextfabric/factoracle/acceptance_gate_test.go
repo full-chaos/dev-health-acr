@@ -222,7 +222,7 @@ func directUnit(t *testing.T, extract *Extract, window Window) (id string, row R
 		}
 		total := 0.0
 		for _, share := range unit.latest.themes {
-			total += share * unit.latest.effort
+			total += share
 		}
 		if total > best || (total == best && unitID < id) {
 			best, id, row = total, unitID, candidate
@@ -244,17 +244,13 @@ func cloneRow(row Row) Row {
 
 func unitThemeEffort(t *testing.T, row Row) map[string]float64 {
 	t.Helper()
-	effort, err := rowFloat(row, "effort_value")
-	if err != nil {
-		t.Fatal(err)
-	}
 	themes, err := rowMap(row, "theme_distribution_json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]float64{}
 	for theme, share := range themes {
-		out[theme] = share * effort
+		out[theme] = share
 	}
 	return out
 }
@@ -378,8 +374,47 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	planted := reference.Clone()
 	rows := planted.Tables[tableWorkUnitInvestments]
 	rows[len(rows)-1]["repo_id"] = source["repo_id"]
+	// The venue's own units whose latest generation has no repository and an
+	// older one has (unsized units among them) are planted the same way:
+	// every unit weighs one, so each reaching nothing but its repository adds
+	// its whole theme distribution to the mix a NULL-skipping argMax serves.
+	wantEffort := map[string]float64{}
+	plantedUnits := 0
+	refStore, err := NewStore(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for unitID, unit := range refStore.units {
+		if unit.revivedRepo == "" {
+			continue
+		}
+		var latest Row
+		latestAt := ""
+		for _, row := range rows {
+			if rowID, _ := rowString(row, "work_unit_id"); rowID != unitID {
+				continue
+			}
+			if at, _ := rowString(row, "computed_at"); latest == nil || at > latestAt {
+				latest, latestAt = row, at
+			}
+		}
+		if latest == nil {
+			t.Fatalf("unit %s has no row in the planted extract", unitID)
+		}
+		latest["repo_id"] = unit.revivedRepo
+		plantedUnits++
+		if len(unit.latest.prs) > 0 || len(unit.latest.issues) > 0 || !refStore.repoIDs[strings.ToLower(unit.revivedRepo)] {
+			continue
+		}
+		for theme, share := range unit.latest.themes {
+			wantEffort[theme] += share
+		}
+	}
+	if plantedUnits == 0 {
+		t.Fatal("no unit has a revivable repository: the gate case cannot be built")
+	}
 	_, rr := gateRun(t, manifest, recording, reference, planted)
-	wantPlanted(t, rr, "investment_org", ClassNullableArgmax, unitThemeEffort(t, source))
+	wantPlanted(t, rr, "investment_org", ClassNullableArgmax, wantEffort)
 }
 
 func acceptanceGateNullRepoID(t *testing.T) {
@@ -548,9 +583,16 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	for _, row := range planted.Tables[tableEstimateCoverageMetricsDaily] {
 		bump(row, "unestimated_count", 1)
 	}
+	// A unit weighs one however it is sized, so a changed value is a unit
+	// that is gone: the unit that reaches organization repositories whole.
+	droppedUnit, _ := directUnit(t, extract, manifest.Window)
+	kept := planted.Tables[tableWorkUnitInvestments][:0]
 	for _, row := range planted.Tables[tableWorkUnitInvestments] {
-		bump(row, "effort_value", 1)
+		if rowID, _ := rowString(row, "work_unit_id"); rowID != droppedUnit {
+			kept = append(kept, row)
+		}
 	}
+	planted.Tables[tableWorkUnitInvestments] = kept
 	name, _ := rowString(planted.Tables[tableRepos][0], "repo")
 	planted.Tables[tableRepos][0]["repo"] = name + "x"
 
