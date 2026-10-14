@@ -73,14 +73,14 @@ func TestPastRangeWindowReadsOwnershipAsSyncedAgainstRealClickHouse(t *testing.T
 		}
 		return sum
 	}
-	for i, want := range []float64{3, 5, 11} {
+	for i, want := range []float64{1, 1, 1} {
 		start := end.Add(-time.Duration(180-60*i) * day)
 		if got := total(read("team-past", start, start.Add(60*day))); math.Abs(got-want) > 1e-9 {
 			t.Fatalf("window %d total = %v, want %v", i, got, want)
 		}
 	}
-	if got := total(read("team-past", end.Add(-180*day), end)); math.Abs(got-19) > 1e-9 {
-		t.Fatalf("trailing-shaped 180d total = %v, want 19", got)
+	if got := total(read("team-past", end.Add(-180*day), end)); math.Abs(got-3) > 1e-9 {
+		t.Fatalf("trailing-shaped 180d total = %v, want 3", got)
 	}
 
 	// Empty windows name their cause.

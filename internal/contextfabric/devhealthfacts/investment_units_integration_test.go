@@ -130,8 +130,8 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 					if len(f.EvidenceRefIDs) != 2 || f.EvidenceRefIDs[1] != want {
 						t.Fatalf("wu1@a refs = %v, want the repository ref and %s", f.EvidenceRefIDs, want)
 					}
-					if math.Abs(share-5) > 1e-9 {
-						t.Fatalf("wu1@a share = %v, want 5 (1 of 2 refs of effort 10)", share)
+					if math.Abs(share-0.5) > 1e-9 {
+						t.Fatalf("wu1@a share = %v, want 0.5 (1 of 2 refs, one unit weighs 1)", share)
 					}
 				}
 				if key.id == "wu6" {
@@ -141,8 +141,8 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 					if len(f.EvidenceRefIDs) != 1 {
 						t.Fatalf("wu6 refs = %v, want the repository ref only", f.EvidenceRefIDs)
 					}
-					if math.Abs(share-3) > 1e-9 {
-						t.Fatalf("wu6 share = %v, want 3 (one of one reference)", share)
+					if math.Abs(share-1) > 1e-9 {
+						t.Fatalf("wu6 share = %v, want 1 (one of one reference)", share)
 					}
 				}
 				if key.id == "wu5" {
@@ -152,8 +152,8 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 					if got := *f.Fields["unit_unresolved_refs"].String; got != "ghpr:acme/missing#7" {
 						t.Fatalf("wu5 unresolved handle = %q", got)
 					}
-					if math.Abs(share-2) > 1e-9 {
-						t.Fatalf("wu5 share = %v, want 2 (1 of 2 refs of effort 4)", share)
+					if math.Abs(share-0.5) > 1e-9 {
+						t.Fatalf("wu5 share = %v, want 0.5 (1 of 2 refs, one unit weighs 1)", share)
 					}
 				}
 			case "":

@@ -71,8 +71,8 @@ SELECT concat('` + prefix + `', toString(number)), ` + instant + `, ` + instant 
 		fact := factFor(t, result, teamSubject("team-1"))
 		wantInt(t, fact.Fields, "project_reached_repository_count", 1)
 		for _, row := range fact.Fields["theme_breakdown"].Table.Rows {
-			if *row.Fields["theme"].String == "feature_delivery" && *row.Fields["weighted_effort"].Number != 10 {
-				t.Fatalf("feature_delivery effort = %v, want the linked unit's 10 whatever else the organization holds", *row.Fields["weighted_effort"].Number)
+			if *row.Fields["theme"].String == "feature_delivery" && *row.Fields["weighted_effort"].Number != 1 {
+				t.Fatalf("feature_delivery effort = %v, want the linked unit's weight of 1 whatever else the organization holds", *row.Fields["weighted_effort"].Number)
 			}
 			if *row.Fields["theme"].String == "risk" && *row.Fields["weighted_effort"].Number != 0 {
 				t.Fatalf("risk effort = %v: an unrelated unit reached the team", *row.Fields["weighted_effort"].Number)

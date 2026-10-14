@@ -4,8 +4,8 @@ package devhealthfacts_test
 // organization fixture of investment_organization_integration_test.go: three
 // repositories (repo-b shared by two teams), one unit naming a repository that
 // does not exist and one unit with no reference at all. The expected numbers are
-// worked out by hand from the seeded rows: unit shares wu1 5+5, wu2 8, wu3 6,
-// wu4 50 (74 resolved), wu5 10 and wu6 10 (20 unattributed), 94 in all.
+// worked out by hand from the seeded rows: unit shares (every unit weighs 1) wu1
+// 0.5+0.5, wu2 1, wu3 1, wu4 1 (4 resolved), wu5 1 and wu6 1 (2 unattributed), 6 in all.
 
 import (
 	"context"
@@ -80,11 +80,11 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 		if got := *fields["scope_unattributed_rows"].Integer; got != 2 {
 			t.Fatalf("page %d scope_unattributed_rows = %d, want 2", page, got)
 		}
-		if got := *fields["scope_unattributed_total"].Number; math.Abs(got-20) > 1e-9 {
-			t.Fatalf("page %d scope_unattributed_total = %v, want 20", page, got)
+		if got := *fields["scope_unattributed_total"].Number; math.Abs(got-2) > 1e-9 {
+			t.Fatalf("page %d scope_unattributed_total = %v, want 2", page, got)
 		}
-		if got := *fields["scope_share_total"].Number; math.Abs(got-94) > 1e-9 {
-			t.Fatalf("page %d scope_share_total = %v, want 94 (resolved 74 + unattributed 20)", page, got)
+		if got := *fields["scope_share_total"].Number; math.Abs(got-6) > 1e-9 {
+			t.Fatalf("page %d scope_share_total = %v, want 6 (resolved 4 + unattributed 2)", page, got)
 		}
 		for _, row := range unitFactsOf(result, contextfabric.InvestmentUnitKind) {
 			id := *row.Fields["work_unit_id"].String
@@ -121,7 +121,7 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 		t.Fatalf("rows: %d repository rows %v and %d unattributed %v, want 5 and 2", len(shares), shares, len(unattributed), unattributed)
 	}
 	wantResolved := map[unitKey]float64{
-		{"wu1", a}: 5, {"wu1", b}: 5, {"wu2", a}: 8, {"wu3", b}: 6, {"wu4", c}: 50,
+		{"wu1", a}: 0.5, {"wu1", b}: 0.5, {"wu2", a}: 1, {"wu3", b}: 1, {"wu4", c}: 1,
 	}
 	resolvedSum := 0.0
 	for key, want := range wantResolved {
@@ -130,8 +130,8 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 		}
 		resolvedSum += shares[key]
 	}
-	if math.Abs(unattributed["wu5"]-10) > 1e-9 || math.Abs(unattributed["wu6"]-10) > 1e-9 {
-		t.Errorf("unattributed shares = %v, want wu5 10 and wu6 10", unattributed)
+	if math.Abs(unattributed["wu5"]-1) > 1e-9 || math.Abs(unattributed["wu6"]-1) > 1e-9 {
+		t.Errorf("unattributed shares = %v, want wu5 1 and wu6 1", unattributed)
 	}
 	// The synthetic row of a unit with no reference at all is not an unresolved
 	// reference: wu6 names none, wu5 names the one repository that is not synced.
@@ -141,8 +141,8 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 	if unresolvedRefs["wu5"] != 1 || unresolvedHandles["wu5"] != "ghpr:acme/not-synced#7" {
 		t.Errorf("wu5 reports %d unresolved references %q, want 1 and ghpr:acme/not-synced#7", unresolvedRefs["wu5"], unresolvedHandles["wu5"])
 	}
-	// The listing ties to the organization fact: resolved 74 is the mix's total
-	// weight and 20 of 94 is its unattributed_effort_share.
+	// The listing ties to the organization fact: resolved 4 is the mix's total
+	// weight and 2 of 6 is its unattributed_effort_share.
 	org := read(contextfabric.InvestmentUnitsRequest{Max: 1})
 	var mix *contextfabric.CanonicalFact
 	for i := range org.Facts {
@@ -153,15 +153,15 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 	if mix == nil {
 		t.Fatalf("the organization fact is missing beside the page: %#v", org.Facts)
 	}
-	if got, want := *mix.Fields["unattributed_effort_share"].Number, 20.0/94.0; math.Abs(got-want) > 1e-9 {
+	if got, want := *mix.Fields["unattributed_effort_share"].Number, 2.0/6.0; math.Abs(got-want) > 1e-9 {
 		t.Errorf("unattributed_effort_share = %v, want %v", got, want)
 	}
-	if math.Abs(resolvedSum-74) > 1e-9 {
-		t.Errorf("resolved rows sum to %v, want 74", resolvedSum)
+	if math.Abs(resolvedSum-4) > 1e-9 {
+		t.Errorf("resolved rows sum to %v, want 4", resolvedSum)
 	}
 	// Share descending, then work unit ascending: the page order is the keyset
-	// order, unattributed rows (10 each) among the repository rows by share.
-	if want := []string{"wu4", "wu5", "wu6", "wu2", "wu3", "wu1", "wu1"}; fmt.Sprint(order) != fmt.Sprint(want) {
+	// order, unattributed rows (1 each) tie with the whole-unit repository rows by share.
+	if want := []string{"wu2", "wu3", "wu4", "wu5", "wu6", "wu1", "wu1"}; fmt.Sprint(order) != fmt.Sprint(want) {
 		t.Errorf("row order = %v, want %v", order, want)
 	}
 }

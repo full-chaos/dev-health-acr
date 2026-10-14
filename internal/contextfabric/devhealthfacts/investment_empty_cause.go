@@ -32,7 +32,7 @@ FROM (
 		(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 		argMax(from_ts, computed_at) AS from_ts,
 		argMax(to_ts, computed_at) AS to_ts,
-		argMax(effort_value, computed_at) AS effort_value
+		toFloat64(1) AS effort_value
 	FROM work_unit_investments
 	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 	GROUP BY work_unit_id

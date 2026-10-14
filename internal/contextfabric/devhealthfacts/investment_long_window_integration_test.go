@@ -104,11 +104,11 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 		}
 	}
 	whole, wholeTotal := read(180)
-	if math.Abs(wholeTotal-47) > 1e-9 {
-		t.Fatalf("180d total = %v, want 47 (each unit once)", wholeTotal)
+	if math.Abs(wholeTotal-4) > 1e-9 {
+		t.Fatalf("180d total = %v, want 4 (each unit once)", wholeTotal)
 	}
-	if math.Abs(stitched-67) > 1e-9 {
-		t.Fatalf("stitched total = %v, want 67 (the boundary-spanning unit counted in both windows)", stitched)
+	if math.Abs(stitched-5) > 1e-9 {
+		t.Fatalf("stitched total = %v, want 5 (the boundary-spanning unit counted in both windows)", stitched)
 	}
 	if strings.Contains(whole.Reason, "investment_window_beyond_stored_history") {
 		t.Fatalf("a window inside the stored history carries a span limitation: %q", whole.Reason)
@@ -116,8 +116,8 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 
 	// Window longer than the stored history: earliest stored unit starts at end-181d.
 	long, longTotal := read(365)
-	if math.Abs(longTotal-47) > 1e-9 {
-		t.Fatalf("365d total = %v, want 47 (days before the history are not zero-filled into the mix)", longTotal)
+	if math.Abs(longTotal-4) > 1e-9 {
+		t.Fatalf("365d total = %v, want 4 (days before the history are not zero-filled into the mix)", longTotal)
 	}
 	if !strings.Contains(long.Reason, "investment_window_beyond_stored_history") || !strings.Contains(long.Reason, end.Add(-181*day).Format(time.RFC3339)) {
 		t.Fatalf("365d reason = %q, want the span limitation naming the earliest stored unit", long.Reason)
@@ -182,8 +182,8 @@ func TestShortInvestmentWindowBeyondHistoryNamesTheSpanAgainstRealClickHouse(t *
 	for _, row := range result.Facts[0].Fields["theme_breakdown"].Table.Rows {
 		total += *row.Fields["weighted_effort"].Number
 	}
-	if math.Abs(total-9) > 1e-9 {
-		t.Fatalf("total = %v, want 9", total)
+	if math.Abs(total-1) > 1e-9 {
+		t.Fatalf("total = %v, want 1", total)
 	}
 	if !strings.Contains(result.Reason, "investment_window_beyond_stored_history") || !strings.Contains(result.Reason, from.Format(time.RFC3339)) {
 		t.Fatalf("reason = %q, want the span limitation naming %s", result.Reason, from.Format(time.RFC3339))

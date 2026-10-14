@@ -104,7 +104,7 @@ FROM (
                             work_unit_id,
                             argMax(from_ts, computed_at) AS from_ts,
                             argMax(to_ts, computed_at) AS to_ts,
-                            argMax(effort_value, computed_at) AS effort_value,
+                            toFloat64(1) AS effort_value,
                             argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
                             argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
                             argMax(structural_evidence_json, computed_at) AS structural_evidence_json
