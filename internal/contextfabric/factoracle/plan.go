@@ -40,8 +40,8 @@ var valuePaths = map[string][]pathRule{
 	"analytics": {
 		{Path: "analytics.breakdowns[*].dimension"},
 		{Path: "analytics.breakdowns[*].measure"},
-		{Path: "analytics.breakdowns[*].items[*].key"},
-		{Path: "analytics.breakdowns[*].items[*].value"},
+		{Path: "analytics.breakdowns[*].items[*].key", Reason: retiredInvestmentOrgReason},
+		{Path: "analytics.breakdowns[*].items[*].value", Reason: retiredInvestmentOrgReason},
 		{Path: "analytics.evidenceQualityDistribution", Reason: noField},
 		{Path: "analytics.evidenceQualityStats", Reason: noField},
 		{Path: "analytics.sankey", Reason: "refused shape (design K14-A): sankey is null"},

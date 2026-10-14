@@ -37,6 +37,9 @@ func (r *Report) Table() string {
 func (r *Report) Details() string {
 	var b strings.Builder
 	for _, rr := range r.Roots {
+		for _, retired := range rr.Retired {
+			fmt.Fprintf(&b, "RETIRED %s: %s\n", rr.Root, retired)
+		}
 		if len(rr.Residual) > 0 {
 			fmt.Fprintf(&b, "RESIDUAL %s (ops organization value minus the acr repository sum): %s\n", rr.Root, formatThemes(rr.Residual))
 		}

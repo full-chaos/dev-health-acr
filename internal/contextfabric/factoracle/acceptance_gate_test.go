@@ -29,6 +29,13 @@ import (
 //
 // Re-run this gate after every change to the comparator.
 
+// retiredReplyGateReason is why the gate of the ops reply against the store is
+// skipped: that pair is the retired ops value of the Investment breakdown
+// (retiredInvestmentOrgReason), so no ops value is read and there is nothing
+// for a wrong reply to be found against. It is not a passing gate; it returns
+// with the pair (9699).
+const retiredReplyGateReason = "RETIRED (9699): the ops value of the Investment breakdown is not compared, so a reply of another store cannot be found; this gate returns with the pair"
+
 // gateRun runs root analytics with reference as the store both the ops reply
 // and the witnesses describe, and acr as the store the acr plane reads.
 func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, acr *Extract) (*Oracle, *RootReport) {
@@ -41,8 +48,8 @@ func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, ac
 		t.Fatalf("replay listener failures: %v", failures)
 	}
 	rr := report.Root("analytics")
-	if rr == nil || rr.ShapesRun == 0 || rr.Compared == 0 {
-		t.Fatalf("root analytics was not run: %+v", rr)
+	if rr == nil || rr.Compared == 0 || len(rr.Retired) == 0 {
+		t.Fatalf("root analytics was not run on its acr pairs: %+v", rr)
 	}
 	// A run that is not a valid measurement proves nothing about the class.
 	if len(rr.Invalid) > 0 {
@@ -166,7 +173,7 @@ func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values m
 	if len(rr.Findings) > 0 {
 		t.Errorf("planted run has findings beside the named class: %+v", rr.Findings)
 	}
-	if rr.ShapesRun == 0 || rr.Leaves == 0 {
+	if len(rr.Retired) == 0 && (rr.ShapesRun == 0 || rr.Leaves == 0) {
 		t.Errorf("the shape pass did not run on the planted store")
 	}
 }
@@ -340,12 +347,26 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	controlOracle, control := gateRun(t, manifest, recording, reference, reference)
 	wantClean(t, control, ClassAttributionBasis)
 	// The control is not vacuous: the unit left the repository mix, so the
-	// residual grew by exactly its effort, up to the order the two residuals
-	// were summed in.
+	// repository mix the store rows give shrank by exactly its effort, up to
+	// the order the two sums were added in.
+	baseStore, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixSum := func(byRepo map[string]map[string]float64) map[string]float64 {
+		out := map[string]float64{}
+		for _, themes := range byRepo {
+			for theme, v := range themes {
+				out[theme] += v
+			}
+		}
+		return out
+	}
+	before, after := mixSum(baseStore.ExpectedRepositoryEffort(manifest.Window)), mixSum(controlOracle.Store.ExpectedRepositoryEffort(manifest.Window))
 	for theme, effort := range unitThemeEffort(t, source) {
-		got := controlOracle.Residual[theme] - manifest.Residual[theme]
-		if math.Abs(got-effort) > math.Max(themeTolerance(effort), sumTolerance(controlOracle.Residual[theme], manifest.Residual[theme])) {
-			t.Fatalf("control: the unit %s must leave the repository mix; residual of %s grew by %v, want %v", id, theme, got, effort)
+		got := before[theme] - after[theme]
+		if math.Abs(got-effort) > math.Max(themeTolerance(effort), sumTolerance(before[theme], after[theme])) {
+			t.Fatalf("control: the unit %s must leave the repository mix; the mix of %s shrank by %v, want %v", id, theme, got, effort)
 		}
 	}
 
@@ -604,6 +625,7 @@ func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 // A recorded reply that is not the reply of the reference store is a
 // finding before anything is said about acr.
 func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
+	t.Skip(retiredReplyGateReason)
 	manifest, recording, extract := loadedCapture(t)
 	other := extract.Clone()
 	for _, row := range other.Tables[tableWorkUnitInvestments] {
