@@ -458,22 +458,22 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 	}
 
-	// Planted defect, absolute: the first-seen rows narrowed to the blocker edge
-	// endpoints before the join (the form the shipped statements dropped for
-	// memory) must put some statement at or over its frozen ceiling in every one
-	// of three warm reads (by peak, or by the memory-limit exception, code 241
-	// asserted, never any error). The same reading of the shipped shape must NOT
-	// reach a ceiling: that is what makes the control discriminate. If the planted
-	// reading did not reach one, the ceilings could not catch the defect they
-	// exist for.
+	// Planted defect, absolute: the library authorization relation forced back
+	// inside every statement (the shape before the organization-wide fast path,
+	// the defect the ceilings exist for) must put some statement at or over its
+	// frozen ceiling in every one of three warm reads (by peak, or by the
+	// memory-limit exception, code 241 asserted, never any error). The same
+	// reading of the shipped shape must NOT reach a ceiling: that is what makes
+	// the control discriminate. If the planted reading did not reach one, the
+	// ceilings could not catch the defect they exist for.
 	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape", func() { read(orgWide) }) {
 		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
 	}
-	restoreVariant := devhealthfacts.SetBlockerStartVariantForTest("legacy")
-	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: first-seen narrowed to the endpoints", func() { read(orgWide) })
-	restoreVariant()
+	restoreLibrary = devhealthfacts.ForceLibraryAuthorizationForTest()
+	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: library authorization forced", func() { read(orgWide) })
+	restoreLibrary()
 	if !planted {
-		t.Error("with the first-seen rows narrowed to the endpoints, no statement reached its ceiling: the ceilings cannot catch the defect they exist for")
+		t.Error("with the library authorization forced back in, no statement reached its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
