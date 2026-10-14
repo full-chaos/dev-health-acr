@@ -144,6 +144,14 @@ func CommitmentAuthorizedItemIDsSQLForTest(principal storage.Principal, requeste
 	return authorized
 }
 
+// SetFileHotspotSettingsForTest replaces the settings clause of the file
+// hotspot statements; restore puts the production clause back.
+func SetFileHotspotSettingsForTest(clause string) (restore func()) {
+	previous := fileHotspotSettings
+	fileHotspotSettings = clause
+	return func() { fileHotspotSettings = previous }
+}
+
 // ForceLibraryAuthorizationForTest makes the organization-wide scope take the
 // library relation again (the shape before the fast path), a negative control
 // for the memory ceilings.

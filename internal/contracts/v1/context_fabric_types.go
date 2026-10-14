@@ -453,6 +453,9 @@ const (
 	// security alert counts per repository (security_alerts), counts only.
 	ContextFabricFactSecurityAlerts ContextFabricFactKind = "security_alerts"
 	ContextFabricFactCommitment     ContextFabricFactKind = "commitment"
+	// ContextFabricFactFileHotspots is a v1 ADDITIVE fact kind: the stored
+	// file hotspot rows of a repository's latest run (file_hotspot_daily).
+	ContextFabricFactFileHotspots ContextFabricFactKind = "file_hotspots"
 )
 
 // ContextFabricFactCardinality is a CLAIM kind and NOT a requestable one, and
@@ -523,6 +526,7 @@ var contextFabricFactKinds = [...]ContextFabricFactKind{
 	ContextFabricFactLandscape,
 	ContextFabricFactSecurityAlerts,
 	ContextFabricFactCommitment,
+	ContextFabricFactFileHotspots,
 }
 
 // ContextFabricFactKindCount is the size of the closed fact-kind vocabulary,
