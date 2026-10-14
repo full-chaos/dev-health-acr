@@ -34,6 +34,16 @@ func TestGrantRuntimeACL_runtimeRoleCanUseThePurgeMarkerTable(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// A default privilege for the runtime role would hand it every table the
+	// migrations create and hide a missing grant. This database is fresh, so
+	// prove there is none.
+	var defaultPrivileges int
+	require.NoError(t, adminDB.QueryRowContext(ctx, `SELECT count(*) FROM pg_default_acl`).Scan(&defaultPrivileges))
+	require.Zero(t, defaultPrivileges, "no default privileges: a missing grant must show up as permission denied")
+	var markerPrivilegeBeforeGrant bool
+	require.NoError(t, adminDB.QueryRowContext(ctx, `SELECT has_table_privilege('acr_marker_runtime_test', 'acr.context_fabric_org_purge_markers', 'SELECT')`).Scan(&markerPrivilegeBeforeGrant))
+	require.False(t, markerPrivilegeBeforeGrant, "the runtime role starts with no privilege on the marker table")
+
 	require.NoError(t, run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
 		migrationDSNEnvironment: migrationDSN,
 		runtimeDSNEnvironment:   "postgres://acr_marker_runtime_test:unused@runtime-dsn-is-never-dialed.invalid:5432/acr",
