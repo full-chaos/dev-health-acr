@@ -60,7 +60,7 @@ func runOrganizationQuestion(t *testing.T, receipt ModelExecutionReceipt, propos
 	return runOrganizationQuestionOver(t, receipt, proposal, facts, allowClarification, false)
 }
 
-func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, facts []FactRequirement, allowClarification, noMembers bool) organizationAnswerRun {
+func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, facts []FactRequirement, allowClarification, noMembers bool, served ...FactKind) organizationAnswerRun {
 	t.Helper()
 	logs := captureEngineLogger(t)
 	receipt.QuestionFrame = &proposal
@@ -75,8 +75,18 @@ func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, pr
 	run := organizationAnswerRun{graph: graph}
 	readFacts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 		run.subjects = append(run.subjects, append([]SubjectRef(nil), request.Subjects...))
+		read := []CanonicalFact{}
+		for _, subject := range request.Subjects {
+			for _, requirement := range request.Requirements {
+				for _, kind := range served {
+					if requirement.Kind == kind {
+						read = append(read, CanonicalFact{Kind: kind, Subject: subject, Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"})
+					}
+				}
+			}
+		}
 		return CanonicalFactBundle{
-			Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			Facts: read, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
 		}, nil
 	})
@@ -346,8 +356,11 @@ func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
 	if !roleContains(result.Limitations, contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation) {
 		t.Fatalf("limitations = %#v, want the no-members sentence", result.Limitations)
 	}
-	if result.Completeness.State != contractsv1.ContextFabricAnswerCompletenessDegraded {
-		t.Fatalf("completeness state = %q, want degraded: a missing member set is not a complete answer", result.Completeness.State)
+	if result.Status != InvestigationPartial || result.Completeness.TerminalStatus != InvestigationPartial {
+		t.Fatalf("status/terminal = %q/%q, want partial: facts the organization subject does not serve were not read", result.Status, result.Completeness.TerminalStatus)
+	}
+	if result.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("completeness state = %q, want the unread requirements disclosed", result.Completeness.State)
 	}
 	if roleContains(result.Limitations, contractsv1.ContextFabricOrganizationSurveyTeamLimitation) {
 		t.Fatalf("limitations = %#v claim a roll-up over teams that were never read", result.Limitations)
@@ -355,5 +368,64 @@ func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
 	want := SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:org_role", Label: "org_role"}
 	if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != want {
 		t.Fatalf("fact read subjects = %+v, want only %+v", run.subjects, want)
+	}
+}
+
+// TestAnOrganizationSubjectAnswerIsPartialWhenAKindWasNotRead holds the
+// organization subject's own limit through the engine: it serves investment and
+// source health only, so an investment question that also asks for health is
+// served partial with the health requirement unavailable, never complete.
+func TestAnOrganizationSubjectAnswerIsPartialWhenAKindWasNotRead(t *testing.T) {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	proposal := organizationProposal(nil, GoalAllocateInvestment, GoalAssessState)
+	result := runOrganizationQuestionOver(t, receipt, proposal, []FactRequirement{{Kind: FactInvestment}, {Kind: FactHealth}}, true, false, FactInvestment).result
+	t.Logf("served status=%s completeness_state=%s", result.Status, result.Completeness.State)
+	if result.Status != InvestigationPartial || result.Completeness.TerminalStatus != InvestigationPartial || result.RefusalBasis != "" {
+		t.Fatalf("status/terminal/basis = %q/%q/%q, want partial", result.Status, result.Completeness.TerminalStatus, result.RefusalBasis)
+	}
+	if result.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("completeness state = %q, want the unread requirement disclosed", result.Completeness.State)
+	}
+}
+
+// TestTheOrganizationSubjectStatusFloorOverItsDomain holds the floor's bound:
+// it lowers only a complete answer read from the organization subject whose
+// outcome rows are not all satisfied.
+func TestTheOrganizationSubjectStatusFloorOverItsDomain(t *testing.T) {
+	t.Parallel()
+	row := func(stage contractsv1.ContextFabricOutcomeStage, outcome contractsv1.ContextFabricPlanRequirementOutcome) contractsv1.ContextFabricPlanRequirementOutcomeRow {
+		impact := contractsv1.ContextFabricAnswerImpactNone
+		if outcome != contractsv1.ContextFabricRequirementSatisfied {
+			impact = contractsv1.ContextFabricAnswerImpactDimension
+		}
+		return contractsv1.ContextFabricPlanRequirementOutcomeRow{Stage: stage, Requirement: "allocation_breakdown/subject/organization", Obligation: "allocation_breakdown", Outcome: outcome, Impact: impact}
+	}
+	read := []contractsv1.ContextFabricPlanRequirementOutcomeRow{
+		row(contractsv1.ContextFabricOutcomeStagePlanning, contractsv1.ContextFabricRequirementSatisfied),
+		row(contractsv1.ContextFabricOutcomeStageAssembledResult, contractsv1.ContextFabricRequirementSatisfied),
+	}
+	unread := []contractsv1.ContextFabricPlanRequirementOutcomeRow{row(contractsv1.ContextFabricOutcomeStagePlanning, contractsv1.ContextFabricRequirementUnavailable)}
+	for _, testCase := range []struct {
+		cell       string
+		status     InvestigationStatus
+		limitation string
+		rows       []contractsv1.ContextFabricPlanRequirementOutcomeRow
+		want       InvestigationStatus
+	}{
+		{"investment read in full stays complete", InvestigationComplete, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, read, InvestigationComplete},
+		{"investment with an unread kind is partial", InvestigationComplete, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, unread, InvestigationPartial},
+		{"no members with an unread kind is partial", InvestigationComplete, contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation, unread, InvestigationPartial},
+		{"a survey over members is not this floor's", InvestigationComplete, contractsv1.ContextFabricOrganizationSurveyTeamLimitation, unread, InvestigationComplete},
+		{"a degraded answer is never raised", InvestigationDegraded, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, read, InvestigationDegraded},
+	} {
+		t.Run(testCase.cell, func(t *testing.T) {
+			t.Parallel()
+			result := InvestigationResult{Status: testCase.status, Limitations: []string{testCase.limitation}}
+			result.Completeness.Outcomes = testCase.rows
+			applyOrganizationSubjectStatusFloor(&result)
+			if result.Status != testCase.want {
+				t.Fatalf("status = %q, want %q", result.Status, testCase.want)
+			}
+		})
 	}
 }

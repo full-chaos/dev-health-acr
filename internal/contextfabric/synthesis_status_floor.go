@@ -262,10 +262,33 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
+	applyOrganizationSubjectStatusFloor(&result)
 	if result.Status != before {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
 	return result
+}
+
+// applyOrganizationSubjectStatusFloor floors a complete answer that was read
+// from the caller's organization subject (it carries the organization
+// investment or no-members sentence) while a requirement it derived is not
+// satisfied: the organization kind serves only a few fact kinds, and an answer
+// that could not read the rest is partial, never complete.
+func applyOrganizationSubjectStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	read := false
+	for _, limitation := range result.Limitations {
+		if limitation == contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation || limitation == contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation {
+			read = true
+			break
+		}
+	}
+	if !read || ComputeAnswerCompleteness(*result).State == contractsv1.ContextFabricAnswerCompletenessComplete {
+		return
+	}
+	floorNoMatchTo(result, InvestigationPartial)
 }
 
 // floorNoMatchTo is the one status swap every no_match floor uses: it sets the
