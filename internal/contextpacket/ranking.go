@@ -59,6 +59,11 @@ func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []con
 }
 
 func evidenceBefore(left, right contractsv1.EvidenceRef, goal string, roles roleResolver) bool {
+	// Within the cause role a weaker match tier never outranks a stronger one,
+	// whatever the goal words say.
+	if lr, rr := roles.rule(left), roles.rule(right); lr.category == contractsv1.CategoryCause && rr.category == contractsv1.CategoryCause && lr.subRank != rr.subRank {
+		return lr.subRank > rr.subRank
+	}
 	if l, r := goalScore(left, goal), goalScore(right, goal); l != r {
 		return l > r
 	}
@@ -71,6 +76,9 @@ func evidenceBefore(left, right contractsv1.EvidenceRef, goal string, roles role
 	l, r := roles.rule(left), roles.rule(right)
 	if l.categoryRank != r.categoryRank {
 		return l.categoryRank < r.categoryRank
+	}
+	if l.subRank != r.subRank {
+		return l.subRank > r.subRank
 	}
 	if left.Confidence != right.Confidence {
 		return left.Confidence > right.Confidence
@@ -205,7 +213,7 @@ func evidenceItemWithRoles(ref contractsv1.EvidenceRef, scope contractsv1.Resolv
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
 		WhyIncluded: whyIncluded(rule), RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
-		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence || (rule.why != "" && rule.category != contractsv1.CategoryCause), UntrustedContent: true},
+		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence || (rule.why != "" && (rule.category != contractsv1.CategoryCause || rule.claim == contractsv1.ClaimInferred)), UntrustedContent: true},
 		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: itemEvidenceRefIDs(ref, rule)}
 }
 

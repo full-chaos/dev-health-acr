@@ -67,10 +67,19 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 			incidentLinked[deploymentID] = true
 		}
 	}
-	// The pull request a failed deployment carried is stored without the tier
-	// of the provider's match, so it is a relation, never a cause.
-	relatedPullRequests := map[string]string{}
-	linkCount := map[string]int{}
+	// The pull request a deployment carried is stored with the tier of the
+	// provider's match when the deployments table has the tier column. A link
+	// whose tier is exact_merge_sha, merged_pr or pushed on a FAILED deployment
+	// is a cause candidate, ordered in that strength; every other link
+	// (first_listed, an empty tier, a table without the column, an unrecognized
+	// value, a deployment that did not fail) is a relation, counted per tier.
+	type prLink struct {
+		bestTier string
+		relation string
+	}
+	prLinks := map[string]*prLink{}
+	demotedBuckets := map[string]map[string]int{}
+	promotedBuckets := map[string]map[string]int{}
 	for _, ref := range evidence {
 		if ref.Source.EntityType != "deployment" {
 			continue
@@ -83,12 +92,27 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 		if number == "" {
 			continue
 		}
+		tier, bucket := linkTier(ref)
+		entry := prLinks[number]
+		if entry == nil {
+			entry = &prLink{}
+			prLinks[number] = entry
+		}
+		if failed && tierRank[tier] > 0 {
+			if tierRank[tier] > tierRank[entry.bestTier] {
+				entry.bestTier = tier
+			}
+			addBucket(promotedBuckets, number, tier)
+			continue
+		}
 		what := "a failed deployment"
 		if !failed {
 			what = "a deployment linked to an open incident"
 		}
-		linkCount[number]++
-		relatedPullRequests[number] = "The provider stored pull request " + number + " for " + what + "; the link's match tier is not stored, so it appears related and is not shown as the cause."
+		if entry.relation == "" {
+			entry.relation = "The provider stored pull request " + number + " for " + what + "; the link's match tier is " + tierPhrase(bucket) + ", so it appears related and is not shown as the cause."
+		}
+		addBucket(demotedBuckets, number, bucket)
 	}
 	// A revert message names a hash prefix; it marks a commit only when exactly
 	// one commit of the set carries that prefix.
@@ -102,7 +126,7 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 			prefixes[prefix] = append(prefixes[prefix], ref.EvidenceRefID)
 		}
 	}
-	links := causeLinks{causes: map[string]linkedCause{}, demoted: map[string]string{}}
+	links := causeLinks{causes: map[string]linkedCause{}, demoted: map[string]string{}, demotedBuckets: map[string]int{}, promotedBuckets: map[string]int{}}
 	revertedCommit := map[string][]string{}
 	for prefix, reverters := range prefixes {
 		var matched []string
@@ -121,9 +145,20 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 	for _, ref := range evidence {
 		switch ref.Source.EntityType {
 		case "pull_request":
-			if why, ok := relatedPullRequests[ref.Source.EntityID]; ok {
-				links.demoted[ref.EvidenceRefID] = why
-				links.demotedLinks += linkCount[ref.Source.EntityID]
+			entry, ok := prLinks[ref.Source.EntityID]
+			if !ok {
+				continue
+			}
+			if entry.bestTier != "" {
+				links.causes[ref.EvidenceRefID] = linkedCause{claim: tierClaim[entry.bestTier], why: tierCauseText(ref.Source.EntityID, entry.bestTier), subRank: tierRank[entry.bestTier]}
+			} else if entry.relation != "" {
+				links.demoted[ref.EvidenceRefID] = entry.relation
+			}
+			for bucket, n := range demotedBuckets[ref.Source.EntityID] {
+				links.demotedBuckets[bucket] += n
+			}
+			for tier, n := range promotedBuckets[ref.Source.EntityID] {
+				links.promotedBuckets[tier] += n
 			}
 		case "commit":
 			if reverters, ok := revertedCommit[ref.EvidenceRefID]; ok {
@@ -141,15 +176,17 @@ type causeLinks struct {
 	causes           map[string]linkedCause
 	demoted          map[string]string
 	ambiguousReverts int
-	demotedLinks     int
+	demotedBuckets   map[string]int
+	promotedBuckets  map[string]int
 }
 
 // linkedCause is one cause assignment: the claim kind the stored link
 // supports and the text that says only what is stored.
 type linkedCause struct {
-	claim contractsv1.ClaimKind
-	why   string
-	cites []string
+	claim   contractsv1.ClaimKind
+	why     string
+	cites   []string
+	subRank int
 }
 
 // roleWarnings discloses the links this pass withheld from the cause role, so
@@ -163,8 +200,11 @@ func roleWarnings(evidence []contractsv1.EvidenceRef) []string {
 	if n := unknownStatusCount(evidence, "deployment"); n > 0 {
 		out = append(out, "status_unknown:deployment:"+strconv.Itoa(n))
 	}
-	if links.demotedLinks > 0 {
-		out = append(out, "cause_links_demoted:"+strconv.Itoa(links.demotedLinks)+":link_tier_not_stored")
+	for bucket, n := range links.demotedBuckets {
+		out = append(out, "cause_links_demoted:"+strconv.Itoa(n)+":"+bucket)
+	}
+	for tier, n := range links.promotedBuckets {
+		out = append(out, "cause_links_promoted:"+strconv.Itoa(n)+":"+tier)
 	}
 	if links.ambiguousReverts > 0 {
 		out = append(out, "revert_links_ambiguous:"+strconv.Itoa(links.ambiguousReverts))
@@ -249,6 +289,7 @@ const (
 	metadataPullRequestNumber = "pull_request_number"
 	metadataDeploymentID      = "deployment_id"
 	metadataIncidentID        = "incident_id"
+	metadataPullRequestTier   = "pull_request_tier"
 	metadataRelationKey       = "relation_key"
 	metadataBlockerID         = "blocker_work_item_id"
 	metadataBlockerStatus     = "blocker_status"
@@ -259,14 +300,14 @@ func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 	links := linkedCauseRefs(evidence)
 	for id, link := range links.causes {
 		cause := causeRule()
-		cause.why, cause.claim, cause.cites = link.why, link.claim, link.cites
+		cause.why, cause.claim, cause.cites, cause.subRank = link.why, link.claim, link.cites, link.subRank
 		resolver[id] = cause
 	}
 	for id := range activeBlockerRefs(evidence) {
 		resolver[id] = pressureRule()
 	}
 	for id, why := range links.demoted {
-		relation := rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, why, nil}
+		relation := rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, why, nil, 0}
 		resolver[id] = relation
 	}
 	return resolver
@@ -294,3 +335,74 @@ const (
 	ActionReasonNoStoredSource = "no_stored_recommendation_source"
 	actionCoverageSource       = "action_findings.v1"
 )
+
+const (
+	tierExactMergeSHA = "exact_merge_sha"
+	tierMergedPR      = "merged_pr"
+	tierPushed        = "pushed"
+	tierFirstListed   = "first_listed"
+	// bucketTierNotStored names a link whose tier is empty or whose table has
+	// no tier column; bucketTierUnrecognized names a stored value outside the
+	// closed vocabulary.
+	bucketTierNotStored    = "link_tier_not_stored"
+	bucketTierUnrecognized = "link_tier_unrecognized"
+)
+
+// tierRank orders the tiers that may reach the cause role: exact_merge_sha is
+// strongest; a tier absent from the map never does.
+var tierRank = map[string]int{tierExactMergeSHA: 3, tierMergedPR: 2, tierPushed: 1}
+
+var tierClaim = map[string]contractsv1.ClaimKind{
+	tierExactMergeSHA: contractsv1.ClaimObserved,
+	tierMergedPR:      contractsv1.ClaimInferred,
+	tierPushed:        contractsv1.ClaimInferred,
+}
+
+// linkTier reads the stored match tier of a deployment's pull request link. A
+// row without the typed key comes from a table without the column.
+func linkTier(ref contractsv1.EvidenceRef) (tier, bucket string) {
+	raw, present := ref.Metadata[metadataPullRequestTier]
+	if !present {
+		return "", bucketTierNotStored
+	}
+	value, _ := raw.(string)
+	switch value = strings.ToLower(strings.TrimSpace(value)); value {
+	case "":
+		return "", bucketTierNotStored
+	case tierExactMergeSHA, tierMergedPR, tierPushed:
+		return value, value
+	case tierFirstListed:
+		return "", tierFirstListed
+	default:
+		return "", bucketTierUnrecognized
+	}
+}
+
+func tierPhrase(bucket string) string {
+	switch bucket {
+	case tierFirstListed:
+		return "first_listed (the first pull request the provider listed for that commit)"
+	case bucketTierUnrecognized:
+		return "an unrecognized stored value"
+	default:
+		return "not stored"
+	}
+}
+
+func tierCauseText(number, tier string) string {
+	switch tier {
+	case tierExactMergeSHA:
+		return "The provider matched pull request " + number + " to the deployed commit of a failed deployment by its exact merge commit sha (match tier exact_merge_sha)."
+	case tierMergedPR:
+		return "The provider matched pull request " + number + " to the deployed commit of a failed deployment as a merged pull request of that commit (match tier merged_pr), not by an exact merge commit sha; it appears to be the change that deployment carried."
+	default:
+		return "The ingest caller asserted pull request " + number + " for the deployed commit of a failed deployment (match tier pushed); it appears to be the change that deployment carried."
+	}
+}
+
+func addBucket(buckets map[string]map[string]int, number, key string) {
+	if buckets[number] == nil {
+		buckets[number] = map[string]int{}
+	}
+	buckets[number][key]++
+}
