@@ -1156,6 +1156,18 @@ import (
 // blocker_dependencies_writer_unresolved_current. An answer saved under v226
 // can count a removed link.
 //
+// v227 -> v228: the team and project commit counters (commits_count,
+// after_hours_commits_count, weekend_commits_count, and the same three columns
+// of the project team_breakdown table) are served as numbers instead of
+// integers, because a team that co-owns a repository holds a share of the
+// counters and can carry a fraction of a commit. An answer saved under v227
+// carries integer counters and is not reused as one produced by this version.
+//
+// v228 -> v229: the blocker facts (work item, team and project) read a blocker
+// stored under any spelling the graph projection maps onto a blocks edge
+// (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
+// the direction the row states. An answer saved under v228 omits those pairs.
+//
 // v229 -> v230: a team that owns repositories and has no work unit in the
 // window is named investment_team_prs_without_linked_work, with the pull
 // request count, when it has pull requests in the window and none has an

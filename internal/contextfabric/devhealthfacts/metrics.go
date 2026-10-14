@@ -616,9 +616,9 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		}
 		fields := map[string]contextfabric.FactValue{
 			"day":                       contextfabric.StringFactValue(r.Day),
-			"commits_count":             contextfabric.IntegerFactValue(r.CommitsCount),
-			"after_hours_commits_count": contextfabric.IntegerFactValue(r.AfterHoursCommitsCount),
-			"weekend_commits_count":     contextfabric.IntegerFactValue(r.WeekendCommitsCount),
+			"commits_count":             contextfabric.NumberFactValue(r.CommitsCount),
+			"after_hours_commits_count": contextfabric.NumberFactValue(r.AfterHoursCommitsCount),
+			"weekend_commits_count":     contextfabric.NumberFactValue(r.WeekendCommitsCount),
 			"after_hours_commit_ratio":  contextfabric.NumberFactValue(r.AfterHoursCommitRatio),
 			"weekend_commit_ratio":      contextfabric.NumberFactValue(r.WeekendCommitRatio),
 		}
@@ -702,9 +702,9 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 				"team_id":                   contextfabric.StringFactValue(r.TeamID),
 				"team_name":                 contextfabric.StringFactValue(r.TeamName),
 				"day":                       contextfabric.StringFactValue(r.Day),
-				"commits_count":             contextfabric.IntegerFactValue(r.CommitsCount),
-				"after_hours_commits_count": contextfabric.IntegerFactValue(r.AfterHoursCommitsCount),
-				"weekend_commits_count":     contextfabric.IntegerFactValue(r.WeekendCommitsCount),
+				"commits_count":             contextfabric.NumberFactValue(r.CommitsCount),
+				"after_hours_commits_count": contextfabric.NumberFactValue(r.AfterHoursCommitsCount),
+				"weekend_commits_count":     contextfabric.NumberFactValue(r.WeekendCommitsCount),
 				"after_hours_commit_ratio":  contextfabric.NumberFactValue(r.AfterHoursCommitRatio),
 				"weekend_commit_ratio":      contextfabric.NumberFactValue(r.WeekendCommitRatio),
 			}})
@@ -721,9 +721,9 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 				// facts are.
 				"rollup_basis":              contextfabric.StringFactValue("team_project_ownership_sum"),
 				"team_count":                contextfabric.IntegerFactValue(int64(rollup.TeamCount)),
-				"commits_count":             contextfabric.IntegerFactValue(rollup.CommitsCount),
-				"after_hours_commits_count": contextfabric.IntegerFactValue(rollup.AfterHoursCommitsCount),
-				"weekend_commits_count":     contextfabric.IntegerFactValue(rollup.WeekendCommitsCount),
+				"commits_count":             contextfabric.NumberFactValue(rollup.CommitsCount),
+				"after_hours_commits_count": contextfabric.NumberFactValue(rollup.AfterHoursCommitsCount),
+				"weekend_commits_count":     contextfabric.NumberFactValue(rollup.WeekendCommitsCount),
 				// team_breakdown carries each contributing team's OWN
 				// ratio, never averaged -- see the package doc comment.
 				// CHAOS-4633 P1: Key is [team_id, team_name, day] -- every
