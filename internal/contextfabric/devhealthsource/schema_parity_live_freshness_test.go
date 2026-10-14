@@ -106,6 +106,48 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 	}
 
 	assertEngineAndSortingKeyAreFresh(t, ctx, query)
+	assertDeclaredProjectionsAreFresh(t, ctx, query)
+}
+
+// assertDeclaredProjectionsAreFresh compares each projection devhealthschema
+// declares with system.projections of the same server: a declared projection
+// that is missing, or whose select list or group by differs, fails.
+func assertDeclaredProjectionsAreFresh(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client) {
+	t.Helper()
+	tables := make([]string, 0, len(devhealthschema.Projections))
+	for table := range devhealthschema.Projections {
+		tables = append(tables, table)
+	}
+	rows, err := query.Query(ctx,
+		"SELECT table, name, query FROM system.projections WHERE database = currentDatabase() AND table IN {tables:Array(String)}",
+		[]contextpacket.ClickHouseBinding{{Name: "tables", Value: tables}})
+	if err != nil {
+		t.Fatalf("query live system.projections: %v", err)
+	}
+	defer rows.Close()
+	live := map[string]string{}
+	for rows.Next() {
+		var table, name, body string
+		if err := rows.Scan(&table, &name, &body); err != nil {
+			t.Fatalf("scan system.projections row: %v", err)
+		}
+		live[table+"."+name] = body
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate system.projections rows: %v", err)
+	}
+	for table, declared := range devhealthschema.Projections {
+		for _, projection := range declared {
+			body, ok := live[table+"."+projection.Name]
+			if !ok {
+				t.Errorf("live ClickHouse has no projection %s.%s that devhealthschema declares (%s)", table, projection.Name, projection.Source)
+				continue
+			}
+			if !devhealthschema.ProjectionMatchesLive(projection, body) {
+				t.Errorf("live projection %s.%s is %q but devhealthschema declares SELECT %s GROUP BY %s (%s)", table, projection.Name, body, projection.Select, projection.GroupBy, projection.Source)
+			}
+		}
+	}
 }
 
 // assertDeclaredOrderMatchesLive checks the declaration lists a table's

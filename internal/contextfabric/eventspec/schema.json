@@ -1289,6 +1289,11 @@
         "presence": "required"
       },
       {
+        "key": "claimed_facts_file_hotspots",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "required"
@@ -3259,6 +3264,11 @@
         "presence": "required"
       },
       {
+        "key": "requirement_computed_input_kind_unplanned_file_hotspots",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "requirement_quantifier_at_least_one",
         "type": "int",
         "presence": "required"
@@ -3435,6 +3445,11 @@
       },
       {
         "key": "requirement_computed_input_kind_commitment",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_file_hotspots",
         "type": "int",
         "presence": "required"
       },

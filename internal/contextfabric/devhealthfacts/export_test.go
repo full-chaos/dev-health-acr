@@ -143,3 +143,11 @@ func CommitmentAuthorizedItemIDsSQLForTest(principal storage.Principal, requeste
 	authorized, _ := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
 	return authorized
 }
+
+// SetFileHotspotSettingsForTest replaces the settings clause of the file
+// hotspot statements; restore puts the production clause back.
+func SetFileHotspotSettingsForTest(clause string) (restore func()) {
+	previous := fileHotspotSettings
+	fileHotspotSettings = clause
+	return func() { fileHotspotSettings = previous }
+}

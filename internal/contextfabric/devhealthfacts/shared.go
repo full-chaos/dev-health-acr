@@ -1125,7 +1125,10 @@ import (
 // tables instead of inlining the link chain four times and the ids in its text.
 // The rows are unchanged; the statements and their memory are not, so an answer
 // saved under v221 is not reused as one produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v222"
+//
+// v222 -> v223: the file_hotspots fact kind is served for a repository. An
+// answer saved under v222 cannot carry it.
+const QueryVersion = "devhealthfacts.clickhouse.v223"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1598,7 +1601,7 @@ func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimensio
 	// code_ownership_risk: health.go's compounding_risk formula is
 	// literally w_churn/w_complexity/w_ownership/w_review-weighted risk --
 	// its own doc comment names ownership as one of the weighted inputs.
-	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts:
+	case contextfabric.FactHealth, contextfabric.FactSecurityAlerts, contextfabric.FactFileHotspots:
 		return contextfabric.HealthDimensionCodeOwnershipRisk
 	// cognitive_workload_pressure: capacity forecasts (workload.go),
 	// IC-level churn/cycle/WIP throughput scatter (landscape.go), and
@@ -1839,6 +1842,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 	// Stored security alert counts explain a repository's risk: a driver,
 	// never a state or a score.
 	case contextfabric.FactSecurityAlerts:
+		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
+		}
+	// Stored file hotspot rows explain where churn and complexity sit in a
+	// repository: a driver, never a state or a score.
+	case contextfabric.FactFileHotspots:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectRepository: {contextfabric.ObligationPrincipalDrivers},
 		}

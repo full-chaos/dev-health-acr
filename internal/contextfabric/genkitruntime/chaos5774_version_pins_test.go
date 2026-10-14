@@ -12,7 +12,7 @@ import "testing"
 
 func TestDefaultInterpretationPromptVersionIsExactlyCurrent(t *testing.T) {
 	t.Parallel()
-	const wantVersion = "context-fabric-interpretation.v30"
+	const wantVersion = "context-fabric-interpretation.v31"
 	if DefaultInterpretationPromptVersion != wantVersion {
 		t.Fatalf("DefaultInterpretationPromptVersion = %q, want %q -- update this pin only alongside a genuine interpretation-prompt content change", DefaultInterpretationPromptVersion, wantVersion)
 	}
@@ -20,7 +20,7 @@ func TestDefaultInterpretationPromptVersionIsExactlyCurrent(t *testing.T) {
 
 func TestDefaultSchemaVersionIsExactlyCurrent(t *testing.T) {
 	t.Parallel()
-	const wantVersion = "context-fabric-model-output.v11"
+	const wantVersion = "context-fabric-model-output.v12"
 	if DefaultSchemaVersion != wantVersion {
 		t.Fatalf("DefaultSchemaVersion = %q, want %q -- update this pin only alongside a genuine model-output-schema content change", DefaultSchemaVersion, wantVersion)
 	}

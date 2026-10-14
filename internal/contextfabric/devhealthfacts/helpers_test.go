@@ -131,6 +131,13 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(time.Time)
 		case *float64:
 			*value = row[index].(float64)
+		case **float64:
+			if row[index] == nil {
+				*value = nil
+			} else {
+				v := row[index].(float64)
+				*value = &v
+			}
 		case *[]string:
 			*value = row[index].([]string)
 		case *[]int64:

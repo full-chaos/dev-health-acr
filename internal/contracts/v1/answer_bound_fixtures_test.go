@@ -513,7 +513,8 @@ const irreducibleAnswerBytes = 1023
 // 521585712 -> 521657911 (+72199): the fact kind vocabulary gained security_alerts.
 // 521657911 -> 521729440 (+71529, CI-measured): the vocabulary gained commitment (+71189) and the census one record for team_project_ownership_commitment_v1 (+340).
 // 521729440 -> 521759242 (+29802): the coverage entry bound 100 -> 101, so the maximal coverage arrays each gain one entry.
-const maximalAnswerBytes = 521759242
+// 521759242 -> 521950245 (+191003, measured locally): the vocabulary gained file_hotspots and the coverage entry bound moved 101 -> 105, so the maximal coverage arrays each gain four entries.
+const maximalAnswerBytes = 521950245
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
