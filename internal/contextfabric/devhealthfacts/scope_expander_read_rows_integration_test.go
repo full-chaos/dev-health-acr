@@ -118,7 +118,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		_ = rows.Close()
 		return readRowsOf(t, ctx, direct, table, fragment, mark)
 	}
-	type reading struct{ rows, highest, spread uint64 }
+	type reading struct{ rows, highest, spread, twice uint64 }
 	// sample reads a statement once unmeasured, then runs warm reads and keeps
 	// the smallest and the spread.
 	sample := func(t *testing.T, table, fragment string, captured capturedStatement) reading {
@@ -152,7 +152,16 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		statements := served(t)
 		readings := map[string]reading{}
 		for _, statement := range historicalReadRowsStatements {
-			readings[statement.label] = sample(t, statement.table, statement.fragment, statements[statement.label])
+			r := sample(t, statement.table, statement.fragment, statements[statement.label])
+			// The control: the same statement sent twice in one query reads the
+			// tables twice over, and must break the bound.
+			body := statements[statement.label].statement
+			if at := strings.LastIndex(body, "\nSETTINGS "); at >= 0 {
+				body = body[:at]
+			}
+			doubled := capturedStatement{statement: fmt.Sprintf("SELECT * FROM (%s) UNION ALL SELECT * FROM (%s)", body, body), bindings: statements[statement.label].bindings}
+			r.twice = sample(t, statement.table, statement.fragment, doubled).rows
+			readings[statement.label] = r
 		}
 		return readings, counts(t)
 	}
@@ -163,7 +172,6 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 	fillScopeOrganization(t, ctx, direct, fixture, "large", 200_000)
 	mergeScopeTables(t, ctx, direct)
 	large, largeCounts := measure(t)
-	largeStatements := served(t)
 
 	for _, statement := range historicalReadRowsStatements {
 		label := statement.label
@@ -190,18 +198,12 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		}
 		t.Logf("READROWS %s slope on the lowest reads: %d more rows for %d added rows, bound %d rows (%.4f per row x %d, floor %d)", label, l.rows-s.rows, added, allowed, bound, added, floor)
 
-		// The guard must be able to fail on this data: the same statement
-		// sent twice in one query reads the tables twice over.
-		sent := largeStatements[label]
-		body := sent.statement
-		if at := strings.LastIndex(body, "\nSETTINGS "); at >= 0 {
-			body = body[:at]
-		}
-		doubled := capturedStatement{statement: fmt.Sprintf("SELECT * FROM (%s) UNION ALL SELECT * FROM (%s)", body, body), bindings: sent.bindings}
-		twice := sample(t, statement.table, statement.fragment, doubled)
-		t.Logf("READROWS %s sent twice in one query: %d rows at the larger size", label, twice.rows)
-		if twice.rows <= l.rows+allowed-floor {
-			t.Errorf("%s: the statement sent twice read %d rows, not above %d: the guard cannot fail on this data", label, twice.rows, l.rows+allowed-floor)
+		// The guard must be able to fail on this data: the same statement sent
+		// twice in one query reads twice the rows per added row, and its lowest
+		// reads must still break the bound.
+		t.Logf("READROWS %s sent twice in one query: lowest small=%d large=%d", label, s.twice, l.twice)
+		if l.twice <= s.twice || l.twice-s.twice <= allowed {
+			t.Errorf("%s: the statement sent twice read %d more rows for %d added rows, not above the %d allowed: the guard cannot fail on this data", label, l.twice-min(l.twice, s.twice), added, allowed)
 		}
 	}
 }
