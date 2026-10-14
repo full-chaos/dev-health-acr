@@ -219,12 +219,18 @@ const FrameRepairMemberKindFactAliasCollapse FrameRepairName = "member_kind_fact
 // repairSelfGroupFlatCohort for its bound.
 const FrameRepairSelfGroupFlatCohort FrameRepairName = "self_group_flat_cohort"
 
+// FrameRepairOrganizationScopeSurvey answers an organization-scope question
+// that counts nothing over the organization's own members. See
+// repairOrganizationScopeSurvey for its bound.
+const FrameRepairOrganizationScopeSurvey FrameRepairName = "organization_scope_survey"
+
 var frameRepairNames = [...]FrameRepairName{
 	FrameRepairCountKindCollapse,
 	FrameRepairCompareGroupedCollapse,
 	FrameRepairCompareRankingCollapse,
 	FrameRepairMemberKindFactAliasCollapse,
 	FrameRepairSelfGroupFlatCohort,
+	FrameRepairOrganizationScopeSurvey,
 }
 
 // FrameRepairNameCount is the closed vocabulary's size.
@@ -1015,4 +1021,97 @@ var frameRepairTable = []frameRepairFunc{
 	repairCompareRankingCollapse,
 	repairMemberKindFactAliasCollapse,
 	repairSelfGroupFlatCohort,
+	repairOrganizationScopeSurvey,
+}
+
+// organizationSurveyDefaultMemberKind is the member kind an organization
+// survey runs over when the question names no servable kind: the team, the
+// organization's ownership unit and the kind every burden composite fact
+// (flow, health, incidents, investment, workload) serves.
+const organizationSurveyDefaultMemberKind = SubjectTeam
+
+// repairOrganizationScopeSurvey answers an organization-scope question that
+// counts nothing ("what is our biggest delivery risk", "where is delivery
+// stuck across the organization") over the organization's own members: the
+// frame becomes a discovered_kind survey of one servable member kind, so the
+// question is investigated with the evidence, coverage and uncertainty a
+// cohort answer carries. The organization as a single subject has no fact
+// but investment and source health, so reading it alone cannot answer these.
+//
+// THE BOUND:
+//
+//   - Only a VALID organization_scope frame whose goals are not counts only
+//     (a count is served by the organization-scope member census as is) and
+//     do not include allocate_investment (served by the organization's own
+//     investment fact, never a sum over members).
+//   - The member kind is the frame's own, when servable; else the
+//     interpretation's requested subject kind, when servable; else
+//     organizationSurveyDefaultMemberKind. The line carries
+//     proposed_member_kind, requested_member_hint and repair_member_kind, so
+//     which source decided is read from the line alone.
+//   - A member qualifier is carried only with the frame's own member kind.
+//   - rank_or_survey is added to the goals: a question over the members of
+//     the organization is a survey of them. Every other field is the
+//     proposal's own.
+//   - The repaired frame passes the SAME validation, unrelaxed.
+//   - At most frameRepairBound attempts.
+//
+// CARRY: Goals change, so RequestedJudgment is the closed phrase of the
+// accepted goals; the result is not children_of_scope, so ScopeAnchorKind
+// stays zero.
+func repairOrganizationScopeSurvey(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
+	applicable := result.Outcome == FrameValidationOutcomeValid &&
+		result.Frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope &&
+		!countsOnly(result.Frame.Goals) &&
+		!result.Frame.HasGoal(GoalAllocateInvestment)
+	if !applicable {
+		if result.Repair.Decision == "" {
+			result.Repair.Decision = FrameRepairNotApplicable
+		}
+		return result
+	}
+	considered := FrameRepair{
+		Name:       FrameRepairOrganizationScopeSurvey,
+		KindBefore: result.Frame.SubjectExpression.Kind,
+		Attempts:   result.Repair.Attempts,
+	}
+	if result.Repair.Attempts >= frameRepairBound {
+		considered.Decision = FrameRepairDeclinedBoundReached
+		result.Repair = considered
+		return result
+	}
+	discovered := organizationSurveyMembers(receipt, result.Frame.SubjectExpression.Org)
+	repaired := proposed
+	repaired.SubjectExpression = SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &discovered}
+	if !repaired.HasGoal(GoalRankOrSurvey) {
+		repaired.Goals = append(append([]InvestigationGoal(nil), proposed.Goals...), GoalRankOrSurvey)
+	}
+	considered.Attempts++
+	considered.KindAfter = repaired.SubjectExpression.Kind
+	considered.MemberKind = discovered.MemberKind
+	revalidated := validateAgainstInterpretation(receipt, repaired, emittedShape)
+	if revalidated.Outcome != FrameValidationOutcomeValid {
+		considered.Decision = FrameRepairRefusedAfterRepair
+		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
+	}
+	considered.Decision = FrameRepairApplied
+	considered.Carry.RequestedJudgment = requestedJudgmentForGoals(revalidated.Frame.Goals)
+	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
+// organizationSurveyMembers picks the member set an organization survey runs
+// over, by the order repairOrganizationScopeSurvey's bound states.
+func organizationSurveyMembers(receipt ModelExecutionReceipt, org *OrganizationScopeExpression) DiscoveredSetExpression {
+	if org != nil && org.MemberKind != nil && organizationSurveyServable(*org.MemberKind) {
+		return DiscoveredSetExpression{MemberKind: *org.MemberKind, MemberQualifier: org.MemberQualifier, MemberQualifierValue: org.MemberQualifierValue}
+	}
+	if !receipt.RequestedSubjectKindUnrecognized && organizationSurveyServable(receipt.RequestedSubjectKind) {
+		return DiscoveredSetExpression{MemberKind: receipt.RequestedSubjectKind}
+	}
+	return DiscoveredSetExpression{MemberKind: organizationSurveyDefaultMemberKind}
+}
+
+func organizationSurveyServable(kind SubjectKind) bool {
+	_, _, reason := CohortMemberKindFor(SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: kind}})
+	return reason == CohortDiscoverable
 }

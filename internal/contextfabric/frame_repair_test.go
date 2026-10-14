@@ -2017,6 +2017,12 @@ func TestEveryFrameRepairDecisionHasAnExecutedDriver(t *testing.T) {
 	for _, attempts := range []int{0, frameRepairBound} {
 		produced[selfGroupRepairAtTheBound(t, attempts).Repair.Decision] = true
 	}
+	for _, testCase := range organizationSurveyCells() {
+		receipt := validModelReceiptFixture(ModelOperationInterpret)
+		testCase.receipt(&receipt)
+		run := interpretForRepair(t, receipt, testCase.frame, nil)
+		produced[FrameRepairDecision(run.line["repair_decision"].(string))] = true
+	}
 	for _, member := range FrameRepairDecisionVocabulary() {
 		if !produced[member] {
 			t.Errorf("no executed driver produces repair decision %q", member)
@@ -2407,6 +2413,13 @@ func repairTableFixtures() []repairTableFixture {
 			shape:           ShapeSingleSubject,
 			terms:           []string{repairAnchorTerm},
 			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true, "RequestedJudgment": true},
+		},
+		{
+			name:            "organization_scope_survey",
+			receipt:         validModelReceiptFixture(ModelOperationInterpret),
+			frame:           organizationProposal(nil, GoalAssessState),
+			shape:           ShapeOpen,
+			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true},
 		},
 	}
 }

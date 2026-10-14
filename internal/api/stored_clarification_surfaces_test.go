@@ -433,7 +433,7 @@ func TestAStoredClarificationIsHandledAlikeOnEveryServingSurface(t *testing.T) {
 // the precedence steps the role rows above do not reach, on every serving
 // surface: the window gate's own clarification (named and organization-scope
 // readings) is served as fresh composition serves it, and an offer-less row
-// with an organization-scope reading is refused on that basis.
+// with an organization-scope reading is repaired as offer-less, with no basis.
 func TestTheWindowGateAndOfferLessRowsAreHandledAlikeOnEveryServingSurface(t *testing.T) {
 	project := contextfabric.SubjectProject
 	ciRun := contractsv1.ContextFabricSubjectCIRun
@@ -501,7 +501,7 @@ func TestTheWindowGateAndOfferLessRowsAreHandledAlikeOnEveryServingSurface(t *te
 	orgReading := surfaceReading(t, orgFrame)
 	cells = append(cells, cell{"offer_less_organization", false, contextfabric.StructureOfferMaterial{}, orgReading, []contextfabric.SubjectCandidate{}, surfaceRequest,
 		legacyUnanswerableClarificationRow(t, "result_surface_offer_less_org"), contextfabric.InvestigationNoMatch,
-		contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported, "organization_scope", "unanswerable", "available"})
+		"", "offer_less", "unanswerable", "not_read"})
 
 	store := memoryinvestigation.NewStore()
 	for _, c := range cells {
@@ -544,13 +544,9 @@ func TestTheWindowGateAndOfferLessRowsAreHandledAlikeOnEveryServingSurface(t *te
 			if byID.Status != fresh.Status || byID.RefusalBasis != fresh.RefusalBasis {
 				t.Fatalf("result-by-id status/basis = %q/%q, fresh composition %q/%q", byID.Status, byID.RefusalBasis, fresh.Status, fresh.RefusalBasis)
 			}
-			if c.basis == contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported {
-				found := false
-				for _, limitation := range byID.Limitations {
-					found = found || limitation == contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation
-				}
-				if !found {
-					t.Fatalf("result-by-id limitations = %#v, want the organization-scope sentence", byID.Limitations)
+			for _, limitation := range byID.Limitations {
+				if limitation == contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation {
+					t.Fatalf("result-by-id limitations = %#v carry the retired organization-scope sentence", byID.Limitations)
 				}
 			}
 			viaMCP := callRealMCPInvestigationResult(t, boot, c.row.ResultID)

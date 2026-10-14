@@ -242,6 +242,14 @@ func statusMeasuredZero(frame *QuestionFrame, cohort *Cohort) bool {
 	return status != "" && kind == cohort.Kind
 }
 
+// organizationInvestmentQuestion reports whether a frame asks where the
+// organization's effort goes: the organization is the subject, and its own
+// investment fact (one fact over every repository once, never a sum over
+// teams) answers it.
+func organizationInvestmentQuestion(frame *QuestionFrame) bool {
+	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope && frame.HasGoal(GoalAllocateInvestment)
+}
+
 // callerOrganizationSubject is the caller's organization as a subject, in the
 // graph's key form.
 func callerOrganizationSubject(principal storage.Principal) SubjectRef {

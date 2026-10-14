@@ -2605,6 +2605,22 @@ carry the same repository grant (`repoAuthorization`), so the rollup reveals
 nothing the cohort list does not. The repository and team cohorts do not ask
 for the rollups.
 
+An `organization_scope` frame that counts nothing ("what is our biggest
+delivery risk", "where is delivery stuck across the organization") is answered,
+never refused. The organization as one subject has only the investment and
+source-health facts, so the bounded repair `organization_scope_survey`
+(`frame_repair.go`) re-reads the frame as a `discovered_kind` survey of the
+organization's own members, with `rank_or_survey` added: the frame's own member
+kind when servable, else the interpretation's requested kind when servable,
+else `team` (the ownership unit every burden composite fact serves). The answer
+then carries the cohort's evidence, coverage and uncertainty like any cohort
+survey; an empty member set is disclosed, never read as healthy. An
+organization-scope investment question (`allocate_investment`) is not
+repaired: when no subject resolves, the engine reads the caller's organization
+subject, whose investment fact covers every repository once. The former
+`organization_scope_unsupported` refusal has no producer; the basis stays in
+the contract only so stored results that carry it still validate.
+
 The FOURTH reason is a runtime fact nobody can decide at derivation time: a
 perfectly servable kind whose search retains no members. `DiscoveredCohort`
 returns a nil cohort in that case, so the correction belongs on the served

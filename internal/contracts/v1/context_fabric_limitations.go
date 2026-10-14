@@ -647,17 +647,11 @@ const ContextFabricContinuationContextUnverifiableLimitation = "This request con
 // readable; the basis is on the wire as refusal_basis and on the log line.
 const ContextFabricDeclaredKindUnmatchedLimitation = "No option found for this question could be chosen to answer it, so no subject was confirmed and no canonical facts were read. Rewording the question may let it be answered."
 
-// ContextFabricOrganizationScopeUnsupportedLimitation is the sentence an
-// organization-scope question that counts nothing carries when it is refused
-// (ContextFabricRefusalBasisOrganizationScopeUnsupported).
-//
-// It says what is not supported AND what is: organization-wide analysis of
-// status, health or drivers is not a capability, and organization-wide counts
-// of one kind of subject are. The second half is the one the asker can act on.
-// It names no subject, because the subject is the caller's own organization.
-//
-// It carries no basis token. A person reads this sentence, and a token is not
-// readable; the basis is on the wire as refusal_basis and on the log line.
+// ContextFabricOrganizationScopeUnsupportedLimitation is the sentence of the
+// RETIRED organization_scope_unsupported refusal
+// (ContextFabricRefusalBasisOrganizationScopeUnsupported). Nothing emits it;
+// it stays so a stored result that carries it is still a service-authored
+// limitation.
 const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was read as being about the organization as a whole. Organization-wide analysis of status, health or drivers is not supported; organization-wide counts of one kind of subject, such as how many repositories or teams there are, are supported. No canonical facts were read."
 
 // ContextFabricSubjectIdentityUnconfirmedLimitation is the sentence a
