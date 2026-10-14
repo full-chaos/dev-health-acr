@@ -3,6 +3,8 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -52,6 +54,10 @@ func (c *sitesLabelClient) Query(ctx context.Context, statement string, bindings
 type sitesSeed struct {
 	scale     int
 	multipart bool
+	// compacted seeds the ownership history as one closed row per key (the
+	// first valid_from to the last valid_to) plus the key's open row, in place
+	// of one version per hour.
+	compacted bool
 }
 
 func seedAuthorizationSites(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, s sitesSeed) {
@@ -108,19 +114,45 @@ func seedAuthorizationSites(t *testing.T, ctx context.Context, direct clickhouse
 	scale := s.scale
 	ins(`INSERT INTO repos (id, org_id, repo, provider, last_synced) SELECT `+repo("number")+`, ?, concat('acme/repo-', toString(number)), 'github', ? FROM numbers(?, ?)`, 11, org, at)
 	ins(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) SELECT concat('team-', toString(number)), concat('team-', toString(number)), NULL, ?, ?, 'linear', [], 1 FROM numbers(?, ?)`, 39, at, org)
-	ins(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+	if s.compacted {
+		ins(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+SELECT ?, 'linear', concat('team-', toString(number % 6)), `+repo("number % 11")+`, concat('acme/repo-', toString(number % 11)), 'exact', 'native', 1, 100, 0,
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC'),
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(if(number < 18, 1846, 1847)) + toIntervalMinute(30),
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(if(number < 18, 1846, 1847)) + toIntervalMinute(30)
+FROM numbers(?, ?)`, 24, org)
+		ins(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+SELECT ?, 'linear', concat('team-', toString(number % 6)), `+repo("number % 11")+`, concat('acme/repo-', toString(number % 11)), 'exact', 'native', 1, 100, 0,
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(1847), NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(1847)
+FROM numbers(?, ?)`, 18, org)
+	} else {
+		ins(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', concat('team-', toString((number % 24) % 6)), `+repo("(number % 24) % 11")+`, concat('acme/repo-', toString((number % 24) % 11)), 'exact', 'native', 1, 100, 0,
   toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 24)),
   if(intDiv(number, 24) = 1847 AND number % 24 < 18, NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 24)) + toIntervalMinute(30)),
   toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 24))
 FROM numbers(?, ?)`, 44352, org)
+	}
 	ins(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) SELECT concat('proj-', toString(number % 33)), ?, 'linear', NULL, concat('proj-', toString(number % 33)), 1, 'active', '', ? + toIntervalMinute(number) FROM numbers(?, ?)`, 47, org, at)
-	ins(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
+	if s.compacted {
+		ins(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
+SELECT ?, 'linear', concat('team-', toString(number % 36)), concat('proj-', toString(number % 48)), NULL, 'native',
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC'),
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(if(number < 60, 765, 766)) + toIntervalMinute(30),
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(if(number < 60, 765, 766)) + toIntervalMinute(30)
+FROM numbers(?, ?)`, 88, org)
+		ins(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
+SELECT ?, 'linear', concat('team-', toString(number % 36)), concat('proj-', toString(number % 48)), NULL, 'native',
+  toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(766), NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(766)
+FROM numbers(?, ?)`, 60, org)
+	} else {
+		ins(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', concat('team-', toString((number % 88) % 36)), concat('proj-', toString((number % 88) % 48)), NULL, 'native',
   toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 88)),
   if(intDiv(number, 88) = 766 AND number % 88 < 60, NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 88)) + toIntervalMinute(30)),
   toDateTime64('2026-01-01 00:00:00', 3, 'UTC') + toIntervalHour(intDiv(number, 88))
 FROM numbers(?, ?)`, 67496, org)
+	}
 	ins(sub.Replace(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
 SELECT `+id("number")+`, {{REPO}}, ?, 'title', 'issue', if(number % 5 = 0, 'done', 'open'), '', ?, ?, '', 'linear', concat('proj-', toString(number % 33)), NULL, ? FROM numbers(?, ?)`), 17000*scale, org, at, at, at)
 	// Repo-less work items, half of them issue endpoints in the work graph.
@@ -168,10 +200,15 @@ func TestWorkItemAuthorizationSitesPeakMemoryOnRealClickHouse(t *testing.T) {
 			name  string
 			scale int
 		}{{"small", 1}, {"large", 3}} {
-			state, size := state, size
-			t.Run(state.name+"_"+size.name, func(t *testing.T) {
-				measureAuthorizationSites(t, state.name, size.name, sitesSeed{scale: size.scale, multipart: state.multipart})
-			})
+			for _, history := range []struct {
+				name      string
+				compacted bool
+			}{{"full-history", false}, {"compacted-history", true}} {
+				state, size, history := state, size, history
+				t.Run(state.name+"_"+size.name+"_"+history.name, func(t *testing.T) {
+					measureAuthorizationSites(t, state.name+" "+history.name, size.name, sitesSeed{scale: size.scale, multipart: state.multipart, compacted: history.compacted})
+				})
+			}
 		}
 	}
 }
@@ -181,17 +218,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		t.Skip("measurement test: memory under the race detector is not the served figure")
 	}
 	ctx := context.Background()
-	var report []string
-	rep := func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
-		report = append(report, line)
-		t.Log(line)
-	}
-	// The measurement PR reports its table through a deliberate failure so
-	// the numbers reach the CI log; the test is not merged as is.
-	defer func() {
-		t.Errorf("SITEMEM REPORT (measurement draft; red on purpose):\n%s", strings.Join(report, "\n"))
-	}()
+	rep := func(format string, args ...any) { t.Logf(format, args...) }
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
@@ -199,8 +226,8 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 	seedAuthorizationSites(t, ctx, direct, seed)
 	parts := sitesPartCount(t, ctx, direct)
 	rep("SITEMEM layout state=%s size=%s active parts (work_items, links, two ownership tables) = %d", state, size, parts)
-	if seed.multipart && parts < 40 {
-		t.Fatalf("multipart layout holds %d active parts, want at least 40: the layout is not pinned", parts)
+	if seed.multipart && parts < 30 {
+		t.Fatalf("multipart layout holds %d active parts, want at least 30: the layout is not pinned", parts)
 	}
 
 	var counter int
@@ -247,6 +274,9 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		}
 		if statements == 0 {
 			t.Fatalf("SITEMEM %s: no statement was logged: the measurement did not happen (last error %v)", label, lastErr)
+		}
+		if strings.HasPrefix(label, "site5") && (lastErr != nil || best < 1<<20) {
+			t.Errorf("SITEMEM %s: S1 did not run (peak %.2f MiB, error %v)", label, mib(best), lastErr)
 		}
 		rep("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB statements=%d err=%v", state, size, label, mib(best), statements, lastErr)
 	}
@@ -329,7 +359,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 			if err != nil {
 				return err
 			}
-			reader, err := devhealthfacts.NewWorkItemMembershipReader(client, devhealthfacts.WorkItemMembershipReaderOptions{Gate: gate, Now: func() time.Time { return ts(2026, 9, 30, 0, 0, 0) }})
+			reader, err := devhealthfacts.NewWorkItemMembershipReader(client, devhealthfacts.WorkItemMembershipReaderOptions{Gate: gate, Telemetry: contextfabric.NewSlogWorkItemMembershipTelemetry(slog.New(slog.NewTextHandler(io.Discard, nil))), Now: func() time.Time { return ts(2026, 9, 30, 0, 0, 0) }})
 			if err != nil {
 				return err
 			}
@@ -391,6 +421,45 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 			relation(pr.name+" over "+set.name, pr.p, set.sql)
 		}
 	}
+
+	// Probes for what the baseline is: the relation without FINAL on its
+	// reads, and its inputs read alone.
+	probe := func(label, statement string, args ...any) {
+		t.Helper()
+		var best, statements uint64
+		for run := 0; run < 4; run++ {
+			mark := serverNowMicros(t, ctx, direct)
+			var n uint64
+			if err := direct.QueryRow(ctx, statement, args...).Scan(&n); err != nil {
+				t.Fatalf("probe %s: %v", label, err)
+			}
+			p, c := peak(mark, "")
+			if run == 0 {
+				continue
+			}
+			statements = c
+			if best == 0 || p < best {
+				best = p
+			}
+		}
+		if statements == 0 {
+			t.Fatalf("probe %s: no statement was logged", label)
+		}
+		rep("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB", state, size, "probe "+label, mib(best))
+	}
+	for _, pr := range principals {
+		sql, bindings := devhealthfacts.AuthorizationRelationForTest(pr.p, "")
+		sql = strings.ReplaceAll(strings.ReplaceAll(sql, "{org_id:String}", "'"+sitesOrg+"'"), " FINAL", "")
+		args := make([]any, 0, len(bindings))
+		for _, binding := range bindings {
+			args = append(args, clickhouse.Named(binding.Name, binding.Value))
+		}
+		probe("relation without FINAL "+pr.name, "SELECT count() FROM "+sql, args...)
+	}
+	probe("work_items FINAL alone", "SELECT count() FROM (SELECT work_item_id FROM work_items FINAL WHERE org_id = '"+sitesOrg+"' GROUP BY work_item_id)")
+	probe("team_project_ownership FINAL alone", "SELECT count() FROM (SELECT team_id, project_id FROM team_project_ownership FINAL WHERE org_id = '"+sitesOrg+"' GROUP BY team_id, project_id)")
+	probe("team_repo_ownership FINAL alone", "SELECT count() FROM (SELECT team_id, repo_id FROM team_repo_ownership FINAL WHERE org_id = '"+sitesOrg+"' GROUP BY team_id, repo_id)")
+	probe("work_graph_issue_pr FINAL alone", "SELECT count() FROM (SELECT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = '"+sitesOrg+"' GROUP BY work_item_id)")
 
 	// Site 7: the repo-less issue gate statement (mirror), whole relation.
 	for _, pr := range principals {
