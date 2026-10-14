@@ -408,3 +408,42 @@ func MembershipStatementForTest(orgID string, since time.Time, after string, lim
 	cursor := cursorState{Since: since, After: after}
 	return membershipStatement(cursor, ingest, pruned), rowLimitBindings(orgID, cursor, limit)
 }
+
+// ProjectTeamsFragment is one named, self-contained piece of the project-team
+// ownership statement that a memory test runs on its own.
+type ProjectTeamsFragment struct {
+	Name, SQL string
+	Settings  string
+	Paged     bool
+}
+
+// ProjectTeamsFragmentsForTest lists the statement's building blocks, then the
+// whole group statement and the paged statement the projector sends, then the
+// same two as they were before the ownership history was collapsed.
+func ProjectTeamsFragmentsForTest(ingest bool) []ProjectTeamsFragment {
+	arms := projectTeamsArmsFor(ingest)
+	return []ProjectTeamsFragment{
+		{Name: "ownership_raw_final_x1", SQL: "SELECT * FROM team_project_ownership FINAL WHERE org_id = {org_id:String}"},
+		{Name: "projects_identity_x1", SQL: "SELECT * FROM " + projectIdentityWithWatermarkSQL(ingest)},
+		{Name: "projects_ambiguous_x1", SQL: "SELECT * FROM " + ambiguousProjectIdentitySQL(ingest)},
+		{Name: "asserting_arm", SQL: arms[0]},
+		{Name: "retraction_arm", SQL: arms[1]},
+		{Name: "both_arms_union", SQL: arms[0] + "\nUNION ALL\n" + arms[1]},
+		{Name: "group_statement", SQL: projectTeamsGroupSQL(ingest)},
+		{Name: "paged_statement", SQL: projectTeamsStatementFor(cursorState{}, ingest), Paged: true},
+		{Name: "legacy_group_statement", SQL: legacyProjectTeamsGroupSQL(ingest)},
+		{Name: "legacy_paged_statement", SQL: legacyProjectTeamsStatementFor(cursorState{}, ingest), Paged: true},
+	}
+}
+
+// ProjectTeamsGroupSQLForTest and LegacyProjectTeamsGroupSQLForTest are the
+// statement and its frozen pre-collapse form, for the differential row.
+func ProjectTeamsGroupSQLForTest(ingest bool) string { return projectTeamsGroupSQL(ingest) }
+
+func LegacyProjectTeamsGroupSQLForTest(ingest bool) string { return legacyProjectTeamsGroupSQL(ingest) }
+
+// ProjectTeamsPagedBindingsForTest are the bindings the projector sends for the
+// first page.
+func ProjectTeamsPagedBindingsForTest(orgID string, limit int) []contextpacket.ClickHouseBinding {
+	return rowLimitBindings(orgID, cursorState{}, limit)
+}
