@@ -78,7 +78,7 @@ func TestFactoracleIsolation_ownRaceJobAndBudget(t *testing.T) {
 		"needs: mirror-preflight",
 		"TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX",
 		"isolated-dedicated factoracle",
-		"over 85%",
+		"scripts/ci/run-isolated-budget.sh",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("race-factoracle job must contain %q; block:\n%s", want, block)
