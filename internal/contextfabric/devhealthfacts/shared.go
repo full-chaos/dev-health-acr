@@ -1090,12 +1090,18 @@ import (
 // sprint ends and the raw issue counts beside them). An answer saved under
 // v215 has no commitment fact.
 //
-// v216 -> v217: the team project link rows intersect the organization's linked
+// v216 -> v217: a team whose owned repositories hold work units that all have
+// zero persisted effort is named investment_team_effort_not_measurable, with
+// the unit count, instead of investment_team_no_unit_in_window. Still no fact
+// and no zero mix. An answer saved under v216 states the false reason that no
+// effort was persisted.
+//
+// v217 -> v218: the team project link rows intersect the organization's linked
 // work item ids with the owned projects' work items before the FINAL read, so
 // the statements hold the owned projects' candidates and not every linked work
 // item. The rows are unchanged; the statements and their memory are not, so an
-// answer saved under v216 is not reused as one produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v217"
+// answer saved under v217 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v218"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

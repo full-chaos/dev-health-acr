@@ -145,9 +145,11 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement. It is the same chain teamRepositories walks. Work items
-// are read once, for linked issues of the owned projects only: the link ids
-// prune work_items granules on its primary key, so the statement's cost
-// follows the organization's links, not the size of its work item table.
+// are read twice, for linked issues of the owned projects only: the link ids
+// prune work_items granules on its primary key, first on the unmerged rows to
+// name the owned projects' candidates, then with FINAL on those candidates, so
+// the statement's cost follows the organization's links, not the size of its
+// work item table.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := `(SELECT p.provider AS provider, p.join_key AS join_key FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
     INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
