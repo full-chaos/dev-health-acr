@@ -1015,7 +1015,10 @@ jobs:
   # ops 5c9a3d32. It runs alone here (isolated_packages and
   # dedicated_isolated_packages in scripts/ci/test-shard.sh) under
   # GOTEST_FACTORACLE_TIMEOUT; the step prints the wall time and fails past 85%
-  # of the budget so a creeping suite is caught loudly.
+  # of the budget so a creeping suite is caught loudly. The package ran 616s
+  # of tests in one job (CHAOS-9730), so it is split in two like devhealthsource:
+  # scripts/ci/factoracle-heavy-tests.txt names the heavy half (race-factoracle-heavy,
+  # -run); this job runs everything else (-skip), so a new test lands here.
   race-factoracle:
     name: race (factoracle, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1040,14 +1043,53 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run isolated factoracle race suite
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh factoracle verify
+      - name: Run isolated factoracle race suite (rest half)
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated factoracle)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
-          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle' "$packages"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh factoracle rest)"
+          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (rest half)' "$packages"
 
+  race-factoracle-heavy:
+    name: race (factoracle heavy, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh factoracle verify
+      - name: Verify every factoracle test runs in exactly one race job
+        run: scripts/ci/race-split.sh factoracle partition
+      - name: Run isolated factoracle race suite (heavy half)
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated factoracle)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh factoracle heavy)"
+          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (heavy half)' "$packages"
 
   build:
     runs-on: ubuntu-latest
@@ -1537,6 +1579,7 @@ jobs:
       - race-devhealthsource-heavy
       - race-devhealthsource-mid
       - race-factoracle
+      - race-factoracle-heavy
       - build
       - contracts
       - container-contract-smoke

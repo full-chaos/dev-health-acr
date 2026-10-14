@@ -13,6 +13,9 @@
 #   verify fails unless every listed name is a real top-level test, so a
 #          rename cannot silently move a heavy test into the rest half.
 #
+# factoracle splits two ways (heavy/rest/verify/partition only): its race jobs
+# run the heavy list with -run and everything else with -skip.
+#
 # devhealthfacts splits four ways, devhealthsource three ways (no fourth list): the race jobs split by these lists. race-mid-tests.txt and
 # race-fourth-tests.txt name tests moved out of the heavy and rest halves into
 # a third and a fourth job. Lines starting with # are comments in every list.
@@ -29,8 +32,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 name="${1:-}"
 case "$name" in
-  devhealthfacts|devhealthsource) ;;
-  *) printf 'usage: %s devhealthfacts|devhealthsource heavy|rest|verify|partition\n' "${0##*/}" >&2; exit 2 ;;
+  devhealthfacts|devhealthsource|factoracle) ;;
+  *) printf 'usage: %s devhealthfacts|devhealthsource|factoracle heavy|rest|verify|partition\n' "${0##*/}" >&2; exit 2 ;;
 esac
 list="$root/scripts/ci/$name-heavy-tests.txt"
 pkg="./internal/contextfabric/$name"
