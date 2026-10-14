@@ -659,4 +659,5 @@ VALUES ($1, $2, 'op', 'p', 'ok', false, '{}', now(), now())`,
 	measure("projector checkpoint update (every source, every tick)", "context_fabric_projection_checkpoints",
 		`UPDATE acr.context_fabric_projection_checkpoints SET updated_at = now() WHERE org_id = $1 AND source = 'src-steady' AND $2::int IS NOT NULL`,
 		func(i int) []any { return []any{orgKept, i} })
+	t.Fatal("TEMPORARY COST PROBE: prints the figures above; removed in the next commit")
 }
