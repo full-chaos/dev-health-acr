@@ -465,3 +465,17 @@ func TestAnUnlistedStatusIsCountedAsUnknownNeitherPressureNorResolved(t *testing
 		}
 	}
 }
+
+func TestAnOpenIncidentMappedToTheRepositoryHeuristicallyIsNotPressure(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	native := roleRow("ev-i-native", "incident", "inc-1", "native mapping", "status=open, severity=high", at)
+	heuristic := roleRow("ev-i-heuristic", "incident", "inc-2", "heuristic mapping", "status=open, severity=high", at)
+	heuristic.Provenance = contractsv1.EvidenceProvenanceHeuristic
+	roles, _ := servedRoles(t, []contractsv1.EvidenceRef{native, heuristic})
+	if roles["ev-i-native"] != contractsv1.CategoryPressure {
+		t.Errorf("a natively mapped open incident served as %q, want pressure", roles["ev-i-native"])
+	}
+	if roles["ev-i-heuristic"] == contractsv1.CategoryPressure {
+		t.Errorf("a heuristically mapped open incident became pressure")
+	}
+}
