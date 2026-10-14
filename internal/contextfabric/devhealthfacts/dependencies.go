@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -158,7 +159,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = `+blockedExpr("d")+`
 `+counterpartRepositoryJoinSQL(blockerExpr("d"))+`
-WHERE `+blockerRowsWhereSQL(authorized)+` AND concat(toString(t.repo_id), ':', `+blockedExpr("d")+`) IN {ids:Array(String)}
+WHERE `+blockerRowsWhereSQL(authorized)+relationCurrentSQL("d")+` AND concat(toString(t.repo_id), ':', `+blockedExpr("d")+`) IN {ids:Array(String)}
 ORDER BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")+`, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
 LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), settings)
 	rowCount := 0
@@ -350,6 +351,9 @@ type blockerTeamTotals struct {
 	// (they are inside the totals above, counted once with owned-repository
 	// items); projectWeakestRank is 0 when no project item contributed.
 	projectBlockedItems, projectWeakestRank int64
+	// writerUnresolved is the open blocker edges counted although the writer
+	// of their link could not be derived (relation_current.go).
+	writerUnresolved int64
 }
 
 // blockerTeamAge is one team's open blocker edges by what is known of their
@@ -378,7 +382,7 @@ func ageReadFailure(ctx context.Context, subject string, err error) error {
 	if ctx.Err() != nil {
 		return err
 	}
-	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error", contextfabric.SanitizeLogAttr(err.Error()), "error_tail", contextfabric.SanitizeLogAttr(errorTail(err.Error(), 240)))
+	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)))
 	return nil
 }
 
@@ -433,11 +437,11 @@ func blockerWorkItemsSQL(alias string) string {
 
 // blockerStartJoinFor is the left join that gives a blocker edge its first
 // sync time. The shipped form ("") reads the organization's first-seen rows of
-// the blocker spellings and joins them on the normalised edge key: narrowing
-// them to the blocker endpoint set first (the "legacy" form) costs more memory
-// than the rows it saves, measured on the production shape (the key condition
-// built from the set), and the join keeps only the matching keys either way.
-// The "legacy" form exists for the value-equality row only.
+// the blocker relationship type and joins them on the edge key: narrowing them
+// to the blocker endpoint set first (the "legacy" form) costs more memory than
+// the rows it saves, measured on the production shape (the key condition built
+// from the set), and the join keeps only the matching keys either way. The
+// "legacy" form exists for the value-equality row only.
 func blockerStartJoinFor(variant string) string {
 	restriction := ""
 	switch variant {
@@ -470,13 +474,13 @@ const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNul
 // request's repository), never through the work item's own repo_id column,
 // read with the same strict link semantics as the project scope expansion
 // (linkedPullRequestOnSQL, workItemIsIssueSQL).
-func blockerEdgeRowsSQL(statusPredicate, authorized string, withStart bool) string {
+func blockerEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT l.pr_repo_id AS rid, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank` + startOutput + `
+	return `SELECT l.pr_repo_id AS rid, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = ` + blockedExpr("d") + `
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = ` + blockerExpr("d") + `
-  WHERE ` + blockerRowsWhereSQL(authorized) + ` AND toString(l.pr_repo_id) IN {ids:Array(String)}
+  WHERE ` + blockerRowsWhereSQL(authorized) + current + ` AND toString(l.pr_repo_id) IN {ids:Array(String)}
   GROUP BY rid, tgt, src, is_open`
 }
 
@@ -485,14 +489,14 @@ func blockerEdgeRowsSQL(statusPredicate, authorized string, withStart bool) stri
 // project the team owns and reach a repository through a linked pull request
 // row (teamProjectLinkRowsSQL), with the item's strongest link tier. Same
 // issue, status and authorization rules as blockerEdgeRowsSQL.
-func blockerProjectEdgeRowsSQL(statusPredicate, authorized string, withStart bool) string {
+func blockerProjectEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT pl.team_id AS team_id, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank` + startOutput + `
+	return `SELECT pl.team_id AS team_id, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = ` + blockedExpr("d") + `
   INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = ` + blockedExpr("d") + `
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = ` + blockerExpr("d") + `
-  WHERE ` + blockerRowsWhereSQL(authorized) + `
+  WHERE ` + blockerRowsWhereSQL(authorized) + current + `
     AND ` + workItemIsIssueSQL("t") + `
   GROUP BY team_id, tgt, src, is_open`
 }
@@ -564,12 +568,12 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
-		authorized, authorizationBindings, authErr := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+		authorized, current, authorizationBindings, authErr := p.blockerScope(ctx, principal, orgID, requestedScope, settings)
 		if authErr != nil {
 			return outcome, authErr
 		}
-		authorizedMemo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
-		edgeRows := blockerEdgeRowsSQL(statusPredicate, authorized, false)
+		authorizedMemo = &blockerAuthorizationMemo{authorized, current, authorizationBindings, settings}
+		edgeRows := blockerEdgeRowsSQL(statusPredicate, authorized, current, false)
 		// The weakest tier of a repository's counted items; the per-repository
 		// counts feed the breakdown only. A team total is NOT the sum of these:
 		// an item linked to two owned repositories is one blocked item.
@@ -601,17 +605,18 @@ ORDER BY rid`, settings)
 		const projectArm = "arm = 'project'"
 		totalsStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
   toInt64(uniqExactIf(tgt, is_open AND `+projectArm+`)),
-  toInt64(if(countIf(is_open AND `+projectArm+`) > 0, minIf(item_rank, is_open AND `+projectArm+`), minIf(item_rank, `+projectArm+`)))
+  toInt64(if(countIf(is_open AND `+projectArm+`) > 0, minIf(item_rank, is_open AND `+projectArm+`), minIf(item_rank, `+projectArm+`))),
+  toInt64(uniqExactIf((tgt, src), is_open AND writer_unresolved = 1))
 FROM (
-  SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, toInt64(e.item_rank) AS item_rank, 'repository' AS arm
+  SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, toInt64(e.item_rank) AS item_rank, toUInt8(e.writer_unresolved) AS writer_unresolved, 'repository' AS arm
   FROM (`+edgeRows+`) AS e
   INNER JOIN (
     SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
     FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
   ) AS tp ON tp.rid_str = toString(e.rid)
   UNION ALL
-  SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, toInt64(item_rank) AS item_rank, 'project' AS arm
-  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, false)+`)
+  SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, toInt64(item_rank) AS item_rank, toUInt8(writer_unresolved) AS writer_unresolved, 'project' AS arm
+  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, false)+`)
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
@@ -619,14 +624,14 @@ ORDER BY team_id`, settings)
   ifNull(toInt64(minIf(start_unix, is_open)), 0)
 FROM (
   SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, e.start_unix AS start_unix, e.start_exact AS start_exact
-  FROM (`+blockerEdgeRowsSQL(statusPredicate, authorized, true)+`) AS e
+  FROM (`+blockerEdgeRowsSQL(statusPredicate, authorized, current, true)+`) AS e
   INNER JOIN (
     SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
     FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
   ) AS tp ON tp.rid_str = toString(e.rid)
   UNION ALL
   SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, start_unix, start_exact
-  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, true)+`)
+  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, true)+`)
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
@@ -643,7 +648,7 @@ ORDER BY team_id`, settings)
 			err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
 				var teamID string
 				var t blockerTeamTotals
-				if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank); err != nil {
+				if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank, &t.writerUnresolved); err != nil {
 					return err
 				}
 				totals[teamID] = t
@@ -691,18 +696,18 @@ ORDER BY team_id`, settings)
 			if settingsErr != nil {
 				return outcome, settingsErr
 			}
-			authorized, authorizationBindings, authErr := p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+			authorized, current, authorizationBindings, authErr := p.blockerScope(ctx, principal, orgID, requestedScope, settings)
 			if authErr != nil {
 				return outcome, authErr
 			}
-			memo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
+			memo = &blockerAuthorizationMemo{authorized, current, authorizationBindings, settings}
 		}
-		authorized, authorizationBindings, settings := memo.sql, memo.bindings, memo.settings
+		authorized, current, authorizationBindings, settings := memo.sql, memo.current, memo.bindings, memo.settings
 		statement := blockerStatement(`SELECT toInt64(uniqExact(`+blockedExpr("d")+`))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = `+blockedExpr("d")+`
 INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = `+blockerExpr("d")+`
-WHERE `+blockerRowsWhereSQL(authorized)+`
+WHERE `+blockerRowsWhereSQL(authorized)+current+`
   AND `+statusPredicate+` AND `+workItemIsIssueSQL("t")+`
   AND `+blockedExpr("d")+` NOT IN (SELECT work_item_id FROM `+admittedIssueLinksAmongSQL(blockerEndpointIDsSQL)+`)`, settings)
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerUnlinkedItems", statement, orgID, nil, func(row readers.RowScanner) error {
@@ -719,7 +724,7 @@ WHERE `+blockerRowsWhereSQL(authorized)+`
 			outcome.teamsWithoutRepos = append(outcome.teamsWithoutRepos, subject)
 			continue
 		}
-		var blockedItems, blockerEdges, excludedEdges, withData int64
+		var blockedItems, blockerEdges, excludedEdges, writerUnresolved, withData int64
 		weakest := int64(0)
 		breakdown := make([]contextfabric.FactValueRow, 0, len(repos))
 		for _, repo := range repos {
@@ -767,7 +772,7 @@ WHERE `+blockerRowsWhereSQL(authorized)+`
 		}
 		projectData := false
 		if t, ok := totals[teamID]; ok {
-			blockedItems, blockerEdges, excludedEdges = t.blockedItems, t.blockerEdges, t.excludedEdges
+			blockedItems, blockerEdges, excludedEdges, writerUnresolved = t.blockedItems, t.blockerEdges, t.excludedEdges, t.writerUnresolved
 			if t.projectWeakestRank > 0 {
 				projectData = true
 				if weakest == 0 || t.projectWeakestRank < weakest {
@@ -787,6 +792,7 @@ WHERE `+blockerRowsWhereSQL(authorized)+`
 			fields["blocked_work_items_current"] = contextfabric.IntegerFactValue(blockedItems)
 			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
 			fields["blocker_dependencies_excluded_by_status_current"] = contextfabric.IntegerFactValue(excludedEdges)
+			fields["blocker_dependencies_writer_unresolved_current"] = contextfabric.IntegerFactValue(writerUnresolved)
 			if days, basis, reason, ok := blockerOldestAgeOrUnavailable(ages[teamID], clock(), ageUnavailable[teamID]); ok {
 				fields["oldest_blocked_age_days"] = contextfabric.IntegerFactValue(days)
 				fields["oldest_blocked_age_basis"] = contextfabric.StringFactValue(basis)
@@ -838,11 +844,4 @@ func blockerExpr(alias string) string {
 // columns so the read prunes by them before the FINAL merge.
 func blockerRowsWhereSQL(authorized string) string {
 	return "d.org_id = {org_id:String} AND " + blockerPredicateSQL("d") + " AND d.source_work_item_id IN " + authorized + " AND d.target_work_item_id IN " + authorized
-}
-
-func errorTail(message string, n int) string {
-	if len(message) <= n {
-		return ""
-	}
-	return message[len(message)-n:]
 }

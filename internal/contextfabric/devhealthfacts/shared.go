@@ -1150,11 +1150,17 @@ import (
 // v225 -> v226: the file_hotspots fact kind is served for a repository. An
 // answer saved under v225 cannot carry it.
 //
-// v226 -> v227: the blocker facts (work item, team and project) read a blocker
+// v226 -> v227: every blocker read (team, project, work item) keeps only the
+// links the provider still reports; a link it removed is no longer counted or
+// named the oldest blocker. Team and project blockers facts carry
+// blocker_dependencies_writer_unresolved_current. An answer saved under v226
+// can count a removed link.
+//
+// v227 -> v229: the blocker facts (work item, team and project) read a blocker
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
-// the direction the row states. An answer saved under v226 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v227"
+// the direction the row states. An answer saved under v227 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v229"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

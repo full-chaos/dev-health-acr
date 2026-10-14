@@ -36,7 +36,7 @@ func newTeamRollupFixture(t *testing.T) *teamRollupFixture {
 	for _, statement := range devhealthschema.DDL(
 		"repos", "team_repo_ownership", "deploy_metrics_daily", "git_pull_requests",
 		"operational_incidents", "work_graph_deployment_incident_edges",
-		"work_items", "work_item_dependencies", "work_item_dependency_first_seen", "projects", "project_membership_transitions", "work_graph_issue_pr", "team_project_ownership", "work_item_team_attributions",
+		"work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "projects", "project_membership_transitions", "work_graph_issue_pr", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)

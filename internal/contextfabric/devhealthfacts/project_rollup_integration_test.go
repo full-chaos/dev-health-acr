@@ -80,7 +80,7 @@ func (s projectRollupSeed) blocksSince(source, target string, started time.Time)
 func newProjectRollupSeed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) projectRollupSeed {
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
