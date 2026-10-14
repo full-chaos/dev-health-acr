@@ -14,7 +14,19 @@ func scopeCandidateSets() []string {
 		requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate),
 		requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate),
 		teamOwnedProjectWorkItemIDsSQL,
+		teamAttributedWorkItemIDsSQL,
 	}
+}
+
+// authorizationJoinSQL is the work-item authorization relation narrowed to
+// candidates ("" for the organization-wide form). Its text does not depend
+// on the grant, only on selector mode.
+func authorizationJoinSQL(candidates string) string {
+	scope := readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{}}
+	if candidates == "" {
+		return readers.WorkItemScopeSQL(scope).JoinSQL
+	}
+	return readers.WorkItemScopeSQLAmong(scope, workItemCandidates(candidates)).JoinSQL
 }
 
 // OrgWideScopeStatementForTest rewrites a served scope expander statement to
@@ -30,6 +42,7 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 	out = strings.ReplaceAll(out, requestedTeamRepositoryOwnershipSQL, readers.TeamRepositoryOwnershipSQL(current))
 	out = strings.ReplaceAll(out, " AND (repo_id, work_item_id) IN "+teamAttributedWorkItemKeysSQL, "")
 	for _, candidates := range scopeCandidateSets() {
+		out = strings.ReplaceAll(out, authorizationJoinSQL(candidates), authorizationJoinSQL(""))
 		out = strings.ReplaceAll(out, issueLinkRowsAmongSQL(candidates), issueLinkRowsSQL)
 		out = strings.ReplaceAll(out, membershipTouchesAsOfAmongSQL(candidates), membershipTouchesAsOfAmongSQL(""))
 		out = strings.ReplaceAll(out, transitionSubjectsAmongSQL(candidates), "")
@@ -43,6 +56,27 @@ func OrgWideScopeStatementForTest(statement string) (orgWide string, filtered, o
 		ok = ok && !strings.Contains(out, candidates)
 	}
 	return out, out != statement, ok
+}
+
+// TeamWorkItemsAuthorizationJoinForTest is teamWorkItems' authorization
+// relation, narrowed to the requested teams' work items or whole.
+func TeamWorkItemsAuthorizationJoinForTest(narrowed bool) string {
+	if narrowed {
+		return authorizationJoinSQL(teamAttributedWorkItemIDsSQL)
+	}
+	return authorizationJoinSQL("")
+}
+
+// UnnarrowedAuthorizationStatementForTest replaces the candidate-narrowed
+// work-item authorization relation in a served statement with the
+// organization-wide one and changes nothing else. It reports whether a
+// narrowed relation was found.
+func UnnarrowedAuthorizationStatementForTest(statement string) (string, bool) {
+	out := statement
+	for _, candidates := range scopeCandidateSets() {
+		out = strings.ReplaceAll(out, authorizationJoinSQL(candidates), authorizationJoinSQL(""))
+	}
+	return out, out != statement
 }
 
 // OrgWideScopeReadsForTest names each organization-wide read a statement

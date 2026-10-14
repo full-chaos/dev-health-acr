@@ -246,7 +246,7 @@ func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testi
 	// Count pin: NewProviders' own doc comment says "one provider per
 	// registered FactKind". A provider added or removed must update this
 	// number deliberately.
-	const wantProviderCount = 22
+	const wantProviderCount = 23
 	if len(providers) != wantProviderCount {
 		t.Fatalf("devhealthfacts.NewProviders() returned %d providers, want %d -- if a provider was deliberately added or removed, update this pin AND add/remove its well-shaped constructor in wellShapedSubjectByKind", len(providers), wantProviderCount)
 	}
@@ -317,15 +317,15 @@ func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testi
 			})
 		}
 	}
-	// Salted positive: a (provider, kind) pair count that stayed at 21
+	// Salted positive: a (provider, kind) pair count that stayed at 23
 	// would mean the inner loop silently degenerated back to "first kind
-	// only" -- this package's providers declare 45 (provider, kind) pairs
+	// only" -- this package's providers declare 46 (provider, kind) pairs
 	// in total (most support 1-3 kinds each), so this must exceed the
 	// provider count.
 	if exercisedPairs <= wantProviderCount {
 		t.Fatalf("exercisedPairs = %d, want > %d (provider count) -- the per-kind loop did not run for any multi-kind provider", exercisedPairs, wantProviderCount)
 	}
-	if exercisedPairs != 45 {
-		t.Fatalf("exercisedPairs = %d, want exactly 45 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
+	if exercisedPairs != 46 {
+		t.Fatalf("exercisedPairs = %d, want exactly 46 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
 	}
 }

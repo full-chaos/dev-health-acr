@@ -50,7 +50,7 @@ func TestInterpretationPromptWordToKindRules(t *testing.T) {
 	for _, rule := range []string{
 		"the burden composite, exactly flow, health, incidents, investment, workload",
 		`"ready to release" and the noun form "release readiness": actual_completion, deployments. Never readiness.`,
-		`"on track", "on schedule", "behind", "delayed", "miss targets": actual_completion, status.`,
+		`"on track", "on schedule", "behind", "delayed", "miss targets", "at risk": actual_completion, status, commitment.`,
 		`"on-call load", "operational load": incidents. The word "load" never names workload.`,
 		`"code ownership risk" named: metrics.`,
 		"A blocking word together with a state word about work items",
