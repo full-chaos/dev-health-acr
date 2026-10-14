@@ -29,13 +29,6 @@ import (
 //
 // Re-run this gate after every change to the comparator.
 
-// retiredReplyGateReason is why the gate of the ops reply against the store is
-// skipped: that pair is the retired ops value of the Investment breakdown
-// (retiredInvestmentOrgReason), so no ops value is read and there is nothing
-// for a wrong reply to be found against. It is not a passing gate; it returns
-// with the pair (9699).
-const retiredReplyGateReason = "RETIRED (9699): the ops value of the Investment breakdown is not compared, so a reply of another store cannot be found; this gate returns with the pair"
-
 // gateRun runs root analytics with reference as the store both the ops reply
 // and the witnesses describe, and acr as the store the acr plane reads.
 func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, acr *Extract) (*Oracle, *RootReport) {
@@ -48,8 +41,8 @@ func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, ac
 		t.Fatalf("replay listener failures: %v", failures)
 	}
 	rr := report.Root("analytics")
-	if rr == nil || rr.Compared == 0 || len(rr.Retired) == 0 {
-		t.Fatalf("root analytics was not run on its acr pairs: %+v", rr)
+	if rr == nil || rr.ShapesRun == 0 || rr.Compared == 0 {
+		t.Fatalf("root analytics was not run: %+v", rr)
 	}
 	// A run that is not a valid measurement proves nothing about the class.
 	if len(rr.Invalid) > 0 {
@@ -173,7 +166,7 @@ func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values m
 	if len(rr.Findings) > 0 {
 		t.Errorf("planted run has findings beside the named class: %+v", rr.Findings)
 	}
-	if len(rr.Retired) == 0 && (rr.ShapesRun == 0 || rr.Leaves == 0) {
+	if rr.ShapesRun == 0 || rr.Leaves == 0 {
 		t.Errorf("the shape pass did not run on the planted store")
 	}
 }
@@ -667,16 +660,18 @@ func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 // A recorded reply that is not the reply of the reference store is a
 // finding before anything is said about acr.
 func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
-	t.Skip(retiredReplyGateReason)
 	manifest, recording, extract := loadedCapture(t)
 	other := extract.Clone()
+	// Every unit weighs one, so a reference store that is not the venue's is
+	// one with a unit fewer: the unit that reaches organization repositories.
+	droppedUnit, _ := directUnit(t, extract, manifest.Window)
+	kept := other.Tables[tableWorkUnitInvestments][:0]
 	for _, row := range other.Tables[tableWorkUnitInvestments] {
-		value, err := rowFloat(row, "effort_value")
-		if err != nil {
-			t.Fatal(err)
+		if rowID, _ := rowString(row, "work_unit_id"); rowID != droppedUnit {
+			kept = append(kept, row)
 		}
-		row["effort_value"] = json.Number(formatFloat(value * 2))
 	}
+	other.Tables[tableWorkUnitInvestments] = kept
 	_, rr := gateRun(t, manifest, recording, other, extract)
 	found := 0
 	for _, f := range rr.Findings {

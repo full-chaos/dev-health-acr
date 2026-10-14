@@ -115,20 +115,6 @@ func loadedCapture(t *testing.T) (Manifest, Recording, *Extract) {
 	return manifest, recording, extract
 }
 
-// recordedOpsRetired is the ops side the recorded mode does not replay: the
-// capture asks the Investment breakdown under CHURN_LOC, which the policy no
-// longer lets a client send, and holds no reply for COUNT. Root analytics runs
-// its acr pairs only. The recorded replies stay as recorded and are never asked
-// for (retiredReplyKeys).
-var recordedOpsRetired = map[string]string{"analytics": retiredInvestmentOrgReason}
-
-// retiredInvestmentOrgReason is why the recorded mode does not replay the ops
-// value of the Investment breakdown: the capture holds the CHURN_LOC replies
-// of a venue before ops dropped that measure, and no reply for COUNT. The live
-// mode compares the pair on COUNT; this entry goes with the next capture of the
-// venue (a replies file is never edited by hand).
-const retiredInvestmentOrgReason = "RETIRED (9699): the recorded capture holds no ops reply for the COUNT breakdown; the pair runs live on COUNT and returns here with the next capture"
-
 func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extract) *Oracle {
 	t.Helper()
 	policy, err := directread.DefaultGraphQLPolicy()
@@ -140,8 +126,7 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 		t.Fatalf("reference store: %v", err)
 	}
 	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases,
-		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams,
-		OpsRetired: recordedOpsRetired}
+		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams}
 }
 
 func runOracle(t *testing.T, o *Oracle) *Report {
@@ -173,9 +158,6 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	t.Logf("\n%s\n%s", report.Table(), report.Details())
 
 	if os.Getenv(repinEnv) != "" {
-		if len(recordedOpsRetired) > 0 {
-			t.Fatalf("a repin would pin the outcome of the roots retired on the ops side (%v): recapture on the venue instead", retiredRoots())
-		}
 		if len(skipped) > 0 {
 			t.Fatalf("a repin would drop the pinned outcome of the roots the capture does not record (%v): recapture on the venue instead", skipped)
 		}
@@ -197,7 +179,7 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	var live []string
 	for _, key := range unused {
 		unusedSet[key] = true
-		if !darkKeys[key] && !isNotRecordedKey(t, key, skipped) && !isNotRecordedKey(t, key, retiredRoots()) {
+		if !darkKeys[key] && !isNotRecordedKey(t, key, skipped) {
 			live = append(live, key)
 		}
 	}
@@ -228,35 +210,6 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 		sortFindings(want.Findings)
 		sort.Strings(got.NotJoined)
 		sort.Strings(want.NotJoined)
-		if _, retired := recordedOpsRetired[rr.Root]; retired {
-			// The ops side is retired: no shape, no ops value and no
-			// attribution_basis residual. What is pinned and still compared is
-			// the acr side: no finding, the named classes of the acr pairs,
-			// the subjects left out.
-			if len(rr.Retired) == 0 {
-				t.Errorf("root %s is retired on the ops side and its report does not say so", rr.Root)
-			}
-			if len(got.Findings) != 0 || len(want.Findings) != 0 {
-				t.Errorf("retired root %s: findings %+v, pinned %+v", rr.Root, got.Findings, want.Findings)
-			}
-			var pinned []PinnedDifference
-			for _, d := range want.Differences {
-				if d.Class != ClassAttributionBasis {
-					pinned = append(pinned, d)
-				}
-			}
-			if problem := differencesDiffer(got.Differences, pinned); problem != "" {
-				t.Errorf("retired root %s: the named differences are not the pinned ones: %s", rr.Root, problem)
-			}
-			if !reflect.DeepEqual(got.NotJoined, want.NotJoined) {
-				t.Errorf("retired root %s: subjects left out %v, pinned %v", rr.Root, got.NotJoined, want.NotJoined)
-			}
-			if rr.Compared == 0 {
-				t.Errorf("retired root %s compared nothing", rr.Root)
-			}
-			valueRoots++
-			continue
-		}
 		// The values of a named difference are float sums: they are held to
 		// the pinned ones within the tolerance of a reordered sum, everything
 		// else exactly.
@@ -281,6 +234,11 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	}
 	if valueRoots != 5 {
 		t.Fatalf("%d value roots were compared, want 5 (analytics, capacityForecasts, catalog, compoundingRisk, throughputForecast)", valueRoots)
+	}
+	for theme, want := range manifest.Residual {
+		if got := oracle.Residual[theme]; math.Abs(got-want) > themeTolerance(got, want) {
+			t.Errorf("investment residual of %s is %v, the venue gave %v", theme, got, want)
+		}
 	}
 }
 
@@ -464,15 +422,6 @@ func withoutNotRecordedRoots(t *testing.T, manifest Manifest) (Manifest, []strin
 	return manifest, skipped
 }
 
-func retiredRoots() []string {
-	roots := make([]string, 0, len(recordedOpsRetired))
-	for root := range recordedOpsRetired {
-		roots = append(roots, root)
-	}
-	sort.Strings(roots)
-	return roots
-}
-
 func rootsExcept(t *testing.T, skipped []string) []string {
 	t.Helper()
 	var only []string
@@ -505,8 +454,8 @@ func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 
 // The capture of the venue records every root: nothing is excluded, so a root
 // added to notRecordedRoots has to be a root the capture really lacks. The
-// retired ops side of root analytics is not an exclusion of the root: the root
-// still runs, on its acr pairs (Oracle.OpsRetired).
+// ops side of root analytics is compared again on COUNT: the root
+// runs in full.
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	filtered, skipped := withoutNotRecordedRoots(t, manifest)
@@ -523,9 +472,6 @@ func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	}
 	if _, ok := manifest.Expect["capacityForecast"]; !ok {
 		t.Fatal("the capture pins no outcome for capacityForecast")
-	}
-	if !strings.Contains(recordedOpsRetired["analytics"], "RETIRED") {
-		t.Fatal("the retired ops side of root analytics does not say it is retired")
 	}
 }
 
