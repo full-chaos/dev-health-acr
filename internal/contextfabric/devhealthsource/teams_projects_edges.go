@@ -1183,32 +1183,48 @@ func projectMembershipRelationshipID(subjectCanonicalID, projectCanonicalID, int
 // (org_id, provider, id), so this join is 1:1 and cannot fan the catalog
 // out; the ON is two plain column equalities, which 24.8 accepts.
 //
-// projectTeamsOwnershipRowsSQL is the raw team_project_ownership row source
-// every arm resolves against: one row per ownership assertion, carrying BOTH
-// identity columns (project_ref, project_key) regardless of which one an arm
-// matches through. Every arm below reads this identical shape, so the two
-// columns cannot drift between what an arm matches on and what it reports as
-// ownership_ref/ownership_key.
-func projectTeamsOwnershipRowsSQL(ingest bool) string {
+// projectTeamsOwnershipRowsSQL is the team_project_ownership row source every
+// arm resolves against, collapsed ONCE: one row per (provider, project_ref,
+// project_key, team_id, source_name), carrying BOTH identity columns
+// regardless of which one an arm matches through, so the columns cannot
+// drift between what an arm matches on and what it reports as
+// ownership_ref/ownership_key. The history is folded here, before the arms
+// and the window layer, because every version of every pair would otherwise
+// sit in the arms' memory: first_valid_from is the earliest version's start,
+// valid_from/valid_to are the latest assertion by ownershipFactOrder (the
+// order the outer statement used to apply), updated_at and ingest_at are the
+// newest across the group (the pagination watermark folds them in again).
+// gate is an extra WHERE conjunct inside the FINAL read; the retraction arm
+// uses it to read nothing when the organization has no ambiguous key.
+func projectTeamsOwnershipRowsSQL(ingest bool, gate string) string {
 	return `(
-		SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "last_synced AS ingest_at") + `
-		FROM team_project_ownership FINAL
-		WHERE org_id = {org_id:String}
+		SELECT provider, project_ref, project_key, team_id, source_name,
+		       min(vf) AS first_valid_from,
+		       argMax(tuple(vf, vt), ord) AS latest_assertion,
+		       latest_assertion.1 AS valid_from, latest_assertion.2 AS valid_to,
+		       max(upd) AS updated_at` + ingestStampSQL(ingest, "max(ing) AS ingest_at") + `
+		FROM (
+			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
+			       valid_from AS vf, valid_to AS vt, updated_at AS upd` + ingestStampSQL(ingest, "last_synced AS ing") + `,
+			       ` + strings.NewReplacer("o.valid_to", "valid_to", "o.valid_from", "valid_from").Replace(ownershipFactOrder) + ` AS ord
+			FROM team_project_ownership FINAL
+			WHERE org_id = {org_id:String}` + gate + `
+		)
+		GROUP BY provider, project_ref, project_key, team_id, source_name
 	)`
 }
 
-// projectTeamsAssertingArm is the OLD arms A and B, unioned at the OWNERSHIP
-// row level (CHAOS-4750) rather than each embedding its own copy of
-// `resolved` -- the same trade CHAOS-4552 proved for
-// readers.ProjectOwnershipJoinSQL: one shared project-identity scan instead
-// of one per arm, at the cost of one extra team_project_ownership scan (a
-// fraction of `projects`' size, and not the metric this ticket measures).
+// projectTeamsAssertingArm is the OLD arms A and B in one arm (CHAOS-4750):
+// the collapsed ownership rows (projectTeamsOwnershipRowsSQL, read once) are
+// fanned into their two match variants with ARRAY JOIN, so the table is read
+// once rather than once per variant and one shared project-identity scan
+// serves both.
 //
-//   - project_ref rows tag required_scope_kind = ” -- the SCOPE arm (old
+//   - the project_ref variant tags required_scope_kind = ” -- the SCOPE arm (old
 //     arm A). Matches a scope row of EITHER kind on purpose: project_ref is
 //     not an id column, it is whichever id space that row uses, and must
 //     never be given a scope_kind restriction (CHAOS-4521b, CHAOS-4542).
-//   - project_key rows tag required_scope_kind = 'key' -- the KEY arm (old
+//   - the project_key variant tags required_scope_kind = 'key' -- the KEY arm (old
 //     arm B). Matches the key SCOPE ROW, never p.project_key (a column
 //     EVERY scope row carries -- CHAOS-4542 defect 6): the restriction sits
 //     in the WHERE below, not the ON, because 24.8 rejects an ON that is not
@@ -1222,20 +1238,15 @@ func projectTeamsOwnershipRowsSQL(ingest bool) string {
 // untested.
 func projectTeamsAssertingArm(resolved string, ingest bool) string {
 	ownership := `(
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
-		       project_ref AS scope_value, '' AS required_scope_kind
-		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
-
-		UNION ALL
-
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
-		       project_key AS scope_value, 'key' AS required_scope_kind
-		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
+		SELECT provider, project_ref, project_key, team_id, source_name, first_valid_from, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
+		       scope_match.1 AS scope_value, scope_match.2 AS required_scope_kind
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest, "") + `
+		ARRAY JOIN [(project_ref, ''), (project_key, 'key')] AS scope_match
 	) AS o`
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
-		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
+		       o.team_id AS team_id, o.source_name AS source_name, o.first_valid_from AS first_valid_from, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
 		       p.project_updated_at AS project_updated_at, p.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at, p.provider_ingest_at AS provider_ingest_at") + `, toUInt8(0) AS retraction_only
 		FROM ` + resolved + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "scope_value") + `
@@ -1243,39 +1254,24 @@ func projectTeamsAssertingArm(resolved string, ingest bool) string {
 		WHERE o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind`
 }
 
-// projectTeamsRetractionArm is the OLD arms C and D, unioned the same way
-// over the AMBIGUOUS project source instead of the resolved one.
-//
-//   - rows whose OWN project_key is non-empty match through project_key
-//     (old arm C) -- tagged match_value = project_key, guarded by
-//     project_key != ”.
-//   - rows whose OWN project_key is empty match through project_ref (old
-//     arm D, CHAOS-4566 R4 P2) -- tagged match_value = project_ref, guarded
-//     by project_key = ”.
-//
-// The two WHERE filters are mutually exclusive over the SAME raw row set --
-// identical to arm C/D's own mutually-exclusive guards, just moved from
-// "which arm a row reaches" to "which half of one union a row reaches". No
-// row gains or loses a match path, and neither branch can double-match a row
-// the other already covers.
+// projectTeamsRetractionArm is the OLD arms C and D in one arm, over the
+// AMBIGUOUS project source instead of the resolved one. Each collapsed
+// ownership row picks ONE match value with if(): its own project_key when it
+// is non-empty (old arm C, CHAOS-4566), else its project_ref (old arm D,
+// CHAOS-4566 R4 P2). The two choices are mutually exclusive on the row's own
+// project_key, so a row cannot match through both. The ownership read is
+// gated on the ambiguous source having at least one ambiguous key: with none
+// the arm cannot return a row and reads no ownership history.
 func projectTeamsRetractionArm(ambiguous string, ingest bool) string {
 	ownership := `(
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
-		       project_key AS match_value
-		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
-		WHERE project_key != ''
-
-		UNION ALL
-
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
-		       project_ref AS match_value
-		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
-		WHERE project_key = ''
+		SELECT provider, project_ref, project_key, team_id, source_name, first_valid_from, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
+		       if(project_key != '', project_key, project_ref) AS match_value
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest, " AND (SELECT count() FROM "+ambiguous+" WHERE p.key_project_count > 1) > 0") + `
 	) AS o`
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
-		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
+		       o.team_id AS team_id, o.source_name AS source_name, o.first_valid_from AS first_valid_from, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
 		       p.project_updated_at AS project_updated_at, p.provider_updated_at AS provider_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at, p.provider_ingest_at AS provider_ingest_at") + `, toUInt8(1) AS retraction_only
 		FROM ` + ambiguous + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.match_value = p.project_key
@@ -1627,7 +1623,7 @@ func projectTeamsGroupSQL(ingest bool) string {
 		legacyProviderTerm = ", max(provider_updated_at)" + identityPartition
 	}
 	return `SELECT o.project_id, o.team_id, o.source_name,
-       minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
+       minIf(o.first_valid_from, o.unassertable = 0) AS first_valid_from,
        argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1 IS NULL AS latest_is_open,
        ifNull(argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        ` + projectTeamsWatermark + ` AS observed_at, o.provider,
@@ -1635,7 +1631,7 @@ func projectTeamsGroupSQL(ingest bool) string {
        groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
        toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present` + ingestStampSQL(ingest, projectTeamsIngestWatermark+" AS ingest_at") + `
 FROM (
-	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, retraction_only,
+	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, first_valid_from, valid_from, valid_to, retraction_only,
 	       greatest(updated_at, max(project_updated_at)` + identityPartition + legacyProviderTerm + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+", max(provider_ingest_at)"+identityPartition+") AS row_ingest,") + `
 	       toUInt8(retraction_only = 1 OR min(project_id)` + identityPartition + ` != max(project_id)` + identityPartition + `) AS unassertable
 	FROM (` + strings.Join(projectTeamsArmsFor(ingest), "\n\n\t\tUNION ALL\n") + `

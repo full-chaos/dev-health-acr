@@ -25,14 +25,14 @@
   "properties": {
     "operation": {
       "type": "string",
-      "description": "The operation name exactly as data_catalog lists it, for example compoundingRisk, hotspots, securityOverview, catalogValues or capacityForecasts. An unknown name is refused.",
+      "description": "The operation name exactly as data_catalog (if listed) lists it, for example compoundingRisk, hotspots, securityOverview, catalogValues or capacityForecasts. An unknown name is refused.",
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z][A-Za-z0-9]*$"
     },
     "variables": {
       "type": "object",
-      "description": "The operation's variables, shaped as data_catalog shows their paths, for example {\"filter\":{\"breakout\":\"REPO\",\"repoIds\":[\"repository:...\"]}}. Repository and team ids are canonical ids taken from find_subjects or from a response: never build one. A variable that is not listed for the operation is refused. Omit it for an operation that needs none.",
+      "description": "The operation's variables, shaped as data_catalog (if listed) shows their paths, for example {\"filter\":{\"breakout\":\"REPO\",\"repoIds\":[\"repository:...\"]}}. Repository and team ids are canonical ids taken from find_subjects (if listed) or from a response: never build one. A variable that is not listed for the operation is refused. Omit it for an operation that needs none.",
       "additionalProperties": true
     },
     "max_bytes": {

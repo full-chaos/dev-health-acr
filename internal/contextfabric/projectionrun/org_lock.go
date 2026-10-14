@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
 )
 
 // ErrOrgLocked means another process currently holds the organization's
@@ -28,6 +31,17 @@ type NoopOrgLocker struct{}
 
 func (NoopOrgLocker) Lock(context.Context, string) (func() error, error) {
 	return func() error { return nil }, nil
+}
+
+// OrgLockKey is the string the advisory lock hashes. Any spelling of one UUID
+// maps to its canonical lowercase form, so a tick holding a discovered
+// spelling and a purge holding the canonical one exclude each other. A value
+// that is not a UUID is used as given.
+func OrgLockKey(orgID string) string {
+	if parsed, err := uuid.Parse(strings.TrimSpace(orgID)); err == nil {
+		return parsed.String()
+	}
+	return orgID
 }
 
 // advisoryLockClassID namespaces this package's PostgreSQL advisory locks so
@@ -62,6 +76,7 @@ func (l *PostgresOrgLocker) Lock(ctx context.Context, orgID string) (func() erro
 	if l == nil || l.db == nil {
 		return nil, errors.New("projectionrun: postgres org locker is not configured")
 	}
+	orgID = OrgLockKey(orgID)
 	conn, err := l.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire org lock connection: %w", err)

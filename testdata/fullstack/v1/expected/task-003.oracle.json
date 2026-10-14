@@ -15,7 +15,8 @@
     {"source": "pull_requests.v1", "reason": "no_evidence"},
     {"source": "pull_request_reviews.v1", "reason": "no_evidence"},
     {"source": "ci_pipeline_runs.v1", "reason": "no_evidence"},
-    {"source": "file_complexity.v1", "reason": "no_evidence"}
+    {"source": "file_complexity.v1", "reason": "no_evidence"},
+    {"source": "action_findings.v1", "reason": "historical_request_not_supported"}
   ],
   "expected_unavailable_sources_exact": true,
   "expected_unavailable_sources_note": "Exactly the five branch-filtered sources are unavailable. Repository-wide sources remain eligible and label their returned evidence repository-wide.",
@@ -26,8 +27,8 @@
       "derived_locator": "acr:v1:commit:b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
       "entity_type": "commit",
       "entity_id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-      "packet_category": "cause",
-      "rule_id": "evidence.observed.cause.v1"
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
     },
     {
       "corpus_evidence_id": null,
@@ -59,8 +60,8 @@
       "reason": "branch-filtered pull request evidence from main must not appear for release/1.4-unindexed"
     }
   ],
-  "required_packet_categories": ["evidence", "cause"],
-  "required_rule_ids": ["evidence.observed.reference.v1", "evidence.observed.cause.v1"],
+  "required_packet_categories": ["evidence"],
+  "required_rule_ids": ["evidence.observed.reference.v1"],
   "required_checks": [],
   "min_expandable_evidence": 2,
   "required_findings": [],

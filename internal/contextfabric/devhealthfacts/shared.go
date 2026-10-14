@@ -1096,11 +1096,48 @@ import (
 // and no zero mix. An answer saved under v216 states the false reason that no
 // effort was persisted.
 //
-// v217 -> v218: the blocker facts (work item, team and project) read a blocker
+// v217 -> v218: the team linked pull request mix takes a unit's reference
+// count once per unit, not from the unit's reference array on every expanded
+// row. The rows are unchanged; the statement and its memory are not.
+//
+// v218 -> v219: the team project link rows intersect the organization's linked
+// work item ids with the owned projects' work items before the FINAL read, so
+// the statements hold the owned projects' candidates and not every linked work
+// item. The rows are unchanged; the statements and their memory are not, so an
+// answer saved under v218 is not reused as one produced by the new statements.
+//
+// v219 -> v220: the team project link rows resolve the owned projects once, with
+// the team restriction on the ownership rows, and prune both work item passes by
+// the identity values the named teams' ownership rows name instead of resolving
+// the owned set again in each pass. The rows are unchanged; the statements and
+// their memory are not, so an answer saved under v219 is not reused as one
+// produced by the new statements.
+//
+// v220 -> v221: a team with owned repositories and no mix is named by its
+// cause: investment_team_units_outside_membership_run when a work unit on an
+// owned repository is outside the latest complete membership run, or
+// investment_team_units_unattributed when positive-effort units in scope were
+// dropped (their references reach no repository the team owns). Still no fact. An
+// answer saved under v220 names only the generic no-unit reason.
+//
+// v221 -> v222: the team linked pull request mix reads its linked set in a
+// statement of its own and takes it, with the membership scope ids, as external
+// tables instead of inlining the link chain four times and the ids in its text.
+// The rows are unchanged; the statements and their memory are not, so an answer
+// saved under v221 is not reused as one produced by the new statements.
+//
+// v222 -> v223: the team and project blocker statements read in blocks of
+// 8,192 rows instead of the server default of 65,536, and the age
+// statements read the first-seen rows of the organization without
+// narrowing them to the blocker edges. The rows are unchanged; the
+// statements served are not, so an answer saved under v222 is not reused as
+// one produced by them.
+//
+// v223 -> v224: the blocker facts (work item, team and project) read a blocker
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
-// the direction the row states. An answer saved under v217 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v218"
+// the direction the row states. An answer saved under v223 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v224"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

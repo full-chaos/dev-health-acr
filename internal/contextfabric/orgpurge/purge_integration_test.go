@@ -117,6 +117,9 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	dry, err := r.run(t, orgGone, orgpurge.Options{DryRun: true})
 	require.NoError(t, err)
 	require.Equal(t, beforeGone, rowCounts(t, r.db, orgGone), "dry run must change nothing")
+	var dryMarked int
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, orgGone).Scan(&dryMarked))
+	require.Zero(t, dryMarked, "a dry run writes no purge marker")
 	require.True(t, graphExists(t, r.adapter, orgGone), "dry run must keep the graph")
 	require.Equal(t, 2, dry.Graphs, "dry run counts the org's graphs in both UUID spellings")
 	require.Len(t, dry.Rows, len(countedTables()), "dry run counts the cascaded children too")
@@ -185,6 +188,12 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	require.False(t, again.AuditRowWritten, "second run writes no audit row")
 	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid AND action = 'org_purged'`, orgGone).Scan(&audit))
 	require.Equal(t, 1, audit)
+
+	var marked, keptMarked int
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, orgGone).Scan(&marked))
+	require.Equal(t, 1, marked, "a purge sets the durable purge marker and a second run keeps it")
+	require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, orgKept).Scan(&keptMarked))
+	require.Zero(t, keptMarked, "other organizations are not marked")
 }
 
 func TestEveryOrgKeyedTableIsPurgedOrKept(t *testing.T) {

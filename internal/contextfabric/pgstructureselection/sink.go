@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 const (
@@ -427,7 +428,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		event.Selected.ReceiptID, event.Selected.AppliedValue, event.Accepted,
 		event.SelectionMode, event.SelectionProvenance, offeredJSON, pipelineJSON, consensusJSON)
 	if err != nil {
-		return fmt.Errorf("pgstructureselection: insert selection: %w", err)
+		return fmt.Errorf("pgstructureselection: insert selection: %w", orgfence.Classify(err))
 	}
 	return nil
 }

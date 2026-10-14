@@ -405,6 +405,9 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
 		return
 	}
+	if a.writeOrgPurged(w, r, err) {
+		return
+	}
 	// CHAOS-4636 / decision D5: the PLANNED, EXPLAINED refusal.
 	//
 	// Classified BEFORE the deadline check on purpose. The engine refuses

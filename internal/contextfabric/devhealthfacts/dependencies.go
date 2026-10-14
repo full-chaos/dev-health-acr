@@ -432,13 +432,27 @@ func blockerWorkItemsSQL(alias string) string {
 	return `(SELECT org_id, work_item_id, status, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + blockerEndpointIDsSQL + `) AS ` + alias
 }
 
-// blockerStartJoinSQL is the left join that gives a blocker edge its first
-// sync time. The subselect reads the first-seen rows of the blocker edge
-// endpoints only, so its cost follows the blocker edges.
-var blockerStartJoinSQL = ` LEFT JOIN (SELECT f.blocker_id AS blocker_id, f.blocked_id AS blocked_id, min(f.first_seen_at) AS first_seen, 1 AS seen
-    FROM ` + blockerRowsSQL("f", "work_item_dependency_first_seen", "", false, rawEndsIn(blockerEndpointIDsSQL), "first_seen_at") + `
+// blockerStartJoinFor is the left join that gives a blocker edge its first
+// sync time. The shipped form ("") reads the organization's first-seen rows of
+// the blocker spellings and joins them on the normalised edge key: narrowing
+// them to the blocker endpoint set first (the "legacy" form) costs more memory
+// than the rows it saves, measured on the production shape (the key condition
+// built from the set), and the join keeps only the matching keys either way.
+// The "legacy" form exists for the value-equality row only.
+func blockerStartJoinFor(variant string) string {
+	var narrowing func(string) string
+	if variant == "legacy" {
+		narrowing = rawEndsIn(blockerEndpointIDsSQL)
+	}
+	return ` LEFT JOIN (SELECT f.blocker_id AS blocker_id, f.blocked_id AS blocked_id, min(f.first_seen_at) AS first_seen, 1 AS seen
+    FROM ` + blockerRowsSQL("f", "work_item_dependency_first_seen", "", false, narrowing, "first_seen_at") + `
     GROUP BY blocker_id, blocked_id) AS fs
     ON fs.blocker_id = d.blocker_id AND fs.blocked_id = d.blocked_id`
+}
+
+// blockerStartVariant selects an experimental first-seen narrowing; "" is the
+// shipped one.
+var blockerStartVariant = ""
 
 // blockerStartOutputSQL are the per-edge start columns carried through the
 // edge grouping: start_unix is the provider time of the link when the synced
@@ -488,7 +502,7 @@ func blockerStartParts(withStart bool) (output, join string) {
 	if !withStart {
 		return "", ""
 	}
-	return blockerStartOutputSQL, blockerStartJoinSQL
+	return blockerStartOutputSQL, blockerStartJoinFor(blockerStartVariant)
 }
 
 // blockerLinkTierName names a link rank; a rank outside 1..3 is never emitted.
@@ -560,7 +574,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 		// The weakest tier of a repository's counted items; the per-repository
 		// counts feed the breakdown only. A team total is NOT the sum of these:
 		// an item linked to two owned repositories is one blocked item.
-		statement := readers.WithSettings(`SELECT toString(rid), toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)), toInt64(if(countIf(is_open) > 0, minIf(item_rank, is_open), min(item_rank)))
+		statement := blockerStatement(`SELECT toString(rid), toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)), toInt64(if(countIf(is_open) > 0, minIf(item_rank, is_open), min(item_rank)))
 FROM (`+edgeRows+`)
 GROUP BY rid
 ORDER BY rid`, settings)
@@ -586,7 +600,7 @@ ORDER BY rid`, settings)
 		// The read groups by team, so team ids go in chunks under the
 		// statement's result row cap; a team's rows live in one chunk only.
 		const projectArm = "arm = 'project'"
-		totalsStatement := readers.WithSettings(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
+		totalsStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
   toInt64(uniqExactIf(tgt, is_open AND `+projectArm+`)),
   toInt64(if(countIf(is_open AND `+projectArm+`) > 0, minIf(item_rank, is_open AND `+projectArm+`), minIf(item_rank, `+projectArm+`)))
 FROM (
@@ -602,7 +616,7 @@ FROM (
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
-		ageStatement := readers.WithSettings(`SELECT team_id, toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), is_open AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open AND start_exact = 1)),
+		ageStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), is_open AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open AND start_exact = 1)),
   ifNull(toInt64(minIf(start_unix, is_open)), 0)
 FROM (
   SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, e.start_unix AS start_unix, e.start_exact AS start_exact
@@ -685,7 +699,7 @@ ORDER BY team_id`, settings)
 			memo = &blockerAuthorizationMemo{authorized, authorizationBindings, settings}
 		}
 		authorized, authorizationBindings, settings := memo.sql, memo.bindings, memo.settings
-		statement := readers.WithSettings(`SELECT toInt64(uniqExact(d.blocked_id))
+		statement := blockerStatement(`SELECT toInt64(uniqExact(d.blocked_id))
 FROM `+blockerDependenciesSQL("d")+`
 INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = {org_id:String} AND t.work_item_id = d.blocked_id
 INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = {org_id:String} AND s.work_item_id = d.blocker_id

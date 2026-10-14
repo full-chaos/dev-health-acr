@@ -42,7 +42,7 @@
           },
           "canonical_id": {
             "type": "string",
-            "description": "The stored id, byte for byte. Use it as is in run_operation variables. Never build one."
+            "description": "The stored id, byte for byte. Use it as is in run_operation (if listed) variables. Never build one."
           },
           "label": {
             "type": "string",
