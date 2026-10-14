@@ -1090,11 +1090,17 @@ import (
 // sprint ends and the raw issue counts beside them). An answer saved under
 // v215 has no commitment fact.
 //
-// v216 -> v217: the blocker facts (work item, team and project) read a blocker
+// v216 -> v217: a team whose owned repositories hold work units that all have
+// zero persisted effort is named investment_team_effort_not_measurable, with
+// the unit count, instead of investment_team_no_unit_in_window. Still no fact
+// and no zero mix. An answer saved under v216 states the false reason that no
+// effort was persisted.
+//
+// v217 -> v218: the blocker facts (work item, team and project) read a blocker
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
-// the direction the row states. An answer saved under v216 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v217"
+// the direction the row states. An answer saved under v217 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v218"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
