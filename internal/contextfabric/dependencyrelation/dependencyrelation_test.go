@@ -48,3 +48,16 @@ func TestKeySQLCoversEveryAlias(t *testing.T) {
 		t.Errorf("KeySQL has no pass-through default: %s", sql)
 	}
 }
+
+func TestKeyOperandSQLHasNoComparisonOperator(t *testing.T) {
+	t.Parallel()
+	got := KeyOperandSQL("d.relationship_type")
+	if strings.Contains(got, "=") {
+		t.Fatalf("KeyOperandSQL carries a comparison operator, which a JOIN ON operand may not: %s", got)
+	}
+	for _, spelling := range []string{"BLOCKED_BY", "IS_BLOCKED_BY", "RELATES"} {
+		if !strings.Contains(got, "'"+spelling+"'") {
+			t.Fatalf("KeyOperandSQL does not carry the mapped spelling %s: %s", spelling, got)
+		}
+	}
+}

@@ -182,3 +182,23 @@ func KeySQL(column string) string {
 	fmt.Fprintf(&b, "concat(lower(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', '')), ':fwd'))", column)
 	return b.String()
 }
+
+// KeyOperandSQL renders the same canonical key as KeySQL in function-call
+// syntax only (no comparison operator), so it can sit inside a JOIN ON operand,
+// which the portable ON grammar allows as column | literal | func(operand...).
+func KeyOperandSQL(column string) string {
+	trimmed := fmt.Sprintf("upper(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', ''))", column)
+	keys := make([]string, 0, len(mapping))
+	for k := range mapping {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("multiIf(")
+	for _, k := range keys {
+		m := mapping[k]
+		fmt.Fprintf(&b, "equals(%s, '%s'), '%s', ", trimmed, k, keyOf(strings.ToLower(string(m.mapped)), m.swapEndpoints))
+	}
+	fmt.Fprintf(&b, "concat(lower(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', '')), ':fwd'))", column)
+	return b.String()
+}

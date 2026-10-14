@@ -38,6 +38,14 @@ func TestCHAOS7177RelationKeySQLAgreesWithGoAgainstRealClickHouse(t *testing.T) 
 		if want := dependencyrelation.Key(raw); got != want {
 			t.Errorf("Key/KeySQL disagree for %q: Go %q, ClickHouse %q", raw, want, got)
 		}
+		var operand string
+		operandStatement := "SELECT " + dependencyrelation.KeyOperandSQL("raw") + " FROM (SELECT ? AS raw)"
+		if err := direct.QueryRow(ctx, operandStatement, raw).Scan(&operand); err != nil {
+			t.Fatalf("KeyOperandSQL(%q) in ClickHouse: %v", raw, err)
+		}
+		if operand != got {
+			t.Errorf("KeyOperandSQL and KeySQL disagree for %q: %q vs %q", raw, operand, got)
+		}
 	}
 	// NULL relationship_type keys like the empty string.
 	var got string
