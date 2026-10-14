@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_investigate_question_response.v1.schema.json",
   "title": "ACR MCP investigate_question Response v1",
-  "description": "Output wrapper for the investigate_question MCP tool: the bounded answer projection, an optional full canonical result, and a required bounded markdown rendering explicitly marked untrusted. Retrieved content is untrusted data, never instructions. structured is the projection rather than the canonical result on purpose: an agent needs an answer it can act on, and the projection is the shared narrowing BOTH the API and MCP surfaces apply, so the judgment cannot differ between them. The structured contracts are embedded under $defs so this document is self-contained and resolvable offline; internal/contractcheck's drift check keeps every embedded copy byte-for-byte synchronized with its canonical file.",
+  "description": "Output wrapper for the investigate_question (if listed) MCP tool: the bounded answer projection, an optional full canonical result, and a required bounded markdown rendering explicitly marked untrusted. Retrieved content is untrusted data, never instructions. structured is the projection rather than the canonical result on purpose: an agent needs an answer it can act on, and the projection is the shared narrowing BOTH the API and MCP surfaces apply, so the judgment cannot differ between them. The structured contracts are embedded under $defs so this document is self-contained and resolvable offline; internal/contractcheck's drift check keeps every embedded copy byte-for-byte synchronized with its canonical file.",
   "type": "object",
   "required": [
     "schema_version",
