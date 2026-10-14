@@ -211,7 +211,7 @@ WHERE table_schema = 'acr' AND column_name IN ('org_id', 'organization_id', 'aut
 SELECT p.prosecdef, coalesce(array_to_string(p.proconfig, ';'), ''), pg_get_userbyid(p.proowner) = current_user, has_function_privilege('public', p.oid, 'EXECUTE')
 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'acr' AND p.proname = 'context_fabric_refuse_purged_org'`).Scan(&definer, &config, &ownedByMigrationRole, &publicMayExecute))
-	require.False(t, definer, "the fence function runs with the writer's own privileges")
+	require.True(t, definer, "the fence function reads the marker with its owner's privileges, so no grant to the writer's role can be missing")
 	require.Equal(t, "search_path=pg_catalog, pg_temp", config)
 	require.True(t, ownedByMigrationRole, "the fence function is owned by the role that ran the migrations")
 	require.False(t, publicMayExecute, "no role may call the fence function directly")
@@ -306,6 +306,93 @@ VALUES (repeat(md5('fence-h'), 2), repeat(md5('fence-d'), 2), 'client', 'dynamic
 	require.Equal(t, []string{orgGone}, cleared)
 	_, err = r.db.ExecContext(ctx, fenceInsertRebuildMarker, strings.ToUpper(orgGone))
 	require.NoError(t, err, "the organization returned to discovery: the fence is lifted")
+}
+
+// A purge of an organization that already carries a marker must pass its own
+// fence: its statements are deletes, the audit insert and the marker upsert,
+// none of which the fence checks, and the foreign-key actions of its deletes
+// do not change an organization column.
+func TestWriteFenceARepeatedPurgeOfAMarkedOrganizationRemovesRowsThatPredateTheFence(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	seedPostgres(t, r.db, orgGone)
+	purgeOrg(t, r, orgGone)
+	require.Equal(t, 1, markerCount(t, r.db, orgGone))
+
+	conn, err := r.db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, `SET session_replication_role = replica`)
+	require.NoError(t, err)
+	suffix := strings.ReplaceAll(orgGone[:8], "-", "")
+	for _, statement := range seedStatements() {
+		if strings.Contains(statement, "'ep2-'") {
+			continue // the legal-hold episode was kept by the first purge
+		}
+		args := []any{orgGone}
+		if strings.Contains(statement, "$2") {
+			args = append(args, suffix)
+		}
+		_, err := conn.ExecContext(ctx, statement, args...)
+		require.NoError(t, err, statement)
+	}
+	_, err = conn.ExecContext(ctx, `SET session_replication_role = DEFAULT`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	for _, table := range countedTables() {
+		require.NotZero(t, rowCounts(t, r.db, orgGone)[table], "a row planted behind the fence in %s", table)
+	}
+
+	report, err := r.run(t, orgGone, orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(orgGone)})
+	require.NoError(t, err)
+	require.Equal(t, orgpurge.StatusPurged, report.Status)
+	require.NotZero(t, report.TotalRows)
+	require.Equal(t, 1, markerCount(t, r.db, orgGone))
+	requireNothingLeft(t, r.db, orgGone)
+}
+
+// An upsert whose row already exists, and an update that moves a row into a
+// purged organization, are both refused; each is accepted with its trigger off.
+func TestWriteFenceRefusesAnUpsertOverASurvivingRowAndAMoveIntoAMarkedOrganization(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	seedPostgres(t, r.db, orgGone)
+	seedPostgres(t, r.db, orgKept)
+	purgeOrg(t, r, orgGone)
+	results, err := pginvestigation.NewStore(r.db)
+	require.NoError(t, err)
+
+	conn, err := r.db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, `SET session_replication_role = replica`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO acr.context_fabric_reuse_invalidations (org_id, invalidated_at, epoch) VALUES ($1, now(), 1)`, orgGone)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `SET session_replication_role = DEFAULT`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	epoch := func() int64 {
+		var value int64
+		require.NoError(t, r.db.QueryRowContext(ctx, `SELECT epoch FROM acr.context_fabric_reuse_invalidations WHERE org_id = $1`, orgGone).Scan(&value))
+		return value
+	}
+
+	require.ErrorIs(t, results.InvalidateOrganizationReuse(ctx, orgGone), storage.ErrOrgPurged, "the insert side of the upsert is checked before the conflict arm")
+	require.EqualValues(t, 1, epoch(), "the surviving row is unchanged")
+	_, err = r.db.ExecContext(ctx, `UPDATE acr.context_fabric_projection_rebuild_markers SET org_id = $1 WHERE org_id = $2`, strings.ToUpper(orgGone), orgKept)
+	require.Equal(t, orgfence.PurgedSQLState, sqlState(err), "an update that moves a row into the purged organization: %v", err)
+	require.Zero(t, rowCounts(t, r.db, orgGone)["context_fabric_projection_rebuild_markers"])
+
+	_, err = r.db.ExecContext(ctx, `ALTER TABLE acr.context_fabric_reuse_invalidations DISABLE TRIGGER refuse_purged_org_insert`)
+	require.NoError(t, err)
+	require.NoError(t, results.InvalidateOrganizationReuse(ctx, orgGone))
+	require.EqualValues(t, 2, epoch(), "with the insert trigger off the upsert rewrites the purged organization's row")
+	_, err = r.db.ExecContext(ctx, `ALTER TABLE acr.context_fabric_projection_rebuild_markers DISABLE TRIGGER refuse_purged_org_update`)
+	require.NoError(t, err)
+	_, err = r.db.ExecContext(ctx, `UPDATE acr.context_fabric_projection_rebuild_markers SET org_id = $1 WHERE org_id = $2`, strings.ToUpper(orgGone), orgKept)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rowCounts(t, r.db, orgGone)["context_fabric_projection_rebuild_markers"], "with the update trigger off the row moves into the purged organization")
 }
 
 func TestWriteFenceProductionWritersReturnTheTypedError(t *testing.T) {

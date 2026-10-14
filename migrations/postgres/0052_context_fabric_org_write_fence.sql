@@ -29,12 +29,17 @@
 -- the lock wait, so a write to a fenced table outside READ COMMITTED is
 -- refused.
 --
--- The function is SECURITY INVOKER with a fixed search_path and is owned by
--- the role that runs migrations. EXECUTE is revoked from PUBLIC: a trigger
--- fires without that privilege, and no role needs to call the function. The
--- writer's role needs SELECT on the marker table and nothing else.
+-- The function is SECURITY DEFINER, owned by the role that runs migrations,
+-- which owns the marker table. So the fence needs no privilege of the
+-- writer's role: it cannot be switched off, or turned into a failure of every
+-- write, by a deployment that did not grant the marker table to that role
+-- (runtime grants are applied out of band and differ between deployments).
+-- The body reads one table by its schema-qualified name, runs no dynamic SQL
+-- and has a fixed search_path. EXECUTE is revoked from PUBLIC: a trigger
+-- fires without that privilege, and no role needs to call the function.
 CREATE OR REPLACE FUNCTION acr.context_fabric_refuse_purged_org() RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
