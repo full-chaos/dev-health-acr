@@ -47,6 +47,11 @@ type Column struct {
 	// listed type is ALSO a shape the readers must serve, and a fixture is
 	// rendered for each (DDLWithColumnType).
 	AlsoAccepts []string
+	// PendingRollout marks a column a migration adds after readers may
+	// already run: a deployment may lack it, so a reader names it only after
+	// a column probe, and a fixture is rendered with it (DDL) and without it
+	// (DDLWithoutPendingRollout).
+	PendingRollout bool
 }
 
 // ProductionColumns is the snapshot: table name -> the columns Context
@@ -288,6 +293,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "incidents_direct", Type: "UInt32"},
 		{Name: "incidents_via_deployment", Type: "UInt32"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+		// ops migration 125, rolled on its own schedule: deployments with a
+		// failed status and no incident link, and deployments with a
+		// terminal status. DEFAULT 0 on rows written before it.
+		{Name: "failed_deployments_status", Type: "UInt32", PendingRollout: true},
+		{Name: "deployments_status_known", Type: "UInt32", PendingRollout: true},
 	},
 	// CHAOS-4347: team_metrics_daily/cicd_metrics_daily/deploy_metrics_daily
 	// read live from the kiac trial ClickHouse (system.columns, 2026-08-26)
@@ -812,6 +822,32 @@ func DDLWithColumnType(database, table, column, typ string) string {
 			t = typ
 		}
 		rendered = append(rendered, c.Name+" "+t)
+	}
+	engine, ok := EngineFull[table]
+	if !ok {
+		panic("devhealthschema: no declared engine for table " + table)
+	}
+	qualified := table
+	if database != "" {
+		qualified = database + "." + table
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s) ENGINE = %s", qualified, strings.Join(rendered, ", "), withNullableKeySetting(engine))
+}
+
+// DDLWithoutPendingRollout renders the table's CREATE statement in the shape
+// before its pending rollout columns exist, created in database when that is
+// not empty.
+func DDLWithoutPendingRollout(database, table string) string {
+	columns, ok := ProductionColumns[table]
+	if !ok {
+		panic("devhealthschema: no declared columns for table " + table)
+	}
+	rendered := make([]string, 0, len(columns))
+	for _, c := range columns {
+		if c.PendingRollout {
+			continue
+		}
+		rendered = append(rendered, c.Name+" "+c.Type)
 	}
 	engine, ok := EngineFull[table]
 	if !ok {
