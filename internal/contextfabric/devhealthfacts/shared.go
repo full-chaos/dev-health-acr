@@ -1112,7 +1112,13 @@ import (
 // the owned set again in each pass. The rows are unchanged; the statements and
 // their memory are not, so an answer saved under v219 is not reused as one
 // produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v220"
+//
+// v220 -> v221: the team linked pull request mix reads its linked set in a
+// statement of its own and takes it, with the membership scope ids, as external
+// tables instead of inlining the link chain four times and the ids in its text.
+// The rows are unchanged; the statements and their memory are not, so an answer
+// saved under v220 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v221"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

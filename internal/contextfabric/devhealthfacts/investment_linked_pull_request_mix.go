@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"sort"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -23,9 +26,13 @@ const linkedMixTeamChunk = 100
 // linkedPullRequestMixStatement sums, per team, the persisted effort of the
 // pull requests linked to the issues of the team's owned projects, in
 // repositories the team does not own (the owned arm counts those whole).
+// The linked set and the membership scope ids reach it as external tables:
+// inlined, they put the link chain in the statement at each of its four uses
+// and the scope ids in its text.
 func linkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, limit int) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
-	linked := linkedPullRequestsOf(bound)
+	linked := linkedPullRequestsSent
+	scope = scope.sentAsTable()
 	return withRowLimitOf(`SELECT lr.team_id AS team_id,
 	uniqExact(m.repo_uuid) AS repos,
 	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
@@ -42,18 +49,95 @@ GROUP BY lr.team_id
 ORDER BY lr.team_id`, limit)
 }
 
-// linkedPullRequestsOf is the distinct (repository id, PR number, team id) of
-// the pull requests linked to the issues of the {ids} teams' owned projects,
-// as one array the statement reads once.
-func linkedPullRequestsOf(bound factTimeBound) string {
-	return `(SELECT groupUniqArray((toString(pr_repo_id), toString(pr_number), team_id)) FROM ` + teamProjectLinkRowsSQL("ids", bound) + `)`
+// linkedPullRequestSetStatement is the distinct (repository id, PR number,
+// team id) of the pull requests linked to the issues of the {ids} teams' owned
+// projects, as three parallel arrays in one row.
+func linkedPullRequestSetStatement(bound factTimeBound) string {
+	return `SELECT groupArray(r), groupArray(n), groupArray(t) FROM (
+	SELECT DISTINCT toString(pr_repo_id) AS r, toString(pr_number) AS n, team_id AS t FROM ` + teamProjectLinkRowsSQL("ids", bound) + `
+)`
+}
+
+const (
+	linkedPullRequestsTable = "_team_linked_pull_requests"
+	membershipScopeTable    = "_membership_scope"
+)
+
+// linkedPullRequestsSent is the linked set read back from its external table,
+// in the Array(Tuple(String, String, String)) shape the statement takes.
+const linkedPullRequestsSent = `(SELECT groupArray((pr_repo, pr_num, team_id)) FROM ` + linkedPullRequestsTable + `)`
+
+func linkedPullRequestsExternalTable(repos, numbers, teams []string) (*ext.Table, error) {
+	table, err := ext.NewTable(linkedPullRequestsTable, ext.Column("pr_repo", "String"), ext.Column("pr_num", "String"), ext.Column("team_id", "String"))
+	if err != nil {
+		return nil, err
+	}
+	for i := range repos {
+		if err := table.Append(repos[i], numbers[i], teams[i]); err != nil {
+			return nil, err
+		}
+	}
+	return table, nil
+}
+
+func membershipScopeExternalTable(ids []string) (*ext.Table, error) {
+	table, err := ext.NewTable(membershipScopeTable, ext.Column("work_unit_id", "String"))
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if err := table.Append(id); err != nil {
+			return nil, err
+		}
+	}
+	return table, nil
+}
+
+func (p *InvestmentProvider) readLinkedPullRequestSet(ctx context.Context, orgID string, chunk []string, bound factTimeBound) (repos, numbers, teams []string, err error) {
+	rows := 0
+	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+		rows++
+		return row.Scan(&repos, &numbers, &teams)
+	}, boundReaderBindings(bound)...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if rows != 1 || len(numbers) != len(repos) || len(teams) != len(repos) {
+		return nil, nil, nil, fmt.Errorf("team linked pull request set returned %d rows of %d/%d/%d values", rows, len(repos), len(numbers), len(teams))
+	}
+	return repos, numbers, teams, nil
+}
+
+// linkedMixRow is one team's row of the linked mix statement, as read.
+type linkedMixRow struct {
+	repos  uint64
+	theme  map[string]float64
+	bugfix float64
 }
 
 // readLinkedPullRequestMix returns, per team with positive linked effort, the
 // summed mix of its project-linked pull requests in repositories it does not
 // own; repos counts the repositories those pull requests are in.
 func (p *InvestmentProvider) readLinkedPullRequestMix(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string]*repoThemeTotals, error) {
+	rows, err := p.readLinkedPullRequestMixRows(ctx, orgID, teamIDs, bound)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]*repoThemeTotals{}
+	for teamID, row := range rows {
+		t := &repoThemeTotals{theme: map[string]float64{}, bugfix: row.bugfix, repos: int64(row.repos)}
+		for _, name := range canonicalInvestmentThemes {
+			t.theme[name] = row.theme[name]
+		}
+		if t.total() > 0 {
+			out[teamID] = t
+		}
+	}
+	return out, nil
+}
+
+func (p *InvestmentProvider) readLinkedPullRequestMixRows(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string]linkedMixRow, error) {
+	out := map[string]linkedMixRow{}
 	if len(teamIDs) == 0 {
 		return out, nil
 	}
@@ -63,27 +147,42 @@ func (p *InvestmentProvider) readLinkedPullRequestMix(ctx context.Context, orgID
 	if err != nil {
 		return nil, err
 	}
-	bindings := append(boundReaderBindings(bound), scope.bindings()...)
+	if scope.mode == membershipScopeIDs && len(scope.ids) == 0 {
+		return out, nil
+	}
+	bindings := boundReaderBindings(bound)
 	statement := linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1)
 	for start := 0; start < len(sorted); start += linkedMixTeamChunk {
 		chunk := sorted[start:min(start+linkedMixTeamChunk, len(sorted))]
+		repos, numbers, teams, err := p.readLinkedPullRequestSet(ctx, orgID, chunk, bound)
+		if err != nil {
+			return nil, err
+		}
+		if len(repos) == 0 {
+			continue
+		}
+		linkedTable, err := linkedPullRequestsExternalTable(repos, numbers, teams)
+		if err != nil {
+			return nil, err
+		}
+		tables := []*ext.Table{linkedTable}
+		if scope.mode == membershipScopeIDs {
+			scopeTable, err := membershipScopeExternalTable(scope.ids)
+			if err != nil {
+				return nil, err
+			}
+			tables = append(tables, scopeTable)
+		}
+		mixCtx := clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(tables...))
 		got := 0
-		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamLinkedPullRequestMix", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+		err = readers.QueryOrgScopedNamed(mixCtx, p.facts.client, "ReadTeamLinkedPullRequestMix", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 			var teamID string
-			var repos uint64
-			var theme map[string]float64
-			var bugfix float64
-			if err := row.Scan(&teamID, &repos, &theme, &bugfix); err != nil {
+			var r linkedMixRow
+			if err := row.Scan(&teamID, &r.repos, &r.theme, &r.bugfix); err != nil {
 				return err
 			}
 			got++
-			t := &repoThemeTotals{theme: map[string]float64{}, bugfix: bugfix, repos: int64(repos)}
-			for _, name := range canonicalInvestmentThemes {
-				t.theme[name] = theme[name]
-			}
-			if t.total() > 0 {
-				out[teamID] = t
-			}
+			out[teamID] = r
 			return nil
 		}, bindings...)
 		if err != nil {

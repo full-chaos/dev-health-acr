@@ -143,7 +143,19 @@ const (
 	membershipScopeNone
 	// membershipScopeIDs: the unit ids of the latest complete run, bound.
 	membershipScopeIDs
+	// membershipScopeTableIDs: the same ids, sent as the external table
+	// membershipScopeTable with the statement.
+	membershipScopeTableIDs
 )
+
+// sentAsTable is the scope a statement that sends the ids as an external table
+// applies; the other modes carry no ids and are unchanged.
+func (s membershipScope) sentAsTable() membershipScope {
+	if s.mode == membershipScopeIDs {
+		s.mode = membershipScopeTableIDs
+	}
+	return s
+}
 
 var subqueryMembershipScope = membershipScope{mode: membershipScopeSubquery}
 
@@ -161,6 +173,8 @@ func (s membershipScope) filter() string {
 		return ""
 	case membershipScopeIDs:
 		return "\n              AND work_unit_id IN (SELECT arrayJoin(JSONExtract({" + membershipScopeJSONParam + ":String}, 'Array(String)')))"
+	case membershipScopeTableIDs:
+		return "\n              AND work_unit_id IN (SELECT work_unit_id FROM " + membershipScopeTable + ")"
 	default:
 		return investmentMembershipScopeFilter()
 	}
