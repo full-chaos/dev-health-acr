@@ -13,7 +13,7 @@
 #   verify fails unless every listed name is a real top-level test, so a
 #          rename cannot silently move a heavy test into the rest half.
 #
-# devhealthfacts only: the race jobs split four ways. race-mid-tests.txt and
+# devhealthfacts splits four ways, devhealthsource three ways (no fourth list): the race jobs split by these lists. race-mid-tests.txt and
 # race-fourth-tests.txt name tests moved out of the heavy and rest halves into
 # a third and a fourth job. Lines starting with # are comments in every list.
 #   race-heavy  anchored regex of heavy-tests.txt minus the mid and fourth lists (-run)
@@ -69,11 +69,18 @@ case "${2:-}" in
   partition)
     cd "$root"
     wf="$root/.github/workflows/ci.yml"
-    for want in "race-split.sh $name rest)" "race-split.sh $name heavy)"; do
+    unit_mode=heavy
+    unit_regex="$(regex)"
+    if [ "$name" = devhealthsource ]; then
+      unit_mode=unit-heavy
+      unit_regex="$(race_heavy)"
+    fi
+    for want in "race-split.sh $name rest)" "race-split.sh $name $unit_mode)"; do
+      [ "$unit_mode" = unit-heavy ] && [ "$want" = "race-split.sh $name rest)" ] && want="race-split.sh $name unit-heavy)"
       grep -qF -- "$want" "$wf" || { printf 'ci.yml never uses "%s"\n' "$want" >&2; exit 1; }
     done
     all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-    a="$(go test -list "$(regex)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    a="$(go test -list "$unit_regex" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$a"))"
     both="$(LC_ALL=C comm -12 <(printf '%s\n' "$a") <(printf '%s\n' "$c"))"
     lost="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n%s\n' "$a" "$c" | grep -v '^$' | LC_ALL=C sort -u))"
@@ -84,12 +91,12 @@ case "${2:-}" in
     printf 'split ok: %s tests = %s heavy + %s rest\n' "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" \
       "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
     ;;
+  unit-heavy) race_heavy ;;
   race-heavy) race_heavy ;;
   race-mid) race_mid ;;
   race-fourth) race_fourth ;;
   race-rest) race_rest ;;
   race-partition)
-    [ "$name" = devhealthfacts ] || { printf 'race-partition: devhealthfacts only\n' >&2; exit 2; }
     cd "$root"
     wf="$root/.github/workflows/ci.yml"
     dup="$(both_lists)"
@@ -97,14 +104,23 @@ case "${2:-}" in
       printf 'named in both race-mid and race-fourth lists:\n%s\n' "$dup" >&2
       exit 1
     fi
-    for want in 'devhealthfacts race-heavy)' 'devhealthfacts race-mid)' 'devhealthfacts race-fourth)' 'devhealthfacts race-rest)'; do
+    wants=("$name race-heavy)" "$name race-mid)" "$name race-rest)")
+    [ -f "$fourth_list" ] && wants+=("$name race-fourth)")
+    for want in "${wants[@]}"; do
       n="$(grep -cF -- "race-split.sh $want" "$wf" || true)"
       [ "$n" -eq 1 ] || { printf 'ci.yml must use "race-split.sh %s" exactly once, found %s\n' "$want" "$n" >&2; exit 1; }
     done
+    if [ ! -f "$fourth_list" ] && grep -qF -- "race-split.sh $name race-fourth)" "$wf"; then
+      printf 'ci.yml uses race-fourth for %s but %s does not exist\n' "$name" "$fourth_list" >&2
+      exit 1
+    fi
     all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-    d="$(go test -list "$(race_fourth)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    d=""
+    if [ -f "$fourth_list" ]; then
+      d="$(go test -list "$(race_fourth)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    fi
     skipped="$(go test -list "$(race_rest)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
     counted="$(printf '%s\n%s\n%s\n%s\n' "$a" "$b" "$d" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
@@ -116,7 +132,7 @@ case "${2:-}" in
     fi
     printf 'race split ok: %s tests = %s heavy + %s mid + %s fourth + %s rest\n' \
       "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" \
-      "$(printf '%s\n' "$b" | wc -l | tr -d ' ')" "$(printf '%s\n' "$d" | wc -l | tr -d ' ')" \
+      "$(printf '%s\n' "$b" | wc -l | tr -d ' ')" "$(printf '%s\n' "$d" | grep -c . || true)" \
       "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
     ;;
   verify)
