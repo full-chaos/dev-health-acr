@@ -23,7 +23,7 @@ const investmentTeamPRsWithoutLinkedWork = "investment_team_prs_without_linked_w
 // on the current axis). A link is admitted when work_graph_issue_pr has a row
 // of a known provenance tier (native, explicit_text, heuristic) for it whose
 // work item is an issue.
-const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier whose work item is an issue); no work unit and no mix can be built from them"
+const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier whose work item is an issue)"
 
 // teamNoLinkedWork is a team with pull requests in the window and none linked.
 type teamNoLinkedWork struct {

@@ -225,6 +225,8 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), '%s', toUInt32(number + 100000), 'pr', 'open', now(), now() - INTERVAL 20 DAY, NULL, NULL, 'feature', '' FROM numbers(%d)`, orgID, step))
 		s.exec(fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), concat('other-', toString(number)), toUInt32(number + 100000), 1, 'native', '', now(), '%s' FROM numbers(%d)`, orgID, step))
+		s.exec(fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
+SELECT concat('other-', toString(number)), toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), '%s', 'title', 'issue', 'open', '', now(), now(), '', 'linear', '', NULL, now() FROM numbers(%d)`, orgID, step))
 		rows, peak := measure()
 		t.Logf("unrelated rows added %d: read_rows=%d (base %d) peak=%d (base %d)", step, rows, baseRows, peak, basePeak)
 		if rows > baseRows+baseRows/10+64 {
