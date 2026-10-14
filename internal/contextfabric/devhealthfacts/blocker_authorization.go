@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -57,6 +58,7 @@ func (p *BlockersProvider) blockerAuthorization(ctx context.Context, principal s
 // its later statements reuse it instead of reading the relation again.
 type blockerAuthorizationMemo struct {
 	sql      string
+	current  string
 	bindings []readers.Binding
 	settings readers.Settings
 }
@@ -67,5 +69,21 @@ type blockerAuthorizationMemo struct {
 // endpoints exceeded the bound (the read stops one past the bound, so the count
 // is then a lower bound, marked by over_bound). mode is a closed vocabulary.
 func logBlockerAuthorization(ctx context.Context, mode string, ids int, overBound bool) {
-	slog.InfoContext(ctx, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
+	level := slog.LevelInfo
+	if overBound {
+		level = slog.LevelWarn
+	}
+	slog.Log(ctx, level, "devhealthfacts.blocker_authorization", "mode", contextfabric.SanitizeLogAttr(mode), "authorized_endpoint_count", ids, "over_bound", overBound, "bound", blockerAuthorizedIDsBound)
+}
+
+// blockerScope resolves, once per request, the authorized endpoints
+// (blockerAuthorization) and the end rule the statements carry: the links the
+// provider no longer reports are tested inside each statement, which measured
+// no heavier than carrying them as a binding (hash pair, tuple set).
+func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, settings readers.Settings) (authorized, current string, bindings []readers.Binding, err error) {
+	authorized, bindings, err = p.blockerAuthorization(ctx, principal, orgID, requestedScope, settings)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return authorized, relationcurrent.CurrentSQL("d"), bindings, nil
 }

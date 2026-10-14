@@ -32,7 +32,7 @@ const (
 	// drawn from, so an answer reused under v21 is never served without it.
 	//
 	// v23 -> v24: the quoted closed fact-kind set names commitment.
-	PromptVersion = "context-fabric-synthesis.v24"
+	PromptVersion = "context-fabric-synthesis.v25"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

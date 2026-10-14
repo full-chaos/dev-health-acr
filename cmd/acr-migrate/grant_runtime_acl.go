@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -59,7 +60,7 @@ import (
 // table -- it exists only to ensure SELECT, INSERT are present -- so
 // there is no privilege-reduction case to make atomic either; removing it
 // is the fix, not a workaround.
-func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output io.Writer) error {
+func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, features dbacl.Features, output io.Writer) error {
 	parsed, err := pgx.ParseConfig(runtimeDSN)
 	if err != nil {
 		// codex round cf-6277-r3's P1, executed repro: pgx's own parse
@@ -84,69 +85,41 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 			return fmt.Errorf("runtime DSN has no username")
 		}
 		// Only a NUL byte is unsafe in a double-quoted identifier; every
-		// embedded `"` is doubled below.
+		// embedded `"` is doubled by QuoteIdent.
 		if strings.ContainsRune(role, 0) {
 			return fmt.Errorf("runtime role name %q contains a NUL byte", role)
 		}
-		quotedRole := `"` + strings.ReplaceAll(role, `"`, `""`) + `"`
-		// A bare repeatable GRANT (never REVOKE first) is idempotent and
-		// never interrupts a role already serving traffic.
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			`GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO %s`,
-			quotedRole,
-		)); err != nil {
-			return fmt.Errorf("grant acr.oauth_device_grants privileges to %s: %w", role, err)
-		}
-		// CHAOS-6191: DELETE for the OAuth purge loop, also a bare
-		// repeatable GRANT (idempotent; never narrows a live role).
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			`GRANT DELETE ON TABLE acr.oauth_clients, acr.oauth_authorization_requests TO %s`,
-			quotedRole,
-		)); err != nil {
-			return fmt.Errorf("grant DELETE on acr.oauth_clients and acr.oauth_authorization_requests to %s: %w", role, err)
-		}
-		// CHAOS-7229: DELETE on the device authorizations the same loop purges
-		// once they are expired. Its ON DELETE CASCADE into
-		// acr.oauth_authorization_requests and acr.oauth_device_grants runs as
-		// the referencing tables' owner, so no DELETE is granted on
-		// acr.oauth_device_grants.
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			`GRANT DELETE ON TABLE acr.device_authorizations TO %s`,
-			quotedRole,
-		)); err != nil {
-			return fmt.Errorf("grant DELETE on acr.device_authorizations to %s: %w", role, err)
-		}
-		// Used web-assertion ids shared by every acr-api pod: INSERT per
-		// assertion, SELECT and DELETE for the bounded expiry sweep.
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			`GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO %s`,
-			quotedRole,
-		)); err != nil {
-			return fmt.Errorf("grant acr.web_assertion_replays privileges to %s: %w", role, err)
-		}
-		// The purge marker (migration 0051): SELECT for the projector tick's
-		// check and DELETE for discovery's clear. Only the purge writes the
-		// marker, so the runtime role gets no INSERT or UPDATE.
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			`GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO %s`,
-			quotedRole,
-		)); err != nil {
-			return fmt.Errorf("grant acr.context_fabric_org_purge_markers privileges to %s: %w", role, err)
+		// Bare, repeatable GRANTs (never REVOKE first): idempotent, and never
+		// interrupt a role already serving traffic.
+		for _, statement := range dbacl.GrantStatements(dbacl.QuoteIdent(role), features) {
+			if _, err := db.ExecContext(ctx, statement.SQL); err != nil {
+				return fmt.Errorf("grant privileges on acr.%s to %s: %w", statement.Table, role, err)
+			}
 		}
 	}
 	role := strings.Join(roles, ", ")
-	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role); err != nil {
-		return err
+	for _, statement := range dbacl.GrantStatements("", features) {
+		if len(statement.Privileges) == 0 {
+			continue
+		}
+		if _, err := fmt.Fprintf(output, "granted %s on acr.%s to %s\n", strings.Join(statement.Privileges, ", "), statement.Table, role); err != nil {
+			return err
+		}
 	}
-	if _, err = fmt.Fprintf(output, "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to %s\n", role); err != nil {
-		return err
+	return nil
+}
+
+// runtimeFeatures reads the optional runtime features that decide which rows of
+// the declaration apply, from the same settings the runtime itself reads.
+func runtimeFeatures(lookup lookupEnv) dbacl.Features {
+	features := dbacl.Features{}
+	if value, _ := lookup("ACR_ENABLE_EPISODE_WRITEBACK"); strings.TrimSpace(value) == "true" {
+		features[dbacl.EpisodeWriteback] = true
 	}
-	if _, err = fmt.Fprintf(output, "granted DELETE on acr.device_authorizations to %s\n", role); err != nil {
-		return err
+	audience, _ := lookup("ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE")
+	trustDomain, _ := lookup("ACR_WORKLOAD_TRUST_DOMAIN")
+	if strings.TrimSpace(audience) != "" && strings.TrimSpace(trustDomain) != "" {
+		features[dbacl.WorkloadTokenExchange] = true
 	}
-	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT, DELETE on acr.web_assertion_replays to %s\n", role); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(output, "granted SELECT, DELETE on acr.context_fabric_org_purge_markers to %s\n", role)
-	return err
+	return features
 }
