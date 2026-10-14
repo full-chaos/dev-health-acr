@@ -53,6 +53,17 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	if strings.Contains(statement, "owners_total") && !c.seedsOwnership() {
 		return &fakeScanner{}, nil
 	}
+	// The counts by state of a team rollup read the same link rows the
+	// window counts do, so the window-count canned rows must not answer them:
+	// they get no rows unless a test seeds this marker itself.
+	if strings.Contains(statement, "arraySort(groupArray((st, c)))") {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, "arraySort(groupArray((st, c)))") {
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
 	for _, table := range c.tables {
 		if strings.Contains(statement, table.match) {
 			if table.err != nil {

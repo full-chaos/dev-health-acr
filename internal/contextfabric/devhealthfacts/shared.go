@@ -1133,9 +1133,14 @@ import (
 // statements served are not, so an answer saved under v222 is not reused as
 // one produced by them.
 //
-// v223 -> v224: the file_hotspots fact kind is served for a repository. An
-// answer saved under v223 cannot carry it.
-const QueryVersion = "devhealthfacts.clickhouse.v224"
+// v223 -> v224: a team pull_requests read serves its pull requests counted by
+// stored state (pull_requests_by_state) and no fact per pull request unless the
+// question asks for the pull requests themselves. The answer changes; an answer
+// saved under v223 is not reused as one produced by the new read.
+//
+// v224 -> v225: the file_hotspots fact kind is served for a repository. An
+// answer saved under v224 cannot carry it.
+const QueryVersion = "devhealthfacts.clickhouse.v225"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
