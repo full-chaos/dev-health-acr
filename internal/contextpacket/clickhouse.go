@@ -114,13 +114,13 @@ func (r *CatalogClickHouseRows) ResolveEvidenceReference(ctx context.Context, or
 	}
 	plan.ReadableRepositorylessIssueIDs = gated
 	if locatorHash == "" {
-		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+query.Statement+`) LIMIT 501`, plan.Bindings(), 501, false)
+		return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, confidence, citation, observed_at FROM (`+resolveStatement(ctx, r.client, *query)+`) LIMIT 501`, plan.Bindings(), 501, false)
 	}
 	if len(locatorHash) != 64 {
 		return nil, storage.ErrNotFound
 	}
 	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_locator_hash", Value: locatorHash})
-	statement := `SELECT * FROM (` + query.Statement + `) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`
+	statement := `SELECT * FROM (` + resolveStatement(ctx, r.client, *query) + `) WHERE lower(hex(SHA256(evidence_ref_id))) = {evidence_locator_hash:String} LIMIT 2`
 	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 2, true)
 }
 

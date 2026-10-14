@@ -60,7 +60,7 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 		"SELECT * FROM (%s) WHERE ({include_low_confidence:UInt8} = 1 OR confidence >= %g) "+
 			"ORDER BY "+provenanceRankSQL+" ASC, observed_at DESC, evidence_ref_id ASC "+
 			"LIMIT 1 BY system, entity_type, entity_id LIMIT {source_row_limit:UInt32}",
-		query.Statement,
+		resolveStatement(ctx, e.client, query),
 		minimumEvidenceConfidence,
 	)
 	queryBindings := make([]ClickHouseBinding, len(bindings), len(bindings)+1)
@@ -102,7 +102,7 @@ func (e *ClickHouseSourceExecutor) QueryLatestObserved(ctx context.Context, quer
 	if e == nil || e.client == nil {
 		return time.Time{}, false, fmt.Errorf("contextpacket: clickhouse query client is required")
 	}
-	rows, err := e.client.Query(ctx, fmt.Sprintf("SELECT max(observed_at), count() FROM (%s)", query.Statement), bindings)
+	rows, err := e.client.Query(ctx, fmt.Sprintf("SELECT max(observed_at), count() FROM (%s)", resolveStatement(ctx, e.client, query)), bindings)
 	if err != nil {
 		return time.Time{}, false, &sourceExecutionError{phase: SourceQueryPhaseQuery, sourceID: query.ID, cause: err}
 	}
@@ -165,7 +165,7 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 // Metadata under its own name.
 var typedEvidenceColumns = map[string][]string{
 	"work_item_dependencies.v1":         {metadataRelationKey, metadataBlockerID, metadataBlockerStatus},
-	"deployments.v1":                    {metadataDeploymentStatus, metadataPullRequestNumber},
+	"deployments.v1":                    {metadataDeploymentStatus, metadataPullRequestNumber, metadataPullRequestTier},
 	"deployment_incident_provenance.v1": {metadataDeploymentID, metadataIncidentID},
 }
 
