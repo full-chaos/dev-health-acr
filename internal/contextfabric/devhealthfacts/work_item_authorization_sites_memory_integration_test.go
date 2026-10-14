@@ -189,7 +189,9 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 	}
 	// The measurement PR reports its table through a deliberate failure so
 	// the numbers reach the CI log; the test is not merged as is.
-	defer func() { t.Errorf("SITEMEM REPORT (measurement draft; red on purpose):\n%s", strings.Join(report, "\n")) }()
+	defer func() {
+		t.Errorf("SITEMEM REPORT (measurement draft; red on purpose):\n%s", strings.Join(report, "\n"))
+	}()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
