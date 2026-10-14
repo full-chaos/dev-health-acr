@@ -46,7 +46,7 @@ func (c *sitesLabelClient) Query(ctx context.Context, statement string, bindings
 		c.raw = append(c.raw, capturedStatement{statement: statement, bindings: append([]contextpacket.ClickHouseBinding(nil), bindings...)})
 		c.mu.Unlock()
 	}
-	return c.inner.Query(ctx, "/* "+c.tag+" */ "+statement, bindings)
+	return c.inner.Query(ctx, statement, bindings)
 }
 
 type sitesSeed struct {
@@ -204,7 +204,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 			t.Fatalf("flush logs: %v", err)
 		}
 		var maxMemory, statements uint64
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), count() FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, mark, tag).Scan(&maxMemory, &statements); err != nil {
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), count() FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND current_database = currentDatabase() AND position(query, 'system.query_log') = 0 AND position(query, 'SYSTEM FLUSH') = 0`, mark).Scan(&maxMemory, &statements); err != nil {
 			t.Fatalf("read query_log: %v", err)
 		}
 		return maxMemory, statements
@@ -348,7 +348,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		for run := 0; run < 4; run++ {
 			tag := nextTag()
 			mark := serverNowMicros(t, ctx, direct)
-			if err := direct.QueryRow(ctx, "/* "+tag+" */ SELECT count() FROM "+sql, args...).Scan(&authorized); err != nil {
+			if err := direct.QueryRow(ctx, "SELECT count() FROM "+sql, args...).Scan(&authorized); err != nil {
 				t.Fatalf("relation %s: %v", label, err)
 			}
 			p, n := peak(mark, tag)
@@ -391,7 +391,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		for run := 0; run < 4; run++ {
 			tag := nextTag()
 			mark := serverNowMicros(t, ctx, direct)
-			rows, err := direct.Query(ctx, "/* "+tag+" */ "+sql, args...)
+			rows, err := direct.Query(ctx, sql, args...)
 			if err != nil {
 				t.Fatalf("site7 %s: %v", pr.name, err)
 			}
