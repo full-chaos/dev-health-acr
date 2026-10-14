@@ -43,6 +43,7 @@ and `—` says so honestly rather than leaving a placeholder.
 | execution_completion | commitment | devhealthfacts.commitment | — |
 | review_and_ci_pressure | continuous_integration | devhealthfacts.continuous_integration | — |
 | reliability_and_release | deployments | devhealthfacts.deployments | — |
+| code_ownership_risk | file_hotspots | devhealthfacts.file_hotspots | — |
 | delivery_flow | flow | devhealthfacts.flow | — |
 | code_ownership_risk | health | devhealthfacts.health | health.compounding_risk |
 | data_trust | identity | devhealthfacts.identity | — |

@@ -162,9 +162,9 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			}
 			cause := credentialLookupCause(err)
 			if cause == credentialLookupCauseCanceled {
-				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause, "db_class", credentialLookupDBClass(err), "error_kind", credentialLookupErrorKind(err), credentialLookupSQLStateAttr(err))
+				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause, "db_class", credentialLookupDBClass(err), "error_kind", credentialLookupErrorKind(err), credentialLookupSQLStateAttr(err), credentialLookupTableAttr(err))
 			} else {
-				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause, "db_class", credentialLookupDBClass(err), "error_kind", credentialLookupErrorKind(err), credentialLookupSQLStateAttr(err))
+				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause, "db_class", credentialLookupDBClass(err), "error_kind", credentialLookupErrorKind(err), credentialLookupSQLStateAttr(err), credentialLookupTableAttr(err))
 			}
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
@@ -504,6 +504,19 @@ func credentialLookupSQLState(err error) string {
 func credentialLookupSQLStateAttr(err error) slog.Attr {
 	if state := credentialLookupSQLState(err); state != "" {
 		return slog.String("sqlstate", state)
+	}
+	return slog.Attr{}
+}
+
+var dbTablePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// credentialLookupTableAttr is the db_table log attribute: the table a refused
+// grant names, absent when the error names none or the name is not a plain
+// identifier. It carries the table name only, never the SQL or its values.
+func credentialLookupTableAttr(err error) slog.Attr {
+	var class *storage.DependencyErrorClass
+	if errors.As(err, &class) && class.SQLState == "42501" && dbTablePattern.MatchString(class.Table) {
+		return slog.String("db_table", class.Table)
 	}
 	return slog.Attr{}
 }

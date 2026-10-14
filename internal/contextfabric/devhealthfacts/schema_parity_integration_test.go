@@ -44,7 +44,7 @@ import (
 // being declared there fails loudly rather than silently going unasserted.
 var factSchemaTables = []string{
 	"repos", "work_items", "work_item_transitions", "git_pull_requests", "git_pull_request_reviews",
-	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies", "work_item_dependency_first_seen",
+	"ci_pipeline_runs", "deployments", "operational_incidents", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen",
 	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "estimate_coverage_metrics_daily",
 	"capacity_forecasts", "recommendations_daily",
 	// CHAOS-4364: FlowProvider/LandscapeProvider's tables (flow.go,
@@ -57,7 +57,7 @@ var factSchemaTables = []string{
 	// The shared work-item authorization relation joins the project
 	// ownership chain and the issue-to-pull-request links into every
 	// work-item reader's statement.
-	"team_repo_ownership", "work_graph_issue_pr", "security_alerts",
+	"team_repo_ownership", "work_graph_issue_pr", "security_alerts", "file_hotspot_daily", "file_complexity_snapshots",
 	"sprints",
 }
 
@@ -147,6 +147,10 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		orgID, repoID, day, "identity-parity", "CHAOS", "backend", uint64(100), uint32(2), 5.0, uint32(3), at)
 	seed("security_alerts", `INSERT INTO security_alerts (org_id, repo_id, alert_id, source, severity, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, repoID, "alert-parity", "dependabot", "high", "open", at, at)
+	seed("file_hotspot_daily", `INSERT INTO file_hotspot_daily (org_id, repo_id, day, file_path, churn_loc_30d, churn_commits_30d, cyclomatic_total, cyclomatic_avg, blame_concentration, risk_score, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, repoID, day, "src/parity.go", uint64(10), uint32(2), uint32(3), 1.5, 0.4, 2.0, at)
+	seed("file_complexity_snapshots", `INSERT INTO file_complexity_snapshots (org_id, repo_id, as_of_day, file_path, computed_at) VALUES (?, ?, ?, ?, ?)`,
+		orgID, repoID, day, "src/parity.go", at)
 	// projects/team_project_ownership back FlowProvider/LandscapeProvider's
 	// PROJECT subject branches (codex R3 P2).
 	seed("projects", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -198,6 +202,7 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		contextfabric.FactFlow:                    teamSubject("CHAOS"),
 		contextfabric.FactLandscape:               teamSubject("CHAOS"),
 		contextfabric.FactSecurityAlerts:          repoSubject(repoID),
+		contextfabric.FactFileHotspots:            repoSubject(repoID),
 		contextfabric.FactCommitment:              projectSubject("github", "proj-commitment"),
 	}
 
@@ -284,6 +289,21 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		}
 		if result.State == contextfabric.SourceUnavailable {
 			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
+		}
+	})
+
+	t.Run("file_hotspots_repository", func(t *testing.T) {
+		hotspotProvider := findProvider(t, providers, contextfabric.FactFileHotspots)
+		result, err := hotspotProvider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind:     contextfabric.FactFileHotspots,
+			Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() against production-typed schema: %v (cause: %v)", err, errors.Unwrap(err))
+		}
+		if result.State == contextfabric.SourceUnavailable || len(result.Facts) != 1 {
+			t.Fatalf("provider degraded against production typing: state=%s facts=%d reason=%s", result.State, len(result.Facts), result.Reason)
 		}
 	})
 

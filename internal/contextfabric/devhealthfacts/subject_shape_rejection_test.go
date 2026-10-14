@@ -217,8 +217,8 @@ var wellShapedSubjectByKind = map[contextfabric.SubjectKind]func() contextfabric
 
 // TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind closes
 // the gap the lane itself flagged as its weakest point going into round 2:
-// the three tests above are executed proof for exactly 3 of the 22
-// registered providers, leaving 19 covered only by the shared mutation
+// the three tests above are executed proof for exactly 3 of the 24
+// registered providers, leaving 21 covered only by the shared mutation
 // battery plus a STATIC producer/kind cross-check -- neither of which is an
 // executed proof that a given provider's OWN deferred call actually fires
 // correctly for a subject of its OWN kind.
@@ -246,7 +246,7 @@ func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testi
 	// Count pin: NewProviders' own doc comment says "one provider per
 	// registered FactKind". A provider added or removed must update this
 	// number deliberately.
-	const wantProviderCount = 23
+	const wantProviderCount = 24
 	if len(providers) != wantProviderCount {
 		t.Fatalf("devhealthfacts.NewProviders() returned %d providers, want %d -- if a provider was deliberately added or removed, update this pin AND add/remove its well-shaped constructor in wellShapedSubjectByKind", len(providers), wantProviderCount)
 	}
@@ -319,13 +319,13 @@ func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testi
 	}
 	// Salted positive: a (provider, kind) pair count that stayed at 23
 	// would mean the inner loop silently degenerated back to "first kind
-	// only" -- this package's providers declare 46 (provider, kind) pairs
+	// only" -- this package's providers declare 47 (provider, kind) pairs
 	// in total (most support 1-3 kinds each), so this must exceed the
 	// provider count.
 	if exercisedPairs <= wantProviderCount {
 		t.Fatalf("exercisedPairs = %d, want > %d (provider count) -- the per-kind loop did not run for any multi-kind provider", exercisedPairs, wantProviderCount)
 	}
-	if exercisedPairs != 46 {
-		t.Fatalf("exercisedPairs = %d, want exactly 46 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
+	if exercisedPairs != 47 {
+		t.Fatalf("exercisedPairs = %d, want exactly 47 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
 	}
 }

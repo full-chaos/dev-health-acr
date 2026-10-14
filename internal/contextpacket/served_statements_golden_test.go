@@ -23,6 +23,10 @@ func (r *statementRecorder) Query(_ context.Context, statement string, _ []Click
 // The golden holds the digest of every evidence statement as built before the
 // provenance values came from constants.
 func TestSourceStatementsAreByteIdenticalToTheGolden(t *testing.T) {
+	// The executed statement of a shaped query depends on the cached column
+	// probe; start from no answer so the digest is order independent.
+	ResetStatementShapeProbesForTest()
+	defer ResetStatementShapeProbesForTest()
 	var out bytes.Buffer
 	line := func(id, statement string) {
 		fmt.Fprintf(&out, "%s %x\n", id, sha256.Sum256([]byte(statement)))
@@ -31,6 +35,9 @@ func TestSourceStatementsAreByteIdenticalToTheGolden(t *testing.T) {
 	executor := NewClickHouseSourceExecutor(recorder)
 	for _, query := range SourceQueryCatalogV1 {
 		line("catalog/"+query.ID, query.Statement)
+		if older, ok := OlderStatement(query.ID); ok {
+			line("older-table/"+query.ID, older)
+		}
 		_, _ = executor.QueryEvidence(context.Background(), query, nil)
 		line("executed/"+query.ID, recorder.statements[len(recorder.statements)-1])
 	}

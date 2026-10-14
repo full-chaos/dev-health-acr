@@ -1,16 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,40 +18,16 @@ import (
 // not depend on that grant.
 func TestWriteFenceWorksForARuntimeRoleWithNoGrantOnTheMarkerTable(t *testing.T) {
 	ctx := context.Background()
-	migrationDSN := newTestPostgresDSN(t, ctx)
-	var output bytes.Buffer
-	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &output))
-
-	ownerConfig, err := pgx.ParseConfig(migrationDSN)
-	require.NoError(t, err)
-	owner := stdlib.OpenDB(*ownerConfig)
-	t.Cleanup(func() { require.NoError(t, owner.Close()) })
-	for _, statement := range []string{
-		`CREATE ROLE acr_fence_runtime LOGIN PASSWORD 'runtime-test-password'`,
-		`GRANT CONNECT ON DATABASE acr TO acr_fence_runtime`,
-		`GRANT USAGE ON SCHEMA acr TO acr_fence_runtime`,
-		// Stands for the table grants a deployment already holds; the fence adds none.
-		`GRANT SELECT, INSERT ON TABLE acr.context_fabric_projection_rebuild_markers TO acr_fence_runtime`,
-	} {
-		_, err := owner.ExecContext(ctx, statement)
-		require.NoError(t, err, statement)
-	}
-	require.NoError(t, run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
-		migrationDSNEnvironment: migrationDSN,
-		runtimeDSNEnvironment:   "postgres://acr_fence_runtime:unused@runtime-dsn-is-never-dialed.invalid:5432/acr",
-	}), &output))
+	database := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_fence_runtime"})
+	owner := database.Owner
 
 	var grantedForTheProjector bool
 	require.NoError(t, owner.QueryRowContext(ctx, `SELECT has_table_privilege('acr_fence_runtime', 'acr.context_fabric_org_purge_markers', 'SELECT')`).Scan(&grantedForTheProjector))
 	require.True(t, grantedForTheProjector, "grant-runtime-acl gives the runtime role SELECT on the marker for the projector's check")
-	_, err = owner.ExecContext(ctx, `REVOKE ALL ON TABLE acr.context_fabric_org_purge_markers FROM acr_fence_runtime`)
+	_, err := owner.ExecContext(ctx, `REVOKE ALL ON TABLE acr.context_fabric_org_purge_markers FROM acr_fence_runtime`)
 	require.NoError(t, err)
 
-	runtimeConfig, err := pgx.ParseConfig(migrationDSN)
-	require.NoError(t, err)
-	runtimeConfig.User, runtimeConfig.Password = "acr_fence_runtime", "runtime-test-password"
-	runtime := stdlib.OpenDB(*runtimeConfig)
-	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+	runtime := database.Runtime
 	state := func(err error) string {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -105,33 +77,9 @@ SELECT has_table_privilege('acr_fence_runtime', 'acr.context_fabric_org_purge_ma
 // sees the marker that transaction wrote.
 func TestWriteFenceExcludesARuntimeRoleWriterFromAPurgeRunAsAnotherRole(t *testing.T) {
 	ctx := context.Background()
-	migrationDSN := newTestPostgresDSN(t, ctx)
-	var output bytes.Buffer
-	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &output))
-	ownerConfig, err := pgx.ParseConfig(migrationDSN)
-	require.NoError(t, err)
-	owner := stdlib.OpenDB(*ownerConfig)
-	t.Cleanup(func() { require.NoError(t, owner.Close()) })
-	for _, statement := range []string{
-		`CREATE ROLE acr_fence_writer LOGIN PASSWORD 'writer-test-password'`,
-		`CREATE ROLE acr_fence_purger LOGIN PASSWORD 'purger-test-password'`,
-		`GRANT CONNECT ON DATABASE acr TO acr_fence_writer, acr_fence_purger`,
-		`GRANT USAGE ON SCHEMA acr TO acr_fence_writer, acr_fence_purger`,
-		`GRANT SELECT, INSERT ON TABLE acr.context_fabric_projection_rebuild_markers TO acr_fence_writer`,
-		`GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_org_purge_markers TO acr_fence_purger`,
-	} {
-		_, err := owner.ExecContext(ctx, statement)
-		require.NoError(t, err, statement)
-	}
-	as := func(role, password string) *sql.DB {
-		config, err := pgx.ParseConfig(migrationDSN)
-		require.NoError(t, err)
-		config.User, config.Password = role, password
-		db := stdlib.OpenDB(*config)
-		t.Cleanup(func() { require.NoError(t, db.Close()) })
-		return db
-	}
-	writer, purger := as("acr_fence_writer", "writer-test-password"), as("acr_fence_purger", "purger-test-password")
+	database := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_fence_writer"})
+	owner, writer := database.Owner, database.Runtime
+	purger := database.NewRole(t, ctx, "acr_fence_purger", `GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_org_purge_markers TO acr_fence_purger`)
 	const org = "dddddddd-0000-4000-8000-000000000004"
 
 	purge, err := purger.BeginTx(ctx, nil)

@@ -22,7 +22,7 @@ import (
 //     declared kind with at least one case; an undeclared kind fails.
 
 // directServableKinds are the declared kinds: the nine aggregate kinds
-// (CHAOS-7073) and the thirteen entity kinds and commitment. Every registered
+// (CHAOS-7073) and the fourteen entity kinds and commitment. Every registered
 // provider must be one of them; there is no "not yet" list.
 var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactInvestment, contextfabric.FactHealth, contextfabric.FactMetrics,
@@ -32,7 +32,7 @@ var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactWork, contextfabric.FactActualCompletion, contextfabric.FactBlockers,
 	contextfabric.FactRequiredChildren, contextfabric.FactPullRequests, contextfabric.FactReviews,
 	contextfabric.FactContinuousIntegration, contextfabric.FactDeployments, contextfabric.FactIncidents,
-	contextfabric.FactSecurityAlerts,
+	contextfabric.FactSecurityAlerts, contextfabric.FactFileHotspots,
 	contextfabric.FactCommitment,
 }
 
@@ -497,11 +497,11 @@ func t4Cases() []t4Case {
 		{match: "lp.project_key", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1), int64(0)}, {"linear:proj-1", int64(1), int64(1), int64(0), int64(0), int64(1)}}},
 	}})
 	add(t4Case{name: "blockers/project", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
-		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1)}}},
+		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1), int64(0)}}},
 		{match: "is_open = 1 AND start_unix IS NOT NULL", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1760000000000)}}},
 	}})
 	add(t4Case{name: "blockers/project_without_relation_start", kind: contextfabric.FactBlockers, subjects: proj, tables: []fakeTable{
-		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1)}}},
+		{match: "uniqExactIf(tgt, is_open = 1)", rows: [][]any{{"linear:proj-1", int64(2), int64(3), int64(1), int64(0)}}},
 		{match: "is_open = 1 AND start_unix IS NOT NULL", rows: [][]any{{"linear:proj-1", int64(3), int64(0), int64(0), int64(0)}}},
 	}})
 	add(t4Case{name: "reviews/pull_request_review", kind: contextfabric.FactReviews, subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")}, tables: []fakeTable{
@@ -534,6 +534,19 @@ func t4Cases() []t4Case {
 			{match: "FROM security_alerts", rows: c.rows},
 		}})
 	}
+	hotspotAt := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	hotspotDay := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	hotspotRow := []any{"repo-1", hotspotDay, hotspotAt, int64(3), "src/a.go", -4.5, uint64(120), uint32(4), uint32(9), 2.5, 0.5}
+	add(t4Case{name: "file_hotspots/repository", kind: contextfabric.FactFileHotspots, subjects: repo, tables: []fakeTable{
+		{match: "FROM file_hotspot_daily", rows: [][]any{hotspotRow}},
+		{match: "FROM file_complexity_snapshots", rows: [][]any{{"repo-1", hotspotDay}}},
+	}})
+	add(t4Case{name: "file_hotspots/repository_no_snapshot", kind: contextfabric.FactFileHotspots, subjects: repo, tables: []fakeTable{
+		{match: "FROM file_hotspot_daily", rows: [][]any{hotspotRow}},
+	}})
+	add(t4Case{name: "file_hotspots/repository_no_rows", kind: contextfabric.FactFileHotspots, subjects: repo, tables: []fakeTable{
+		{match: "FROM file_hotspot_daily", rows: nil},
+	}})
 	add(t4Case{name: "deployments/deployment", kind: contextfabric.FactDeployments, subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")}, tables: []fakeTable{
 		{match: "FROM deployments", rows: [][]any{{"deploy-1", "success", "production", "repo-1"}, {"deploy-1", "", "", "repo-1"}}},
 	}})
@@ -747,8 +760,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 	for _, kind := range directServableKinds {
 		direct[kind] = true
 	}
-	if len(directServableKinds) != 23 || len(direct) != 23 {
-		t.Fatalf("expected 23 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
+	if len(directServableKinds) != 24 || len(direct) != 24 {
+		t.Fatalf("expected 24 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
 	}
 	registered := map[contextfabric.FactKind]bool{}
 	for _, provider := range devhealthfacts.NewProviders(&fakeClient{}) {
@@ -765,8 +778,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 			t.Errorf("%s: declared kind has no catalogue-truth case", kind)
 		}
 	}
-	if len(registered) != 23 {
-		t.Errorf("registered providers = %d kinds, want 23", len(registered))
+	if len(registered) != 24 {
+		t.Errorf("registered providers = %d kinds, want 24", len(registered))
 	}
 	for kind := range direct {
 		if !registered[kind] {
@@ -849,7 +862,7 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 	}
 	// Labels and ratios are not scores; no entity field is an aggregate
 	// (actual_completion's project counts are over the caller's own items).
-	entity := directServableKinds[9:22]
+	entity := directServableKinds[9:23]
 	for _, kind := range entity {
 		capability := t4Capability(kind)
 		for _, field := range capability.Fields {
@@ -870,13 +883,14 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 			// projects, whose id columns are declared references the read gate
 			// checks like any other.
 			if field.Type == contextfabric.FactFieldTable && !(kind == contextfabric.FactIdentity && field.Name == "owning_teams") &&
-				!(kind == contextfabric.FactPullRequests && field.Name == "project_breakdown") {
+				!(kind == contextfabric.FactPullRequests && field.Name == "project_breakdown") &&
+				!(kind == contextfabric.FactFileHotspots && field.Name == "hotspot_files") {
 				t.Errorf("%s %s: entity kinds emit no tables", kind, field.Name)
 			}
 		}
 	}
-	if len(entity) != 13 || entity[0] != contextfabric.FactIdentity {
-		t.Fatalf("entity kinds = %v, want the thirteen entity kinds", entity)
+	if len(entity) != 14 || entity[0] != contextfabric.FactIdentity {
+		t.Fatalf("entity kinds = %v, want the fourteen entity kinds", entity)
 	}
 }
 

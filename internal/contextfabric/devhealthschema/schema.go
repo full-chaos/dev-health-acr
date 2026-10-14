@@ -136,6 +136,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "deployed_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "merged_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "pull_request_number", Type: "Nullable(UInt32)"},
+		{Name: "pull_request_tier", Type: "LowCardinality(String) DEFAULT ''", PendingRollout: true},
 		{Name: "release_ref", Type: "String"},
 		{Name: "release_ref_confidence", Type: "Float64"},
 		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
@@ -343,6 +344,26 @@ var ProductionColumns = map[string][]Column{
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
+	"file_hotspot_daily": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "day", Type: "Date"},
+		{Name: "file_path", Type: "String"},
+		{Name: "churn_loc_30d", Type: "UInt64"},
+		{Name: "churn_commits_30d", Type: "UInt32"},
+		{Name: "cyclomatic_total", Type: "UInt32"},
+		{Name: "cyclomatic_avg", Type: "Float64"},
+		{Name: "blame_concentration", Type: "Nullable(Float64)"},
+		{Name: "risk_score", Type: "Float64"},
+		{Name: "computed_at", Type: "DateTime('UTC')", AlsoAccepts: []string{"DateTime"}},
+		{Name: "org_id", Type: "String"},
+	},
+	"file_complexity_snapshots": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "as_of_day", Type: "Date"},
+		{Name: "file_path", Type: "String"},
+		{Name: "computed_at", Type: "DateTime('UTC')", AlsoAccepts: []string{"DateTime"}},
+		{Name: "org_id", Type: "String"},
+	},
 	"security_alerts": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "alert_id", Type: "String"},
@@ -415,6 +436,17 @@ var ProductionColumns = map[string][]Column{
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
 		{Name: "relation_started_at", Type: "Nullable(DateTime64(3))"},
+		// ops migration 103_work_item_relation_writer_and_read.sql.
+		{Name: "relation_writer", Type: "Nullable(String)"},
+	},
+	// ops migration 103_work_item_relation_writer_and_read.sql: per item, the
+	// latest last_synced of a work_items row written by a pass that reads the
+	// item's relations; read it as max(relations_read_at) per item.
+	"work_item_relations_read": {
+		{Name: "org_id", Type: "String"},
+		{Name: "provider", Type: "String"},
+		{Name: "work_item_id", Type: "String"},
+		{Name: "relations_read_at", Type: "DateTime64(3)"},
 	},
 	"work_item_dependency_first_seen": {
 		{Name: "org_id", Type: "String"},
@@ -745,6 +777,8 @@ var EngineFull = map[string]string{
 	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
+	"file_hotspot_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day, file_path) SETTINGS index_granularity = 8192",
+	"file_complexity_snapshots":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day) ORDER BY (org_id, repo_id, as_of_day, file_path) SETTINGS index_granularity = 8192",
 	"security_alerts":                         "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id) SETTINGS index_granularity = 8192",
 	"sprints":                                 "ReplacingMergeTree(last_synced) ORDER BY (org_id, provider, sprint_id) SETTINGS index_granularity = 8192",
 	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so
@@ -761,6 +795,7 @@ var EngineFull = map[string]string{
 	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
 	"work_item_transitions":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
+	"work_item_relations_read":             "ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192",
 	"work_item_dependency_first_seen":      "AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_measure_capability":         "ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192",
 	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",

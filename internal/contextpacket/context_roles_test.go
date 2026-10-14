@@ -584,3 +584,195 @@ func TestAnUnknownBlockerStatusIsNotPressure(t *testing.T) {
 		t.Errorf("a blocker with status unknown served as pressure")
 	}
 }
+
+func tieredDeploymentRow(id, deploymentID, status, pullRequest, tier string, at time.Time) contractsv1.EvidenceRef {
+	ref := deploymentRow(id, deploymentID, status, pullRequest, at)
+	ref.Metadata["pull_request_tier"] = tier
+	return ref
+}
+
+func TestOnlyAStoredExactOrMergedOrPushedTierOfAFailedDeploymentReachesTheCauseRole(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-exact", "pull_request", "1", "Exact", "merged", at),
+		roleRow("ev-pr-merged", "pull_request", "2", "Merged", "merged", at),
+		roleRow("ev-pr-pushed", "pull_request", "3", "Pushed", "merged", at),
+		roleRow("ev-pr-first", "pull_request", "4", "First listed", "merged", at),
+		roleRow("ev-pr-empty", "pull_request", "5", "Empty tier", "merged", at),
+		roleRow("ev-pr-weird", "pull_request", "6", "Weird tier", "merged", at),
+		roleRow("ev-pr-success", "pull_request", "7", "Success deployment", "merged", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-merged", "d2", "failure", "2", "merged_pr", at),
+		tieredDeploymentRow("ev-d-pushed", "d3", "failed", "3", "pushed", at),
+		tieredDeploymentRow("ev-d-first", "d4", "failure", "4", "first_listed", at),
+		tieredDeploymentRow("ev-d-empty", "d5", "failure", "5", "", at),
+		tieredDeploymentRow("ev-d-weird", "d6", "failure", "6", "guessed", at),
+		tieredDeploymentRow("ev-d-success", "d7", "success", "7", "exact_merge_sha", at),
+	}
+	roles, packet := servedRoles(t, evidence)
+	want := map[string]contractsv1.PacketCategory{
+		"ev-pr-exact": contractsv1.CategoryCause, "ev-pr-merged": contractsv1.CategoryCause, "ev-pr-pushed": contractsv1.CategoryCause,
+		"ev-pr-first": contractsv1.CategoryEvidence, "ev-pr-empty": contractsv1.CategoryEvidence,
+		"ev-pr-weird": contractsv1.CategoryEvidence, "ev-pr-success": contractsv1.CategoryEvidence,
+	}
+	for id, category := range want {
+		if roles[id] != category {
+			t.Errorf("%s served as %q, want %q", id, roles[id], category)
+		}
+	}
+	claims := map[string]contractsv1.ClaimKind{}
+	uncertain := map[string]bool{}
+	why := map[string]string{}
+	var causeOrder []string
+	for _, item := range packet.Items {
+		id := item.EvidenceRefIDs[0]
+		claims[id], uncertain[id], why[id] = item.ClaimKind, item.Flags.Uncertain, item.WhyIncluded
+		if item.Category == contractsv1.CategoryCause {
+			causeOrder = append(causeOrder, id)
+		}
+	}
+	if claims["ev-pr-exact"] != contractsv1.ClaimObserved || uncertain["ev-pr-exact"] || !strings.Contains(why["ev-pr-exact"], "exact_merge_sha") {
+		t.Errorf("exact tier item: claim=%s uncertain=%v why=%q", claims["ev-pr-exact"], uncertain["ev-pr-exact"], why["ev-pr-exact"])
+	}
+	for _, id := range []string{"ev-pr-merged", "ev-pr-pushed"} {
+		if claims[id] != contractsv1.ClaimInferred || !uncertain[id] {
+			t.Errorf("%s: claim=%s uncertain=%v, want inferred and uncertain", id, claims[id], uncertain[id])
+		}
+	}
+	if !strings.Contains(why["ev-pr-merged"], "merged_pr") || !strings.Contains(why["ev-pr-pushed"], "pushed") || !strings.Contains(why["ev-pr-pushed"], "asserted") {
+		t.Errorf("tier is not named: %q / %q", why["ev-pr-merged"], why["ev-pr-pushed"])
+	}
+	if strings.Join(causeOrder, ",") != "ev-pr-exact,ev-pr-merged,ev-pr-pushed" {
+		t.Errorf("cause order = %v, want exact_merge_sha > merged_pr > pushed", causeOrder)
+	}
+	for _, want := range []string{
+		"cause_links_promoted:1:exact_merge_sha", "cause_links_promoted:1:merged_pr", "cause_links_promoted:1:pushed",
+		"cause_links_demoted:1:first_listed", "cause_links_demoted:1:link_tier_not_stored", "cause_links_demoted:1:link_tier_unrecognized",
+	} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+	if !strings.Contains(why["ev-pr-first"], "first_listed") {
+		t.Errorf("the demoted first_listed relation does not name its tier: %q", why["ev-pr-first"])
+	}
+}
+
+func TestAWeakerTierNeverOutranksAnExactOneEvenWhenTheGoalNamesIt(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
+		roleRow("ev-pr-pushed", "pull_request", "2", "checkout", "merged", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-pushed", "d2", "failure", "2", "pushed", at),
+	}
+	_, packet := servedRoles(t, evidence)
+	var order []string
+	for _, item := range packet.Items {
+		if item.Category == contractsv1.CategoryCause {
+			order = append(order, item.EvidenceRefIDs[0])
+		}
+	}
+	if strings.Join(order, ",") != "ev-pr-exact,ev-pr-pushed" {
+		t.Errorf("cause order = %v", order)
+	}
+}
+
+func TestATableWithoutTheTierColumnIsNamedAndEveryLinkStaysARelation(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-absent", "pull_request", "9", "Absent", "merged", at),
+		tieredDeploymentRow("ev-d-absent", "d9", "failure", "9", "column_absent", at),
+	}
+	roles, packet := servedRoles(t, evidence)
+	if roles["ev-pr-absent"] != contractsv1.CategoryEvidence {
+		t.Errorf("a link from a table without the tier column served as %q, want evidence", roles["ev-pr-absent"])
+	}
+	for _, want := range []string{"deployments_pull_request_tier_column_absent", "cause_links_demoted:1:link_tier_not_stored"} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+}
+
+func TestAnItemBudgetCutsTheWeakestCauseTierFirstEvenWhenTheGoalNamesIt(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
+		roleRow("ev-pr-pushed", "pull_request", "2", "checkout", "merged", at),
+		roleRow("ev-ordinary", "commit", "9999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout flow", "checkout", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-pushed", "d2", "failure", "2", "pushed", at),
+	}
+	request := fixtureRequest("req-budget-tier", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems = 1
+	request.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryCause}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(packet.Items) != 1 || packet.Items[0].EvidenceRefIDs[0] != "ev-pr-exact" {
+		t.Fatalf("the budget kept %v, want the exact_merge_sha cause", itemEvidenceIDs(packet))
+	}
+}
+
+func TestEveryDeploymentLinkIsCountedEvenWhenItsPullRequestRowIsAbsent(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	_, packet := servedRoles(t, []contractsv1.EvidenceRef{
+		tieredDeploymentRow("ev-d-first", "d1", "failure", "123", "first_listed", at),
+		tieredDeploymentRow("ev-d-exact", "d2", "failure", "124", "exact_merge_sha", at),
+	})
+	for _, want := range []string{"cause_links_demoted:1:first_listed", "cause_links_promoted:1:exact_merge_sha"} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+}
+
+func TestAStrongTierOnADeploymentThatDidNotFailIsNamedNotCalledUnstored(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	edge := incidentEdge("ev-e-link", "d1", "inc-1", "native", at)
+	_, packet := servedRoles(t, []contractsv1.EvidenceRef{
+		roleRow("ev-pr-ok", "pull_request", "5", "Shipped", "merged", at),
+		tieredDeploymentRow("ev-d-ok-1", "d1", "success", "5", "exact_merge_sha", at),
+		roleRow("ev-inc-open", "incident", "inc-1", "open incident", "status=open, severity=high", at),
+		edge,
+	})
+	for _, item := range packet.Items {
+		if item.EvidenceRefIDs[0] == "ev-pr-ok" && (strings.Contains(item.WhyIncluded, "not stored") || !strings.Contains(item.WhyIncluded, "exact_merge_sha")) {
+			t.Errorf("relation text contradicts the stored tier: %q", item.WhyIncluded)
+		}
+	}
+}
+
+func TestAnUnrelatedExactCauseNeverDropsOrdinaryGoalMatches(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-goal-a", "pull_request", "1", "checkout flow", "checkout flow", at),
+		roleRow("ev-pr-goal-b", "pull_request", "2", "checkout cart", "checkout cart", at),
+		roleRow("ev-pr-exact", "pull_request", "3", "Unrelated title", "merged", at),
+		tieredDeploymentRow("ev-d-exact", "d3", "failure", "3", "exact_merge_sha", at),
+	}
+	request := fixtureRequest("req-goal-head", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems = 2
+	request.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryEvidence}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	got := itemEvidenceIDs(packet)
+	slices.Sort(got)
+	if strings.Join(got, ",") != "ev-pr-goal-a,ev-pr-goal-b" {
+		t.Fatalf("kept %v, want both goal-matching pull requests", got)
+	}
+}

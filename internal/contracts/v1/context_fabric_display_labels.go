@@ -48,6 +48,7 @@ var contextFabricFactKindLabels = map[ContextFabricFactKind]string{
 	ContextFabricFactLandscape:               "landscape",
 	ContextFabricFactSecurityAlerts:          "security alerts",
 	ContextFabricFactCommitment:              "commitment",
+	ContextFabricFactFileHotspots:            "file hotspots",
 }
 
 // contextFabricSourceStateLabels labels every member of the closed source

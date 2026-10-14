@@ -67,7 +67,7 @@ const (
 var oracleSchemaTables = []string{
 	"repos", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"ci_pipeline_runs", "deployments", "operational_incidents",
-	"operational_service_repository_mappings", "work_item_dependencies",
+	"operational_service_repository_mappings", "work_item_dependencies", "work_item_relations_read",
 	"work_graph_deployment_incident_edges", "work_graph_issue_pr",
 	"teams", "projects", "work_item_team_attributions", "team_project_ownership",
 	"project_membership_transitions", "team_repo_ownership", "work_item_transitions",
