@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -84,5 +85,5 @@ func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.P
 	if err != nil {
 		return "", "", nil, err
 	}
-	return authorized, relationCurrentSQL("d"), bindings, nil
+	return authorized, relationcurrent.CurrentSQL("d"), bindings, nil
 }
