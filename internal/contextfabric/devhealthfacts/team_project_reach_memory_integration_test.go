@@ -206,7 +206,7 @@ func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, 
 	beforeRows, before := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
 	afterRows, after := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	t.Errorf("TEMP-MEASURE MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
+	t.Logf("MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
 	if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
 		t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
 	}
