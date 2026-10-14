@@ -69,7 +69,7 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 		if len(result.Facts) != 1 {
 			t.Fatalf("facts = %#v, want exactly 1", result.Facts)
 		}
-		if got := result.Facts[0].Fields["commits_count"].Integer; got == nil || *got != 25 {
+		if got := result.Facts[0].Fields["commits_count"].Number; got == nil || *got != 25 {
 			t.Fatalf("commits_count = %#v, want the LATER rerun's 25, not the earlier 10", result.Facts[0].Fields["commits_count"])
 		}
 	})
@@ -156,7 +156,7 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("facts = %#v, want exactly 1", result.Facts)
 		}
 		fact := result.Facts[0]
-		if got := fact.Fields["commits_count"].Integer; got == nil || *got != 25 {
+		if got := fact.Fields["commits_count"].Number; got == nil || *got != 25 {
 			t.Fatalf("commits_count = %#v, want 20+5=25 (team-a deduped across 2 sources + team-b only; lapsed/future/metrics-less teams excluded)", fact.Fields["commits_count"])
 		}
 		if got := fact.Fields["team_count"].Integer; got == nil || *got != 2 {
@@ -263,7 +263,7 @@ func TestCHAOS4347WideningAgainstRealClickHouse(t *testing.T) {
 		if got := fact.Fields["team_count"].Integer; got == nil || *got != 2 {
 			t.Fatalf("team_count = %#v, want 2 (team-duplicated survives its 205 duplicate rows AND team-second is not truncated out of the LIMIT)", fact.Fields["team_count"])
 		}
-		if got := fact.Fields["commits_count"].Integer; got == nil || *got != 39 {
+		if got := fact.Fields["commits_count"].Number; got == nil || *got != 39 {
 			t.Fatalf("commits_count = %#v, want 30+9=39", fact.Fields["commits_count"])
 		}
 	})
