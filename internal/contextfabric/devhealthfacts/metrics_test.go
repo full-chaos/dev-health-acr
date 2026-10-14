@@ -37,14 +37,14 @@ func projectSubject(provider, projectID string) contextfabric.SubjectRef {
 }
 
 func teamMetricsRow(teamID string) []any {
-	return []any{teamID, "2026-02-21", int64(10), int64(2), int64(1), float64(0.2), float64(0.1)}
+	return []any{teamID, "2026-02-21", float64(10), float64(2), float64(1), float64(0.2), float64(0.1)}
 }
 
 // projectRollupRow shapes one row of the team_project_ownership join
 // output: (project_key, team_id, team_name, day, commits_count,
 // after_hours_commits_count, weekend_commits_count,
 // after_hours_commit_ratio, weekend_commit_ratio).
-func projectRollupRow(provider, projectID, teamID, teamName string, commits, afterHoursCommits, weekendCommits int64, afterHoursRatio, weekendRatio float64) []any {
+func projectRollupRow(provider, projectID, teamID, teamName string, commits, afterHoursCommits, weekendCommits float64, afterHoursRatio, weekendRatio float64) []any {
 	return []any{provider + ":" + projectID, teamID, teamName, "2026-02-21", commits, afterHoursCommits, weekendCommits, afterHoursRatio, weekendRatio}
 }
 
@@ -65,7 +65,7 @@ func TestMetricsProviderTeamHappyPath(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["commits_count"].Integer == nil || *fact.Fields["commits_count"].Integer != 10 {
+	if fact.Fields["commits_count"].Number == nil || *fact.Fields["commits_count"].Number != 10 {
 		t.Fatalf("commits_count = %#v", fact.Fields["commits_count"])
 	}
 	if fact.Fields["after_hours_commit_ratio"].Number == nil || *fact.Fields["after_hours_commit_ratio"].Number != 0.2 {
@@ -77,6 +77,51 @@ func TestMetricsProviderTeamHappyPath(t *testing.T) {
 // TestMetricsProviderProjectRollupSumsCountsKeepsPerTeamRates is the
 // contract CHAOS-4347's ticket named explicitly: counts sum across owning
 // teams, rates are NEVER averaged -- each source row's own rate survives
+// A team that co-owns a repository holds a share of its counters, so the team
+// and project counters are numbers: a fractional share is served unrounded and
+// a whole value still serves as a number, never as an integer.
+func TestMetricsProviderTeamAndProjectCountersServeAsNumbers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                       string
+		commits, afterHours, weeks float64
+	}{
+		{"fractional share", 0.3, 0.1, 0.2},
+		{"whole value", 10, 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, read := range []struct {
+				name    string
+				table   fakeTable
+				subject contextfabric.SubjectRef
+			}{
+				{"team", fakeTable{match: "FROM team_metrics_daily", rows: [][]any{{"team-1", "2026-02-21", tc.commits, tc.afterHours, tc.weeks, 0.2, 0.1}}}, teamSubject("team-1")},
+				{"project", fakeTable{match: "FROM team_project_ownership", rows: [][]any{projectRollupRow("linear", "proj-1", "team-1", "Team One", tc.commits, tc.afterHours, tc.weeks, 0.2, 0.1)}}, projectSubject("linear", "proj-1")},
+			} {
+				client := &fakeClient{tables: []fakeTable{read.table}}
+				provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+				result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+					Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{read.subject},
+				})
+				if err != nil {
+					t.Fatalf("%s ReadFacts() error = %v", read.name, err)
+				}
+				if len(result.Facts) != 1 {
+					t.Fatalf("%s facts = %#v, want 1", read.name, result.Facts)
+				}
+				for field, want := range map[string]float64{"commits_count": tc.commits, "after_hours_commits_count": tc.afterHours, "weekend_commits_count": tc.weeks} {
+					value := result.Facts[0].Fields[field]
+					if value.Integer != nil || value.Number == nil || *value.Number != want {
+						t.Errorf("%s %s = %#v, want the number %v", read.name, field, value, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 // in the renderable team_breakdown table instead.
 func TestMetricsProviderProjectRollupSumsCountsKeepsPerTeamRates(t *testing.T) {
 	t.Parallel()
@@ -96,10 +141,10 @@ func TestMetricsProviderProjectRollupSumsCountsKeepsPerTeamRates(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["commits_count"].Integer == nil || *fact.Fields["commits_count"].Integer != 15 {
+	if fact.Fields["commits_count"].Number == nil || *fact.Fields["commits_count"].Number != 15 {
 		t.Fatalf("commits_count = %#v, want summed 15", fact.Fields["commits_count"])
 	}
-	if fact.Fields["after_hours_commits_count"].Integer == nil || *fact.Fields["after_hours_commits_count"].Integer != 4 {
+	if fact.Fields["after_hours_commits_count"].Number == nil || *fact.Fields["after_hours_commits_count"].Number != 4 {
 		t.Fatalf("after_hours_commits_count = %#v, want summed 4", fact.Fields["after_hours_commits_count"])
 	}
 	if fact.Fields["team_count"].Integer == nil || *fact.Fields["team_count"].Integer != 2 {
@@ -144,8 +189,8 @@ func TestMetricsProviderProjectRollupDedupesTeamOwnedByTwoSources(t *testing.T) 
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	fact := result.Facts[0]
-	if *fact.Fields["commits_count"].Integer != 10 {
-		t.Fatalf("commits_count = %v, want 10 (deduped, not 20)", *fact.Fields["commits_count"].Integer)
+	if *fact.Fields["commits_count"].Number != 10 {
+		t.Fatalf("commits_count = %v, want 10 (deduped, not 20)", *fact.Fields["commits_count"].Number)
 	}
 	if *fact.Fields["team_count"].Integer != 1 {
 		t.Fatalf("team_count = %v, want 1", *fact.Fields["team_count"].Integer)
