@@ -1167,7 +1167,13 @@ import (
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
 // the direction the row states. An answer saved under v228 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v229"
+//
+// v231 -> v232: the scoped as-of historical statements (the drop count and the
+// touch count of the project chain) build their candidate set once per
+// statement, as one scalar subquery, instead of once at every reference. Their
+// rows are unchanged; the text changes so an answer saved under v231 is not
+// reused as one produced by this version.
+const QueryVersion = "devhealthfacts.clickhouse.v232"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
