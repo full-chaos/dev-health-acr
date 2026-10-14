@@ -286,7 +286,7 @@ func (r *CatalogClickHouseRows) ResolveSourceRow(ctx context.Context, orgID stri
 		bindings = append(bindings, ClickHouseBinding{Name: "component_" + strconv.Itoa(index+1), Value: component})
 	}
 	statement := `SELECT * FROM (` + query.Statement + `) WHERE evidence_ref_id = {evidence_locator:String} LIMIT 2`
-	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 3)
+	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 3, false)
 }
 
 // OrganizationRowReference is one organization-level row: the evidence and

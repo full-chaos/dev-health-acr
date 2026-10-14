@@ -38,8 +38,8 @@
       "derived_locator": "acr:v1:commit:b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
       "entity_type": "commit",
       "entity_id": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-      "packet_category": "cause",
-      "rule_id": "evidence.observed.cause.v1"
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
     }
   ],
   "evidence_ref_id_matching_contract": "See README.md#evidence-ref-id-matching. Match by (query_id, entity_type, entity_id), never by string-comparing derived_locator against the wire evidence_ref_id.",
@@ -54,8 +54,8 @@
       "reason": "belongs to example-org/other-service; must never appear in a widget-service packet"
     }
   ],
-  "required_packet_categories": ["evidence", "cause"],
-  "required_rule_ids": ["evidence.observed.reference.v1", "evidence.observed.cause.v1"],
+  "required_packet_categories": ["evidence"],
+  "required_rule_ids": ["evidence.observed.reference.v1"],
   "required_checks": ["check.evidence.observed.reference.v1"],
   "min_expandable_evidence": 3,
   "required_findings": [
