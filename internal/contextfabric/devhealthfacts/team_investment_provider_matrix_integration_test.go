@@ -22,7 +22,7 @@ type matrixUnit struct {
 }
 
 func effortOf(u matrixUnit) float64 {
-	if u.id == "zero-out" {
+	if strings.HasSuffix(u.id, "-zeroeff") {
 		return 0
 	}
 	return 1.0
@@ -114,11 +114,24 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		{"both-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
 	}
 	zeroOut := []matrixUnit{
-		{"zero-out", "team-gitlab", `{"issues":["gitlab:chaos-gl/data/pipeline#1"],"prs":[]}`},
+		{"out-zeroeff", "team-gitlab", `{"issues":["gitlab:chaos-gl/data/pipeline#1"],"prs":[]}`},
 		{"zero-gh", "team-github", `{"issues":["gh:acme/payments#1"],"prs":[]}`},
 		{"zero-jira", "team-jira", `{"issues":["jira:SUP-1"],"prs":[]}`},
 		{"zero-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
 	}
+	mixed := []matrixUnit{
+		{"mix-zeroeff", "team-gitlab", `{"issues":["gitlab:chaos-gl/data/pipeline#1"],"prs":[]}`},
+		{"mix-unres", "team-gitlab", `{"issues":["gitlab:vendor/unknown!9"],"prs":[]}`},
+		{"mix-gh", "team-github", `{"issues":["gh:acme/payments#1"],"prs":[]}`},
+		{"mix-jira", "team-jira", `{"issues":["jira:SUP-1"],"prs":[]}`},
+		{"mix-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
+	}
+	scenarios = append(scenarios, scenario{
+		name: "in-scope zero-effort unit plus a dropped positive-effort unit names the unattributed cause", org: "org-matrix-zero-and-dropped", units: mixed,
+		runs:  [][]string{ids(mixed, nil)},
+		want:  map[string]float64{"team-gitlab": 0, "team-github": 1, "team-jira": 1, "team-linear": 1},
+		token: map[string]string{"team-gitlab": "investment_team_units_unattributed"},
+	})
 	scenarios = append(scenarios, scenario{
 		name: "all-zero-effort units outside the run name the run, not the effort", org: "org-matrix-zero-out", units: zeroOut,
 		runs:  [][]string{{"zero-gh", "zero-jira", "zero-lin"}},

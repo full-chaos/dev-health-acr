@@ -18,7 +18,7 @@ const (
 
 const (
 	investmentTeamUnitsOutsideRunReason = investmentTeamUnitsOutsideRun + ": the team's owned repositories have persisted work units in the requested window, and none of them is in the latest complete membership run"
-	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository; the count follows)"
+	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository, or to a repository the team does not own; the count follows)"
 )
 
 // ownedUnitCountStatement counts, per repository, the distinct latest work
@@ -133,7 +133,7 @@ func (c emptyCause) reason() string {
 	case investmentTeamUnitsOutsideRun:
 		return fmt.Sprintf("%s (%d units outside the run)", investmentTeamUnitsOutsideRunReason, c.outside)
 	case investmentTeamUnitsUnattrib:
-		return fmt.Sprintf("%s (%d units with positive effort dropped by a reference that resolves to no repository)", investmentTeamUnitsUnattribReason, c.positive)
+		return fmt.Sprintf("%s (%d units with positive effort whose references reach no repository the team owns)", investmentTeamUnitsUnattribReason, c.positive)
 	}
 	return investmentTeamNoUnitReason
 }
@@ -144,7 +144,7 @@ func (c emptyCause) summary() string {
 	case investmentTeamUnitsOutsideRun:
 		return "owned repositories have persisted work units in the requested window, and at least one is outside the latest complete membership run"
 	case investmentTeamUnitsUnattrib:
-		return "owned repositories have persisted work units in scope, and none reached a positive share because a reference resolves to no repository (counts per team in the subject reason)"
+		return "owned repositories have persisted work units in scope, and none reached a positive share because their references reach no repository the team owns: a reference that resolves to no repository, or to a repository the team does not own (counts per team in the subject reason)"
 	}
 	return investmentTeamNoUnitReason
 }

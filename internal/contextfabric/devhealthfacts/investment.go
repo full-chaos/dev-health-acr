@@ -449,10 +449,10 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		if causeErr != nil {
 			return shapeRejected, 0, nil, nil, nil, nil, false, causeErr
 		}
-		// A unit outside the latest membership run outranks the zero-effort bucket.
+		// A named cause (outside the run, or positive-effort units dropped) outranks the zero-effort bucket.
 		keptEffort := noEffort[:0:0]
 		for _, z := range noEffort {
-			if causes[strings.TrimPrefix(z.subject.CanonicalID, teamPrefix)].token == investmentTeamUnitsOutsideRun {
+			if causes[strings.TrimPrefix(z.subject.CanonicalID, teamPrefix)].token != "" {
 				noUnit = append(noUnit, z.subject)
 				continue
 			}
