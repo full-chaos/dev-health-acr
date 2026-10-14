@@ -2,7 +2,9 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +50,25 @@ type linkedProdShape struct {
 	// extremePRs pull requests and extremeIssues issue references.
 	extremeEvery, extremePRs, extremeIssues int
 	padHashes                               int
+	// wideUnitIDs gives every unit id prod's width (about 73 characters, a
+	// hash suffix) instead of the short wu-<n>.
+	wideUnitIDs bool
+}
+
+// unitIDSQL is the unit id of the number in col, as ClickHouse spells it.
+func (s linkedProdShape) unitIDSQL(col string) string {
+	if s.wideUnitIDs {
+		return "concat('wu-', toString(" + col + "), '-', lower(hex(SHA256(toString(" + col + ")))))"
+	}
+	return "concat('wu-', toString(" + col + "))"
+}
+
+// unitID is the unit id of i, equal to unitIDSQL's.
+func (s linkedProdShape) unitID(i int) string {
+	if s.wideUnitIDs {
+		return fmt.Sprintf("wu-%d-%x", i, sha256.Sum256([]byte(strconv.Itoa(i))))
+	}
+	return fmt.Sprintf("wu-%d", i)
 }
 
 // Largest real prod organization (read-only counts, 2026-10-13):
@@ -162,7 +183,7 @@ FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 	for version := uint64(0); version < 2; version++ {
 		exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
 	WITH `+repoArr+` AS repos_arr, ['feature_delivery','operational','maintenance','quality','risk'] AS themes
-	SELECT concat('wu-', toString(u)), ? - toIntervalDay(u % 300), ?, NULL, toFloat64(1 + u % 9),
+	SELECT `+s.unitIDSQL("u")+`, ? - toIntervalDay(u % 300), ?, NULL, toFloat64(1 + u % 9),
 		map(themes[1 + u % 5], 0.6, themes[1 + (u + 2) % 5], 0.4),
 		map('`+readers.BugfixSubcategoryKey+`', 0.25, 'refactor', 0.15),
 		concat('{"issues":', toJSONString(arrayMap(j -> if(j < nl,
@@ -193,7 +214,7 @@ FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 	}
 	exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?, 'run-1', ?)`, orgID, at.Add(time.Hour))
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
-SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)), 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?) WHERE number % 100 < ?`,
+SELECT ?, 'issue', concat('n', toString(number)), `+s.unitIDSQL("number")+`, 'theme', 'feature_delivery', ?, 'run-1' FROM numbers(?) WHERE number % 100 < ?`,
 		orgID, at.Add(time.Hour), uint64(s.units), uint64(s.scopePct))
 	// One unit names the same pull request three times (by repository id and
 	// twice through the same GitHub lookup) and one other pull request, in a
@@ -216,7 +237,7 @@ SELECT ?, 'issue', concat('n', toString(number)), concat('wu-', toString(number)
 	ids := []string{linkedShapeRepeatedUnit}
 	for i := 0; i < s.units; i++ {
 		if i%100 < s.scopePct {
-			ids = append(ids, fmt.Sprintf("wu-%d", i))
+			ids = append(ids, s.unitID(i))
 		}
 	}
 	return ids
@@ -423,8 +444,10 @@ func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabr
 // repoScopedSplitMemoryCeiling (64 MiB) is not applied here: it bounds the
 // repository-scoped split reads on a shape without wide units, and this
 // statement's floor at the prod skew is its own split (60-72 MiB).
-func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
-	ctx := context.Background()
+// newLinkedProdShapeStore starts ClickHouse with the API's read settings,
+// stops merges on the tables the statement reads and seeds shape for orgID.
+func newLinkedProdShapeStore(t *testing.T, ctx context.Context, orgID string, shape linkedProdShape) (*runtimeclickhouse.Client, clickhousedriver.Conn, []string, []string) {
+	t.Helper()
 	maxBytes := uint64(linkedShapeMaxBytesToRead)
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(o *runtimeclickhouse.Options) { o.MaxBytesToRead = &maxBytes })
 	createCHAOS5930Tables(t, ctx, direct)
@@ -433,7 +456,6 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-	const orgID = "org-linked-prod-shape"
 	tables := []string{"work_unit_investments", "work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "projects", "repos", "team_repo_ownership"}
 	t.Cleanup(func() {
 		for _, table := range tables {
@@ -447,7 +469,13 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ids := seedLinkedProdShape(t, ctx, direct, orgID, linkedMemoryProdShape)
+	return query, direct, tables, seedLinkedProdShape(t, ctx, direct, orgID, shape)
+}
+
+func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-linked-prod-shape"
+	query, direct, tables, ids := newLinkedProdShapeStore(t, ctx, orgID, linkedMemoryProdShape)
 	var rows, units, prRefs, issueRefs, lookupRefs, maxPRs, maxIssues uint64
 	var avgJSON float64
 	if err := direct.QueryRow(ctx, `SELECT count(), uniqExact(work_unit_id), sum(np), sum(ni), sum(nl), max(np), max(ni), avg(jl) FROM (

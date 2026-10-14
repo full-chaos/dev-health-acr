@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 // Store is the production contextfabric.GraphLifecycleStore. The caller
@@ -584,6 +585,9 @@ func validCompletionMode(mode contextfabric.BuildCompletionMode) bool {
 }
 
 func sanitize(err error) error {
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
+	}
 	if err == nil {
 		return nil
 	}

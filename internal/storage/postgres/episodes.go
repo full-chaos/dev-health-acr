@@ -11,6 +11,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 const redactedEpisodeText = "[redacted]"
@@ -77,7 +78,7 @@ ON CONFLICT DO NOTHING
 		return contractsv1.AgentEpisode{}, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return contractsv1.AgentEpisode{}, false, fmt.Errorf("insert episode: %w", err)
+		return contractsv1.AgentEpisode{}, false, fmt.Errorf("insert episode: %w", orgfence.Classify(err))
 	}
 	existing, err := s.existing(ctx, principal, repositoryID, create, digestText)
 	if err != nil {
