@@ -436,7 +436,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		})
 	}
 	if len(noUnit) > 0 {
-		noUnit, noLinked, err = p.splitTeamsWithoutLinkedWork(ctx, orgID, noUnit, bySubject, owned, reachedOnly, timeBound)
+		noUnit, noLinked, err = p.splitTeamsWithoutLinkedWork(ctx, orgID, noUnit, nil, bySubject, owned, reachedOnly, timeBound)
 		if err != nil {
 			return shapeRejected, 0, nil, nil, nil, nil, false, err
 		}

@@ -105,7 +105,12 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 // of the no-unit list. A team with no pull request, or with at least one
 // linked pull request, stays in it: that is a quiet team or a unit not yet
 // computed.
-func (p *InvestmentProvider) splitTeamsWithoutLinkedWork(ctx context.Context, orgID string, noUnit []contextfabric.SubjectRef, bySubject map[string]contextfabric.SubjectRef, owned map[string][]string, reachedOnly map[string][]teamReachedRepo, bound factTimeBound) (stay []contextfabric.SubjectRef, moved []teamNoLinkedWork, err error) {
+//
+// caused names the teams (by team id) that already carry a more specific cause
+// token for their empty window; they are never given this one, so the order of
+// the empty-reason tokens holds whichever change lands first. A team in caused
+// is neither read nor moved.
+func (p *InvestmentProvider) splitTeamsWithoutLinkedWork(ctx context.Context, orgID string, noUnit []contextfabric.SubjectRef, caused map[string]bool, bySubject map[string]contextfabric.SubjectRef, owned map[string][]string, reachedOnly map[string][]teamReachedRepo, bound factTimeBound) (stay []contextfabric.SubjectRef, moved []teamNoLinkedWork, err error) {
 	teamOfSubject := make(map[string]string, len(noUnit))
 	for teamID, subject := range bySubject {
 		teamOfSubject[contextfabric.FactSubjectKey(subject)] = teamID
@@ -114,6 +119,9 @@ func (p *InvestmentProvider) splitTeamsWithoutLinkedWork(ctx context.Context, or
 	repoSet := map[string]bool{}
 	for _, subject := range noUnit {
 		teamID := teamOfSubject[contextfabric.FactSubjectKey(subject)]
+		if caused[teamID] {
+			continue
+		}
 		seen := map[string]bool{}
 		for _, repoID := range owned[teamID] {
 			seen[repoID] = true
@@ -136,6 +144,10 @@ func (p *InvestmentProvider) splitTeamsWithoutLinkedWork(ctx context.Context, or
 	}
 	for _, subject := range noUnit {
 		teamID := teamOfSubject[contextfabric.FactSubjectKey(subject)]
+		if caused[teamID] {
+			stay = append(stay, subject)
+			continue
+		}
 		var prs, links int64
 		for _, repoID := range teamRepos[teamID] {
 			prs += pullRequests[repoID]
