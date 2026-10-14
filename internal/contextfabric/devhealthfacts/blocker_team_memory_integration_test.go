@@ -31,7 +31,7 @@ func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t 
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -101,6 +101,9 @@ SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'fi
 	large, largeResult, largeErr := read()
 	// The roll-up, the totals, the oldest age and the unlinked count run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 4)
+	for hash, peak := range small {
+		t.Logf("team blocker statement %d peak memory at the smaller size: %d bytes (%.1f MiB)", hash, peak, float64(peak)/(1<<20))
+	}
 	for hash, peak := range large {
 		t.Logf("team blocker statement %d peak memory: %d bytes (%.1f MiB) against the 256 MiB API cap", hash, peak, float64(peak)/(1<<20))
 	}
@@ -134,7 +137,7 @@ func TestTeamBlockerFactsRefuseAnEndpointWithAnUnauthorizedSiblingRowOnRealClick
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
-		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
+		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {

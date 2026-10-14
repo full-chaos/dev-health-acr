@@ -28,7 +28,7 @@ func (projectRollupRowsClient) Query(_ context.Context, statement string, _ []co
 	case strings.Contains(collapsed, "lp.project_key"):
 		return &projectRollupRows{rows: [][]any{{"github:P1", int64(3), int64(4), int64(1), int64(2), int64(0)}}}, nil
 	case strings.Contains(collapsed, "SELECT project_key, toInt64(uniqExactIf(tgt, is_open = 1))"):
-		return &projectRollupRows{rows: [][]any{{"github:P1", int64(2), int64(2), int64(1)}}}, nil
+		return &projectRollupRows{rows: [][]any{{"github:P1", int64(2), int64(2), int64(1), int64(0)}}}, nil
 	}
 	return &projectRollupRows{}, nil
 }
