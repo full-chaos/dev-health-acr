@@ -431,16 +431,20 @@ func blockerWorkItemsSQL(alias string) string {
 // blockerStartJoinSQL is the left join that gives a blocker edge its first
 // sync time. The subselect reads the first-seen rows of the blocker edge
 // endpoints only, so its cost follows the blocker edges.
-// blockerStartJoinFor is blockerStartJoinSQL with the first-seen rows narrowed
-// by variant: "" is the shipped shape (both ends in the blocker endpoint set).
-// The other variants exist for the memory measurement only.
+// blockerStartJoinFor is the left join that gives a blocker edge its first
+// sync time. The shipped form ("") reads the organization's first-seen rows of
+// the blocker relationship type and joins them on the edge key: narrowing them
+// to the blocker endpoint set first (the "legacy" form) costs more memory than
+// the rows it saves, measured on the production shape (the key condition built
+// from the set), and the join keeps only the matching keys either way. The
+// other variants exist for the measurement and the value-equality row only.
 func blockerStartJoinFor(variant string) string {
-	restriction := ` AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL
+	restriction := ""
 	switch variant {
+	case "legacy":
+		restriction = ` AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL
 	case "one_scan":
 		restriction = ` AND (source_work_item_id, target_work_item_id, relationship_type) IN (SELECT source_work_item_id, target_work_item_id, relationship_type FROM work_item_dependencies FINAL WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `')`
-	case "unrestricted":
-		restriction = ""
 	}
 	return ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
     FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `'` + restriction + `

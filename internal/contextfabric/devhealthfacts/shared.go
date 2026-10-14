@@ -1106,11 +1106,20 @@ import (
 // item. The rows are unchanged; the statements and their memory are not, so an
 // answer saved under v218 is not reused as one produced by the new statements.
 //
-// v219 -> v220: the team and project blocker statements read in blocks of
-// 8,192 rows instead of the server default of 65,536. The rows are unchanged;
-// the statements served are not, so an answer saved under v219 is not reused as
+// v219 -> v220: the team project link rows resolve the owned projects once, with
+// the team restriction on the ownership rows, and prune both work item passes by
+// the identity values the named teams' ownership rows name instead of resolving
+// the owned set again in each pass. The rows are unchanged; the statements and
+// their memory are not, so an answer saved under v219 is not reused as one
+// produced by the new statements.
+//
+// v220 -> v221: the team and project blocker statements read in blocks of
+// 8,192 rows instead of the server default of 65,536, and the age
+// statements read the first-seen rows of the organization without
+// narrowing them to the blocker edges. The rows are unchanged; the
+// statements served are not, so an answer saved under v220 is not reused as
 // one produced by them.
-const QueryVersion = "devhealthfacts.clickhouse.v220"
+const QueryVersion = "devhealthfacts.clickhouse.v221"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
