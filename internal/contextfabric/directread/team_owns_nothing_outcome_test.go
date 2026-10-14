@@ -82,7 +82,7 @@ func TestTeamOwningNoRepositoryReadsNotApplicableBesideAnOwnerThatWasNeverEvalua
 
 func TestTeamOwningNoRepositoryThatScopeExpansionReachesItemsKeepsTheDerivedOutcome(t *testing.T) {
 	team := subject(contractsv1.ContextFabricSubjectTeam, "team:empty")
-	provider := perSubjectProvider(contextfabric.FactPullRequests, contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectTeam)
+	provider := perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectTeam)
 	provider.read = func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 		return contextfabric.FactProviderResult{
 			State:                 contextfabric.SourceAvailable,
@@ -90,13 +90,13 @@ func TestTeamOwningNoRepositoryThatScopeExpansionReachesItemsKeepsTheDerivedOutc
 			SubjectReasons:        map[string]string{contextfabric.FactSubjectKey(team): "the team owns no repository in synced ownership"},
 		}, nil
 	}
-	expander := &scriptedExpander{expand: expandTo(labelled(prA, "acme/a#532"))}
+	expander := &scriptedExpander{expand: expandTo(labelled(workA, "acme/a#532"))}
 	reader := directExpandingReader(t, teamGraph(team), expander, nil, provider)
-	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"pull_requests"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: team.CanonicalID}}})
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: team.CanonicalID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := coverageOf(t, response, "pull_requests", team)
+	row := coverageOf(t, response, "blockers", team)
 	if len(expander.requests) == 0 {
 		t.Fatal("scope expansion never ran")
 	}

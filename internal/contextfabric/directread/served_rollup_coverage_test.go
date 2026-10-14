@@ -109,7 +109,7 @@ func TestServedRollupRowsWhenExpansionDidNotRun(t *testing.T) {
 		wantNote    bool
 	}{
 		{"project with a served rollup", contextfabric.FactPullRequests, projectQ7073, true, OutcomeFactServed, "truncated", true},
-		{"team with a served rollup", contextfabric.FactPullRequests, teamT, true, OutcomeFactServed, "truncated", true},
+		{"team with a served rollup needs no expansion", contextfabric.FactPullRequests, teamT, true, OutcomeFactServed, "available", false},
 		{"blockers project with a served rollup", contextfabric.FactBlockers, projectQ7073, true, OutcomeFactServed, "truncated", true},
 		{"project with no fact keeps its state", contextfabric.FactPullRequests, projectQ7073, false, OutcomeReadNoFact, "", true},
 		{"non-additive kind stays complete", contextfabric.FactHealth, projectQ7073, true, OutcomeFactServed, "available", false},

@@ -1133,15 +1133,20 @@ import (
 // statements served are not, so an answer saved under v222 is not reused as
 // one produced by them.
 //
-// v223 -> v224: repository and team metrics serve the change failure rate by
+// v223 -> v224: a team pull_requests read serves its pull requests counted by
+// stored state (pull_requests_by_state) and no fact per pull request unless the
+// question asks for the pull requests themselves. The answer changes; an answer
+// saved under v223 is not reused as one produced by the new read.
+//
+// v224 -> v225: repository and team metrics serve the change failure rate by
 // the ops rule that counts a deployment's own failed status: the failed count
 // includes failures by status, a window with final-status deployments and no
 // incident evidence is a measured rate (basis status, over the deployments with
 // a final status), and change_failure_unknown_reason, change_failure_evidence_basis,
 // the two status counts and change_failure_status_coverage are served. A
-// candidate saved under v223 may hold an unknown rate that is now measured and
+// candidate saved under v224 may hold an unknown rate that is now measured and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v224"
+const QueryVersion = "devhealthfacts.clickhouse.v225"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
