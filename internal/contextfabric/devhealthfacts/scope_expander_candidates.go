@@ -55,7 +55,7 @@ func requestedProjectHistoryWorkItemIDsSQL(projectPredicate string) string {
 // ids go through the server, never as a bound parameter: a bound array is
 // parsed again at every reference and measured 2.3 to 2.6 times the memory.
 func readOnceCandidatesSQL(candidates string) string {
-	return `(SELECT arrayJoin((SELECT groupUniqArray(work_item_id) FROM ` + candidates + `)))`
+	return candidates
 }
 
 // teamOwnedProjectJoinKeysSQL is every (provider, project_id) a work item can
