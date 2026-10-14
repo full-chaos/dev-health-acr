@@ -270,8 +270,8 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 }
 
 // applyOrganizationSubjectStatusFloor floors a complete answer that was read
-// from the caller's organization subject (it carries the organization
-// investment or no-members sentence) while a requirement it derived is not
+// from the caller's organization subject (it carries one of the three
+// organization-subject sentences) while a requirement it derived is not
 // satisfied: the organization kind serves only a few fact kinds, and an answer
 // that could not read the rest is partial, never complete.
 func applyOrganizationSubjectStatusFloor(result *InvestigationResult) {
@@ -280,7 +280,7 @@ func applyOrganizationSubjectStatusFloor(result *InvestigationResult) {
 	}
 	read := false
 	for _, limitation := range result.Limitations {
-		if limitation == contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation || limitation == contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation {
+		if limitation == contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation || limitation == contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation || limitation == contractsv1.ContextFabricOrganizationFactAbsentLimitation {
 			read = true
 			break
 		}

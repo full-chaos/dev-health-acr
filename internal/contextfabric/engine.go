@@ -3700,6 +3700,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if err == nil {
 			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort, graphContext.CohortPopulation)
 		}
+		if err == nil && graphContext.OrganizationSubjectRead {
+			if recorder, ok := e.telemetry.(OrganizationSubjectReadRecorder); ok {
+				recorder.RecordOrganizationSubjectRead(ctx, principal, OrganizationSubjectReadEventOf(familyOutcome.Frame, facts))
+			}
+		}
 		if err != nil {
 			subjectKinds := make([]string, 0, len(subjects))
 			seenSubjectKind := make(map[SubjectKind]struct{}, len(subjects))

@@ -2617,13 +2617,20 @@ then carries the cohort's evidence, coverage and uncertainty like any cohort
 survey, and a fixed sentence that names its basis: a roll-up over the
 organization's teams (or projects, repositories, ...), not an organization-wide
 measure. The repair stamps `QuestionFrame.OrganizationSurveyMemberKind` so the
-served answer, and a carried frame, can say so. When the survey finds no
+served answer, and a carried frame, can say so; the sentence is attached only
+when the served member set is that kind, has members and no subject was
+committed in its place. When the survey finds no
 member, the engine reads the caller's organization subject instead of ending in
 `no_match`, and the answer says no member was found: a missing member set is
 not a healthy one. An organization-scope investment question
 (`allocate_investment`) is not repaired: when no subject resolves, the engine
 reads the caller's organization subject, whose investment fact covers every
-repository once, and the answer names that roll-up. The former
+repository once, and the answer names that roll-up only when the fact was read
+(else it says the fact was not found). An answer read from the organization
+subject is served `partial`, never `complete`, while any requirement it derived
+is unavailable (`applyOrganizationSubjectStatusFloor`), and the decision line
+`context fabric organization subject read` records the reason and the facts
+read. The former
 `organization_scope_unsupported` refusal has no producer; the basis stays in
 the contract only so stored results that carry it still validate.
 

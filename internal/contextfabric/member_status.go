@@ -259,19 +259,50 @@ func organizationSubjectAnswers(frame *QuestionFrame) bool {
 }
 
 // organizationRollUpLimitation is the sentence that names an organization
-// answer's basis: a survey of the members the organization-scope repair chose,
-// or the organization's own investment fact.
-func organizationRollUpLimitation(frame *QuestionFrame, graph GraphContext) (string, bool) {
-	survey := frame != nil && frame.OrganizationSurveyMemberKind != ""
-	switch {
-	case graph.OrganizationSubjectRead && survey:
-		return contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation, true
-	case graph.OrganizationSubjectRead:
-		return contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, true
-	case !survey:
+// answer's basis, chosen from what the turn actually served: the survey
+// sentence only when the served member set is the surveyed kind, has members
+// and was not replaced by a committed subject; the investment sentence only
+// when an organization investment fact was read; otherwise the sentence that
+// says what was asked for and not found.
+func organizationRollUpLimitation(frame *QuestionFrame, graph GraphContext, facts CanonicalFactBundle) (string, bool) {
+	survey := SubjectKind("")
+	if frame != nil {
+		survey = frame.OrganizationSurveyMemberKind
+	}
+	if graph.OrganizationSubjectRead {
+		switch {
+		case organizationInvestmentQuestion(frame) && organizationFactRead(facts, FactInvestment):
+			return contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, true
+		case survey != "":
+			return contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation, true
+		default:
+			return contractsv1.ContextFabricOrganizationFactAbsentLimitation, true
+		}
+	}
+	if survey == "" || graph.Cohort == nil || graph.Cohort.Kind != survey || len(graph.Cohort.Members) == 0 || len(graph.Resolution.Committed) > 0 {
 		return "", false
 	}
-	return contractsv1.ContextFabricOrganizationSurveyLimitation(frame.OrganizationSurveyMemberKind)
+	return contractsv1.ContextFabricOrganizationSurveyLimitation(survey)
+}
+
+// organizationFactRead reports whether the bundle holds a readable fact of the
+// kind on the organization subject.
+func organizationFactRead(facts CanonicalFactBundle, kind FactKind) bool {
+	for _, fact := range facts.Facts {
+		if fact.Kind == kind && fact.Subject.Kind == SubjectOrganization && (fact.SourceState == SourceAvailable || fact.SourceState == SourceStale) {
+			return true
+		}
+	}
+	return false
+}
+
+// organizationSubjectReadReason names why the engine read the organization
+// subject, for the decision line.
+func organizationSubjectReadReason(frame *QuestionFrame) string {
+	if frame != nil && frame.OrganizationSurveyMemberKind != "" {
+		return "survey_no_members"
+	}
+	return "investment"
 }
 
 // callerOrganizationSubject is the caller's organization as a subject, in the

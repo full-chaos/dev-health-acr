@@ -19,6 +19,9 @@ type organizationMemberGraph struct {
 	// noMembers makes every discovery find no member, as in an organization
 	// with nothing synced of the kind.
 	noMembers bool
+	// committed is a subject resolution committed (a carried hint); the
+	// census then does not run, as in the falkorgraph reader.
+	committed bool
 }
 
 func (g *organizationMemberGraph) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
@@ -26,7 +29,7 @@ func (g *organizationMemberGraph) DiscoverContext(_ context.Context, _ storage.P
 	graph := g.context
 	graph.Cohort = nil
 	if request.Frame != nil {
-		if kind, _, reason := CohortMemberKindForFrame(*request.Frame); reason == CohortDiscoverable && !g.noMembers {
+		if kind, _, reason := CohortMemberKindForFrame(*request.Frame); reason == CohortDiscoverable && !g.noMembers && !g.committed {
 			graph.Cohort = organizationMembers(kind, 3)
 		}
 	}
@@ -50,6 +53,20 @@ type organizationAnswerRun struct {
 	result   InvestigationResult
 	graph    *organizationMemberGraph
 	subjects [][]SubjectRef
+	logs     *engineLoggerCapture
+}
+
+// organizationRun is one organization question for runOrganizationQuestionWith.
+type organizationRun struct {
+	receipt            ModelExecutionReceipt
+	proposal           QuestionFrame
+	facts              []FactRequirement
+	allowClarification bool
+	noMembers          bool
+	// served are the fact kinds the fact reader returns a readable fact for.
+	served []FactKind
+	// committed is the subject retrieval commits, when set.
+	committed *SubjectRef
 }
 
 // runOrganizationQuestion drives Engine.Investigate through the production
@@ -57,11 +74,12 @@ type organizationAnswerRun struct {
 // result with what retrieval and the fact read received.
 func runOrganizationQuestion(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, facts []FactRequirement, allowClarification bool) organizationAnswerRun {
 	t.Helper()
-	return runOrganizationQuestionOver(t, receipt, proposal, facts, allowClarification, false)
+	return runOrganizationQuestionWith(t, organizationRun{receipt: receipt, proposal: proposal, facts: facts, allowClarification: allowClarification})
 }
 
-func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, facts []FactRequirement, allowClarification, noMembers bool, served ...FactKind) organizationAnswerRun {
+func runOrganizationQuestionWith(t *testing.T, run0 organizationRun) organizationAnswerRun {
 	t.Helper()
+	receipt, proposal, facts, allowClarification, noMembers, served := run0.receipt, run0.proposal, run0.facts, run0.allowClarification, run0.noMembers, run0.served
 	logs := captureEngineLogger(t)
 	receipt.QuestionFrame = &proposal
 	graph := &organizationMemberGraph{retrievalRecordingGraph: retrievalRecordingGraph{graphReaderStub: graphReaderStub{
@@ -72,7 +90,12 @@ func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, pr
 			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		},
 	}}, noMembers: noMembers}
-	run := organizationAnswerRun{graph: graph}
+	if run0.committed != nil {
+		graph.committed = true
+		graph.resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{*run0.committed}}
+		graph.bases = provenCommitBases(*run0.committed)
+	}
+	run := organizationAnswerRun{graph: graph, logs: logs}
 	readFacts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 		run.subjects = append(run.subjects, append([]SubjectRef(nil), request.Subjects...))
 		read := []CanonicalFact{}
@@ -117,7 +140,7 @@ func runOrganizationQuestionOver(t *testing.T, receipt ModelExecutionReceipt, pr
 			}, nil
 		}),
 		Results:      &staticResultStore{results: map[string]InvestigationResult{}},
-		Telemetry:    &recordingTelemetry{},
+		Telemetry:    logs.telemetry,
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test",
@@ -249,25 +272,73 @@ func TestOrganizationScopeQuestionsAreAnsweredOverTheOrganizationsMembers(t *tes
 
 // TestAnOrganizationInvestmentQuestionReadsTheOrganizationSubject holds that
 // "where is our effort going" reads the organization's own investment fact:
-// the organization subject, never a refusal and never a sum over members.
+// the organization subject, never a refusal and never a sum over members. The
+// served sentence names the fact only when it was read, and the decision line
+// records the read.
 func TestAnOrganizationInvestmentQuestionReadsTheOrganizationSubject(t *testing.T) {
-	receipt := validModelReceiptFixture(ModelOperationInterpret)
-	run := runOrganizationQuestion(t, receipt, organizationProposal(nil, GoalAllocateInvestment), []FactRequirement{{Kind: FactInvestment}}, true)
-	result := run.result
-	if result.Status == InvestigationNoMatch || result.Status == InvestigationClarificationRequired || result.RefusalBasis != "" {
-		t.Fatalf("status/basis = %q/%q, want an answered turn", result.Status, result.RefusalBasis)
+	for _, testCase := range []struct {
+		cell     string
+		served   []FactKind
+		sentence string
+		absent   string
+		read     float64
+	}{
+		{"the organization fact is read", []FactKind{FactInvestment}, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, contractsv1.ContextFabricOrganizationFactAbsentLimitation, 1},
+		{"no organization fact is found", nil, contractsv1.ContextFabricOrganizationFactAbsentLimitation, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation, 0},
+	} {
+		t.Run(testCase.cell, func(t *testing.T) {
+			run := runOrganizationQuestionWith(t, organizationRun{
+				receipt: validModelReceiptFixture(ModelOperationInterpret), proposal: organizationProposal(nil, GoalAllocateInvestment),
+				facts: []FactRequirement{{Kind: FactInvestment}}, allowClarification: true, served: testCase.served,
+			})
+			result := run.result
+			t.Logf("served status=%s", result.Status)
+			if result.Status == InvestigationNoMatch || result.Status == InvestigationClarificationRequired || result.RefusalBasis != "" {
+				t.Fatalf("status/basis = %q/%q, want an answered turn", result.Status, result.RefusalBasis)
+			}
+			if !roleContains(result.Limitations, testCase.sentence) || roleContains(result.Limitations, testCase.absent) {
+				t.Fatalf("limitations = %#v, want %q and not %q", result.Limitations, testCase.sentence, testCase.absent)
+			}
+			for call, frame := range run.graph.discovered {
+				if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionOrganizationScope {
+					t.Fatalf("discovery call %d received %+v, want the organization-scope frame", call, frame)
+				}
+			}
+			want := SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:org_role", Label: "org_role"}
+			if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != want {
+				t.Fatalf("fact read subjects = %+v, want only %+v", run.subjects, want)
+			}
+			lines := linesWithMessage(t, run.logs.configured.String(), OrganizationSubjectReadLogMessage)
+			if len(lines) != 1 {
+				t.Fatalf("organization subject read lines = %d, want 1", len(lines))
+			}
+			assertRepairLine(t, lines[0], map[string]any{"reason": "investment", "survey_member_kind": "none", "organization_facts_read": testCase.read})
+		})
 	}
-	for call, frame := range run.graph.discovered {
-		if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionOrganizationScope {
-			t.Fatalf("discovery call %d received %+v, want the organization-scope frame", call, frame)
+}
+
+// TestASurveyWhoseRetrievalCommittedASubjectClaimsNoRollUp holds the survey
+// sentence to what was served: a carried hint that commits one repository
+// replaces the census, so the answer is about that repository and must not
+// say it is a roll-up over the organization's members.
+func TestASurveyWhoseRetrievalCommittedASubjectClaimsNoRollUp(t *testing.T) {
+	committed := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:hinted", Label: "hinted"}
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.RequestedSubjectKind = SubjectRepository
+	run := runOrganizationQuestionWith(t, organizationRun{
+		receipt: receipt, proposal: organizationProposal(nil, GoalAssessState),
+		facts: []FactRequirement{{Kind: FactHealth}}, allowClarification: true, committed: &committed,
+	})
+	result := run.result
+	t.Logf("served status=%s", result.Status)
+	for _, kind := range []SubjectKind{SubjectTeam, SubjectProject, SubjectRepository, SubjectPullRequest, SubjectIncident} {
+		sentence, _ := contractsv1.ContextFabricOrganizationSurveyLimitation(kind)
+		if roleContains(result.Limitations, sentence) {
+			t.Fatalf("limitations = %#v claim a roll-up over the organization's %ss that was never read", result.Limitations, kind)
 		}
 	}
-	if !roleContains(result.Limitations, contractsv1.ContextFabricOrganizationInvestmentRollUpLimitation) {
-		t.Fatalf("limitations = %#v, want the investment roll-up sentence", result.Limitations)
-	}
-	want := SubjectRef{Kind: SubjectOrganization, CanonicalID: "organization:org_role", Label: "org_role"}
-	if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != want {
-		t.Fatalf("fact read subjects = %+v, want only %+v", run.subjects, want)
+	if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != committed {
+		t.Fatalf("fact read subjects = %+v, want only the committed repository", run.subjects)
 	}
 }
 
@@ -325,7 +396,7 @@ func TestTheDemoOrganizationQuestionsAreNeverRefused(t *testing.T) {
 			receipt := validModelReceiptFixture(ModelOperationInterpret)
 			receipt.RequestedSubjectKind = testCase.requested
 			for _, allowClarification := range []bool{true, false} {
-				result := runOrganizationQuestion(t, receipt, testCase.frame, testCase.facts, allowClarification).result
+				result := runOrganizationQuestionWith(t, organizationRun{receipt: receipt, proposal: testCase.frame, facts: testCase.facts, allowClarification: allowClarification, served: []FactKind{FactInvestment}}).result
 				t.Logf("allow_clarification=%v served status=%s", allowClarification, result.Status)
 				if (result.Status != InvestigationComplete && result.Status != InvestigationPartial) || result.RefusalBasis != "" {
 					t.Fatalf("status/basis = %q/%q, want complete or partial", result.Status, result.RefusalBasis)
@@ -347,7 +418,7 @@ func TestTheDemoOrganizationQuestionsAreNeverRefused(t *testing.T) {
 // ending in no_match. Missing is disclosed, never served as healthy.
 func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
 	receipt := validModelReceiptFixture(ModelOperationInterpret)
-	run := runOrganizationQuestionOver(t, receipt, organizationProposal(nil, GoalAssessState, GoalExplainDrivers), []FactRequirement{{Kind: FactHealth}}, true, true)
+	run := runOrganizationQuestionWith(t, organizationRun{receipt: receipt, proposal: organizationProposal(nil, GoalAssessState, GoalExplainDrivers), facts: []FactRequirement{{Kind: FactHealth}}, allowClarification: true, noMembers: true})
 	result := run.result
 	t.Logf("served status=%s completeness=%+v coverage_partial=%v", result.Status, result.Completeness, result.Coverage.Partial)
 	if result.Status == InvestigationNoMatch || result.Status == InvestigationClarificationRequired || result.RefusalBasis != "" {
@@ -369,6 +440,11 @@ func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
 	if len(run.subjects) == 0 || len(run.subjects[0]) != 1 || run.subjects[0][0] != want {
 		t.Fatalf("fact read subjects = %+v, want only %+v", run.subjects, want)
 	}
+	lines := linesWithMessage(t, run.logs.configured.String(), OrganizationSubjectReadLogMessage)
+	if len(lines) != 1 {
+		t.Fatalf("organization subject read lines = %d, want 1", len(lines))
+	}
+	assertRepairLine(t, lines[0], map[string]any{"reason": "survey_no_members", "survey_member_kind": "team", "organization_facts_read": float64(0)})
 }
 
 // TestAnOrganizationSubjectAnswerIsPartialWhenAKindWasNotRead holds the
@@ -378,7 +454,7 @@ func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
 func TestAnOrganizationSubjectAnswerIsPartialWhenAKindWasNotRead(t *testing.T) {
 	receipt := validModelReceiptFixture(ModelOperationInterpret)
 	proposal := organizationProposal(nil, GoalAllocateInvestment, GoalAssessState)
-	result := runOrganizationQuestionOver(t, receipt, proposal, []FactRequirement{{Kind: FactInvestment}, {Kind: FactHealth}}, true, false, FactInvestment).result
+	result := runOrganizationQuestionWith(t, organizationRun{receipt: receipt, proposal: proposal, facts: []FactRequirement{{Kind: FactInvestment}, {Kind: FactHealth}}, allowClarification: true, served: []FactKind{FactInvestment}}).result
 	t.Logf("served status=%s completeness_state=%s", result.Status, result.Completeness.State)
 	if result.Status != InvestigationPartial || result.Completeness.TerminalStatus != InvestigationPartial || result.RefusalBasis != "" {
 		t.Fatalf("status/terminal/basis = %q/%q/%q, want partial", result.Status, result.Completeness.TerminalStatus, result.RefusalBasis)

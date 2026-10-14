@@ -659,13 +659,14 @@ const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was r
 // the one for the member kind it read, so a reader sees the answer is a
 // roll-up over those members, not an organization-wide measure.
 const (
-	ContextFabricOrganizationSurveyTeamLimitation        = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's teams: the stored facts of each team were read, so the answer is a survey of the teams, not an organization-wide measure. Its coverage is the coverage of the teams that were read."
-	ContextFabricOrganizationSurveyProjectLimitation     = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's projects: the stored facts of each project were read, so the answer is a survey of the projects, not an organization-wide measure. Its coverage is the coverage of the projects that were read."
-	ContextFabricOrganizationSurveyRepositoryLimitation  = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's repositories: the stored facts of each repository were read, so the answer is a survey of the repositories, not an organization-wide measure. Its coverage is the coverage of the repositories that were read."
-	ContextFabricOrganizationSurveyPullRequestLimitation = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's pull requests: the stored facts of each pull request were read, so the answer is a survey of the pull requests, not an organization-wide measure. Its coverage is the coverage of the pull requests that were read."
-	ContextFabricOrganizationSurveyIncidentLimitation    = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's incidents: the stored facts of each incident were read, so the answer is a survey of the incidents, not an organization-wide measure. Its coverage is the coverage of the incidents that were read."
-	ContextFabricOrganizationSurveyNoMembersLimitation   = "This question was read as being about the organization as a whole. No members of the organization were found to roll up, so only the organization's own facts were read. A missing member set is not a healthy one."
+	ContextFabricOrganizationSurveyTeamLimitation        = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's teams: the answer is a survey of the teams it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those teams."
+	ContextFabricOrganizationSurveyProjectLimitation     = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's projects: the answer is a survey of the projects it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those projects."
+	ContextFabricOrganizationSurveyRepositoryLimitation  = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's repositories: the answer is a survey of the repositories it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those repositories."
+	ContextFabricOrganizationSurveyPullRequestLimitation = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's pull requests: the answer is a survey of the pull requests it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those pull requests."
+	ContextFabricOrganizationSurveyIncidentLimitation    = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's incidents: the answer is a survey of the incidents it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those incidents."
+	ContextFabricOrganizationSurveyNoMembersLimitation   = "This question was read as being about the organization as a whole. No members of the organization were found to roll up, so the answer rests only on the organization's own stored facts, where there are any. A missing member set is not a healthy one."
 	ContextFabricOrganizationInvestmentRollUpLimitation  = "This question was read as being about the organization as a whole. It was answered from the organization's investment fact, a roll-up that counts the work of each repository once, never a sum of team values."
+	ContextFabricOrganizationFactAbsentLimitation        = "This question was read as being about the organization as a whole, and the organization's own investment fact was asked for. No such fact was found, so the answer does not state where the organization's effort went."
 )
 
 // ContextFabricOrganizationSurveyLimitation returns the roll-up sentence for
@@ -793,6 +794,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricOrganizationSurveyIncidentLimitation,
 		ContextFabricOrganizationSurveyNoMembersLimitation,
 		ContextFabricOrganizationInvestmentRollUpLimitation,
+		ContextFabricOrganizationFactAbsentLimitation,
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,

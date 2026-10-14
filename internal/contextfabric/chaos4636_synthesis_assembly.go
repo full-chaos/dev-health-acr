@@ -460,7 +460,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
 	}
-	if sentence, ok := organizationRollUpLimitation(params.Frame, graphContext); ok {
+	if sentence, ok := organizationRollUpLimitation(params.Frame, graphContext, params.Facts); ok {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
