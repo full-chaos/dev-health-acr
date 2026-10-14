@@ -825,18 +825,18 @@ var (
 // direction: every spelling the graph projection maps onto a blocks edge. It is
 // generated from the same spelling map as the projection's key.
 func blockerPredicateSQL(alias string) string {
-	return dependencyrelation.BlockerPredicateSQL(alias + ".relationship_type")
+	return "lower(ifNull(" + alias + ".relationship_type, '')) = 'blocks'"
 }
 
 // blockedExpr and blockerExpr name the two ends of a stored blocker row
 // whatever its direction: an inverse spelling (blocked_by) states the blocked
 // item as the source. Function-call syntax only, so they can sit in a JOIN ON.
 func blockedExpr(alias string) string {
-	return "if(" + dependencyrelation.BlockerInverseSQL(alias+".relationship_type") + ", " + alias + ".source_work_item_id, " + alias + ".target_work_item_id)"
+	return alias + ".target_work_item_id"
 }
 
 func blockerExpr(alias string) string {
-	return "if(" + dependencyrelation.BlockerInverseSQL(alias+".relationship_type") + ", " + alias + ".target_work_item_id, " + alias + ".source_work_item_id)"
+	return alias + ".source_work_item_id"
 }
 
 // blockerRowsWhereSQL selects the blocker rows of the organization whose two
