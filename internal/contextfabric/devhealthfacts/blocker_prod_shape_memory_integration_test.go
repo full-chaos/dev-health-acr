@@ -211,7 +211,20 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		restore()
 	}
 	measureStates("seeded")
-	for _, table := range []string{"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr", "git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions"} {
+	tableRows, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree'`)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+	var tables []string
+	for tableRows.Next() {
+		var name string
+		if err := tableRows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, name)
+	}
+	tableRows.Close()
+	for _, table := range tables {
 		if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
 			t.Fatalf("optimize %s: %v", table, err)
 		}
