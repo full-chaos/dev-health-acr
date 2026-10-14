@@ -242,9 +242,10 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
-	// Ceilings: the smallest peak of each statement over three warm reads, as
+	// Ceilings: the HIGHEST peak of each statement over three warm reads, as
 	// seeded and after the parts are merged, for both callers, must be under the
-	// statement's ceiling. A single cold read is logged above, not asserted.
+	// statement's ceiling (a cap is hit by the worst read). A single cold read is
+	// logged above, not asserted. The lowest read is logged beside it.
 	for _, state := range []string{"parts as seeded", "parts merged (OPTIMIZE FINAL)"} {
 		if strings.Contains(state, "OPTIMIZE") {
 			tableRows, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree' AND name NOT LIKE '.%'`)
@@ -273,15 +274,16 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
 			for key := range low {
 				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
-				if ceiling := blockerProdShapeCeilingFor(key); low[key] >= ceiling {
-					t.Errorf("%s, %s: the smallest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, low[key], ceiling)
+				if ceiling := blockerProdShapeCeilingFor(key); high[key] >= ceiling {
+					t.Errorf("%s, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, high[key], ceiling)
 				}
 			}
 		}
 	}
 
 	// Negative control: with the library authorization forced back in (the shape
-	// before the organization-wide fast path) the same assertion must fail.
+	// before the organization-wide fast path) even the LOWEST of three warm reads
+	// must exceed a ceiling, the harder side of the same assertion.
 	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
 	lowForced, _ := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
 	restoreLibrary()

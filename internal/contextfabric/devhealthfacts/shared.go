@@ -1090,12 +1090,18 @@ import (
 // sprint ends and the raw issue counts beside them). An answer saved under
 // v215 has no commitment fact.
 //
-// v216 -> v217: every blocker read (team, project, work item) keeps only the
+// v216 -> v217: a team whose owned repositories hold work units that all have
+// zero persisted effort is named investment_team_effort_not_measurable, with
+// the unit count, instead of investment_team_no_unit_in_window. Still no fact
+// and no zero mix. An answer saved under v216 states the false reason that no
+// effort was persisted.
+//
+// v217 -> v218: every blocker read (team, project, work item) keeps only the
 // links the provider still reports; a link it removed is no longer counted or
 // named the oldest blocker. Team and project blockers facts carry
-// blocker_dependencies_writer_unresolved_current. An answer saved under v216
+// blocker_dependencies_writer_unresolved_current. An answer saved under v217
 // can count a removed link.
-const QueryVersion = "devhealthfacts.clickhouse.v217"
+const QueryVersion = "devhealthfacts.clickhouse.v218"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
