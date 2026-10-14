@@ -42,6 +42,8 @@ func requestedProjectHistoryWorkItemIDsSQL(projectPredicate string) string {
 	keys := requestedProjectJoinKeysSQL(projectPredicate)
 	return `(SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND project_id IN ` + keys + `
   UNION ALL
+  SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND project_id IN ` + keys + `
+  UNION ALL
   SELECT subject_id FROM project_membership_transitions WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND (to_project_id IN ` + keys + ` OR from_project_id IN ` + keys + `))`
 }
 
