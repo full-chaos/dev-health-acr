@@ -1089,7 +1089,13 @@ import (
 // v215 -> v216: a project subject serves the commitment kind (target date,
 // sprint ends and the raw issue counts beside them). An answer saved under
 // v215 has no commitment fact.
-const QueryVersion = "devhealthfacts.clickhouse.v216"
+//
+// v216 -> v217: the team project link rows intersect the organization's linked
+// work item ids with the owned projects' work items before the FINAL read, so
+// the statements hold the owned projects' candidates and not every linked work
+// item. The rows are unchanged; the statements and their memory are not, so an
+// answer saved under v216 is not reused as one produced by the new statements.
+const QueryVersion = "devhealthfacts.clickhouse.v217"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
