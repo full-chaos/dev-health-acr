@@ -21,9 +21,10 @@ func blockerStatement(statement string, settings readers.Settings) string {
 	if blockerMaxBlockSize <= 0 {
 		return statement + rendered
 	}
-	setting := " SETTINGS max_block_size = " + strconv.Itoa(blockerMaxBlockSize)
+	const clause = "\nSETTINGS "
+	setting := clause + "max_block_size = " + strconv.Itoa(blockerMaxBlockSize)
 	if rendered == "" {
 		return statement + setting
 	}
-	return statement + setting + ", " + strings.TrimPrefix(rendered, " SETTINGS ")
+	return statement + setting + ", " + strings.TrimPrefix(rendered, clause)
 }

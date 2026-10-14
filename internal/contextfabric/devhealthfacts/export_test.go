@@ -112,3 +112,8 @@ func SetBlockerMaxBlockSizeForTest(rows int) (restore func()) {
 	blockerMaxBlockSize = rows
 	return func() { blockerMaxBlockSize = previous }
 }
+
+// BlockerStatementForTest renders a statement with the blocker settings.
+func BlockerStatementForTest(statement string, settings readers.Settings) string {
+	return blockerStatement(statement, settings)
+}
