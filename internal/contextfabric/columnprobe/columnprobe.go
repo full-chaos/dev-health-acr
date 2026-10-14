@@ -98,9 +98,9 @@ func (p *Probe) Available(ctx context.Context, count Counter, now time.Time) boo
 			"shape_known", p.known)
 		return p.known && p.available
 	}
-	was := p.available
+	first, was := !p.known, p.available
 	p.known, p.available, p.checkedAt = true, n == uint64(len(p.columns)), now
-	if !p.known || was != p.available {
+	if first || was != p.available {
 		slog.InfoContext(ctx, fmt.Sprintf("column_probe_answered: probe=%s table=%s", p.name, p.table), "columns_present", p.available)
 	}
 	return p.available

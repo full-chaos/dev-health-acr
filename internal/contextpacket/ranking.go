@@ -28,6 +28,7 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 		refs = append(refs, ref)
 	}
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], goal, roles) })
+	orderCauseByTier(refs, roles)
 	refs = deduplicateEvidence(refs)
 	refs = requestedEvidenceCategories(refs, requested, roles)
 	refs, truncated := allocateCategories(refs, goal, maxItems, roles)
@@ -59,11 +60,6 @@ func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []con
 }
 
 func evidenceBefore(left, right contractsv1.EvidenceRef, goal string, roles roleResolver) bool {
-	// Within the cause role a weaker match tier never outranks a stronger one,
-	// whatever the goal words say.
-	if lr, rr := roles.rule(left), roles.rule(right); lr.category == contractsv1.CategoryCause && rr.category == contractsv1.CategoryCause && lr.subRank != rr.subRank {
-		return lr.subRank > rr.subRank
-	}
 	if l, r := goalScore(left, goal), goalScore(right, goal); l != r {
 		return l > r
 	}
@@ -199,6 +195,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 		}
 	}
 	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], goal, roles) })
+	orderCauseByTier(selected, roles)
 	return selected, true
 }
 
@@ -254,4 +251,25 @@ func itemEvidenceRefIDs(ref contractsv1.EvidenceRef, r rule) []string {
 		}
 	}
 	return ids
+}
+
+// orderCauseByTier makes a weaker match tier never outrank a stronger one
+// inside the cause role, whatever the goal words say. It keeps every
+// non-cause item where the (total, transitive) comparator put it and refills
+// the cause items' own positions strongest tier first, stable within a tier, so
+// the ordering stays deterministic and an item budget cuts the weakest tier
+// first.
+func orderCauseByTier(refs []contractsv1.EvidenceRef, roles roleResolver) {
+	var positions []int
+	var causes []contractsv1.EvidenceRef
+	for index, ref := range refs {
+		if roles.rule(ref).category == contractsv1.CategoryCause {
+			positions = append(positions, index)
+			causes = append(causes, ref)
+		}
+	}
+	sort.SliceStable(causes, func(i, j int) bool { return roles.rule(causes[i]).subRank > roles.rule(causes[j]).subRank })
+	for slot, index := range positions {
+		refs[index] = causes[slot]
+	}
 }

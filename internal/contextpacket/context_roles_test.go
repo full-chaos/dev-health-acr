@@ -694,3 +694,58 @@ func TestATableWithoutTheTierColumnIsNamedAndEveryLinkStaysARelation(t *testing.
 		}
 	}
 }
+
+func TestAnItemBudgetCutsTheWeakestCauseTierFirstEvenWhenTheGoalNamesIt(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
+		roleRow("ev-pr-pushed", "pull_request", "2", "checkout", "merged", at),
+		roleRow("ev-ordinary", "commit", "9999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout flow", "checkout", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-pushed", "d2", "failure", "2", "pushed", at),
+	}
+	request := fixtureRequest("req-budget-tier", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems = 1
+	request.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryCause}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(packet.Items) != 1 || packet.Items[0].EvidenceRefIDs[0] != "ev-pr-exact" {
+		t.Fatalf("the budget kept %v, want the exact_merge_sha cause", itemEvidenceIDs(packet))
+	}
+}
+
+func TestEveryDeploymentLinkIsCountedEvenWhenItsPullRequestRowIsAbsent(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	_, packet := servedRoles(t, []contractsv1.EvidenceRef{
+		tieredDeploymentRow("ev-d-first", "d1", "failure", "123", "first_listed", at),
+		tieredDeploymentRow("ev-d-exact", "d2", "failure", "124", "exact_merge_sha", at),
+	})
+	for _, want := range []string{"cause_links_demoted:1:first_listed", "cause_links_promoted:1:exact_merge_sha"} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+}
+
+func TestAStrongTierOnADeploymentThatDidNotFailIsNamedNotCalledUnstored(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	edge := incidentEdge("ev-e-link", "d1", "inc-1", "native", at)
+	_, packet := servedRoles(t, []contractsv1.EvidenceRef{
+		roleRow("ev-pr-ok", "pull_request", "5", "Shipped", "merged", at),
+		tieredDeploymentRow("ev-d-ok-1", "d1", "success", "5", "exact_merge_sha", at),
+		roleRow("ev-inc-open", "incident", "inc-1", "open incident", "status=open, severity=high", at),
+		edge,
+	})
+	for _, item := range packet.Items {
+		if item.EvidenceRefIDs[0] == "ev-pr-ok" && (strings.Contains(item.WhyIncluded, "not stored") || !strings.Contains(item.WhyIncluded, "exact_merge_sha")) {
+			t.Errorf("relation text contradicts the stored tier: %q", item.WhyIncluded)
+		}
+	}
+}

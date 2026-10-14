@@ -142,6 +142,18 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 			links.ambiguousReverts++
 		}
 	}
+	// Every deployment link is counted, whether or not its pull request row is
+	// in the evidence set.
+	for _, buckets := range demotedBuckets {
+		for bucket, n := range buckets {
+			links.demotedBuckets[bucket] += n
+		}
+	}
+	for _, tiers := range promotedBuckets {
+		for tier, n := range tiers {
+			links.promotedBuckets[tier] += n
+		}
+	}
 	for _, ref := range evidence {
 		switch ref.Source.EntityType {
 		case "pull_request":
@@ -153,12 +165,6 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 				links.causes[ref.EvidenceRefID] = linkedCause{claim: tierClaim[entry.bestTier], why: tierCauseText(ref.Source.EntityID, entry.bestTier), subRank: tierRank[entry.bestTier]}
 			} else if entry.relation != "" {
 				links.demoted[ref.EvidenceRefID] = entry.relation
-			}
-			for bucket, n := range demotedBuckets[ref.Source.EntityID] {
-				links.demotedBuckets[bucket] += n
-			}
-			for tier, n := range promotedBuckets[ref.Source.EntityID] {
-				links.promotedBuckets[tier] += n
 			}
 		case "commit":
 			if reverters, ok := revertedCommit[ref.EvidenceRefID]; ok {
@@ -387,6 +393,9 @@ func linkTier(ref contractsv1.EvidenceRef) (tier, bucket string) {
 }
 
 func tierPhrase(bucket string) string {
+	if tierRank[bucket] > 0 {
+		return bucket + ", but this deployment did not fail, so the link is not a cause candidate"
+	}
 	switch bucket {
 	case tierFirstListed:
 		return "first_listed (the first pull request the provider listed for that commit)"

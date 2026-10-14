@@ -50,14 +50,15 @@ func TestRealNormalizerTiersReachTheCauseRoleOnlyWhenTheTierIsStrongOnRealClickH
 			contextpacket.ResetStatementShapeProbesForTest()
 			ctx := context.Background()
 			query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
-			for _, statement := range devhealthschema.DDL("repos", "deployments", "git_pull_requests") {
+			statements := devhealthschema.DDL("repos", "git_pull_requests")
+			if shape.withColumn {
+				statements = append(statements, devhealthschema.DDL("deployments")...)
+			} else {
+				statements = append(statements, devhealthschema.DDLWithoutPendingRollout("", "deployments"))
+			}
+			for _, statement := range statements {
 				if err := direct.Exec(ctx, statement); err != nil {
 					t.Fatalf("create table: %v\n%s", err, statement)
-				}
-			}
-			if !shape.withColumn {
-				if err := direct.Exec(ctx, `ALTER TABLE deployments DROP COLUMN pull_request_tier`); err != nil {
-					t.Fatalf("drop the tier column: %v", err)
 				}
 			}
 			instant := func(value *string) *time.Time {

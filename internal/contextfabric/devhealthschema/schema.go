@@ -136,7 +136,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "deployed_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "merged_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "pull_request_number", Type: "Nullable(UInt32)"},
-		{Name: "pull_request_tier", Type: "LowCardinality(String) DEFAULT ''"},
+		{Name: "pull_request_tier", Type: "LowCardinality(String) DEFAULT ''", PendingRollout: true},
 		{Name: "release_ref", Type: "String"},
 		{Name: "release_ref_confidence", Type: "Float64"},
 		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
