@@ -68,7 +68,9 @@ func seedAuthorizationSites(t *testing.T, ctx context.Context, direct clickhouse
 		"{{LINKWI}}", fmt.Sprint(14017*s.scale),
 		"{{ID}}", "concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(%s), 12, '0'))",
 	)
-	id := func(expr string) string { return fmt.Sprintf("concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(%s), 12, '0'))", expr) }
+	id := func(expr string) string {
+		return fmt.Sprintf("concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(%s), 12, '0'))", expr)
+	}
 	tables := []string{"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions", "work_graph_edges"}
 	for _, statement := range devhealthschema.DDL(tables...) {
