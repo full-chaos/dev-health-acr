@@ -30,9 +30,10 @@ var linkedWideIDProdShape = func() linkedProdShape {
 }()
 
 const (
-	// Prod served the rev 88 statement at 233.98 MiB of the 256 MiB cap; the
-	// seed calibrates when that form lands inside this band under the cap.
-	wideIDRev88FloorMiB = 200.0
+	// Prod served the rev 88 statement at 233.98 MiB; the seed calibrates when
+	// that form, measured without the API cap, peaks within 15% of it.
+	wideIDProdRev88MiB     = 233.98
+	wideIDCalibrationSlack = 0.15
 	// A form measured without the API cap still stops here, so a runaway
 	// statement fails this row instead of the runner.
 	wideIDUncappedCeiling = 2 << 30
@@ -173,8 +174,8 @@ func highestOf(values []float64) float64 {
 // with short unit ids the same seed measured 80 MiB for the rev 89 form, so
 // the width of the scope ids is the dimension the short seed lacked.
 //
-// Three forms run on one seed. The rev 88 text calibrates (inside the band
-// under the cap) and the text with the linked set and the scope inlined (the
+// Three forms run on one seed. The rev 88 text calibrates (measured without
+// the cap, its highest read within 15% of prod's peak) and the text with the linked set and the scope inlined (the
 // form the production statement replaced) must be refused with code 241 under
 // the API cap: if either does not hold, the seed does not reproduce prod and
 // no bound below means anything. The production read sends both as external
@@ -200,7 +201,7 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	inlined := readWideIDForm(t, "team_linked_mix_inline_sets.sql")
 	uncapped := fmt.Sprintf("max_memory_usage = %d, max_result_rows = 0", wideIDUncappedCeiling)
 
-	rev88Runs := linkedFormRuns(t, ctx, capped, direct, orgID, "rev88", rev88, "", bindings)
+	rev88Runs := linkedFormRuns(t, ctx, query, direct, orgID, "rev88-uncapped", rev88, uncapped, bindings)
 	inlinedRuns := linkedFormRuns(t, ctx, capped, direct, orgID, "inline-sets", inlined, "", bindings)
 	inlinedFree := runLinkedForm(t, ctx, query, direct, orgID, "inline-sets-uncapped", inlined, uncapped, bindings)
 	served := servedLinkedSetAndMixReads(t, ctx, provider, direct, orgID)
@@ -217,23 +218,27 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	for _, form := range []struct {
 		name string
 		runs []linkedFormRun
-	}{{"rev88", rev88Runs}, {"inline_sets", inlinedRuns}} {
+	}{{"rev88 (uncapped)", rev88Runs}, {"inline_sets", inlinedRuns}} {
 		for i, r := range form.runs {
-			fmt.Fprintf(&b, "  %-12s run %d: peak %8.2f MiB, %d ms, code %d\n", form.name, i, r.mib, r.ms, r.code)
+			fmt.Fprintf(&b, "  %-16s run %d: peak %8.2f MiB, %d ms, code %d\n", form.name, i, r.mib, r.ms, r.code)
 		}
 	}
 	fmt.Fprintf(&b, "  inline_sets uncapped (ceiling %d MiB): peak %.2f MiB code %d\n", wideIDUncappedCeiling>>20, inlinedFree.mib, inlinedFree.code)
 	for i, r := range served {
 		fmt.Fprintf(&b, "  served read %d: linked set %.2f MiB %d ms (the added round trip), linked mix %.2f MiB %d ms, whole investment read %d ms\n", i, r.setMiB, r.setMs, r.mixMiB, r.mixMs, r.wall.Milliseconds())
 	}
-	fmt.Fprintf(&b, "  bounds: rev88 calibration [%.0f, %d) MiB (lowest %.2f, highest %.2f); inline_sets refused with 241 on every run (lowest %.2f, highest %.2f); served highest under %.0f MiB",
-		wideIDRev88FloorMiB, contextpacket.APIStatementMaxMemoryUsage>>20, rev88Low, rev88High, inlinedLow, inlinedHigh, linkedShapePeakBoundMiB)
+	calLow, calHigh := wideIDProdRev88MiB*(1-wideIDCalibrationSlack), wideIDProdRev88MiB*(1+wideIDCalibrationSlack)
+	fmt.Fprintf(&b, "  bounds: calibration rev88 uncapped highest in [%.2f, %.2f] MiB (prod %.2f; lowest %.2f, highest %.2f); inline_sets refused with 241 on every run under the cap (lowest %.2f, highest %.2f); served highest under %.0f MiB",
+		calLow, calHigh, wideIDProdRev88MiB, rev88Low, rev88High, inlinedLow, inlinedHigh, linkedShapePeakBoundMiB)
 	t.Log(b.String())
 
 	for i, r := range rev88Runs {
-		if r.err != nil || r.mib < wideIDRev88FloorMiB {
-			t.Errorf("calibration did not happen: rev 88 form run %d peaked %.2f MiB (error %v), prod served it at 233.98 MiB", i, r.mib, r.err)
+		if r.err != nil {
+			t.Errorf("calibration did not happen: rev 88 form run %d failed without the cap: %v", i, r.err)
 		}
+	}
+	if rev88High < calLow || rev88High > calHigh {
+		t.Errorf("calibration did not happen: the rev 88 form's highest read %.2f MiB is outside [%.2f, %.2f] MiB (prod %.2f MiB)", rev88High, calLow, calHigh, wideIDProdRev88MiB)
 	}
 	for i, r := range inlinedRuns {
 		if r.code != 241 {
