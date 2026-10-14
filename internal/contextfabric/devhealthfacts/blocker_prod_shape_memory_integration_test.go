@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -246,6 +247,21 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	// block size, to show what the setting buys on this shape.
 	for _, rows := range []int{0, 2048} {
 		restoreBlock := devhealthfacts.SetBlockerMaxBlockSizeForTest(rows)
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+			want      contextfabric.FactProviderResult
+		}{{"org-wide", orgWide, orgWideResult}, {"restricted", restricted, restrictedResult}} {
+			got := read(caller.principal)
+			if len(got.Facts) != len(caller.want.Facts) {
+				t.Fatalf("block size %d, %s: %d facts, want %d", rows, caller.label, len(got.Facts), len(caller.want.Facts))
+			}
+			for index := range got.Facts {
+				if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
+					t.Errorf("block size %d, %s: fact %d differs from the default block size: %+v vs %+v", rows, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
+				}
+			}
+		}
 		for _, caller := range []struct {
 			label     string
 			principal storage.Principal
