@@ -69,7 +69,7 @@ func purge(args []string) error {
 	if err != nil {
 		return err
 	}
-	purger := &orgpurge.Purger{DB: runtime.DB, Graph: deleter, Set: runtime.Coordinator, Entitlements: entitlementClient, Locker: locker}
+	purger := &orgpurge.Purger{Logger: logger, DB: runtime.DB, Graph: deleter, Set: runtime.Coordinator, Entitlements: entitlementClient, Locker: locker}
 	report, err := purger.Run(ctx, *org, orgpurge.Options{DryRun: *dryRun, ConfirmOrgKey: *confirm})
 	if err != nil {
 		if errors.Is(err, orgpurge.ErrIncomplete) {

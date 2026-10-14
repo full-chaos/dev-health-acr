@@ -138,6 +138,10 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
+	purgeMarkers, err := pgprojection.NewOrgPurgeMarkerStore(db)
+	if err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
 
 	// CHAOS-3898 S2a-2: the retire executor needs the backend as an
 	// EpochGraphDeleter, which every production falkorgraph.Adapter
@@ -208,7 +212,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		// deny list silently disappear if the two were ever decoupled.
 		OrgDiscoveryDeny: cfg.OrgDiscoveryDenyIDs,
 		Sources:          projectionSources(clickhouseSource, episodesSource, teamsProjectsSource),
-		Backend:          backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
+		Backend:          backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, PurgeMarkers: purgeMarkers, Locker: locker,
 		ReuseInvalidator: reuseInvalidator,
 		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, DrainBatchBudget: cfg.DrainBatchBudget, GraphCountCheckInterval: cfg.CountCheckInterval, Logger: logger,
 		// Codex round-3 F2: a real observer, not the no-op default. A tick
