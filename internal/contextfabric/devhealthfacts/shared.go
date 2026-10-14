@@ -1100,13 +1100,33 @@ import (
 // count once per unit, not from the unit's reference array on every expanded
 // row. The rows are unchanged; the statement and its memory are not.
 //
-// v218 -> v219: a team that owns repositories and has no work unit in the
+// v218 -> v219: the team project link rows intersect the organization's linked
+// work item ids with the owned projects' work items before the FINAL read, so
+// the statements hold the owned projects' candidates and not every linked work
+// item. The rows are unchanged; the statements and their memory are not, so an
+// answer saved under v218 is not reused as one produced by the new statements.
+//
+// v219 -> v220: the team project link rows resolve the owned projects once, with
+// the team restriction on the ownership rows, and prune both work item passes by
+// the identity values the named teams' ownership rows name instead of resolving
+// the owned set again in each pass. The rows are unchanged; the statements and
+// their memory are not, so an answer saved under v219 is not reused as one
+// produced by the new statements.
+//
+// v220 -> v221: a team with owned repositories and no mix is named by its
+// cause: investment_team_units_outside_membership_run when a work unit on an
+// owned repository is outside the latest complete membership run, or
+// investment_team_units_unattributed when positive-effort units in scope were
+// dropped (their references reach no repository the team owns). Still no fact. An
+// answer saved under v220 names only the generic no-unit reason.
+//
+// v221 -> v222: a team that owns repositories and has no work unit in the
 // window is named investment_team_prs_without_linked_work, with the pull
 // request count, when it has pull requests in the window and none has an
 // admitted link to tracked work. A team with no pull request, or with any
 // linked pull request, keeps investment_team_no_unit_in_window. An answer
-// saved under v218 gives both the old reason.
-const QueryVersion = "devhealthfacts.clickhouse.v219"
+// saved under v221 gives both the old reason.
+const QueryVersion = "devhealthfacts.clickhouse.v222"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/google/uuid"
 )
 
@@ -63,6 +65,7 @@ type Purger struct {
 	Entitlements Entitlements
 	Locker       Locker
 	Now          func() time.Time
+	Logger       *slog.Logger
 }
 
 type Options struct {
@@ -142,7 +145,11 @@ func PurgedTables() []string {
 	return names
 }
 
-func KeptTables() []string { return []string{"audit_events"} }
+// KeptTables are org-keyed tables the purge never deletes: the audit trail,
+// and the purge marker, which is the fence that outlives the purge.
+func KeptTables() []string {
+	return []string{"audit_events", "context_fabric_org_purge_markers"}
+}
 
 // CascadedTables are org-keyed tables whose rows go with their
 // device_authorizations parent (ON DELETE CASCADE).
@@ -285,8 +292,34 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 		}
 		report.AuditRowWritten = true
 	}
+	if err := p.writePurgeMarker(ctx, tx, orgID); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit purge transaction: %w", err)
+	}
+	p.logger().InfoContext(ctx, "projection organization purge marker set", "org_key", contextfabric.SanitizeLogAttr(report.OrgKey))
+	return nil
+}
+
+func (p *Purger) logger() *slog.Logger {
+	if p.Logger != nil {
+		return p.Logger
+	}
+	return slog.Default()
+}
+
+// writePurgeMarker records the fence in the purge's own transaction: either
+// the rows are gone and the marker is set, or neither happened. The marker
+// is the canonical lowercase UUID, which is what the coordinator checks, and
+// its time is the database clock, the one a discovery compares it with.
+func (p *Purger) writePurgeMarker(ctx context.Context, tx *sql.Tx, orgID string) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at)
+VALUES ($1, clock_timestamp())
+ON CONFLICT (org_id) DO UPDATE SET purged_at = EXCLUDED.purged_at`, orgID)
+	if err != nil {
+		return fmt.Errorf("write purge marker: %w", err)
 	}
 	return nil
 }

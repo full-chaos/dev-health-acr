@@ -275,3 +275,49 @@ SELECT concat('other-', toString(number)), toUUID(concat('00000000-0000-4000-800
 		}
 	}
 }
+
+// A team that meets two causes names the most specific one: units outside the
+// latest complete membership run outrank pull requests with no admitted link.
+func TestTeamWithUnitsOutsideTheRunAndUnlinkedPullRequestsNamesTheRunCause(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	const orgID = "org-pr-link-precedence"
+	s := newPRLinkSeed(t, ctx, direct, orgID)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
+	inWindow := ts(2026, 9, 10, 0, 0, 0)
+
+	s.team("team-both", "repo-both")
+	s.pullRequest("repo-both", 1, inWindow, nil)
+	s.exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"wu-outside", inWindow, inWindow, repoUUID("repo-both"), 1.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, "{}", inWindow, orgID)
+	s.exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"wu-elsewhere", inWindow, inWindow, repoUUID("repo-elsewhere"), 1.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, "{}", inWindow, orgID)
+	s.exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
+		orgID, "issue", "wu-elsewhere", "wu-elsewhere", "theme", "feature_delivery", inWindow, "run-1")
+	s.exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-1", inWindow)
+	s.team("team-prsonly", "repo-prsonly")
+	s.pullRequest("repo-prsonly", 1, inWindow, nil)
+
+	reasonOf := func(team string) string {
+		t.Helper()
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject(team)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		if len(result.Facts) != 0 {
+			t.Fatalf("%s serves no fact: %+v", team, result.Facts)
+		}
+		return contextfabric.CombineRequestNote(result.Reason, result.RequestNote) + " | " + result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject(team))]
+	}
+	const runCause, prsCause = "investment_team_units_outside_membership_run", "investment_team_prs_without_linked_work"
+	if both := reasonOf("team-both"); !strings.Contains(both, runCause) || strings.Contains(both, prsCause) {
+		t.Errorf("team-both reason = %q, want %s and not %s", both, runCause, prsCause)
+	}
+	if only := reasonOf("team-prsonly"); !strings.Contains(only, prsCause) || strings.Contains(only, runCause) {
+		t.Errorf("team-prsonly reason = %q, want %s and not %s", only, prsCause, runCause)
+	}
+}
