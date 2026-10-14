@@ -1126,9 +1126,16 @@ import (
 // The rows are unchanged; the statements and their memory are not, so an answer
 // saved under v221 is not reused as one produced by the new statements.
 //
-// v222 -> v223: the file_hotspots fact kind is served for a repository. An
-// answer saved under v222 cannot carry it.
-const QueryVersion = "devhealthfacts.clickhouse.v223"
+// v222 -> v223: the team and project blocker statements read in blocks of
+// 8,192 rows instead of the server default of 65,536, and the age
+// statements read the first-seen rows of the organization without
+// narrowing them to the blocker edges. The rows are unchanged; the
+// statements served are not, so an answer saved under v222 is not reused as
+// one produced by them.
+//
+// v223 -> v224: the file_hotspots fact kind is served for a repository. An
+// answer saved under v223 cannot carry it.
+const QueryVersion = "devhealthfacts.clickhouse.v224"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
