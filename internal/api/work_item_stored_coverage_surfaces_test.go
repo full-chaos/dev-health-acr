@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -17,7 +18,7 @@ func TestStoredWorkItemCoverageErrorSurfaces(t *testing.T) {
 	principal := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{hostedTestRepository}}
 	stored := storedWorkItemTupleRouteFixture(t, principal)
 	stored.Result.ResultID = "result_pg_coverage_surfaces"
-	storedPGBoundaryCoverage(&stored.Result, 100, false)
+	storedPGBoundaryCoverage(&stored.Result, contractsv1.ContextFabricCoverageEntriesMaxCount, false)
 	stored.SemanticState = storedPGBoundaryCanonicalState(stored.SemanticState.WorkItemCensus)
 	store := storedPGBoundarySave(t, db, principal, stored)
 	before := storedPGBoundaryNative(t, db, stored.Result.ResultID)

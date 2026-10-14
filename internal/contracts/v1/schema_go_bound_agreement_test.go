@@ -671,7 +671,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ContentProjection.properties.source_version.minLength":                      1,
 		"common#$defs.ConversationTurn.properties.turn_id.maxLength":                              256,
 		"common#$defs.ConversationTurn.properties.turn_id.minLength":                              1,
-		"common#$defs.Coverage.properties.details.maxItems":                                       100,
+		"common#$defs.Coverage.properties.details.maxItems":                                       ContextFabricCoverageEntriesMaxCount,
 		"common#$defs.CoverageDetail.properties.detail_id.maxLength":                              64,
 		"common#$defs.CoverageDetail.properties.detail_id.minLength":                              1,
 		"common#$defs.CoverageDetail.properties.label.maxLength":                                  160,
