@@ -68,7 +68,7 @@ func workGraphEndpointLabelSQL(id, kind, pr string) string {
 		kind + " = 'issue', trimRight(concat(" + id + ", ' ', " + workGraphIssueTitleOf(id) + ")), " + id + ")"
 }
 
-const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String} AND p.repo_id = {repo_id:UUID}`
+const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String}`
 
 // Each run is a replacement slice, so files from an earlier run must not be merged into the latest one.
 const fileHotspotLatestSnapshotFilter = ` AND (day, computed_at) = (SELECT day, computed_at FROM file_hotspot_daily WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR toDateTime(day) <= {as_of:Nullable(DateTime64(3, 'UTC'))}) GROUP BY org_id, repo_id, day, computed_at ORDER BY day DESC, computed_at DESC LIMIT 1 SETTINGS force_optimize_projection_name='prj_acr_file_hotspot_runs')`
