@@ -149,3 +149,41 @@ func TestOffsetInputDatetimeGroundsItsUTCDayAndNeighbours(t *testing.T) {
 		})
 	}
 }
+
+// Not parallel: AllocsPerRun reads process-wide allocation counts.
+func TestDraftStatingNoDayDoesNotScanTheInputForDays(t *testing.T) {
+	input, draft := closureFixture()
+	large := input
+	large.Facts.Facts = nil
+	base := input.Facts.Facts[0]
+	for i := 0; i < 500; i++ {
+		fact := base
+		at := time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i)
+		fact.ObservedAt = &at
+		large.Facts.Facts = append(large.Facts.Facts, fact)
+	}
+	allocs := func(d SynthesisDraft, in SynthesisInput) float64 {
+		return testing.AllocsPerRun(2, func() {
+			if err := d.requireGroundedInstants(in); err != nil {
+				t.Fatalf("requireGroundedInstants() = %v", err)
+			}
+		})
+	}
+	small, grown := allocs(draft, input), allocs(draft, large)
+	dated := draft
+	dated.CurrentState = "As of 2031-01-05."
+	datedGrown := allocs(dated, large)
+	t.Logf("allocations per call: undated draft small input=%.0f large input=%.0f; dated draft large input=%.0f", small, grown, datedGrown)
+	const margin = 200
+	if datedGrown <= small+margin {
+		t.Fatalf("a dated draft over the large input allocated %.0f, want more than %.0f: the measure does not see an input scan", datedGrown, small+margin)
+	}
+	if grown > small+margin {
+		t.Fatalf("an undated draft allocated %.0f over the large input and %.0f over the small one: it scanned the input for days", grown, small)
+	}
+	dated.CurrentState = "As of 2041-01-05."
+	var rejection *SynthesisRejection
+	if err := dated.requireGroundedInstants(large); !errors.As(err, &rejection) || rejection.Reason != RejectionReasonFreeTextInstantUngrounded {
+		t.Fatalf("a day the large input does not hold: error = %v, want %q", err, RejectionReasonFreeTextInstantUngrounded)
+	}
+}

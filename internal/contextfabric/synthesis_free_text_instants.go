@@ -166,11 +166,7 @@ func (d SynthesisDraft) freeText() []string {
 // day the input does not hold. The text of the rejection never carries the
 // day the draft wrote.
 func (d SynthesisDraft) requireGroundedInstants(input SynthesisInput) error {
-	held, err := synthesisInputInstantDays(input)
-	if err != nil {
-		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "%w", err)
-	}
-	ungrounded := 0
+	var stated []calendarDay
 	for _, text := range d.freeText() {
 		if strings.TrimSpace(text) == "" {
 			continue
@@ -179,10 +175,23 @@ func (d SynthesisDraft) requireGroundedInstants(input SynthesisInput) error {
 			if month < time.January || month > time.December || day < 1 || day > 31 {
 				return
 			}
-			if !held.holds(year, month, day) {
-				ungrounded++
-			}
+			stated = append(stated, calendarDay{year, month, day})
 		})
+	}
+	// Scanning the whole encoded input costs time linear in its size, so a
+	// draft that states no day does not pay for it.
+	if len(stated) == 0 {
+		return nil
+	}
+	held, err := synthesisInputInstantDays(input)
+	if err != nil {
+		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "%w", err)
+	}
+	ungrounded := 0
+	for _, day := range stated {
+		if !held.holds(day.year, day.month, day.day) {
+			ungrounded++
+		}
 	}
 	if ungrounded > 0 {
 		return rejectSynthesis(RejectionReasonFreeTextInstantUngrounded, "synthesis free text states %d calendar day(s) the investigation input does not hold", ungrounded)
