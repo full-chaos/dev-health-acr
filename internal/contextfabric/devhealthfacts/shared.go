@@ -1100,11 +1100,17 @@ import (
 // count once per unit, not from the unit's reference array on every expanded
 // row. The rows are unchanged; the statement and its memory are not.
 //
-// v218 -> v219: the team and project blocker statements read in blocks of
+// v218 -> v219: the team project link rows intersect the organization's linked
+// work item ids with the owned projects' work items before the FINAL read, so
+// the statements hold the owned projects' candidates and not every linked work
+// item. The rows are unchanged; the statements and their memory are not, so an
+// answer saved under v218 is not reused as one produced by the new statements.
+//
+// v219 -> v220: the team and project blocker statements read in blocks of
 // 8,192 rows instead of the server default of 65,536. The rows are unchanged;
-// the statements served are not, so an answer saved under v218 is not reused as
+// the statements served are not, so an answer saved under v219 is not reused as
 // one produced by them.
-const QueryVersion = "devhealthfacts.clickhouse.v219"
+const QueryVersion = "devhealthfacts.clickhouse.v220"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
