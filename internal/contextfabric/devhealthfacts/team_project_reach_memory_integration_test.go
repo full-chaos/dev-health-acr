@@ -202,10 +202,10 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 // statement it replaced, and the statement's peak memory is lower.
 func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID string) {
 	t.Helper()
-	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.LegacyTeamProjectLinkRowsSQLForTest("ids"))
-	beforeRows, before := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.LegacyTeamProjectLinkRowsSQLForTest("ids"))
-	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest("ids"))
-	afterRows, after := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest("ids"))
+	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+	beforeRows, before := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
+	afterRows, after := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
 	t.Logf("MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
 	if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
 		t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
@@ -242,8 +242,8 @@ func assertEmptyProjectIDLinkRowsIdentical(t *testing.T, ctx context.Context, qu
 		repoUUID("repo-empty-id"), org, uint32(7), "pr", "open", at, at, "feature", "")
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		repoUUID("repo-empty-id"), "i-empty-id", uint32(7), float32(1), "native", "", at, org)
-	beforeRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-before", devhealthfacts.LegacyTeamProjectLinkRowsSQLForTest("ids"))
-	afterRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-after", devhealthfacts.TeamProjectLinkRowsSQLForTest("ids"))
+	beforeRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+	afterRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
 	if len(beforeRows) != 1 || !slices.Equal(beforeRows, afterRows) {
 		t.Fatalf("empty project id link rows differ: before %v, after %v, want the one row of the empty-id project in both", beforeRows, afterRows)
 	}
@@ -251,7 +251,7 @@ func assertEmptyProjectIDLinkRowsIdentical(t *testing.T, ctx context.Context, qu
 
 func runLinkRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID, marker, rows string) ([]string, uint64) {
 	t.Helper()
-	statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, pr_number"
+	statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, toString(pr_repo_id), pr_number, link_rank"
 	mark := serverNowMicros(t, ctx, direct)
 	var out []string
 	err := readers.QueryOrgScopedNamed(ctx, query, "TeamProjectLinkRows", statement, org, []string{teamID}, func(row contextpacket.ClickHouseRowScanner) error {

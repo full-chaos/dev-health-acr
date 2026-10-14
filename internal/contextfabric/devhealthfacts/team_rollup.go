@@ -145,14 +145,23 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement. It is the same chain teamRepositories walks. Work items
-// are read once, for linked issues of the owned projects only: the link ids
-// prune work_items granules on its primary key, so the statement's cost
-// follows the organization's links, not the size of its work item table.
+// are read twice, for linked issues of the owned projects only: the link ids
+// prune work_items granules on its primary key, first on the unmerged rows to
+// name the owned projects' candidates, then with FINAL on those candidates, so
+// the statement's cost follows the organization's links, not the size of its
+// work item table.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := teamOwnedResolvedProjectsSQL(teamParam, bound)
+	keys := teamOwnedProjectKeyCandidatesSQL(teamParam, bound)
+	// The linked ids are intersected with the owned projects' work items on
+	// the unmerged rows first (a row of any version carrying an owned project
+	// is a superset of the work items whose latest version does), so the FINAL
+	// read below holds only those candidates, not every linked work item.
+	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND cp.project_id IN ` + keys + `)`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + linkedWorkItemIDsSQL + `
-      AND cw.project_id IN ` + teamOwnedProjectKeyCandidatesSQL(teamParam, bound) + ` AND ` + workItemIsIssueSQL("cw") + `)`
+    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
+      AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
 	return `(
   SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
   FROM ` + owned + ` AS o
