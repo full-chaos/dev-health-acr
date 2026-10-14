@@ -174,7 +174,8 @@ func teamOwnedResolvedProjectsSQL(teamParam string, bound factTimeBound) string 
 
 // teamOwnedProjectKeyCandidatesSQL is a superset of the join keys of the
 // projects the named teams own: every identity value an ownership row names,
-// and the id and key of every project one of those values names. It prunes the
+// and the id and the non-empty key of every project one of those values
+// names. An empty project id is a real identity value and stays in. It prunes the
 // work item read to the owned projects without evaluating the project
 // identity resolution a second time; the exact set is the join with
 // teamOwnedResolvedProjectsSQL.
@@ -183,10 +184,10 @@ func teamOwnedProjectKeyCandidatesSQL(teamParam string, bound factTimeBound) str
 	scopes := `(SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL` + validity + `
     UNION ALL
     SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''` + validity + `)`
-	return `(SELECT v FROM (SELECT v FROM ` + scopes + `
+	return `(SELECT v FROM ` + scopes + `
     UNION ALL
-    SELECT arrayJoin([id, ifNull(project_key, '')]) AS v FROM projects FINAL
-    WHERE org_id = {org_id:String} AND (id IN ` + scopes + ` OR ifNull(project_key, '') IN ` + scopes + `)) WHERE v != '')`
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN ` + scopes + ` OR ifNull(project_key, '') IN ` + scopes + `))`
 }
 
 // teamProjectLinkRowsAmongSQL is teamProjectLinkRowsSQL over the work item
