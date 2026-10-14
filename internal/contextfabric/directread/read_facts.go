@@ -583,6 +583,8 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	}
 	withheldBySubject := map[string][]string{}
 	unitsNotVisible := 0
+	var allFacts []ServedFact
+	emptyByKind := map[string]int{}
 	for _, item := range gated {
 		if unitRowNotVisible(item) {
 			unitsNotVisible++
@@ -594,10 +596,16 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 			key := string(item.Fact.Kind) + "\x00" + subjectKey(item.Fact.Subject)
 			withheldBySubject[key] = append(withheldBySubject[key], withheld...)
 		}
+		allFacts = append(allFacts, served)
+		if len(served.ReachedFrom) > 0 && len(served.Fields) == 0 && len(served.Tables) == 0 && len(served.Withheld) == 0 {
+			emptyByKind[served.Kind]++
+			continue
+		}
 		response.Facts = append(response.Facts, served)
 	}
-	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject, derived)
+	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, allFacts, withheldBySubject, derived)
 	response.RequestNotes = requestNotes(plan, bundle)
+	response.RequestNotes = append(response.RequestNotes, emptyFactNotes(plan, emptyByKind)...)
 	if plan.units != nil {
 		noteUnitsCoverage(response.Coverage, response.Facts, unitsNotVisible)
 	}
@@ -1565,4 +1573,20 @@ func subjectKindPlural(kind contractsv1.ContextFabricSubjectKind) string {
 		return noun
 	}
 	return string(kind)
+}
+
+// emptyFactNotes names, once per kind, the reached facts left out because they
+// serve no field in the requested tables mode: the count is served, never
+// dropped silently.
+func emptyFactNotes(plan readPlan, emptyByKind map[string]int) []RequestNote {
+	var notes []RequestNote
+	for _, kind := range plan.kinds {
+		count := emptyByKind[string(kind)]
+		if count == 0 {
+			continue
+		}
+		notes = append(notes, RequestNote{Kind: string(kind), Note: fmt.Sprintf(
+			"%d reached %s facts are not listed: they carry no table data in tables mode %q; read with tables include to list their fields", count, kind, plan.tables)})
+	}
+	return notes
 }
