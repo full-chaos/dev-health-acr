@@ -21,9 +21,11 @@ const investmentTeamPRsWithoutLinkedWork = "investment_team_prs_without_linked_w
 // it did not. A pull request is in the window when it was created before the
 // window end and was not merged or closed before the window start (no window
 // on the current axis). A link is admitted when work_graph_issue_pr has a row
-// of a known provenance tier (native, explicit_text, heuristic) for it whose
-// work item is an issue.
-const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier whose work item is an issue)"
+// of a known provenance tier (native, explicit_text, heuristic) for it. The
+// type of the linked work item is not read: a work item id is not unique across
+// repositories, and a link to an item typed pr or merge_request still counts as
+// a link here, so the token is given less often, never wrongly.
+const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier for the pull request)"
 
 // teamNoLinkedWork is a team with pull requests in the window and none linked.
 type teamNoLinkedWork struct {
@@ -43,11 +45,6 @@ const teamPRLinkChunk = 500
 // key can prune on; an array expression with a lambda is not.
 const teamPRLinkRepositorySet = `(SELECT toUUIDOrZero(arrayJoin({ids:Array(String)})))`
 
-// The work item type is read only for work items stored in the requested
-// repositories (the table is sorted by org_id, repo_id, work_item_id, so an id
-// lookup alone reads the organization). A linked work item stored in another
-// repository has no row here and counts as admitted, the same as a missing row
-// does in the shared link rule.
 // teamPRLinkStatement counts, per requested repository, the pull requests in
 // the window and how many of them have an admitted link. Both tables are read
 // by their primary key prefix (org_id, repo_id), so the read grows with the
@@ -57,15 +54,8 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 	countIf((pr.repo_id, pr.number) IN (
 		SELECT l.repo_id, l.pr_number
 		FROM work_graph_issue_pr AS l FINAL
-		LEFT JOIN (
-			SELECT work_item_id, type FROM work_items FINAL
-			WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+` AND work_item_id IN (
-				SELECT work_item_id FROM work_graph_issue_pr
-				WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`
-			)
-		) AS wi ON wi.work_item_id = l.work_item_id
 		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
-			AND `+linkTierRankSQL+` > 0 AND `+workItemIsIssueSQL("wi")+`
+			AND `+linkTierRankSQL+` > 0
 	)) AS linked
 FROM git_pull_requests AS pr FINAL
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+

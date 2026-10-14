@@ -69,11 +69,6 @@ func (s prLinkSeed) pullRequest(repo string, number uint32, created time.Time, m
 		repoUUID(repo), s.org, number, "pr", "open", s.at, created, merged, "feature", "")
 }
 
-func (s prLinkSeed) workItem(id, typ, repo string) {
-	s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, '', 'linear', '', NULL, ?)`,
-		id, repoUUID(repo), s.org, "title "+id, typ, "open", s.at, s.at, s.at)
-}
-
 func (s prLinkSeed) link(repo, workItem string, number uint32, provenance string) {
 	s.exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		repoUUID(repo), workItem, number, float32(1), provenance, "", s.at, s.org)
@@ -88,9 +83,6 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
 	beforeWindow := ts(2026, 7, 1, 0, 0, 0)
 
-	s.workItem("issue-1", "issue", "repo-any")
-	s.workItem("pr-typed", "pr", "repo-prtyped")
-
 	s.team("team-nolink", "repo-nolink")
 	for n := uint32(1); n <= 3; n++ {
 		s.pullRequest("repo-nolink", n, inWindow, nil)
@@ -104,6 +96,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	s.pullRequest("repo-oldpr", 1, beforeWindow, ts(2026, 7, 5, 0, 0, 0))
 	s.team("team-prtyped", "repo-prtyped")
 	s.pullRequest("repo-prtyped", 1, inWindow, nil)
+	// A link from a work item of any type counts as a link: the type is not read.
 	s.link("repo-prtyped", "pr-typed", 1, "native")
 	s.team("team-badtier", "repo-badtier")
 	s.pullRequest("repo-badtier", 1, inWindow, nil)
@@ -140,7 +133,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		token, count string
 	}{
 		"team-nolink":    {token, "3 pull request"},
-		"team-prtyped":   {token, "1 pull request"},
+		"team-prtyped":   {old, ""},
 		"team-badtier":   {token, "1 pull request"},
 		"team-partial":   {old, ""},
 		"team-quiet":     {old, ""},
@@ -174,7 +167,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	// The served request note names the token, the team count, and that the
 	// pull request total is per team (a pull request in a repository two of
 	// these teams share would count for each).
-	const wantNote = "investment_team_prs_without_linked_work for 4: 6 pull request(s) counted per team"
+	const wantNote = "investment_team_prs_without_linked_work for 3: 5 pull request(s) counted per team"
 	noted := false
 	for _, note := range response.RequestNotes {
 		if note.Kind == "investment" && strings.Contains(note.Note, wantNote) && strings.Contains(note.Note, "no pull request in the window has an admitted link to tracked work") {
@@ -205,15 +198,10 @@ func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *
 	const orgID = "org-pr-link-cost"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
-	s.workItem("issue-1", "issue", "repo-any")
-	s.workItem("pr-typed", "pr", "repo-cost")
 	s.team("team-cost", "repo-cost")
 	for n := uint32(1); n <= 20; n++ {
 		s.pullRequest("repo-cost", n, inWindow, nil)
 	}
-	// A link from a pull-request-typed item is not admitted, so the team keeps
-	// the reason while the work item lookup runs with a non-empty candidate set.
-	s.link("repo-cost", "pr-typed", 1, "native")
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
 	measure := func() (lowRows, lowPeak, highPeak uint64) {
@@ -263,8 +251,6 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), '%s', toUInt32(number + 100000), 'pr', 'open', now(), now() - INTERVAL 20 DAY, NULL, NULL, 'feature', '' FROM numbers(%d)`, orgID, step))
 		s.exec(fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), concat('other-', toString(number)), toUInt32(number + 100000), 1, 'native', '', now(), '%s' FROM numbers(%d)`, orgID, step))
-		s.exec(fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
-SELECT concat('other-', toString(number)), toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), '%s', 'title', 'issue', 'open', '', now(), now(), '', 'linear', '', NULL, now() FROM numbers(%d)`, orgID, step))
 		rows, lowPeak, highPeak := measure()
 		t.Logf("unrelated rows added %d: read_rows lowest=%d (base %d, bound %d); peak lowest=%d highest=%d (base lowest %d highest %d, ceiling %d)", step, rows, baseRows, baseRows+baseRows/10+64, lowPeak, highPeak, baseLowPeak, baseHighPeak, ceiling)
 		if rows > baseRows+baseRows/10+64 {
