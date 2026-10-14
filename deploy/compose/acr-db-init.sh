@@ -75,6 +75,12 @@ ACR_RUNTIME_DB_PASSWORD="$(secret_value ACR_RUNTIME_DB_PASSWORD)"
 purge_enabled=false
 purge_password=""
 if [ -n "$ACR_PURGE_DB_USER" ]; then
+  # The purge's privileges (DELETE on credentials and results, among others)
+  # must never reach a role the runtime or the migrations use.
+  if [ "$ACR_PURGE_DB_USER" = "$ACR_RUNTIME_DB_USER" ] || [ "$ACR_PURGE_DB_USER" = "$ACR_MIGRATION_DB_USER" ] || [ "$ACR_PURGE_DB_USER" = "$POSTGRES_USER" ]; then
+    printf 'ACR_PURGE_DB_USER must be a role of its own: it equals the runtime, migration or admin role\n' >&2
+    exit 2
+  fi
   purge_password="$(secret_value ACR_PURGE_DB_PASSWORD)"
   purge_enabled=true
 fi

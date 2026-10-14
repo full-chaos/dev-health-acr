@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -140,6 +141,9 @@ func TestComposeBootstrapHandlesThePurgeRoleSettings(t *testing.T) {
 		{"no purge user", nil, "", []string{"purge_enabled=false"}},
 		{"direct password", []string{"ACR_PURGE_DB_USER=acr_purge", "ACR_PURGE_DB_PASSWORD=direct-purge-secret"}, "", []string{"purge_enabled=true", "purge_user=acr_purge", "purge_password=direct-purge-secret"}},
 		{"password file", []string{"ACR_PURGE_DB_USER=acr_purge", "ACR_PURGE_DB_PASSWORD_FILE=" + passwordFile}, "", []string{"purge_enabled=true", "purge_user=acr_purge", "purge_password=file-purge-secret"}},
+		{"purge user is the runtime user", []string{"ACR_PURGE_DB_USER=acr_runtime", "ACR_PURGE_DB_PASSWORD=x"}, "ACR_PURGE_DB_USER must be a role of its own", nil},
+		{"purge user is the migration user", []string{"ACR_PURGE_DB_USER=acr_migrate", "ACR_PURGE_DB_PASSWORD=x"}, "ACR_PURGE_DB_USER must be a role of its own", nil},
+		{"purge user is the admin user", []string{"ACR_PURGE_DB_USER=postgres", "ACR_PURGE_DB_PASSWORD=x"}, "ACR_PURGE_DB_USER must be a role of its own", nil},
 		{"no password", []string{"ACR_PURGE_DB_USER=acr_purge"}, "ACR_PURGE_DB_PASSWORD or ACR_PURGE_DB_PASSWORD_FILE is required", nil},
 		{"both sources", []string{"ACR_PURGE_DB_USER=acr_purge", "ACR_PURGE_DB_PASSWORD=x", "ACR_PURGE_DB_PASSWORD_FILE=" + passwordFile}, "", nil},
 	} {
@@ -158,6 +162,9 @@ func TestComposeBootstrapHandlesThePurgeRoleSettings(t *testing.T) {
 				if err == nil || !strings.Contains(string(out), tc.wantErr) {
 					t.Fatalf("want refusal %q, got err=%v out=%s", tc.wantErr, err, out)
 				}
+				if recorded, _ := os.ReadFile(record); len(recorded) != 0 {
+					t.Fatalf("a refused configuration must not reach psql: %s", recorded)
+				}
 				return
 			}
 			if err != nil {
@@ -170,5 +177,29 @@ func TestComposeBootstrapHandlesThePurgeRoleSettings(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The shipped compose services pass the purge settings to the two bootstrap
+// stages, so the documented compose path is wired.
+func TestComposeServicesPassThePurgeSettings(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose/acr.compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range []string{"acr-db-init", "acr-db-acl"} {
+		start := strings.Index(string(raw), "\n  "+service+":")
+		if start < 0 {
+			t.Fatalf("service %s not found", service)
+		}
+		block := string(raw)[start+1:]
+		if next := regexp.MustCompile(`\n  [a-z-]+:\n`).FindStringIndex(block[1:]); next != nil {
+			block = block[:next[0]+1]
+		}
+		for _, want := range []string{"ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}", "ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}"} {
+			if !strings.Contains(block, want) {
+				t.Errorf("%s does not pass %s", service, want)
+			}
+		}
 	}
 }
