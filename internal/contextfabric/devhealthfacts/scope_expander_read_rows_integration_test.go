@@ -36,7 +36,7 @@ var historicalReadRowsStatements = []struct {
 	// rows added to grownTables, from hosted CI (spread 0 across runs).
 	readsPerAddedRow float64
 }{
-	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr"}, 5.3974},
+	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr", "git_pull_requests"}, 5.3974},
 	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 6.0},
 }
 
