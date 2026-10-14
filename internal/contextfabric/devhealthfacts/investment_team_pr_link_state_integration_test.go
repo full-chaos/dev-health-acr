@@ -8,6 +8,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -169,6 +170,20 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		if !strings.Contains(reason, w.token) || strings.Contains(reason, other) || (w.count != "" && !strings.Contains(reason, w.count)) {
 			t.Errorf("%s coverage reason = %q, want %s (%s) and not %s", team, reason, w.token, w.count, other)
 		}
+	}
+	// The served request note names the token, the team count, and that the
+	// pull request total is per team (a pull request in a repository two of
+	// these teams share would count for each).
+	const wantNote = "investment_team_prs_without_linked_work for 4: 6 pull request(s) counted per team"
+	noted := false
+	for _, note := range response.RequestNotes {
+		if note.Kind == "investment" && strings.Contains(note.Note, wantNote) && strings.Contains(note.Note, "no pull request in the window has an admitted link to tracked work") {
+			noted = true
+		}
+	}
+	if !noted {
+		raw, _ := json.Marshal(response.RequestNotes)
+		t.Errorf("request notes %s lack %q", raw, wantNote)
 	}
 	for _, team := range []string{"team-nolink"} {
 		reason := reasons[teamSubject(team).CanonicalID]
