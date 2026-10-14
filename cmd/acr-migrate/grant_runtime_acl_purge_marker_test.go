@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The purge marker is read by every projector tick, written by the purge and
-// cleared by discovery, all on the runtime DSN. On Kubernetes the runtime
+// The purge marker is read by every projector tick and cleared by discovery,
+// both on the runtime DSN; only the purge writes it. On Kubernetes the runtime
 // role's table grants come from an out-of-band bootstrap plus
 // grant-runtime-acl, never from acr-db-init.sh, so this runs the Kubernetes
 // path (migrate, then grant-runtime-acl) and connects as the runtime role.
@@ -65,17 +65,11 @@ func TestGrantRuntimeACL_runtimeRoleCanUseThePurgeMarkerTable(t *testing.T) {
 		require.False(t, purged)
 	})
 
-	t.Run("the purge writes and rewrites the marker in its delete transaction", func(t *testing.T) {
-		for range 2 {
-			tx, err := runtimeDB.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			_, err = tx.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at)
-VALUES ($1, clock_timestamp())
-ON CONFLICT (org_id) DO UPDATE SET purged_at = EXCLUDED.purged_at`, org)
-			require.NoError(t, err)
-			require.NoError(t, tx.Commit())
-		}
+	t.Run("the runtime role cannot write the marker: only the purge does", func(t *testing.T) {
+		_, err := runtimeDB.ExecContext(ctx, `INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at) VALUES ($1, clock_timestamp())`, org)
+		require.ErrorContains(t, err, "42501")
+		_, err = runtimeDB.ExecContext(ctx, `UPDATE acr.context_fabric_org_purge_markers SET purged_at = clock_timestamp() WHERE org_id = $1`, org)
+		require.ErrorContains(t, err, "42501")
 	})
 
 	t.Run("discovery clears the marker from its snapshot", func(t *testing.T) {

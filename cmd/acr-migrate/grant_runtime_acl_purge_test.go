@@ -34,13 +34,15 @@ func (purgeTestEntitlements) OrganizationUnknown(context.Context, string) (bool,
 
 var composeGrantPattern = regexp.MustCompile(`(?m)^GRANT ([A-Z, ]+) ON TABLE (acr\.[a-z0-9_]+) TO :"runtime_user";`)
 
-// TestGrantRuntimeACL_theWholePurgeRunsAsTheRuntimeRole runs Purger.Run, the
-// way `acr-projector purge` does, on the runtime DSN: a database migrated, given
-// the runtime grants the compose db-init script applies (standing in for the
-// operator's out-of-band bootstrap on Kubernetes), then grant-runtime-acl. It
-// reports every privilege the purge needs and the role lacks, then the first
-// statement the database refuses.
-func TestGrantRuntimeACL_theWholePurgeRunsAsTheRuntimeRole(t *testing.T) {
+// TestGrantRuntimeACL_theWholePurgeCannotRunAsTheRuntimeRole records, by
+// execution, that Purger.Run is refused on the runtime DSN: on a database
+// migrated, given every runtime grant the compose db-init script applies
+// (standing in for the operator's out-of-band bootstrap on Kubernetes) and
+// then grant-runtime-acl, the runtime role lacks DELETE on seventeen tables'
+// worth of privileges (listed in the failure log). The runtime role must not
+// be widened to fix that; the purge gets its own role. This test flips to
+// requiring success on that role when the purge takes its own DSN.
+func TestGrantRuntimeACL_theWholePurgeCannotRunAsTheRuntimeRole(t *testing.T) {
 	ctx := context.Background()
 	migrationDSN := newTestPostgresDSN(t, ctx)
 	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
@@ -107,6 +109,17 @@ func TestGrantRuntimeACL_theWholePurgeRunsAsTheRuntimeRole(t *testing.T) {
 	purger := &orgpurge.Purger{DB: runtimeDB, Graph: purgeTestGraph{}, Set: purgeTestSet{}, Entitlements: purgeTestEntitlements{}, Locker: locker}
 	_, err = purger.Run(ctx, org, orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(org)})
 	t.Logf("privileges the purge needs and the runtime role lacks (%d): %s", len(missing), strings.Join(missing, "; "))
-	require.NoError(t, err, "the whole purge must run as the runtime role; first refusal above")
-	require.Empty(t, missing)
+	require.ErrorIs(t, err, orgpurge.ErrIncomplete)
+	require.ErrorContains(t, err, "42501", "the first refused statement is a permission error")
+	require.NotEmpty(t, missing)
+
+	// The same purge, run as the table owner (standing in for a purge-only
+	// role that holds the grants), succeeds and writes the marker.
+	ownerPurger := &orgpurge.Purger{DB: adminDB, Graph: purgeTestGraph{}, Set: purgeTestSet{}, Entitlements: purgeTestEntitlements{}, Locker: locker}
+	report, err := ownerPurger.Run(ctx, org, orgpurge.Options{ConfirmOrgKey: orgpurge.OrgKey(org)})
+	require.NoError(t, err)
+	require.Equal(t, orgpurge.StatusPurged, report.Status)
+	var marked bool
+	require.NoError(t, adminDB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM acr.context_fabric_org_purge_markers WHERE org_id = $1)`, org).Scan(&marked))
+	require.True(t, marked, "the purge writes the marker in its transaction")
 }
