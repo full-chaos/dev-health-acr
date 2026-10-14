@@ -19,10 +19,10 @@ import (
 
 // historicalReadRowsMargin is the room above a statement's measured reads per
 // added row. A scan reports whole granules (index_granularity 8192 rows): the
-// scoped touch statement reads the grown tables about 18 times over, so the
-// rounding of one run is at most 18 x 8192 = 147k rows of the 2.8M it reads at
-// the larger size, 5.3%. 10% is twice that and below the 100% one more pass
-// over the same tables adds.
+// touch statement reads work_items and project_membership_transitions once for
+// each of six evaluations of its candidate set, 12 scans, so rounding moves it
+// by at most 12 x 8192 = 98k of the 1.8M rows it reads more at the larger size,
+// 5.5%. 10% is about twice that and below the 16.7% one more evaluation adds.
 const historicalReadRowsMargin = 1.10
 
 // historicalReadRowsStatements names the two scoped historical statements by a
@@ -33,11 +33,11 @@ var historicalReadRowsStatements = []struct {
 	label, table, fragment string
 	grownTables            []string
 	// readsPerAddedRow is the measured (larger - smaller) read_rows over the
-	// rows added to grownTables, 0 until it is pinned.
+	// rows added to grownTables, from hosted CI (spread 0 across runs).
 	readsPerAddedRow float64
 }{
-	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr"}, 0},
-	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 0},
+	{"historicalDropCount", "work_graph_issue_pr", "AS ever_matched", []string{"work_items", "project_membership_transitions", "work_graph_issue_pr"}, 5.3974},
+	{"historicalTouchCount", "project_membership_transitions", "AS malformed_touches", []string{"work_items", "project_membership_transitions"}, 6.0},
 }
 
 // historicalReadRowsRuns is the number of warm reads per size; the smallest
@@ -118,7 +118,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		_ = rows.Close()
 		return readRowsOf(t, ctx, direct, table, fragment, mark)
 	}
-	type reading struct{ rows, spread uint64 }
+	type reading struct{ rows, highest, spread uint64 }
 	// sample reads a statement once unmeasured, then runs warm reads and keeps
 	// the smallest and the spread.
 	sample := func(t *testing.T, table, fragment string, captured capturedStatement) reading {
@@ -128,7 +128,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		for attempt := 0; attempt < historicalReadRowsRuns; attempt++ {
 			rows = append(rows, run(t, table, fragment, captured))
 		}
-		return reading{rows: slices.Min(rows), spread: slices.Max(rows) - slices.Min(rows)}
+		return reading{rows: slices.Min(rows), highest: slices.Max(rows), spread: slices.Max(rows) - slices.Min(rows)}
 	}
 	counts := func(t *testing.T) map[string]uint64 {
 		t.Helper()
@@ -172,7 +172,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		for _, table := range statement.grownTables {
 			added += largeCounts[table] - smallCounts[table]
 		}
-		t.Logf("READROWS %s scoped small=%d large=%d (spread %d/%d) added rows %d over %v (small %v, large %v)", label, s.rows, l.rows, s.spread, l.spread, added, statement.grownTables, smallCounts, largeCounts)
+		t.Logf("READROWS %s scoped lowest small=%d large=%d, highest small=%d large=%d (spread %d/%d) added rows %d over %v (small %v, large %v)", label, s.rows, l.rows, s.highest, l.highest, s.spread, l.spread, added, statement.grownTables, smallCounts, largeCounts)
 		if s.rows == 0 || l.rows == 0 || added == 0 || l.rows <= s.rows {
 			t.Fatalf("%s: measurement did not happen (small %+v, large %+v, added rows %d)", label, s, l, added)
 		}
@@ -188,6 +188,7 @@ func TestScopedHistoricalStatementsReadRowsFollowTheAddedRowsOnRealClickHouse(t 
 		if l.rows-s.rows > allowed {
 			t.Errorf("%s reads more rows per unrelated row added than measured: %d more rows for %d added rows (%.4f per row), want at most %.4f per row (%.4f measured x %.2f) and %d rows in all", label, l.rows-s.rows, added, perRow, bound, statement.readsPerAddedRow, historicalReadRowsMargin, allowed)
 		}
+		t.Logf("READROWS %s slope on the lowest reads: %d more rows for %d added rows, bound %d rows (%.4f per row x %d, floor %d)", label, l.rows-s.rows, added, allowed, bound, added, floor)
 
 		// The guard must be able to fail on this data: the same statement
 		// sent twice in one query reads the tables twice over.
