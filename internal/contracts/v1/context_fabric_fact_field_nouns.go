@@ -98,7 +98,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		classes[name] = StringFieldToken
 	}
 	classes["rationale"] = StringFieldNumericInString
-	for _, name := range []string{"next_cursor", "repository_breakdown_limitation", "unit_unresolved_refs", "unit_weight", "units_limitation"} {
+	for _, name := range []string{"next_cursor", "pull_requests_by_state_basis", "repository_breakdown_limitation", "unit_unresolved_refs", "unit_weight", "units_limitation"} {
 		classes[name] = StringFieldNeverInProse
 	}
 	return classes

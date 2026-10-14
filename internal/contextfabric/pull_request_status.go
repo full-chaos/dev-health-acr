@@ -147,3 +147,17 @@ func PullRequestStatusUnappliedOf(frame *QuestionFrame) bool {
 func PullRequestStatusFilterDisclosure(value string) string {
 	return contractsv1.ContextFabricPullRequestStatusFilterLimitation(value)
 }
+
+// pullRequestFactsWanted reports whether the question frame asks for pull
+// requests themselves: a status filter, or pull requests as the member kind.
+// Only then does a team root's read serve one fact per pull request.
+func pullRequestFactsWanted(frame *QuestionFrame) bool {
+	if frame == nil {
+		return false
+	}
+	if PullRequestStatusFilterOf(frame) != "" {
+		return true
+	}
+	kind, ok := frame.SubjectExpression.MemberKind()
+	return ok && kind == SubjectPullRequest
+}
