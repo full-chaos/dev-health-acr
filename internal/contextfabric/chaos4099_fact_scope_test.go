@@ -3188,9 +3188,9 @@ func TestChaos4099_OnlyTheRuledPoliciesAreEverActivatable(t *testing.T) {
 	}
 	seen := make(map[FactScopePolicy]bool, len(wantOrigin))
 	for _, row := range factScopeEligibility {
-		if row.Rule.Policy == FactScopePolicyNone {
+		if row.Rule.Policy == FactScopePolicyNone || row.Rule.Policy == FactScopePolicyTeamProjectOwnershipCommitment {
 			if row.Rule.Enabled {
-				t.Fatalf("%s is enabled with no policy to name it", row.Requirement)
+				t.Fatalf("%s is enabled under a disclosure-only rule %q", row.Requirement, row.Rule.Policy)
 			}
 			continue
 		}
@@ -3264,6 +3264,7 @@ func TestChaos4099_OnlyTheRatifiedPoliciesAppearForEachOrigin(t *testing.T) {
 
 			// The entity-tree team half.
 			FactScopePolicyTeamRepositoryOwnershipContinuousIntegration: true,
+			FactScopePolicyTeamProjectOwnershipCommitment:               true,
 		},
 	}
 	for _, row := range factScopeEligibility {

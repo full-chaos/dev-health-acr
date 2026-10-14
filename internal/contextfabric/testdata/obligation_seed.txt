@@ -43,6 +43,7 @@ readiness
   team                 readiness
 
 remaining_work
+  project              commitment
   team                 blockers
   work_item            blockers required_children
 
