@@ -39,39 +39,66 @@ func TestBlockerForcedLibraryDiagnostic(t *testing.T) {
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
 	orgWide := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}
-	read := func() {
-		if _, err := provider.ReadFacts(ctx, orgWide, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: subjects,
-		}); err != nil {
-			t.Fatalf("ReadFacts: %v", err)
+	read := func() {}
+	restricted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"acme/repo-0", "acme/repo-1", "acme/repo-2", "acme/repo-3", "acme/repo-4", "acme/repo-5"}}
+	readAs := func(principal storage.Principal) func() {
+		return func() {
+			if _, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: subjects,
+			}); err != nil {
+				t.Fatalf("ReadFacts: %v", err)
+			}
 		}
 	}
-	restore := devhealthfacts.ForceLibraryAuthorizationForTest()
-	defer restore()
-	read()
-	mark := serverNowMicros(t, ctx, direct)
-	read()
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, type, memory_usage, read_rows, read_bytes, length(query),
-  countSubstrings(query, 'work_item_dependencies'), countSubstrings(query, 'work_items'),
-  arrayStringConcat(arrayMap(k -> concat(k, '=', toString(ProfileEvents[k])), arrayFilter(k -> positionCaseInsensitive(k, 'join') > 0 OR positionCaseInsensitive(k, 'set') > 0 OR positionCaseInsensitive(k, 'aggregat') > 0 OR k IN ('SelectedRows', 'SelectedBytes', 'SelectedMarks', 'MergeTreeDataSelectExecutorRowsRead'), mapKeys(ProfileEvents))), ' '),
-  substring(replaceRegexpAll(query, '\\s+', ' '), 1, 90)
+	_ = read
+	measure := func(label string, run func()) {
+		run()
+		low, high := map[string]uint64{}, map[string]uint64{}
+		for round := 0; round < 3; round++ {
+			mark := serverNowMicros(t, ctx, direct)
+			run()
+			if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := direct.Query(ctx, `SELECT memory_usage, read_rows, read_bytes, length(query), substring(replaceRegexpAll(query, '\\s+', ' '), 1, 90)
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) ORDER BY memory_usage DESC`, mark)
-	if err != nil {
-		t.Fatalf("query_log: %v", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var hash, mem, readRows, readBytes uint64
-		var typ, events, head string
-		var qlen, depCount, itemCount uint64
-		if err := rows.Scan(&hash, &typ, &mem, &readRows, &readBytes, &qlen, &depCount, &itemCount, &events, &head); err != nil {
-			t.Fatal(err)
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))`, mark)
+			if err != nil {
+				t.Fatalf("query_log: %v", err)
+			}
+			for rows.Next() {
+				var mem, readRows, readBytes, qlen uint64
+				var head string
+				if err := rows.Scan(&mem, &readRows, &readBytes, &qlen, &head); err != nil {
+					t.Fatal(err)
+				}
+				if low[head] == 0 || mem < low[head] {
+					low[head] = mem
+				}
+				if mem > high[head] {
+					high[head] = mem
+				}
+				if round == 0 {
+					t.Logf("DIAG[%s] read_rows %d read_bytes %d query_len %d | %s", label, readRows, readBytes, qlen, head)
+				}
+			}
+			rows.Close()
 		}
-		t.Logf("DIAG statement %d %s peak %.1f MiB read_rows %d read_bytes %d query_len %d dep_refs %d item_refs %d | %s | %s", hash, typ, float64(mem)/(1<<20), readRows, readBytes, qlen, depCount, itemCount, head, events)
+		for head := range low {
+			t.Logf("DIAG[%s] min %.1f max %.1f MiB | %s", label, float64(low[head])/(1<<20), float64(high[head])/(1<<20), head)
+		}
 	}
+	measure("normal org-wide", readAs(orgWide))
+	measure("normal restricted", readAs(restricted))
+	restoreBlock := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
+	measure("default block size org-wide", readAs(orgWide))
+	measure("default block size restricted", readAs(restricted))
+	restoreBlock()
+	restoreBound := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+	measure("in-statement restricted", readAs(restricted))
+	restoreBound()
+	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
+	measure("library forced org-wide", readAs(orgWide))
+	restoreLibrary()
 	t.Error("diagnostic: force the log lines to print")
 }
