@@ -23,6 +23,18 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// createPullRequestLinkTables creates the two tables the no-unit team reason
+// reads. A test that reads a team with no work unit through the investment
+// provider needs them; one that creates them itself must not call this.
+func createPullRequestLinkTables(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
+	t.Helper()
+	for _, statement := range devhealthschema.DDL("git_pull_requests", "work_graph_issue_pr") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+}
+
 type prLinkSeed struct {
 	t      *testing.T
 	ctx    context.Context
@@ -34,11 +46,7 @@ type prLinkSeed struct {
 func newPRLinkSeed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, org string) prLinkSeed {
 	t.Helper()
 	createCHAOS5930Tables(t, ctx, direct)
-	for _, statement := range devhealthschema.DDL("git_pull_requests", "work_graph_issue_pr") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
+	createPullRequestLinkTables(t, ctx, direct)
 	return prLinkSeed{t: t, ctx: ctx, direct: direct, org: org, at: ts(2026, 9, 18, 0, 0, 0)}
 }
 
