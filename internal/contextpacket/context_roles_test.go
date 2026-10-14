@@ -564,3 +564,23 @@ func TestNeverEvaluatedOwningTeamsAreNotReadAsNothingFired(t *testing.T) {
 		t.Errorf("an unevaluated team is shown as measured zero: %+v", packet.Coverage)
 	}
 }
+
+func TestWithheldFindingsMakeAnActionRequestPartialEvenWhenNothingIsServed(t *testing.T) {
+	packet, _ := assembleWithFindings(t, func(r *contractsv1.ContextPacketRequest) {
+		r.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryAction, contractsv1.CategoryEvidence}
+	}, contextpacket.ActionFindingsResult{WithheldTeams: 1, Reason: contextpacket.ActionUnavailableNoGrant})
+	if !packet.Coverage.Partial {
+		t.Errorf("withheld findings did not make the action request partial: %+v", packet.Coverage)
+	}
+	if !slices.Contains(packet.Warnings, "action_items_partial:owning_team_not_readable:1") {
+		t.Errorf("the withheld team is not counted: %v", packet.Warnings)
+	}
+}
+
+func TestAnUnknownBlockerStatusIsNotPressure(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	roles, _ := servedRoles(t, []contractsv1.EvidenceRef{dependencyRow("ev-dep-unk-status", "blocks:fwd", "PAY-1", "unknown", at)})
+	if roles["ev-dep-unk-status"] == contractsv1.CategoryPressure {
+		t.Errorf("a blocker with status unknown served as pressure")
+	}
+}

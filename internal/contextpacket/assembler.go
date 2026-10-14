@@ -117,6 +117,9 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(warnings(bundle), roleWarnings(bundle.Evidence)...))
 	actionEvidence, actionReason, actionNotes := a.actionEvidence(ctx, principal, request, scope, packet.Freshness.AsOf)
 	packet.Warnings = sortedUnique(append(packet.Warnings, actionNotes...))
+	if len(actionNotes) > 0 {
+		markActionPartial(&packet, request)
+	}
 	if actionReason != "" {
 		packet.Warnings = sortedUnique(append(packet.Warnings, "action_items_unavailable:"+actionReason))
 		markActionSourceUnavailable(&packet, request, actionReason)
@@ -283,10 +286,10 @@ func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Princi
 		reason = result.Reason
 	}
 	var notes []string
-	if len(served) > 0 && result.WithheldTeams > 0 {
+	if result.WithheldTeams > 0 {
 		notes = append(notes, "action_items_partial:"+ActionUnavailableNoGrant+":"+strconv.Itoa(result.WithheldTeams))
 	}
-	if len(served) > 0 && result.NotEvaluatedTeams > 0 {
+	if result.NotEvaluatedTeams > 0 {
 		notes = append(notes, "action_items_partial:"+ActionUnavailableNotEvaluated+":"+strconv.Itoa(result.NotEvaluatedTeams))
 	}
 	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "withheld_teams", result.WithheldTeams, "not_evaluated_teams", result.NotEvaluatedTeams, "reason", reason)
@@ -303,5 +306,13 @@ func markActionSourceUnavailable(packet *contractsv1.ContextPacket, request cont
 		if category == contractsv1.CategoryAction {
 			packet.Coverage.Partial = true
 		}
+	}
+}
+
+// markActionPartial makes the packet partial when the request names the action
+// category and some owning team's findings were withheld or never evaluated.
+func markActionPartial(packet *contractsv1.ContextPacket, request contractsv1.ContextPacketRequest) {
+	if slices.Contains(request.Options.RequestedCategories, contractsv1.CategoryAction) {
+		packet.Coverage.Partial = true
 	}
 }

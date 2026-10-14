@@ -195,7 +195,7 @@ func activeBlockerRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
 		blocker, _ := ref.Metadata[metadataBlockerID].(string)
 		status, _ := ref.Metadata[metadataBlockerStatus].(string)
 		status = strings.ToLower(strings.TrimSpace(status))
-		if (key != "blocks:fwd" && key != "blocks:inv") || blocker == "" || status == "" || closedWorkItemStatuses[status] {
+		if (key != "blocks:fwd" && key != "blocks:inv") || blocker == "" || status == "" || status == "unknown" || closedWorkItemStatuses[status] {
 			continue
 		}
 		active[ref.EvidenceRefID] = true

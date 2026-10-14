@@ -87,11 +87,11 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 			catalog = candidate
 		}
 	}
-	// The organization-wide form drops the repository filter and the blocker id
-	// set, so the status join groups every work item of the organization.
+	// The organization-wide form drops the blocker id set, so the status join
+	// groups every work item of the organization.
 	orgWideStatement := catalog.Statement
 	for {
-		start := strings.Index(orgWideStatement, " AND repo_id = {repo_id:UUID} AND work_item_id IN (")
+		start := strings.Index(orgWideStatement, " AND work_item_id IN (")
 		if start < 0 {
 			break
 		}
@@ -170,13 +170,14 @@ func TestDependencyBlockerStatusIsCarriedOnlyForTheRepositoryAndTheCurrentAxisOn
 	}
 	for _, item := range []struct{ id, repo, status string }{
 		{"a1", repoA, "in_progress"}, {"a2", repoA, "open"}, {"a3", repoA, "open"}, {"a4", repoA, "done"},
-		{"a6", repoA, "open"}, {"b1", repoB, "open"},
+		{"a6", repoA, "open"}, {"b1", repoB, "open"}, {"a7", repoA, "in_progress"}, {"a7", repoB, "done"}, {"a8", repoA, "unknown"},
 	} {
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
 VALUES (?, ?, ?, 'title', 'issue', ?, '', ?, ?, '', 'linear', '', NULL, ?)`, item.id, item.repo, org, item.status, at, at, at)
 	}
 	for _, dep := range []struct{ source, target, kind string }{
 		{"a1", "a2", "blocks"}, {"a3", "a1", "blocked_by"}, {"a4", "a2", "blocks"}, {"a6", "b1", "blocked_by"}, {"a3", "a2", "relates_to"},
+		{"a7", "a2", "blocks"}, {"a8", "a2", "blocks"},
 	} {
 		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at) VALUES (?,?,?,?,?,?,NULL)`,
 			org, dep.source, dep.target, dep.kind, dep.kind, at)

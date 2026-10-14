@@ -99,6 +99,9 @@ func (s *ActionFindingsSource) ActionFindings(ctx context.Context, principal sto
 		if fact.ObservedAt != nil && fact.ObservedAt.After(team.ObservedAt) {
 			team.ObservedAt = *fact.ObservedAt
 		}
+		if windowEnd, err := time.Parse("2006-01-02", factString(fact, "window_end")); err == nil && windowEnd.After(team.ObservedAt) {
+			team.ObservedAt = windowEnd.UTC()
+		}
 		team.Findings = append(team.Findings, contextpacket.ActionFinding{
 			RuleID: factString(fact, "rule_id"), Severity: factString(fact, "severity"),
 			Title: factString(fact, "title"), SuccessCriterion: factString(fact, "success_criterion"),
