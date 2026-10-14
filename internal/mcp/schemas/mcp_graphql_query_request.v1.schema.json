@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_graphql_query_request.v1.schema.json",
   "title": "ACR MCP graphql_query Request v1",
-  "description": "Input for the graphql_query tool: one GraphQL query over the allowed part of the product analytics schema (data_catalog section schema lists it), with its variables. Queries only: no mutation, subscription, fragment, directive or introspection. Aliases only on root fields. The organization always comes from your credential: never send orgId.",
+  "description": "Input for the graphql_query tool: one GraphQL query over the allowed part of the product analytics schema (data_catalog (if listed) section schema lists it), with its variables. Queries only: no mutation, subscription, fragment, directive or introspection. Aliases only on root fields. The organization always comes from your credential: never send orgId.",
   "examples": [
     {
       "query": "query($ids: [String!]) { hotspots(input: {sinceUtc: \"2026-09-01T00:00:00Z\", untilUtc: \"2026-09-28T00:00:00Z\", repoIds: $ids, limit: 20}) { rows { repoId filePath riskScore } } }",
@@ -22,7 +22,7 @@
   "properties": {
     "query": {
       "type": "string",
-      "description": "The GraphQL query text: exactly one query operation over the root fields data_catalog section schema lists, selecting only listed fields, at most 8192 bytes. Repository and team ids are canonical ids taken from find_subjects or from a response: never build one.",
+      "description": "The GraphQL query text: exactly one query operation over the root fields data_catalog (if listed) section schema lists, selecting only listed fields, at most 8192 bytes. Repository and team ids are canonical ids taken from find_subjects (if listed) or from a response: never build one.",
       "minLength": 1,
       "maxLength": 8192
     },

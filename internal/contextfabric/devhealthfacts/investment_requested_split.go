@@ -111,11 +111,21 @@ func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipSc
 	head := `SELECT win, work_unit_id, repo_uuid,
 	countEqual(arrayMap(p -> p.1, pairs), repo_uuid) AS c, length(pairs) AS n,`
 	expand := requestedRepositories
+	pairs := `groupUniqArray((ref_repo, if(ref_repo = '', ref_text, concat(ref_repo, '#', pr_number)))) AS pairs`
 	if linked != "" {
+		// The unit's reference array must not be read above the expansion: an
+		// array read after ARRAY JOIN (or captured in a lambda over repo_prs)
+		// is copied onto every (unit, pull request) row, which grew with the
+		// unit's references times its pull requests. Its length is taken here
+		// as a number. c is 1: pairs and repo_prs are distinct sets over the
+		// same reference rows, so the key of a resolved rp (rp.1 != '', the
+		// only rows the WHERE keeps) is in the unit's pairs exactly once.
 		head = `SELECT win, work_unit_id, rp.1 AS repo_uuid, rp.2 AS pr_number,
-	countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,`
+	1 AS c, n,`
 		unitAgg = `
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
+		pairs += `,
+		length(pairs) AS n`
 		expand = `ARRAY JOIN repo_prs AS rp
 ARRAY JOIN wins AS win
 WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(` + linked + `) AS l))`
@@ -139,7 +149,7 @@ FROM (
 		any(bugfix_share) AS bugfix_share,
 		any(span_from) AS span_from,
 		any(wins) AS wins,` + unitAgg + `
-		groupUniqArray((ref_repo, if(ref_repo = '', ref_text, concat(ref_repo, '#', pr_number)))) AS pairs
+		` + pairs + `
 	FROM (
 		SELECT parsed.work_unit_id AS work_unit_id, parsed.effort_value AS effort_value,
 			parsed.theme_distribution_json AS theme_distribution_json, parsed.bugfix_share AS bugfix_share,
