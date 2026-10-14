@@ -1590,7 +1590,7 @@
             },
             "kind": {
               "type": "string",
-              "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, cardinality. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment, cardinality. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "identity",
                 "membership",
@@ -1615,6 +1615,7 @@
                 "flow",
                 "landscape",
                 "security_alerts",
+                "commitment",
                 "cardinality"
               ]
             },
@@ -3032,13 +3033,13 @@
           "items": {
             "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/FactScopeCensusRecord"
           },
-          "maxItems": 26,
+          "maxItems": 27,
           "description": "CHAOS-5405 D-d: one record per attempted requirement/origin scope decision. Optional-first: absent on every result written before this field existed, and on any path that resolved no scope at all -- absent and empty are different documents."
         },
         "fact_scope_census_omitted": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 26,
+          "maximum": 27,
           "description": "Count of scope decisions the census does not list because the request's serialized byte budget could not carry every row beside the smallest valid answer. Absent when every decision is listed. Additive: absent on every result written before this field existed."
         },
         "evidence_ref_labels": {
@@ -3342,13 +3343,13 @@
           "items": {
             "$ref": "#/$defs/context_fabric_common.v1/$defs/FactScopeCensusRecord"
           },
-          "maxItems": 26,
+          "maxItems": 27,
           "description": "CHAOS-5405 D-d: one record per attempted requirement/origin scope decision. Optional-first: absent on every result written before this field existed, and on any path that resolved no scope at all -- absent and empty are different documents."
         },
         "fact_scope_census_omitted": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 26,
+          "maximum": 27,
           "description": "Count of scope decisions the census does not list because the request's serialized byte budget could not carry every row beside the smallest valid answer. Absent when every decision is listed. Additive: absent on every result written before this field existed."
         },
         "evidence_ref_labels": {
@@ -3924,7 +3925,7 @@
             "fact_kinds": {
               "items": {
                 "type": "string",
-                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
+                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment. A client must tolerate values it does not know.",
                 "x-documented-values": [
                   "identity",
                   "membership",
@@ -3948,7 +3949,8 @@
                   "evidence",
                   "flow",
                   "landscape",
-                  "security_alerts"
+                  "security_alerts",
+                  "commitment"
                 ]
               },
               "maxItems": 64,
@@ -4086,7 +4088,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
+                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment. A client must tolerate values it does not know.",
                 "x-documented-values": [
                   "identity",
                   "membership",
@@ -4110,7 +4112,8 @@
                   "evidence",
                   "flow",
                   "landscape",
-                  "security_alerts"
+                  "security_alerts",
+                  "commitment"
                 ]
               },
               "uniqueItems": true,
@@ -4144,7 +4147,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
+                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment. A client must tolerate values it does not know.",
                 "x-documented-values": [
                   "identity",
                   "membership",
@@ -4168,7 +4171,8 @@
                   "evidence",
                   "flow",
                   "landscape",
-                  "security_alerts"
+                  "security_alerts",
+                  "commitment"
                 ]
               },
               "uniqueItems": true,
@@ -4578,7 +4582,7 @@
             },
             "kind": {
               "type": "string",
-              "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, cardinality. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment, cardinality. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "identity",
                 "membership",
@@ -4603,6 +4607,7 @@
                 "flow",
                 "landscape",
                 "security_alerts",
+                "commitment",
                 "cardinality"
               ]
             },
@@ -5973,14 +5978,14 @@
                 "minLength": 1,
                 "type": "string"
               },
-              "maxItems": 100,
+              "maxItems": 101,
               "type": "array"
             },
             "details": {
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/CoverageDetail"
               },
-              "maxItems": 100,
+              "maxItems": 101,
               "type": "array"
             },
             "partial": {
@@ -6037,7 +6042,7 @@
                 ],
                 "type": "object"
               },
-              "maxItems": 100,
+              "maxItems": 101,
               "type": "array"
             }
           },
@@ -6745,7 +6750,7 @@
           "properties": {
             "kind": {
               "type": "string",
-              "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "identity",
                 "membership",
@@ -6769,7 +6774,8 @@
                 "evidence",
                 "flow",
                 "landscape",
-                "security_alerts"
+                "security_alerts",
+                "commitment"
               ]
             },
             "parameters": {
