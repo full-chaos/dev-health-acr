@@ -330,3 +330,24 @@ func TestUnavailableActionCategoryIsInCoverageAndPartialOnlyWhenRequested(t *tes
 		t.Errorf("the unavailable action source is not in coverage: %+v", packet.Coverage)
 	}
 }
+
+func TestAnUnlistedStatusIsCountedAsUnknownNeitherPressureNorResolved(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-i-weird", "incident", "inc-1", "weird", "status=not_a_status, severity=low", at),
+		roleRow("ev-i-closed", "incident", "inc-2", "closed", "status=resolved, severity=low", at),
+		roleRow("ev-i-open-1", "incident", "inc-3", "open", "status=open, severity=low", at),
+		deploymentRow("ev-d-weird", "dep-1", "exploded", "", at),
+		deploymentRow("ev-d-good-1", "dep-2", "success", "", at),
+		deploymentRow("ev-d-failed", "dep-3", "failure", "", at),
+	}
+	roles, packet := servedRoles(t, evidence)
+	if roles["ev-i-weird"] == contractsv1.CategoryPressure || roles["ev-d-weird"] == contractsv1.CategoryPressure {
+		t.Errorf("an unlisted status became pressure: %v", roles)
+	}
+	for _, want := range []string{"status_unknown:incident:1", "status_unknown:deployment:1"} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+}
