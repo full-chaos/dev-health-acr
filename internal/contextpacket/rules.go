@@ -30,6 +30,11 @@ func evidenceRule(ref contractsv1.EvidenceRef) rule {
 // Pressure needs a persisted failure or open state; a commit is never a cause
 // by its type alone (see linkedCauseRefs).
 func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
+	// Rows whose entity type or text is free-form producer content never
+	// choose a role by that text.
+	if ref.SourceVersion == aiArtifactSourceVersion {
+		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, ""}
+	}
 	switch strings.ToLower(ref.Source.EntityType) {
 	case "ci_pipeline_run", "check", "check_run", "workflow_run", "build", "alert":
 		if citationShowsFailure(ref.Citation) {
@@ -45,6 +50,9 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, ""}
 		}
 	case "recommendation", "review_action", "task":
+		if ref.SourceVersion != storedFindingsSourceVersion {
+			break
+		}
 		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, ""}
 	case "state", "release":
 		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, ""}
@@ -59,6 +67,11 @@ func pressureRule() rule {
 func causeRule() rule {
 	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, ""}
 }
+
+const (
+	aiArtifactSourceVersion     = "ai_workflow_artifacts.v1"
+	storedFindingsSourceVersion = "operational_deficiencies.v1"
+)
 
 type ruleOutcome struct {
 	id    string

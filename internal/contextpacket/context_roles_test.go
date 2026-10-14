@@ -60,7 +60,7 @@ func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *tes
 	}
 	roles, packet := servedRoles(t, evidence)
 	for _, item := range packet.Items {
-		if item.EvidenceRefIDs[0] == "ev-pr-regress" && item.WhyIncluded != "The commit of a failed or incident-linked deployment is associated with pull request 42 by the provider." {
+		if item.EvidenceRefIDs[0] == "ev-pr-regress" && item.WhyIncluded != "The provider stored pull request 42 for the deployed commit of a failed or incident-linked deployment; the provider's match tier is not stored, so this appears to be the change that deployment carried." {
 			t.Errorf("cause text = %q, want what is stored and no more", item.WhyIncluded)
 		}
 	}
@@ -102,18 +102,92 @@ func TestACommitIsNotCauseByTimeOrderOrOpenIncidentAlone(t *testing.T) {
 	}
 }
 
+func incidentEdge(id, deploymentID, incidentID, provenance string, at time.Time) contractsv1.EvidenceRef {
+	edge := roleRow(id, "deployment_incident_edge", id, deploymentID+" linked to "+incidentID, "edge_id="+id, at)
+	edge.Provenance = provenance
+	edge.Metadata = map[string]any{"deployment_id": deploymentID, "incident_id": incidentID}
+	return edge
+}
+
+func TestAnIncidentLinkedDeploymentNeedsANonHeuristicEdgeAndAnOpenIncident(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-open", "pull_request", "77", "Slots", "merged", at),
+		roleRow("ev-pr-heur", "pull_request", "78", "Heuristic edge", "merged", at),
+		roleRow("ev-pr-gone", "pull_request", "79", "Incident not in set", "merged", at),
+		roleRow("ev-pr-closed", "pull_request", "80", "Resolved incident", "merged", at),
+		deploymentRow("ev-d-open", "dep-1", "success", "77", at),
+		deploymentRow("ev-d-heur", "dep-2", "success", "78", at),
+		deploymentRow("ev-d-gone", "dep-3", "success", "79", at),
+		deploymentRow("ev-d-closed", "dep-4", "success", "80", at),
+		roleRow("ev-inc-open", "incident", "inc-1", "checkout down", "status=investigating, severity=high", at),
+		roleRow("ev-inc-heur", "incident", "inc-2", "heuristic incident", "status=investigating, severity=high", at),
+		roleRow("ev-inc-closed", "incident", "inc-4", "old", "status=resolved, severity=low", at),
+		incidentEdge("ev-e-open", "dep-1", "inc-1", "native", at),
+		incidentEdge("ev-e-heur", "dep-2", "inc-2", "heuristic", at),
+		incidentEdge("ev-e-gone", "dep-3", "inc-9", "native", at),
+		incidentEdge("ev-e-closed", "dep-4", "inc-4", "native", at),
+	}
+	roles, packet := servedRoles(t, evidence)
+	want := map[string]contractsv1.PacketCategory{
+		"ev-pr-open": contractsv1.CategoryCause, "ev-pr-heur": contractsv1.CategoryEvidence,
+		"ev-pr-gone": contractsv1.CategoryEvidence, "ev-pr-closed": contractsv1.CategoryEvidence,
+	}
+	for id, category := range want {
+		if roles[id] != category {
+			t.Errorf("%s served as %q, want %q", id, roles[id], category)
+		}
+	}
+	for _, item := range packet.Items {
+		if item.EvidenceRefIDs[0] == "ev-pr-open" && (item.ClaimKind != contractsv1.ClaimInferred || !item.Flags.Uncertain || !strings.Contains(item.WhyIncluded, "match tier is not stored")) {
+			t.Errorf("cause item claims more than is stored: claim=%s uncertain=%v why=%q", item.ClaimKind, item.Flags.Uncertain, item.WhyIncluded)
+		}
+	}
+}
+
+func TestARevertPrefixSharedByTwoCommitsMarksNeither(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-c-one", "commit", "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "one", "one", at),
+		roleRow("ev-c-two", "commit", "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "two", "two", at),
+		roleRow("ev-c-sole", "commit", "4444444cccccccccccccccccccccccccccccccc", "sole", "sole", at),
+		roleRow("ev-c-revert-1", "commit", "5555555dddddddddddddddddddddddddddddddd", "Revert", "This reverts commit 2222222.", at),
+		roleRow("ev-c-revert-2", "commit", "6666666eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Revert", "This reverts commit 4444444.", at),
+	}
+	roles, _ := servedRoles(t, evidence)
+	if roles["ev-c-one"] == contractsv1.CategoryCause || roles["ev-c-two"] == contractsv1.CategoryCause {
+		t.Errorf("an ambiguous prefix marked a commit: %v", roles)
+	}
+	if roles["ev-c-sole"] != contractsv1.CategoryCause {
+		t.Errorf("a unique prefix did not mark its commit: %v", roles)
+	}
+}
+
+func TestFreeFormArtifactTextNeverChoosesARole(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	build := roleRow("ev-art-build", "build", "art-1", "build artifact", "succeeded; the log mentions error handling: error=0", at)
+	build.SourceVersion = "ai_workflow_artifacts.v1"
+	recommendation := roleRow("ev-art-rec", "recommendation", "art-2", "recommendation artifact", "do more", at)
+	recommendation.SourceVersion = "ai_workflow_artifacts.v1"
+	roles, _ := servedRoles(t, []contractsv1.EvidenceRef{build, recommendation})
+	for _, id := range []string{"ev-art-build", "ev-art-rec"} {
+		if roles[id] != contractsv1.CategoryEvidence {
+			t.Errorf("%s served as %q, want evidence", id, roles[id])
+		}
+	}
+}
+
 func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	const reverted = "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	edge := roleRow("ev-e-link", "deployment_incident_edge", "edge-1", "dep-9 linked to inc-9", "edge_id=edge-1", at)
-	edge.Metadata = map[string]any{"deployment_id": "dep-9"}
 	evidence := []contractsv1.EvidenceRef{
 		roleRow("ev-pr-carried", "pull_request", "77", "Slots", "merged", at),
 		roleRow("ev-pr-other", "pull_request", "78", "Unrelated", "merged", at),
 		roleRow("ev-c-reverted", "commit", reverted, "gift cards", "gift cards", at),
 		roleRow("ev-c-revert", "commit", "3333333cccccccccccccccccccccccccccccccc", "Revert gift cards", "Revert gift cards\n\nThis reverts commit "+reverted+".", at),
 		deploymentRow("ev-d-green", "dep-9", "success", "77", at),
-		edge,
+		roleRow("ev-inc-open", "incident", "inc-9", "checkout down", "status=open, severity=high", at),
+		incidentEdge("ev-e-link", "dep-9", "inc-9", "native", at),
 	}
 	roles, _ := servedRoles(t, evidence)
 	if roles["ev-pr-carried"] != contractsv1.CategoryCause || roles["ev-c-reverted"] != contractsv1.CategoryCause {

@@ -166,7 +166,7 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 var typedEvidenceColumns = map[string][]string{
 	"work_item_dependencies.v1":         {metadataRelationKey, metadataBlockerID, metadataBlockerStatus},
 	"deployments.v1":                    {metadataDeploymentStatus, metadataPullRequestNumber},
-	"deployment_incident_provenance.v1": {metadataDeploymentID},
+	"deployment_incident_provenance.v1": {metadataDeploymentID, metadataIncidentID},
 }
 
 func scanTypedEvidenceRow(names []string) func(ClickHouseRowScanner) (contractsv1.EvidenceRef, error) {

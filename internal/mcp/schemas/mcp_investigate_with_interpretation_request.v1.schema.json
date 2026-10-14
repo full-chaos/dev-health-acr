@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_investigate_with_interpretation_request.v1.schema.json",
   "title": "ACR MCP investigate_with_interpretation Request v1",
-  "description": "Input for the investigate_with_interpretation tool: every investigate_question argument, plus the interpretation you ran on your own model. Fetch the prompt interpret_question with prompts/get, run it on your own model, send the reply object as interpretation and the prompt's _meta values (prompt_version, model_output_version, system_sha256) as contract. The question and the other arguments mean what they mean for investigate_question. A contract that is not the service's own is refused with the current values: fetch the prompt again. The answer comes back in the same form as investigate_question.",
+  "description": "Input for the investigate_with_interpretation tool: every investigate_question (if listed) argument, plus the interpretation you ran on your own model. Fetch the prompt interpret_question with prompts/get, run it on your own model, send the reply object as interpretation and the prompt's _meta values (prompt_version, model_output_version, system_sha256) as contract. The question and the other arguments mean what they mean for investigate_question (if listed). A contract that is not the service's own is refused with the current values: fetch the prompt again. The answer comes back in the same form as investigate_question (if listed).",
   "examples": [
     {
       "question": "Is pull request 532 ready to merge?",
