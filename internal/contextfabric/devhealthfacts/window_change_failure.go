@@ -41,6 +41,7 @@ const (
 	changeFailureEvidenceBasis     = "change_failure_evidence_basis"
 	changeFailureStatusFailedField = "change_failure_status_failed_deployments_count"
 	changeFailureStatusKnownField  = "change_failure_status_known_deployments_count"
+	changeFailureStatusCoverage    = "change_failure_status_coverage"
 
 	changeFailureStateMeasured      = "measured"
 	changeFailureStateNotApplicable = "not_applicable_no_deployments"
@@ -194,6 +195,9 @@ func setChangeFailure(fields map[string]contextfabric.FactValue, counts *changeF
 	if counts.statusColumns {
 		fields[changeFailureStatusFailedField] = contextfabric.IntegerFactValue(counts.failedStatus)
 		fields[changeFailureStatusKnownField] = contextfabric.IntegerFactValue(counts.statusKnown)
+		if counts.deployments > 0 {
+			fields[changeFailureStatusCoverage] = contextfabric.NumberFactValue(float64(counts.statusKnown) / float64(counts.deployments))
+		}
 	}
 	if outcome.measured {
 		fields[changeFailureRateField] = contextfabric.NumberFactValue(outcome.value)

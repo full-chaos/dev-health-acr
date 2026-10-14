@@ -19,9 +19,11 @@ const changeFailureStatusColumnsRecheck = time.Minute
 // names them only after this answers 2.
 const changeFailureStatusColumnsStatement = `SELECT count() FROM system.columns
 WHERE database = currentDatabase() AND table = 'repo_change_failure_daily'
-	AND name IN ('failed_deployments_status', 'deployments_status_known')`
+	AND has({names:Array(String)}, name)`
 
-const changeFailureStatusColumnsWanted = 2
+// changeFailureStatusColumns is the list of columns the new statement form
+// names; a column added by the same migration is one more entry.
+var changeFailureStatusColumns = []string{"failed_deployments_status", "deployments_status_known"}
 
 // changeFailureStatusColumnsProbe caches whether repo_change_failure_daily has
 // the status columns. A positive answer is final for the process; a negative
@@ -49,12 +51,12 @@ func (p *changeFailureStatusColumnsProbe) availableAt(ctx context.Context, clien
 	if err != nil {
 		return p.known && p.available
 	}
-	p.known, p.available, p.checkedAt = true, count == changeFailureStatusColumnsWanted, now
+	p.known, p.available, p.checkedAt = true, count == uint64(len(changeFailureStatusColumns)), now
 	return p.available
 }
 
 func countStatusColumns(ctx context.Context, client contextpacket.ClickHouseQueryClient) (uint64, error) {
-	rows, err := client.Query(ctx, changeFailureStatusColumnsStatement, nil)
+	rows, err := client.Query(ctx, changeFailureStatusColumnsStatement, []contextpacket.ClickHouseBinding{{Name: "names", Value: changeFailureStatusColumns}})
 	if err != nil {
 		return 0, err
 	}
