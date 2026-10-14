@@ -121,6 +121,8 @@ type sourcePlan struct {
 	// so key-named reads size their statements from it. Zero: the client
 	// default.
 	readByteLimit uint64
+	// endedLinksBound overrides relationcurrent.MaxEndedLinks when positive (tests).
+	endedLinksBound int
 
 	// observeNormalization is called once per token per item repaired by
 	// producer-side normalization (item_normalization.go), with a closed
@@ -160,7 +162,7 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
-	ctx = withStartLogger(withReadByteLimit(ctx, p.readByteLimit), p.logger)
+	ctx = withEndedLinkMemo(p.endedLinksBound, withStartLogger(withReadByteLimit(ctx, p.readByteLimit), p.logger))
 	yielded := false
 	p.yielded = &yielded
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)

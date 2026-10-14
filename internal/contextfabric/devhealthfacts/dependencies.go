@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"log/slog"
 	"time"
 
@@ -28,7 +29,7 @@ import (
 // BlockersProvider's sibling, RequiredChildrenProvider -- see its doc
 // comment for why that split, rather than a second hardcoded string, is the
 // honest choice here.
-const blockerRelationshipType = "blocks"
+const blockerRelationshipType = relationcurrent.RelationshipType
 
 // The counterpart's canonical work item id (CHAOS-7120). A dependency row
 // names the OTHER work item by its bare work_item_id, which carries no
@@ -159,7 +160,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 `+counterpartRepositoryJoinSQL("d.source_work_item_id")+`
-WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+relationCurrentSQL("d")+`
+WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+relationcurrent.CurrentSQL("d")+`
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
 ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id
 LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), settings)
@@ -349,7 +350,7 @@ type blockerTeamTotals struct {
 	// items); projectWeakestRank is 0 when no project item contributed.
 	projectBlockedItems, projectWeakestRank int64
 	// writerUnresolved is the open blocker edges counted although the writer
-	// of their link could not be derived (relation_current.go).
+	// of their link could not be derived (internal/contextfabric/relationcurrent).
 	writerUnresolved int64
 }
 
@@ -424,7 +425,7 @@ const blockerPairSeparator = "\x1f"
 // edges. The team blocker statements read work items, their link rows and
 // their authorization for these ids only, so a statement's cost follows the
 // blocker edges, not the size of the organization's work item table.
-const blockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND lower(ifNull(be.relationship_type, '')) = '` + blockerRelationshipType + `')`
+const blockerEndpointIDsSQL = relationcurrent.EndpointIDsSQL
 
 // blockerWorkItemsSQL is the work_items rows of the blocker edge endpoints
 // under alias, with the columns the team blocker statements read.
@@ -473,7 +474,7 @@ const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNul
 // (linkedPullRequestOnSQL, workItemIsIssueSQL).
 func blockerEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
+	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = d.target_work_item_id
   INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
@@ -489,7 +490,7 @@ func blockerEdgeRowsSQL(statusPredicate, authorized, current string, withStart b
 // issue, status and authorization rules as blockerEdgeRowsSQL.
 func blockerProjectEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
+	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
   INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = d.target_work_item_id

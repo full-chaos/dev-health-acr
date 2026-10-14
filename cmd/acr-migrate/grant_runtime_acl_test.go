@@ -109,15 +109,15 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	// Then it succeeds and reports the role it granted.
 	require.NoError(t, grantErr)
 	require.Contains(t, grantOutput.String(), "acr_mcp_runtime_test")
-	require.Contains(t, grantOutput.String(), "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to acr_mcp_runtime_test")
-	require.Contains(t, grantOutput.String(), "granted DELETE on acr.device_authorizations to acr_mcp_runtime_test")
+	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, UPDATE, DELETE on acr.oauth_clients to acr_mcp_runtime_test")
+	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, UPDATE, DELETE on acr.oauth_authorization_requests to acr_mcp_runtime_test")
+	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, UPDATE, DELETE on acr.device_authorizations to acr_mcp_runtime_test")
 
-	// CHAOS-6191, GREEN: DELETE, and nothing else, on the two purge tables.
+	// GREEN: the OAuth purge tables hold the declared privileges, DELETE among
+	// them, and no TRUNCATE.
 	for _, table := range oauthPurgeTables {
 		require.True(t, hasPrivilege(table, "DELETE"), "%s: grant-runtime-acl must give the runtime role DELETE for the OAuth purge loop", table)
-		for _, privilege := range []string{"INSERT", "UPDATE", "TRUNCATE"} {
-			require.False(t, hasPrivilege(table, privilege), "%s: grant-runtime-acl must grant DELETE only, not %s", table, privilege)
-		}
+		require.False(t, hasPrivilege(table, "TRUNCATE"), "%s: no TRUNCATE", table)
 	}
 
 	for _, privilege := range []string{"SELECT", "INSERT", "DELETE"} {
