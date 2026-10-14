@@ -42,7 +42,7 @@ func TestStatusColumnsProbeCachesPositiveRechecksNegativeAndNeverPinsAFailure(t 
 	// A failed first probe answers "old shape" for this call only.
 	failing := &probeClient{fail: true}
 	probe := &changeFailureStatusColumnsProbe{}
-	if probe.availableAt(context.Background(), failing, now) || probe.known {
+	if probe.availableAt(context.Background(), failing, now) || probe.Known() {
 		t.Fatal("a failed probe must answer no and cache nothing")
 	}
 	// A negative answer stands for the recheck window, then is asked again.
