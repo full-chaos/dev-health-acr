@@ -3049,3 +3049,62 @@ func (t SlogEngineTelemetry) RecordEngineFactGate(ctx context.Context, principal
 	}
 	t.logger.InfoContext(ctx, EngineFactGateLogMessage, args...)
 }
+
+// OrganizationSubjectReadRecorder is the optional decision line of the
+// engine's organization-subject read: a turn that resolved no subject and was
+// answered from the caller's organization subject.
+type OrganizationSubjectReadRecorder interface {
+	RecordOrganizationSubjectRead(ctx context.Context, principal storage.Principal, event OrganizationSubjectReadEvent)
+}
+
+// OrganizationSubjectReadEvent is closed values and counts only.
+type OrganizationSubjectReadEvent struct {
+	// Reason is "investment" or "survey_no_members".
+	Reason string
+	// SurveyMemberKind is the surveyed member kind that found no member, or
+	// empty for an investment question.
+	SurveyMemberKind SubjectKind
+	// FactsRead counts the readable facts on the organization subject, and
+	// FactKinds names their kinds, sorted.
+	FactsRead int
+	FactKinds []string
+}
+
+// OrganizationSubjectReadEventOf builds the event from the frame and the
+// bundle the read returned.
+func OrganizationSubjectReadEventOf(frame *QuestionFrame, facts CanonicalFactBundle) OrganizationSubjectReadEvent {
+	event := OrganizationSubjectReadEvent{Reason: organizationSubjectReadReason(frame), FactKinds: []string{}}
+	if frame != nil {
+		event.SurveyMemberKind = frame.OrganizationSurveyMemberKind
+	}
+	seen := map[string]bool{}
+	for _, fact := range facts.Facts {
+		if fact.Subject.Kind != SubjectOrganization || (fact.SourceState != SourceAvailable && fact.SourceState != SourceStale) {
+			continue
+		}
+		event.FactsRead++
+		if !seen[string(fact.Kind)] {
+			seen[string(fact.Kind)] = true
+			event.FactKinds = append(event.FactKinds, string(fact.Kind))
+		}
+	}
+	sort.Strings(event.FactKinds)
+	return event
+}
+
+// OrganizationSubjectReadLogMessage is the decision line of the
+// organization-subject read.
+const OrganizationSubjectReadLogMessage = "context fabric organization subject read"
+
+// RecordOrganizationSubjectRead implements OrganizationSubjectReadRecorder.
+func (t SlogEngineTelemetry) RecordOrganizationSubjectRead(ctx context.Context, principal storage.Principal, event OrganizationSubjectReadEvent) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"reason", SanitizeLogAttr(event.Reason),
+		"survey_member_kind", SanitizeLogAttr(repairMemberKindToken(event.SurveyMemberKind)),
+		"organization_facts_read", event.FactsRead,
+		"organization_fact_kinds", SanitizeLogStrings(event.FactKinds),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, OrganizationSubjectReadLogMessage, args...)
+}

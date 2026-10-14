@@ -641,6 +641,8 @@ var frameFieldConsumers = map[string]string{
 		"repairMemberKindFactAliasCollapse (CHAOS-5992) produced this exact frame, never inferred " +
 		"from shape; encoded (omitempty) so the provenance survives the semantic-state write and " +
 		"read that carries a frame into a later turn",
+	"OrganizationSurveyMemberKind": "organizationRollUpLimitation and organizationSubjectAnswers (member_status.go) -- " +
+		"PROVENANCE that repairOrganizationScopeSurvey produced this frame; the served answer names its roll-up basis from it",
 }
 
 // TestLawL6EveryFrameFieldHasANamedConsumer is law L6's structural half.

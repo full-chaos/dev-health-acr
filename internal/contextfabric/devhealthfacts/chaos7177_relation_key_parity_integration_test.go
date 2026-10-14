@@ -38,6 +38,18 @@ func TestCHAOS7177RelationKeySQLAgreesWithGoAgainstRealClickHouse(t *testing.T) 
 		if want := dependencyrelation.Key(raw); got != want {
 			t.Errorf("Key/KeySQL disagree for %q: Go %q, ClickHouse %q", raw, want, got)
 		}
+		var blocker, inverse uint8
+		predicateStatement := "SELECT toUInt8(" + dependencyrelation.BlockerPredicateSQL("raw") + "), toUInt8(" + dependencyrelation.BlockerInverseSQL("raw") + ") FROM (SELECT ? AS raw)"
+		if err := direct.QueryRow(ctx, predicateStatement, raw).Scan(&blocker, &inverse); err != nil {
+			t.Fatalf("BlockerPredicateSQL(%q) in ClickHouse: %v", raw, err)
+		}
+		key := dependencyrelation.Key(raw)
+		if want := key == "blocks:fwd" || key == "blocks:inv"; (blocker == 1) != want {
+			t.Errorf("BlockerPredicateSQL disagrees with Key for %q: predicate %d, key %q", raw, blocker, key)
+		}
+		if want := key == "blocks:inv"; (inverse == 1) != want {
+			t.Errorf("BlockerInverseSQL disagrees with Key for %q: inverse %d, key %q", raw, inverse, key)
+		}
 	}
 	// NULL relationship_type keys like the empty string.
 	var got string

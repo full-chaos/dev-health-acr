@@ -142,6 +142,7 @@ func TestInterpretationSubjectRulesNameOnlyVocabularyKinds(t *testing.T) {
 	for _, named := range []struct{ rule, kind string }{
 		{`"task" and "what work" say work_item`, "work_item"},
 		{`"company" and "across the organization" say organization`, "organization"},
+		{`"system", "service" and "codebase" say repository`, "repository"},
 		{`"how many repositories are in the organization" says repository`, "repository"},
 		{`the repository is the anchor and member_kind is team`, "team"},
 	} {

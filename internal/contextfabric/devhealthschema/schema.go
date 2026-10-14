@@ -311,9 +311,13 @@ var ProductionColumns = map[string][]Column{
 		{Name: "day", Type: "Date"},
 		{Name: "team_id", Type: "LowCardinality(String)"},
 		{Name: "team_name", Type: "String"},
-		{Name: "commits_count", Type: "UInt32"},
-		{Name: "after_hours_commits_count", Type: "UInt32"},
-		{Name: "weekend_commits_count", Type: "UInt32"},
+		// ops migration 124 widens the three team counters to Float64 (a
+		// co-owning team holds a share of a repository's counts). ACR and ops
+		// roll independently, so a deployment may carry either type and the
+		// readers serve both.
+		{Name: "commits_count", Type: "UInt32", AlsoAccepts: []string{"Float64"}},
+		{Name: "after_hours_commits_count", Type: "UInt32", AlsoAccepts: []string{"Float64"}},
+		{Name: "weekend_commits_count", Type: "UInt32", AlsoAccepts: []string{"Float64"}},
 		{Name: "after_hours_commit_ratio", Type: "Float64"},
 		{Name: "weekend_commit_ratio", Type: "Float64"},
 		{Name: "computed_at", Type: "DateTime64(6, 'UTC')"},
@@ -834,14 +838,23 @@ func AcceptsColumnType(table, column, typ string) bool {
 // not empty. typ must be accepted by
 // AcceptsColumnType; anything else panics, so a fixture cannot invent a type.
 func DDLWithColumnType(database, table, column, typ string) string {
-	if !AcceptsColumnType(table, column, typ) {
-		panic("devhealthschema: " + table + "." + column + " does not accept type " + typ)
+	return DDLWithColumnTypes(database, table, map[string]string{column: typ})
+}
+
+// DDLWithColumnTypes is DDLWithColumnType for several columns at once, each
+// named column carrying its type from types. Every type must be accepted by
+// AcceptsColumnType and every named column must exist; anything else panics.
+func DDLWithColumnTypes(database, table string, types map[string]string) string {
+	for column, typ := range types {
+		if !AcceptsColumnType(table, column, typ) {
+			panic("devhealthschema: " + table + "." + column + " does not accept type " + typ)
+		}
 	}
 	columns := ProductionColumns[table]
 	rendered := make([]string, 0, len(columns))
 	for _, c := range columns {
 		t := c.Type
-		if c.Name == column {
+		if typ, ok := types[c.Name]; ok {
 			t = typ
 		}
 		rendered = append(rendered, c.Name+" "+t)

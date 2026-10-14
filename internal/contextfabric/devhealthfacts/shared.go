@@ -1162,7 +1162,12 @@ import (
 // integers, because a team that co-owns a repository holds a share of the
 // counters and can carry a fraction of a commit. An answer saved under v227
 // carries integer counters and is not reused as one produced by this version.
-const QueryVersion = "devhealthfacts.clickhouse.v228"
+//
+// v228 -> v229: the blocker facts (work item, team and project) read a blocker
+// stored under any spelling the graph projection maps onto a blocks edge
+// (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
+// the direction the row states. An answer saved under v228 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v229"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

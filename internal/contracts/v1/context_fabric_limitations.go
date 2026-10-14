@@ -647,18 +647,47 @@ const ContextFabricContinuationContextUnverifiableLimitation = "This request con
 // readable; the basis is on the wire as refusal_basis and on the log line.
 const ContextFabricDeclaredKindUnmatchedLimitation = "No option found for this question could be chosen to answer it, so no subject was confirmed and no canonical facts were read. Rewording the question may let it be answered."
 
-// ContextFabricOrganizationScopeUnsupportedLimitation is the sentence an
-// organization-scope question that counts nothing carries when it is refused
-// (ContextFabricRefusalBasisOrganizationScopeUnsupported).
-//
-// It says what is not supported AND what is: organization-wide analysis of
-// status, health or drivers is not a capability, and organization-wide counts
-// of one kind of subject are. The second half is the one the asker can act on.
-// It names no subject, because the subject is the caller's own organization.
-//
-// It carries no basis token. A person reads this sentence, and a token is not
-// readable; the basis is on the wire as refusal_basis and on the log line.
+// ContextFabricOrganizationScopeUnsupportedLimitation is the sentence of the
+// RETIRED organization_scope_unsupported refusal
+// (ContextFabricRefusalBasisOrganizationScopeUnsupported). Nothing emits it;
+// it stays so a stored result that carries it is still a service-authored
+// limitation.
 const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was read as being about the organization as a whole. Organization-wide analysis of status, health or drivers is not supported; organization-wide counts of one kind of subject, such as how many repositories or teams there are, are supported. No canonical facts were read."
+
+// The organization roll-up sentences: an answer to an organization-scope
+// question that was answered as a survey of the organization's members carries
+// the one for the member kind it read, so a reader sees the answer is a
+// roll-up over those members, not an organization-wide measure.
+const (
+	ContextFabricOrganizationSurveyTeamLimitation        = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's teams: the answer is a survey of the teams it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those teams."
+	ContextFabricOrganizationSurveyProjectLimitation     = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's projects: the answer is a survey of the projects it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those projects."
+	ContextFabricOrganizationSurveyRepositoryLimitation  = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's repositories: the answer is a survey of the repositories it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those repositories."
+	ContextFabricOrganizationSurveyPullRequestLimitation = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's pull requests: the answer is a survey of the pull requests it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those pull requests."
+	ContextFabricOrganizationSurveyIncidentLimitation    = "This question was read as being about the organization as a whole. It was answered as a roll-up over the organization's incidents: the answer is a survey of the incidents it lists, not an organization-wide measure, and its coverage is the coverage of the stored facts of those incidents."
+	ContextFabricOrganizationSurveyNoMembersLimitation   = "This question was read as being about the organization as a whole. No members of the organization were found to roll up, so the answer rests only on the organization's own stored facts, where there are any. A missing member set is not a healthy one."
+	ContextFabricOrganizationInvestmentRollUpLimitation  = "This question was read as being about the organization as a whole. It was answered from the organization's investment fact, a roll-up that counts the work of each repository once, never a sum of team values."
+	ContextFabricOrganizationFactAbsentLimitation        = "This question was read as being about the organization as a whole, and the organization's own investment fact was asked for. No such fact was found, so the answer does not state where the organization's effort went."
+)
+
+// ContextFabricOrganizationSurveyLimitation returns the roll-up sentence for
+// the member kind an organization survey read, and false for a kind no survey
+// reads.
+func ContextFabricOrganizationSurveyLimitation(kind ContextFabricSubjectKind) (string, bool) {
+	switch kind {
+	case ContextFabricSubjectTeam:
+		return ContextFabricOrganizationSurveyTeamLimitation, true
+	case ContextFabricSubjectProject:
+		return ContextFabricOrganizationSurveyProjectLimitation, true
+	case ContextFabricSubjectRepository:
+		return ContextFabricOrganizationSurveyRepositoryLimitation, true
+	case ContextFabricSubjectPullRequest:
+		return ContextFabricOrganizationSurveyPullRequestLimitation, true
+	case ContextFabricSubjectIncident:
+		return ContextFabricOrganizationSurveyIncidentLimitation, true
+	default:
+		return "", false
+	}
+}
 
 // ContextFabricSubjectIdentityUnconfirmedLimitation is the sentence a
 // follow-up carries when the subject-substitution guard fired and this
@@ -758,6 +787,14 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricContinuationContextUnverifiableLimitation,
 		ContextFabricDeclaredKindUnmatchedLimitation,
 		ContextFabricOrganizationScopeUnsupportedLimitation,
+		ContextFabricOrganizationSurveyTeamLimitation,
+		ContextFabricOrganizationSurveyProjectLimitation,
+		ContextFabricOrganizationSurveyRepositoryLimitation,
+		ContextFabricOrganizationSurveyPullRequestLimitation,
+		ContextFabricOrganizationSurveyIncidentLimitation,
+		ContextFabricOrganizationSurveyNoMembersLimitation,
+		ContextFabricOrganizationInvestmentRollUpLimitation,
+		ContextFabricOrganizationFactAbsentLimitation,
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,

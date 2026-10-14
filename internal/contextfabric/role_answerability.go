@@ -324,29 +324,12 @@ func decideAnswerability(reading answerabilityReading, offers []answerabilityOff
 		}
 	}
 	decision.Unsatisfiable = len(decision.Roles) > 0 && decision.OffersEvaluated > 0 && decision.OffersAdvancing == 0
-	decision.OrganizationScopeUnsupported = organizationScopeUnsupported(reading.Frame)
 	return decision
 }
 
-// organizationScopeUnsupported reports whether a reading makes the
-// organization itself the subject and counts nothing.
-//
-// D48. The organization-scope member set is served for a
-// counting goal only (D46); every other organization-scope question -- its
-// state, health or drivers -- has no capability behind it. Such a question
-// that ends without a committed subject is refused on its own basis, whatever
-// retrieval offered: no offer can make it answerable, because the subject is
-// the caller's own organization and is never a candidate. A goal set that asks
-// for anything besides a count is outside the served envelope even when a
-// count sits beside it, and its non-count goal is the part the sentence names
-// as unsupported. Only a frame whose every goal is a count keeps the role
-// decision, because "counts are supported" is true of it alone.
-func organizationScopeUnsupported(frame *QuestionFrame) bool {
-	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope && !countsOnly(frame.Goals)
-}
-
 // countsOnly reports whether goals is a non-empty set whose every member is
-// the count goal: the one organization-scope goal set that is served.
+// the count goal: the organization-scope goal set the member census serves
+// without a survey.
 func countsOnly(goals []InvestigationGoal) bool {
 	if len(goals) == 0 {
 		return false
@@ -358,15 +341,6 @@ func countsOnly(goals []InvestigationGoal) bool {
 	}
 	return true
 }
-
-// The organization-scope terminal: its reason token, its sentence, and its
-// wire basis. One decision, one basis, one sentence -- the pairing the
-// declared-kind terminal keeps (chaos5660_declared_kind_terminal.go).
-const (
-	organizationScopeTerminalReason     = "organization_scope_unsupported"
-	organizationScopeTerminalLimitation = contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation
-	organizationScopeTerminalBasis      = contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported
-)
 
 // SubjectlessTerminalAnswerability is the role half of the subjectless
 // terminal line: which roles the decision evaluated, which role the winning

@@ -93,8 +93,11 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 				t.Errorf("live %s.%s no longer exists -- regenerate productionColumns (schema_parity_integration_test.go); the devhealthsource producer reading it will fail on real data", table, column.Name)
 				continue
 			}
-			if actual != column.Type {
-				t.Errorf("live %s.%s is %q but devhealthschema still says %q -- regenerate the snapshot, then check every Scan() destination for %s.%s against the new type", table, column.Name, actual, column.Type, table, column.Name)
+			// A type in transition is declared with its alternates
+			// (Column.AlsoAccepts): a deployment carrying one of them is not
+			// drift, only a type outside the declaration is.
+			if !devhealthschema.AcceptsColumnType(table, column.Name, actual) {
+				t.Errorf("live %s.%s is %q but devhealthschema still says %q (also accepting %v) -- regenerate the snapshot, then check every Scan() destination for %s.%s against the new type", table, column.Name, actual, column.Type, column.AlsoAccepts, table, column.Name)
 			}
 		}
 		// CHAOS-3781 round-3 F3: POSITION as well as type. The

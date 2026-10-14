@@ -110,6 +110,12 @@ type QuestionFrame struct {
 	// never writes this field: its frame enters through a separate output
 	// type and is rebuilt server-side, so a model emission cannot forge it.
 	CollapsedGroupAxisMemberKind SubjectKind `json:"collapsed_group_axis_member_kind,omitempty"`
+
+	// OrganizationSurveyMemberKind is PROVENANCE: set ONLY by
+	// repairOrganizationScopeSurvey, to the member kind it surveys. The served
+	// answer reads it to state that it is a roll-up over those members.
+	// Encoded (omitempty) so a carried frame keeps the disclosure.
+	OrganizationSurveyMemberKind SubjectKind `json:"organization_survey_member_kind,omitempty"`
 }
 
 // QuestionFrameVersion is the derivation-table version this build

@@ -460,6 +460,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
 	}
+	if sentence, ok := organizationRollUpLimitation(params.Frame, graphContext, params.Facts); ok {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	if subjectTermsInputFrom(ctx) == SubjectTermsFromFrame {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSubjectTermsFromFrameLimitation})
 		result.Limitations = composed

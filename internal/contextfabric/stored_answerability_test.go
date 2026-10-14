@@ -173,7 +173,7 @@ func TestTheReadAdapterAndTheComposingAdapterTakeOneDecision(t *testing.T) {
 			state, read := storedStateFor(t, testCase.frame, testCase.anchorKind), SemanticStateReadAvailable
 			stored := *store.saved
 			if testCase.refused {
-				if stored.Status != InvestigationNoMatch || (stored.RefusalBasis != declaredKindTerminalBasis && stored.RefusalBasis != organizationScopeTerminalBasis) {
+				if stored.Status != InvestigationNoMatch || stored.RefusalBasis != declaredKindTerminalBasis {
 					t.Fatalf("fixture defect: fresh status/basis = %q/%q, want the declared-kind refusal", stored.Status, stored.RefusalBasis)
 				}
 				stored.Status = InvestigationClarificationRequired
@@ -228,7 +228,7 @@ func TestAStoredClarificationIsRepairedOnReadOnlyWhenItsReadingRefusesIt(t *test
 			t.Fatal("the repair removed the stored prompt or candidates")
 		}
 	})
-	t.Run("an organization-scope reading that counts nothing is repaired on its own basis", func(t *testing.T) {
+	t.Run("an organization-scope reading takes the declared-kind basis, never the retired one", func(t *testing.T) {
 		t.Parallel()
 		orgReading := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
 		served := storedClarification(storedCIRunCandidates()...)
@@ -236,8 +236,8 @@ func TestAStoredClarificationIsRepairedOnReadOnlyWhenItsReadingRefusesIt(t *test
 		if got.Determination != StoredAnswerabilityUnanswerable || !got.Repaired {
 			t.Fatalf("determination/repaired = %q/%v, want unanswerable/true", got.Determination, got.Repaired)
 		}
-		if served.RefusalBasis != organizationScopeTerminalBasis || !roleContains(served.Limitations, organizationScopeTerminalLimitation) || roleContains(served.Limitations, declaredKindTerminalLimitation) {
-			t.Fatalf("served basis/limitations = %q/%#v, want organization_scope_unsupported with its own sentence only", served.RefusalBasis, served.Limitations)
+		if served.RefusalBasis != declaredKindTerminalBasis || !roleContains(served.Limitations, declaredKindTerminalLimitation) || roleContains(served.Limitations, contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation) {
+			t.Fatalf("served basis/limitations = %q/%#v, want declared_kind_unmatched with its own sentence only", served.RefusalBasis, served.Limitations)
 		}
 	})
 	t.Run("unanswerable with no clarification sentence: the basis sentence is added", func(t *testing.T) {
@@ -477,36 +477,33 @@ func TestTheWireDisclosureIsPresentExactlyWhenTheDeterminationIsUnavailable(t *t
 	}
 }
 
-// TestAnOrganizationScopeReadingIsRefusedOnBothSidesWhateverItsRoles holds the
-// one reading where the organization-scope predicate and the role decision can
-// disagree: an organization_scope frame whose pointer is absent derives no
-// role, so no offer can make the role decision unsatisfiable, and still the
-// question counts nothing. Fresh composition refuses it on its own basis
-// (resolveTerminalStatus consults the predicate first); the read side must
-// refuse the stored clarification the same way, or reuse and result-by-id
-// would serve a clarification fresh composition never composes.
-func TestAnOrganizationScopeReadingIsRefusedOnBothSidesWhateverItsRoles(t *testing.T) {
+// TestAnOrganizationScopeReadingWithNoRoleIsTreatedAlikeOnBothSides holds the
+// reading that derives no role (an organization_scope frame whose pointer is
+// absent): no offer can make the role decision unsatisfiable, so fresh
+// composition keeps the clarification and the read side serves the stored
+// clarification as answerable. Neither side refuses it.
+func TestAnOrganizationScopeReadingWithNoRoleIsTreatedAlikeOnBothSides(t *testing.T) {
 	t.Parallel()
 	frame := &QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope}}
 	resolution := SubjectResolution{Candidates: storedCIRunCandidates(), Committed: []SubjectRef{}}
 
 	fresh := decideDeclaredKind(frame, "", resolution, StructureOfferMaterial{})
-	if fresh.Unsatisfiable || !fresh.OrganizationScopeUnsupported {
-		t.Fatalf("fixture defect: fresh unsatisfiable/org = %v/%v, want false/true -- the reading must derive no role", fresh.Unsatisfiable, fresh.OrganizationScopeUnsupported)
+	if fresh.Unsatisfiable {
+		t.Fatal("fixture defect: the reading must derive no role")
 	}
 	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
-	if status, limitation := resolveTerminalStatus(request, &resolution, frame, true, fresh, SubjectSubstitutionNotEvaluated, OfferFloorOutcome{}); status != InvestigationNoMatch || limitation != organizationScopeTerminalLimitation {
-		t.Fatalf("fresh status/limitation = %q/%q, want the organization-scope refusal", status, limitation)
+	if status, limitation := resolveTerminalStatus(request, &resolution, frame, true, fresh, SubjectSubstitutionNotEvaluated, OfferFloorOutcome{}); status != InvestigationClarificationRequired || limitation == contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation {
+		t.Fatalf("fresh status/limitation = %q/%q, want the clarification", status, limitation)
 	}
 
 	state := &PersistedSemanticState{FramePresent: true, Frame: frame}
 	stored := storedClarification(storedCIRunCandidates()...)
-	if got := DecideStoredAnswerability(stored, state, SemanticStateReadAvailable); got.Determination != StoredAnswerabilityUnanswerable {
-		t.Fatalf("read-side determination = %q, want unanswerable, the refusal fresh composition takes", got.Determination)
+	if got := DecideStoredAnswerability(stored, state, SemanticStateReadAvailable); got.Determination != StoredAnswerabilityAnswerable {
+		t.Fatalf("read-side determination = %q, want answerable, the clarification fresh composition keeps", got.Determination)
 	}
 	served := storedClarification(storedCIRunCandidates()...)
-	if got := RepairStoredClarification(&served, state, SemanticStateReadAvailable); !got.Repaired || served.RefusalBasis != organizationScopeTerminalBasis {
-		t.Fatalf("repaired/basis = %v/%q, want true/organization_scope_unsupported", got.Repaired, served.RefusalBasis)
+	if got := RepairStoredClarification(&served, state, SemanticStateReadAvailable); got.Repaired || served.RefusalBasis != "" {
+		t.Fatalf("repaired/basis = %v/%q, want an untouched clarification", got.Repaired, served.RefusalBasis)
 	}
 }
 
@@ -547,9 +544,9 @@ func TestStoredAnswerabilityTakesFreshCompositionsPrecedence(t *testing.T) {
 		{"window gate, named reading its offers refuse", gate(storedClarification()), named, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepWindowGate, "not_read"},
 		{"window gate, organization-scope reading", gate(storedClarification(storedCIRunCandidates()...)), organization, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepWindowGate, "not_read"},
 		{"window gate, no reading", gate(storedClarification(storedCIRunCandidates()...)), nil, SemanticStateReadAbsent, StoredAnswerabilityAnswerable, StoredAnswerabilityStepWindowGate, "not_read"},
-		{"organization scope, wrong-kind offers", storedClarification(storedCIRunCandidates()...), organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOrganizationScope, "available"},
-		{"organization scope, no offer at all", offerLess, organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOrganizationScope, "available"},
-		{"organization scope, window clarification only", nudged(storedClarification()), organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOrganizationScope, "available"},
+		{"organization scope, wrong-kind offers: the role decides", storedClarification(storedCIRunCandidates()...), organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepRole, "available"},
+		{"organization scope, no offer at all", offerLess, organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOfferLess, "not_read"},
+		{"organization scope, window clarification only", nudged(storedClarification()), organization, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepNoSubjectOffer, "not_read"},
 		{"organization count, wrong-kind offers: the role decides", storedClarification(storedCIRunCandidates()...), counting, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepRole, "available"},
 		{"terminal clarification carrying a window clarification: the role decides", nudged(storedClarification(storedCIRunCandidates()...)), named, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepRole, "available"},
 		{"role, declared-kind offer", storedClarification(roleCandidate("subr_project", SubjectProject, "project:1")), named, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepRole, "available"},
@@ -577,18 +574,15 @@ func TestTheRepairTakesTheBasisOfTheStepThatRefused(t *testing.T) {
 	project := SubjectProject
 	named := storedStateFor(t, chaos5660NamedFrame(&project), "")
 	organization := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
-	t.Run("an offer-less row with an organization-scope reading takes the organization basis", func(t *testing.T) {
+	t.Run("an offer-less row with an organization-scope reading is repaired as offer-less", func(t *testing.T) {
 		t.Parallel()
 		served := storedClarification()
 		got := RepairStoredClarification(&served, organization, SemanticStateReadAvailable)
-		if got.Step != StoredAnswerabilityStepOrganizationScope || !got.Repaired {
-			t.Fatalf("step/repaired = %q/%v, want organization_scope/true", got.Step, got.Repaired)
+		if got.Step != StoredAnswerabilityStepOfferLess || !got.Repaired {
+			t.Fatalf("step/repaired = %q/%v, want offer_less/true", got.Step, got.Repaired)
 		}
-		if served.Status != InvestigationNoMatch || served.RefusalBasis != organizationScopeTerminalBasis || !roleContains(served.Limitations, organizationScopeTerminalLimitation) {
-			t.Fatalf("served status/basis/limitations = %q/%q/%#v, want no_match/organization_scope_unsupported with its sentence", served.Status, served.RefusalBasis, served.Limitations)
-		}
-		if roleContains(served.Limitations, noMatchLimitationOfferPoolEmptied) {
-			t.Fatalf("served limitations = %#v carry the offer-less sentence on an organization-scope refusal", served.Limitations)
+		if served.RefusalBasis == contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported || roleContains(served.Limitations, contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation) {
+			t.Fatalf("served basis/limitations = %q/%#v carry the retired organization-scope refusal", served.RefusalBasis, served.Limitations)
 		}
 	})
 	t.Run("an offer-less row with no reading is repaired with no basis", func(t *testing.T) {
@@ -655,7 +649,7 @@ func TestEveryStoredAnswerabilityStepHasAProductionDriver(t *testing.T) {
 
 // TestReuseTakesFreshCompositionsPrecedence drives tryReuse over the steps the
 // role-only filter did not separate: the window gate's clarification is served
-// whatever its reading, and an organization-scope or offer-less row is
+// whatever its reading, and a wrong-kind or offer-less row is
 // declined with its determination recorded exactly once.
 func TestReuseTakesFreshCompositionsPrecedence(t *testing.T) {
 	t.Parallel()
@@ -683,8 +677,8 @@ func TestReuseTakesFreshCompositionsPrecedence(t *testing.T) {
 		step       StoredAnswerabilityStep
 	}{
 		{"window gate, organization-scope reading: served", nil, gateNeeds, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, true, StoredAnswerabilityStepWindowGate},
-		{"organization scope, wrong-kind offers: declined", storedCIRunCandidates(), nil, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, false, StoredAnswerabilityStepOrganizationScope},
-		{"organization scope, no offer at all: declined", nil, offerLess, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, false, StoredAnswerabilityStepOrganizationScope},
+		{"organization scope, wrong-kind offers: declined on the role", storedCIRunCandidates(), nil, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, false, StoredAnswerabilityStepRole},
+		{"organization scope, no offer at all: declined as offer-less", nil, offerLess, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, false, StoredAnswerabilityStepOfferLess},
 		{"offer-less, no reading: declined", nil, offerLess, &storedAnswerabilityStore{read: SemanticStateReadAbsent}, false, StoredAnswerabilityStepOfferLess},
 	} {
 		t.Run(testCase.cell, func(t *testing.T) {
