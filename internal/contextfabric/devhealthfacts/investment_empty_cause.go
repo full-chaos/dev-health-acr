@@ -26,7 +26,7 @@ const (
 // follows references: it names which stage dropped a team's units, it serves
 // no mix.
 func ownedUnitCountStatement(bound factTimeBound, scope membershipScope) string {
-	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units, uniqExactIf(work_unit_id, effort_value > 0) AS positive
+	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units, uniqExact(work_unit_id) AS positive
 FROM (
 	SELECT work_unit_id,
 		(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
