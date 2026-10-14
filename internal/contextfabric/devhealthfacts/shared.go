@@ -1096,13 +1096,17 @@ import (
 // and no zero mix. An answer saved under v216 states the false reason that no
 // effort was persisted.
 //
-// v217 -> v218: a team with owned repositories and no mix is named by its
+// v217 -> v218: the team linked pull request mix takes a unit's reference
+// count once per unit, not from the unit's reference array on every expanded
+// row. The rows are unchanged; the statement and its memory are not.
+//
+// v218 -> v219: a team with owned repositories and no mix is named by its
 // cause: investment_team_units_outside_membership_run when a work unit on an
 // owned repository is outside the latest complete membership run, or
 // investment_team_units_unattributed when positive-effort units in scope were
 // dropped by a reference that resolves to no repository. Still no fact. An
-// answer saved under v217 names only the generic no-unit reason.
-const QueryVersion = "devhealthfacts.clickhouse.v218"
+// answer saved under v218 names only the generic no-unit reason.
+const QueryVersion = "devhealthfacts.clickhouse.v219"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
