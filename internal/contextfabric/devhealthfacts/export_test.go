@@ -105,3 +105,12 @@ func CommitmentAuthorizedItemIDsSQLForTest(principal storage.Principal, requeste
 	authorized, _ := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
 	return authorized
 }
+
+// ForceLibraryAuthorizationForTest makes the organization-wide scope take the
+// library relation again (the shape before the fast path), a negative control
+// for the memory ceilings.
+func ForceLibraryAuthorizationForTest() (restore func()) {
+	previous := libraryAuthorizationForced
+	libraryAuthorizationForced = true
+	return func() { libraryAuthorizationForced = previous }
+}

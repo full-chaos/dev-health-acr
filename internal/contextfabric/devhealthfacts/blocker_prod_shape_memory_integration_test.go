@@ -92,6 +92,37 @@ type blockerProdShapeStatement struct {
 
 // blockerProdShapeQueryLog is every statement over the dependency table logged
 // after mark, with its peak memory and its head.
+// blockerProdShapeCeilingFor is the ceiling of one statement: the totals
+// statement is held to the lower one (its calibration ratio is 0.80).
+func blockerProdShapeCeilingFor(head string) uint64 {
+	if strings.HasPrefix(head, blockerProdShapeTotalsHead) {
+		return blockerProdShapeTotalsCeiling
+	}
+	return blockerProdShapeCeiling
+}
+
+// blockerProdShapeMinOfWarmReads runs read three times after one warm-up and
+// returns, per statement, the smallest peak seen (and the largest, for the
+// log).
+func blockerProdShapeMinOfWarmReads(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, read func()) (low, high map[string]uint64) {
+	t.Helper()
+	read()
+	low, high = map[string]uint64{}, map[string]uint64{}
+	for round := 0; round < 3; round++ {
+		roundMark := serverNowMicros(t, ctx, direct)
+		read()
+		for _, st := range blockerProdShapeQueryLog(t, ctx, direct, roundMark) {
+			if low[st.head] == 0 || st.peak < low[st.head] {
+				low[st.head] = st.peak
+			}
+			if st.peak > high[st.head] {
+				high[st.head] = st.peak
+			}
+		}
+	}
+	return low, high
+}
+
 func blockerProdShapeQueryLog(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64) []blockerProdShapeStatement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
@@ -124,15 +155,6 @@ func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickh
 	}
 	if len(out) < 4 {
 		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
-	}
-	for _, st := range out {
-		ceiling := blockerProdShapeCeiling
-		if strings.HasPrefix(st.head, blockerProdShapeTotalsHead) {
-			ceiling = blockerProdShapeTotalsCeiling
-		}
-		if st.peak >= ceiling {
-			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, st.peak, ceiling, st.head)
-		}
 	}
 	return out
 }
@@ -220,9 +242,9 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
-	// Spread: the peak of each statement over three warm reads, as seeded and
-	// after the parts are merged. Logged (no assertion): the ceiling is chosen
-	// from the minimum and the maximum seen here.
+	// Ceilings: the smallest peak of each statement over three warm reads, as
+	// seeded and after the parts are merged, for both callers, must be under the
+	// statement's ceiling. A single cold read is logged above, not asserted.
 	for _, state := range []string{"parts as seeded", "parts merged (OPTIMIZE FINAL)"} {
 		if strings.Contains(state, "OPTIMIZE") {
 			tableRows, err := direct.Query(ctx, `SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree' AND name NOT LIKE '.%'`)
@@ -248,25 +270,30 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			label     string
 			principal storage.Principal
 		}{{"org-wide", orgWide}, {"restricted", restricted}} {
-			read(caller.principal)
-			low, high := map[string]uint64{}, map[string]uint64{}
-			for round := 0; round < 3; round++ {
-				roundMark := serverNowMicros(t, ctx, direct)
-				read(caller.principal)
-				for _, st := range blockerProdShapeQueryLog(t, ctx, direct, roundMark) {
-					key := st.head
-					if low[key] == 0 || st.peak < low[key] {
-						low[key] = st.peak
-					}
-					if st.peak > high[key] {
-						high[key] = st.peak
-					}
-				}
-			}
+			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
 			for key := range low {
 				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+				if ceiling := blockerProdShapeCeilingFor(key); low[key] >= ceiling {
+					t.Errorf("%s, %s: the smallest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, low[key], ceiling)
+				}
 			}
 		}
+	}
+
+	// Negative control: with the library authorization forced back in (the shape
+	// before the organization-wide fast path) the same assertion must fail.
+	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
+	lowForced, _ := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
+	restoreLibrary()
+	exceeded := false
+	for key, peak := range lowForced {
+		if peak >= blockerProdShapeCeilingFor(key) {
+			exceeded = true
+		}
+		t.Logf("PRODSHAPE negative control [org-wide, library authorization forced] min %.1f MiB: %s", float64(peak)/(1<<20), key)
+	}
+	if !exceeded {
+		t.Error("with the library authorization forced back in, no statement exceeded its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
