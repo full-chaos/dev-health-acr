@@ -39,6 +39,10 @@ func investmentTeamPRsWithoutLinkedWorkOwnReason(pullRequests int64) string {
 // yields one row per repository, so its row ceiling is the chunk.
 const teamPRLinkChunk = 500
 
+// teamPRLinkRepositorySet is the requested repositories as a set the primary
+// key can prune on; an array expression with a lambda is not.
+const teamPRLinkRepositorySet = `(SELECT toUUIDOrZero(arrayJoin({ids:Array(String)})))`
+
 // teamPRLinkStatement counts, per requested repository, the pull requests in
 // the window and how many of them have an admitted link. Both tables are read
 // by their primary key prefix (org_id, repo_id), so the read grows with the
@@ -52,14 +56,14 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 			SELECT work_item_id, type FROM work_items FINAL
 			WHERE org_id = {org_id:String} AND work_item_id IN (
 				SELECT work_item_id FROM work_graph_issue_pr
-				WHERE org_id = {org_id:String} AND repo_id IN arrayMap(x -> toUUIDOrZero(x), {ids:Array(String)})
+				WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`
 			)
 		) AS wi ON wi.work_item_id = l.work_item_id
-		WHERE l.org_id = {org_id:String} AND l.repo_id IN arrayMap(x -> toUUIDOrZero(x), {ids:Array(String)})
+		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
 			AND `+linkTierRankSQL+` > 0 AND `+workItemIsIssueSQL("wi")+`
 	)) AS linked
 FROM git_pull_requests AS pr FINAL
-WHERE pr.org_id = {org_id:String} AND pr.repo_id IN arrayMap(x -> toUUIDOrZero(x), {ids:Array(String)})`+
+WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+
 		themeInvestmentRangePredicate(bound, "pr.created_at", "ifNull(pr.merged_at, ifNull(pr.closed_at, toDateTime64('2999-12-31 00:00:00', 6, 'UTC')))")+`
 GROUP BY pr.repo_id
 ORDER BY pr.repo_id`, limit)

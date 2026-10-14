@@ -150,6 +150,14 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		if w.token == old {
 			other = token
 		}
+		// The per-team reason of the old state is its sentence; the token name
+		// is in the request note.
+		if w.token == old {
+			if !strings.Contains(reason, "none of them has persisted work unit effort") || strings.Contains(reason, token) {
+				t.Errorf("%s coverage reason = %q, want the no-unit sentence and not %s", team, reason, token)
+			}
+			continue
+		}
 		if !strings.Contains(reason, w.token) || strings.Contains(reason, other) || (w.count != "" && !strings.Contains(reason, w.count)) {
 			t.Errorf("%s coverage reason = %q, want %s (%s) and not %s", team, reason, w.token, w.count, other)
 		}
