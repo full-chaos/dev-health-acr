@@ -452,6 +452,8 @@ var contextFabricFactScopePolicies = [...]string{
 	"project_issue_pull_request_deployments_v1",
 	"project_issue_pull_request_incidents_v1",
 	"project_team_ownership_operational_deficiencies_v1",
+	// Disclosure-only: a team reaches commitment through its owned projects.
+	"team_project_ownership_commitment_v1",
 }
 
 // ContextFabricFactScopeCensusMaxCount bounds
@@ -468,6 +470,9 @@ var contextFabricFactScopePolicies = [...]string{
 // A number chosen independently would be the shape this file keeps removing:
 // a relation between two literals is not checkable, a relation between a
 // constant and its vocabulary is.
+//
+// team_project_ownership_commitment_v1 adds one cell (team x commitment), so
+// the bound moves from 26 to 27 with it.
 const ContextFabricFactScopeCensusMaxCount = len(contextFabricFactScopePolicies)
 
 // ContextFabricFactScopeCensusTokenMaxLength bounds every string field on a

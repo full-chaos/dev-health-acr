@@ -115,3 +115,8 @@ func SetBlockerAuthorizedIDsBoundForTest(bound int) (restore func()) {
 func OrganizationWideAuthorizationScopeForTest(scope readers.AuthorizationScope) bool {
 	return organizationWideAuthorization(scope)
 }
+
+func CommitmentAuthorizedItemIDsSQLForTest(principal storage.Principal, requestedScope []string) string {
+	authorized, _ := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
+	return authorized
+}
