@@ -1125,7 +1125,14 @@ import (
 // tables instead of inlining the link chain four times and the ids in its text.
 // The rows are unchanged; the statements and their memory are not, so an answer
 // saved under v221 is not reused as one produced by the new statements.
-const QueryVersion = "devhealthfacts.clickhouse.v222"
+//
+// v222 -> v223: the team and project commit counters (commits_count,
+// after_hours_commits_count, weekend_commits_count, and the same three columns
+// of the project team_breakdown table) are served as numbers instead of
+// integers, because a team that co-owns a repository holds a share of the
+// counters and can carry a fraction of a commit. An answer saved under v222
+// carries integer counters and is not reused as one produced by this version.
+const QueryVersion = "devhealthfacts.clickhouse.v223"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
