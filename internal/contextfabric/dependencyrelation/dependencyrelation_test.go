@@ -48,3 +48,22 @@ func TestKeySQLCoversEveryAlias(t *testing.T) {
 		t.Errorf("KeySQL has no pass-through default: %s", sql)
 	}
 }
+
+func TestBlockerPredicateSQLNamesEverySpellingFromTheMapAndHasNoComparisonOperator(t *testing.T) {
+	t.Parallel()
+	predicate := BlockerPredicateSQL("d.relationship_type")
+	inverse := BlockerInverseSQL("d.relationship_type")
+	for _, sql := range []string{predicate, inverse} {
+		if strings.Contains(sql, "=") {
+			t.Fatalf("a comparison operator inside a JOIN ON operand: %s", sql)
+		}
+	}
+	for _, spelling := range []string{"'blocks'", "'blocked_by'", "'is_blocked_by'"} {
+		if !strings.Contains(predicate, spelling) {
+			t.Fatalf("predicate does not name %s: %s", spelling, predicate)
+		}
+	}
+	if strings.Contains(inverse, "'blocks'") || !strings.Contains(inverse, "'blocked_by'") || !strings.Contains(inverse, "'is_blocked_by'") {
+		t.Fatalf("inverse set is not exactly the swapping spellings: %s", inverse)
+	}
+}

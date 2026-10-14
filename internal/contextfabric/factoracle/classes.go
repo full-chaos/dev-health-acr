@@ -116,9 +116,13 @@ type RootReport struct {
 	// as differences.
 	CodeRead []string `json:"code_read,omitempty"`
 	// Residual is, for root analytics, the ops organization value minus the
-	// sum of the acr repository mixes, per theme.
+	// sum of the acr repository mixes, per theme. It is empty while the ops
+	// value is not compared (Retired).
 	Residual map[string]float64 `json:"residual,omitempty"`
-	Excluded map[string]string  `json:"excluded,omitempty"`
+	// Retired lists the compares a root does not make, each with the reason
+	// and the follow-up that restores it. A retired compare is not coverage.
+	Retired  []string          `json:"retired,omitempty"`
+	Excluded map[string]string `json:"excluded,omitempty"`
 
 	// The cases of each path by outcome, the output paths a served answer
 	// gave a value for, and the ops output paths the value pairs compared.

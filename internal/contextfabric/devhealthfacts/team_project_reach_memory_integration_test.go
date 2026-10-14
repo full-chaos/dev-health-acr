@@ -23,6 +23,10 @@ const (
 	projectReachMemoryOrg            = "b7a41c9e-2d63-4f85-a1e0-6c93d8f20b47"
 	projectReachInterleavedMemoryOrg = "3e9d17b2-5a48-4c06-9f1d-8b27c4e6a053"
 	projectReachReadBytesSlope       = 1.15
+	// The narrowed link rows statement's lowest warm read must be at least 2%
+	// under the lowest of the statement it replaced. Lowest-of-3 reads of one
+	// statement differ by under 1% between runs; the narrowing saves 5 to 7%.
+	linkRowsNarrowedMargin = 0.98
 )
 
 var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
@@ -199,20 +203,50 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 
 // teamProjectLinkRowsSQL resolves the owned projects once and prunes the work
 // item read from the named teams' ownership rows. The rows are the rows of the
-// statement it replaced, and the statement's peak memory is lower.
+// statement it replaced, and the statement's peak memory is lower. A single
+// read of either form can peak a few MiB high, so each form is read three
+// times warm, alternated, and the comparison uses each form's lowest read.
+// The planted control puts the replaced statement in the narrowed slot: the
+// same comparison must refuse it.
 func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID string) {
 	t.Helper()
-	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
-	beforeRows, before := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
-	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	afterRows, after := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	t.Logf("MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
-	if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
-		t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
+	replaced, narrowed := devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest(), devhealthfacts.TeamProjectLinkRowsSQLForTest()
+	if lower, line := linkRowsLowerOnLowestOfThree(t, ctx, query, direct, org, teamID, replaced, narrowed); !lower {
+		t.Errorf("narrowed statement not under the statement it replaced: %s", line)
+	} else {
+		t.Logf("MEMORY team project link rows: %s", line)
 	}
-	if after >= before {
-		t.Errorf("narrowed statement peaked at %d bytes, want under the %d bytes of the statement it replaced", after, before)
+	if lower, line := linkRowsLowerOnLowestOfThree(t, ctx, query, direct, org, teamID, replaced, replaced); lower {
+		t.Errorf("planted control: the replaced statement passed as narrowed against itself, so the comparison cannot tell a narrower statement: %s", line)
+	} else {
+		t.Logf("MEMORY team project link rows planted control (replaced statement in the narrowed slot) refused: %s", line)
 	}
+}
+
+// linkRowsLowerOnLowestOfThree reads both statements once unmeasured, then
+// three times each, alternated, and reports whether the lowest read of after
+// is under linkRowsNarrowedMargin of the lowest read of before. Both
+// statements must return the same rows on every read.
+func linkRowsLowerOnLowestOfThree(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID, before, after string) (bool, string) {
+	t.Helper()
+	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", before)
+	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", after)
+	var rows int
+	var befores, afters []uint64
+	for range 3 {
+		beforeRows, peak := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", before)
+		befores = append(befores, peak)
+		afterRows, peak := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", after)
+		afters = append(afters, peak)
+		if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
+			t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
+		}
+		rows = len(afterRows)
+	}
+	bound := uint64(linkRowsNarrowedMargin * float64(slices.Min(befores)))
+	line := fmt.Sprintf("before lowest %d highest %d bytes (reads %v), after lowest %d highest %d bytes (reads %v), bound under %d bytes (%.2f of the before lowest), %d rows",
+		slices.Min(befores), slices.Max(befores), befores, slices.Min(afters), slices.Max(afters), afters, bound, linkRowsNarrowedMargin, rows)
+	return slices.Min(afters) < bound, line
 }
 
 // Two identity edge cases the narrowed statement must keep exactly as the
