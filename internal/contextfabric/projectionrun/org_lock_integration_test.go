@@ -66,3 +66,20 @@ func TestPostgresOrgLocker_rejectsNilDatabase(t *testing.T) {
 	_, err := projectionrun.NewPostgresOrgLocker(nil)
 	require.Error(t, err)
 }
+
+// Invariant 3: a tick that holds a discovered spelling of an organization id
+// and a purge that holds the canonical one must exclude each other.
+func TestPostgresOrgLocker_everySpellingOfOneOrganizationSharesOneLock(t *testing.T) {
+	ctx := context.Background()
+	db := newOrgLockTestDatabase(t, ctx)
+	locker, err := projectionrun.NewPostgresOrgLocker(db)
+	require.NoError(t, err)
+	const canonical = "f00d1234-5678-4abc-8def-0123456789ab"
+	for _, spelling := range []string{"F00D1234-5678-4ABC-8DEF-0123456789AB", "{" + canonical + "}", "urn:uuid:" + canonical, "f00d123456784abc8def0123456789ab", " " + canonical} {
+		unlock, err := locker.Lock(ctx, canonical)
+		require.NoError(t, err)
+		_, err = locker.Lock(ctx, spelling)
+		require.True(t, errors.Is(err, projectionrun.ErrOrgLocked), "spelling %q must contend with the canonical lock, got: %v", spelling, err)
+		require.NoError(t, unlock())
+	}
+}
