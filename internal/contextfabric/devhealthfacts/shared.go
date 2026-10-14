@@ -1126,11 +1126,18 @@ import (
 // The rows are unchanged; the statements and their memory are not, so an answer
 // saved under v221 is not reused as one produced by the new statements.
 //
-// v222 -> v223: a team pull_requests read serves its pull requests counted by
+// v222 -> v223: the team and project blocker statements read in blocks of
+// 8,192 rows instead of the server default of 65,536, and the age
+// statements read the first-seen rows of the organization without
+// narrowing them to the blocker edges. The rows are unchanged; the
+// statements served are not, so an answer saved under v222 is not reused as
+// one produced by them.
+//
+// v223 -> v224: a team pull_requests read serves its pull requests counted by
 // stored state (pull_requests_by_state) and no fact per pull request unless the
 // question asks for the pull requests themselves. The answer changes; an answer
-// saved under v222 is not reused as one produced by the new read.
-const QueryVersion = "devhealthfacts.clickhouse.v223"
+// saved under v223 is not reused as one produced by the new read.
+const QueryVersion = "devhealthfacts.clickhouse.v224"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

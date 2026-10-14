@@ -45,6 +45,10 @@ func workItemAuthorizedIDsSQL(scope readers.AuthorizationScope) (string, []reade
 	return workItemAuthorizedIDsAmongSQL(scope, "")
 }
 
+// libraryAuthorizationForced makes every scope take the library relation, the
+// shape before the organization-wide fast path; a test-only negative control.
+var libraryAuthorizationForced bool
+
 // organizationWideAuthorization reports the scope that authorizes every work
 // item of the organization: an organization-wide grant with no requested
 // restriction and no repository id dimension. The library renders its
@@ -60,7 +64,7 @@ func organizationWideAuthorization(scope readers.AuthorizationScope) bool {
 // candidates (a subquery) names; "" is every id of the organization. Every
 // stored row of a kept id is still grouped, so the rule is unchanged.
 func workItemAuthorizedIDsAmongSQL(scope readers.AuthorizationScope, candidates string) (string, []readers.Binding) {
-	if organizationWideAuthorization(scope) {
+	if organizationWideAuthorization(scope) && !libraryAuthorizationForced {
 		among := ""
 		if candidates != "" {
 			among = ` AND w.work_item_id IN ` + candidates
