@@ -24,7 +24,7 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 	ctx := context.Background()
 	orgID := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
-	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "projects") {
+	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "projects", "team_repo_ownership") {
 		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -43,6 +43,8 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 		repo := repoUUID("pr-rows-" + team)
 		repos = append(repos, repo)
 		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, orgID, "acme/"+strings.ToLower(team), "github", at)
+		exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			orgID, "github", team, repo, "acme/"+strings.ToLower(team), "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
 		item := "WI-" + team
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			item, repo, orgID, "linear", "issue "+item, "open", "", "", "", at)
@@ -80,6 +82,15 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 			t.Fatalf("an empty pull request fact was served: %+v", fact)
 		}
 	}
+	linkedServed := false
+	for _, fact := range response.Facts {
+		if fact.Subject.Kind == "pull_request" && strings.HasSuffix(fact.Subject.CanonicalID, ":900") && len(fact.Tables["project_breakdown"].Rows) == 1 {
+			linkedServed = true
+		}
+	}
+	if !linkedServed {
+		t.Fatalf("the linked pull request with a project_breakdown table is not served: %+v", response.Facts)
+	}
 	// Every reached pull request is either served with content or counted:
 	// perTeam per team plus the linked one, none lost silently.
 	reached := len(teams)*perTeam + 1
@@ -88,6 +99,9 @@ func TestDirectReadPullRequestsForSeveralTeamsCountsFactsServingNoField(t *testi
 		if fact.Subject.Kind == "pull_request" {
 			served++
 		}
+	}
+	if served != 1 {
+		t.Fatalf("served %d pull request facts, want only the linked one", served)
 	}
 	var note string
 	for _, candidate := range response.RequestNotes {
