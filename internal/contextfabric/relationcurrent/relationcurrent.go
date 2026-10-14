@@ -111,6 +111,30 @@ func rowsSQL(typeCondition, endpoints string) string {
     GROUP BY e.s, e.t, e.rt, e.ls, e.code)`
 }
 
+// BlockerEndpointIDsSQL is EndpointIDsSQL over every spelling the graph
+// projection maps onto a blocks edge (dependencyrelation.BlockerPredicateSQL:
+// the same set as projectionEndpointIDsSQL, one trim and one lower per row).
+var BlockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND ` + dependencyrelation.BlockerPredicateSQL("be.relationship_type") + `)`
+
+// BlockerRowsSQL is RowsSQL over every spelling of the blocks relation, for the
+// fact readers: a pair stored as blocked_by is judged by the same rule as the
+// blocks row, and the graph projection judges it the same way.
+func BlockerRowsSQL() string {
+	return rowsSQL(dependencyrelation.BlockerPredicateSQL("de.relationship_type"), BlockerEndpointIDsSQL)
+}
+
+// BlockerEndedKeysSQL is the keys of the blocker rows, of any spelling, the
+// provider no longer reports.
+func BlockerEndedKeysSQL() string {
+	return `(SELECT s, t, rt FROM ` + BlockerRowsSQL() + ` WHERE ended)`
+}
+
+// BlockerCurrentSQL keeps the blocker rows, of any spelling, the provider still
+// reports. A pair with a live twin keeps the live row, so the edge stays.
+func BlockerCurrentSQL(d string) string {
+	return ` AND (` + d + `.source_work_item_id, ` + d + `.target_work_item_id, ` + d + `.relationship_type) NOT IN ` + BlockerEndedKeysSQL()
+}
+
 // EndedKeysSQL is the keys of the blocker rows the provider no longer
 // reports. Every reader tests membership in this one subquery.
 func EndedKeysSQL() string {

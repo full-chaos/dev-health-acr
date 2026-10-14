@@ -85,5 +85,5 @@ func (p *BlockersProvider) blockerScope(ctx context.Context, principal storage.P
 	if err != nil {
 		return "", "", nil, err
 	}
-	return authorized, relationcurrent.CurrentSQL("d"), bindings, nil
+	return authorized, relationcurrent.BlockerCurrentSQL("d"), bindings, nil
 }
