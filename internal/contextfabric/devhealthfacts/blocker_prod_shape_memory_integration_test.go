@@ -90,6 +90,10 @@ const (
 	blockerProdShapeTotalsCeiling = uint64(38 << 20)
 	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
 
+	// The planted defect must clear its ceiling by this much on the totals
+	// statement, so the control does not flip on allocator noise.
+	blockerProdShapeControlMargin = uint64(2 << 20)
+
 	// The in-statement authorization fallback: main's peaks on this shape
 	// (52.3 MiB age, 46.8 MiB totals) plus 2 MiB, under the 64 MiB cap.
 	blockerProdShapeInStatementCeiling       = uint64(54 << 20)
@@ -227,7 +231,10 @@ GROUP BY normalized_query_hash`, mark)
 	exceeded := false
 	for hash, entry := range byHash {
 		ceiling := blockerProdShapeCeilingFor(entry.head)
-		hit := entry.memoryLimits == entry.rounds || entry.low >= ceiling
+		// Only the totals statement counts, and only by a clear margin: a
+		// control that clears a ceiling by a hair flips on allocator noise.
+		totals := strings.HasPrefix(entry.head, blockerProdShapeTotalsHead)
+		hit := totals && (entry.memoryLimits == entry.rounds || entry.low >= ceiling+blockerProdShapeControlMargin)
 		if hit {
 			exceeded = true
 		}
