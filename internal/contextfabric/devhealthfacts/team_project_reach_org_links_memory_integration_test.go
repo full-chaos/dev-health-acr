@@ -38,6 +38,12 @@ const (
 // the peak of each project-reached statement, measured with the organization's
 // link rows and pull requests tripled, may not grow past the slope.
 func TestTeamProjectReachedStatementMemoryFollowsOwnedProjectsNotOrganizationLinksOnRealClickHouse(t *testing.T) {
+	if raceDetectorEnabled {
+		// The peaks are the ClickHouse server's, which the Go race detector does not touch;
+		// it only multiplies the Go-side seeding of about a million rows past the race job's
+		// budget. The ordinary unit legs run this row and fail on any bound.
+		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
+	}
 	for _, merged := range []bool{false, true} {
 		mode := map[bool]string{false: "unmerged", true: "merged"}[merged]
 		t.Run(mode, func(t *testing.T) {
