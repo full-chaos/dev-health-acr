@@ -83,10 +83,12 @@ const (
 	// contextpacket.APIStatementMaxMemoryUsage and max_bytes_to_read from
 	// config.DefaultClickHouseMaxBytesToRead.
 	linkedShapeMaxBytesToRead = 256 << 20
-	// The served statement must stay at or under this at the prod shape in
-	// both merge states. The repository-scoped split reads it sits beside are
-	// held under 64 MiB (repoScopedSplitMemoryCeiling).
-	linkedShapeBoundMiB = 64.0
+	// The served statement stays at or under linkedShapePeakBoundMiB (3/8 of
+	// the 256 MiB statement cap) and at or under linkedShapeSplitFactor times
+	// the peak of its own split rows plus linkedShapeSplitSlackMiB.
+	linkedShapePeakBoundMiB  = 96.0
+	linkedShapeSplitFactor   = 1.25
+	linkedShapeSplitSlackMiB = 8.0
 	// The unit that names one pull request three times, and its effort: large
 	// enough that a team's feature_delivery effort shows whether the repeated
 	// pull request was counted once (half of the effort) or per mention.
@@ -224,21 +226,18 @@ type linkedFragmentPeak struct {
 	name     string
 	mib      float64
 	readRows uint64
-	misses   uint64
 }
 
-func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID, stage string, fragments []devhealthfacts.LinkedMixFragment) []linkedFragmentPeak {
+// measureLinkedMixFragments runs each form linkedShapeRuns times with no
+// memory cap and no result row cap and keeps its lowest peak.
+func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID, stage string, fragments []devhealthfacts.LinkedMixFragment) map[string]linkedFragmentPeak {
 	t.Helper()
-	var out []linkedFragmentPeak
+	out := map[string]linkedFragmentPeak{}
 	for _, frag := range fragments {
 		best := linkedFragmentPeak{name: frag.Name, mib: -1}
 		for run := 0; run < linkedShapeRuns; run++ {
 			tag := fmt.Sprintf("linked-%s-%s-%d-%d", stage, frag.Name, run, time.Now().UnixNano())
-			settings := "max_result_rows = 0, max_memory_usage = 0, log_comment = '" + tag + "'"
-			if frag.Settings != "" {
-				settings += ", " + frag.Settings
-			}
-			statement := frag.SQL + "\nSETTINGS " + settings
+			statement := frag.SQL + "\nSETTINGS max_result_rows = 0, max_memory_usage = 0, log_comment = '" + tag + "'"
 			if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixFragment", statement, orgID, []string{linkedShapeTeam},
 				func(readers.RowScanner) error { return nil }, frag.Bindings...); err != nil {
 				t.Fatalf("%s %s: %v: %s", stage, frag.Name, err, readFailureCause(err))
@@ -246,26 +245,26 @@ func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextp
 			if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 				t.Fatalf("flush logs (measurement did not happen): %v", err)
 			}
-			var mem, readRows, misses uint64
-			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows, ProfileEvents['ScalarSubqueriesCacheMiss'] FROM system.query_log
-WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &readRows, &misses); err != nil {
+			var mem, readRows uint64
+			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows FROM system.query_log
+WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &readRows); err != nil {
 				t.Fatalf("%s %s: no query_log row for %s (measurement did not happen): %v", stage, frag.Name, tag, err)
 			}
-			mib := float64(mem) / (1 << 20)
-			if best.mib < 0 || mib < best.mib {
-				best = linkedFragmentPeak{name: frag.Name, mib: mib, readRows: readRows, misses: misses}
+			if mib := float64(mem) / (1 << 20); best.mib < 0 || mib < best.mib {
+				best = linkedFragmentPeak{name: frag.Name, mib: mib, readRows: readRows}
 			}
 		}
-		out = append(out, best)
+		out[frag.Name] = best
 	}
 	return out
 }
 
-func linkedFragmentTable(stage string, peaks []linkedFragmentPeak) string {
+func linkedFragmentTable(stage string, fragments []devhealthfacts.LinkedMixFragment, peaks map[string]linkedFragmentPeak) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "team linked pull request mix, stage=%s (min of %d warm runs; diagnostic settings max_memory_usage=0, max_result_rows=0)\n", stage, linkedShapeRuns)
-	for _, p := range peaks {
-		fmt.Fprintf(&b, "  %-20s peak=%8.2f MiB read_rows=%10d scalar_misses=%d\n", p.name, p.mib, p.readRows, p.misses)
+	fmt.Fprintf(&b, "team linked pull request mix, stage=%s (min of %d warm runs; max_memory_usage=0, max_result_rows=0)\n", stage, linkedShapeRuns)
+	for _, frag := range fragments {
+		p := peaks[frag.Name]
+		fmt.Fprintf(&b, "  %-32s peak=%8.2f MiB read_rows=%10d\n", p.name, p.mib, p.readRows)
 	}
 	return b.String()
 }
@@ -317,6 +316,60 @@ func fragmentNamed(t *testing.T, fragments []devhealthfacts.LinkedMixFragment, n
 	return devhealthfacts.LinkedMixFragment{}
 }
 
+// repeatedKeyShare is true when a team row carries half of the repeated-key
+// unit's effort: the repeated pull request counted once.
+func repeatedKeyShare(rows map[string]linkedMixRow) (float64, bool) {
+	share := rows[linkedShapeRepeatedTeam].theme["feature_delivery"]
+	half := linkedShapeRepeatedEffort / 2
+	return share, share >= half && share <= half+1e6
+}
+
+// assertLinkedMixDifferential compares the production statement with the
+// statement before the folded split and with the form that reads the
+// reference array above the expansion, for every team of the seed, and pins
+// the repeated-key unit's share in all three.
+func assertLinkedMixDifferential(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID, stage string, fragments []devhealthfacts.LinkedMixFragment) {
+	t.Helper()
+	teams := make([]string, linkedMemoryProdShape.teams)
+	for i := range teams {
+		teams[i] = fmt.Sprintf("T-%d", i)
+	}
+	served := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement"))
+	if len(served) < 2 {
+		t.Fatalf("%s: differential did not happen: the production statement returned %d team rows", stage, len(served))
+	}
+	if share, ok := repeatedKeyShare(served); !ok {
+		t.Errorf("%s: production statement: team %s feature_delivery effort %v, want half of the repeated-key unit (%v) plus the small units", stage, linkedShapeRepeatedTeam, share, linkedShapeRepeatedEffort/2)
+	}
+	for _, name := range []string{"legacy_statement", "reference_array_above_expansion"} {
+		other := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, name))
+		t.Logf("%s: differential over %d teams: production statement %d team rows, %s %d", stage, len(teams), len(served), name, len(other))
+		if len(other) != len(served) {
+			t.Errorf("%s: %s returned %d team rows, the production statement %d", stage, name, len(other), len(served))
+		}
+		for team, got := range served {
+			want, ok := other[team]
+			if !ok || got.repos != want.repos || !closeEnough(got.bugfix, want.bugfix) || len(got.theme) != len(want.theme) {
+				t.Errorf("%s: team %s: production %+v, %s %+v", stage, team, got, name, want)
+				continue
+			}
+			for theme, v := range want.theme {
+				if !closeEnough(got.theme[theme], v) {
+					t.Errorf("%s: team %s theme %s: production %v, %s %v", stage, team, theme, got.theme[theme], name, v)
+				}
+			}
+		}
+		if share, ok := repeatedKeyShare(other); !ok {
+			t.Errorf("%s: %s: team %s feature_delivery effort %v, want half of the repeated-key unit", stage, name, linkedShapeRepeatedTeam, share)
+		}
+	}
+	// The repeated-key row can tell a repeat counted from a repeat ignored.
+	counted := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "repeats_counted"))
+	if share, ok := repeatedKeyShare(counted); ok {
+		t.Errorf("%s: the repeated-key row cannot fail: with c forced to 2 team %s still reads %v", stage, linkedShapeRepeatedTeam, share)
+	}
+}
+
 // servedLinkedMixPeak drives the team investment read through the provider on
 // a client with the API's statement settings and returns the linked mix
 // statement's lowest peak over warm runs.
@@ -350,9 +403,21 @@ func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabr
 }
 
 // The team linked pull request mix at the largest prod organization's
-// volume, measured whole and fragment by fragment, with the parts unmerged and
-// after OPTIMIZE FINAL. Prod peaked 233.98 MiB of its 256 MiB cap for one
-// team read; CI reads about 0.80-0.86 of prod.
+// volume and skew, with the parts unmerged and after OPTIMIZE FINAL. Prod
+// peaked 233.98 MiB of its 256 MiB statement cap for one team read while the
+// statement read each unit's reference array on every expanded
+// (unit, pull request) row; this seed reads 232-239 MiB in that form.
+//
+// Two bounds hold the served statement. The peak bound keeps it far from the
+// cap. The mechanism bound ties it to the split rows it is built on, so a
+// unit array carried through the expansion again fails whatever the size of
+// the organization. The form that reads the array above the expansion is
+// measured beside it and must break both bounds, or the seed has lost the
+// skew that makes the row able to fail.
+//
+// repoScopedSplitMemoryCeiling (64 MiB) is not applied here: it bounds the
+// repository-scoped split reads on a shape without wide units, and this
+// statement's floor at the prod skew is its own split (60-72 MiB).
 func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	ctx := context.Background()
 	maxBytes := uint64(linkedShapeMaxBytesToRead)
@@ -390,15 +455,34 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	}
 	t.Logf("seeded: %d unit rows / %d units (%d in scope), PR refs %d (max %d), issue refs %d (max %d), lookups %d, evidence avg %.0f B",
 		rows, units, len(ids), prRefs, maxPRs, issueRefs, maxIssues, lookupRefs, avgJSON)
+	if maxPRs < uint64(linkedMemoryProdShape.extremePRs) || maxIssues < uint64(linkedMemoryProdShape.extremeIssues) {
+		t.Fatalf("the seed lost its widest units: max %d PR refs and %d issue refs", maxPRs, maxIssues)
+	}
 	fragments, missing := devhealthfacts.TeamLinkedMixFragmentsForTest(ids)
 	if missing != "" {
-		t.Fatalf("fragment %s: cut marker not in the rendered statement", missing)
+		t.Fatalf("form %s: marker not in the rendered statement", missing)
 	}
 	capped := contextpacket.NewMemoryCappedQueryClient(query, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 
-	unmerged := measureLinkedMixFragments(t, ctx, query, direct, orgID, "unmerged", fragments)
-	servedUnmerged := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
+	check := func(stage string) {
+		t.Helper()
+		peaks := measureLinkedMixFragments(t, ctx, query, direct, orgID, stage, fragments)
+		served := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
+		t.Logf("%sserved through the provider (API settings, %d MiB cap), stage=%s: %.2f MiB", linkedFragmentTable(stage, fragments, peaks), contextpacket.APIStatementMaxMemoryUsage>>20, stage, served)
+		mechanism := linkedShapeSplitFactor*peaks["split_rows"].mib + linkedShapeSplitSlackMiB
+		if served > linkedShapePeakBoundMiB {
+			t.Errorf("%s: the served team linked pull request mix peaked at %.2f MiB at the prod shape, bound %.0f MiB", stage, served, linkedShapePeakBoundMiB)
+		}
+		if served > mechanism {
+			t.Errorf("%s: the served team linked pull request mix peaked at %.2f MiB, over %.2f MiB (%.2f x its split rows + %.0f MiB): it carries more than its split", stage, served, mechanism, linkedShapeSplitFactor, linkedShapeSplitSlackMiB)
+		}
+		if above := peaks["reference_array_above_expansion"].mib; above <= linkedShapePeakBoundMiB || above <= mechanism {
+			t.Errorf("%s: the row cannot fail: the form that reads the reference array above the expansion peaked at %.2f MiB, inside the bounds (%.0f and %.2f MiB)", stage, above, linkedShapePeakBoundMiB, mechanism)
+		}
+		assertLinkedMixDifferential(t, ctx, query, orgID, stage, fragments)
+	}
+	check("unmerged")
 	for _, table := range tables {
 		// devhealthschema:not-a-production-replica these statements maintain tables the production DDL created; no column, type or engine is declared here.
 		if err := direct.Exec(ctx, "SYSTEM START MERGES "+table); err != nil {
@@ -409,47 +493,5 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	optimized := measureLinkedMixFragments(t, ctx, query, direct, orgID, "optimized", fragments)
-	servedOptimized := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
-	t.Logf("%s%sserved (API settings, 256 MiB cap): unmerged %.2f MiB, optimized %.2f MiB", linkedFragmentTable("unmerged", unmerged), linkedFragmentTable("optimized", optimized), servedUnmerged, servedOptimized)
-	teams := make([]string, linkedMemoryProdShape.teams)
-	for i := range teams {
-		teams[i] = fmt.Sprintf("T-%d", i)
-	}
-	current := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, "statement"))
-	if len(current) == 0 {
-		t.Errorf("differential did not happen: the current statement returned no team row")
-	}
-	for _, name := range []string{"legacy_statement", "statement_n_length_in_fold", "statement_n_uniq_in_fold", "statement_n_uniq_filtered_first"} {
-		other := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, name))
-		t.Logf("differential over %d teams: current statement served %d team rows, %s %d", len(teams), len(current), name, len(other))
-		if len(other) != len(current) {
-			t.Errorf("%s returned %d team rows, the current statement %d", name, len(other), len(current))
-		}
-		for team, want := range current {
-			got, ok := other[team]
-			if !ok || got.repos != want.repos || !closeEnough(got.bugfix, want.bugfix) || len(got.theme) != len(want.theme) {
-				t.Errorf("team %s: %s %+v, current %+v", team, name, got, want)
-				continue
-			}
-			for theme, v := range want.theme {
-				if !closeEnough(got.theme[theme], v) {
-					t.Errorf("team %s theme %s: %s %v, current %v", team, theme, name, got.theme[theme], v)
-				}
-			}
-		}
-		// The repeated pull request is counted once: half of the unit's effort.
-		share := other[linkedShapeRepeatedTeam].theme["feature_delivery"]
-		if half := linkedShapeRepeatedEffort / 2; share < half || share > half+1e6 {
-			t.Errorf("%s: team %s feature_delivery effort %v, want half of the repeated-key unit (%v) plus the small units", name, linkedShapeRepeatedTeam, share, half)
-		}
-	}
-	if share, half := current[linkedShapeRepeatedTeam].theme["feature_delivery"], linkedShapeRepeatedEffort/2; share < half || share > half+1e6 {
-		t.Errorf("current statement: team %s feature_delivery effort %v, want half of the repeated-key unit (%v) plus the small units", linkedShapeRepeatedTeam, share, half)
-	}
-	for stage, peak := range map[string]float64{"unmerged": servedUnmerged, "optimized": servedOptimized} {
-		if peak > linkedShapeBoundMiB {
-			t.Errorf("%s: the served team linked pull request mix peaked at %.2f MiB at the prod shape, bound %.0f MiB", stage, peak, linkedShapeBoundMiB)
-		}
-	}
+	check("optimized")
 }
