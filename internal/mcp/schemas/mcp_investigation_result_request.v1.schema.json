@@ -16,7 +16,7 @@
   "properties": {
     "result_id": {
       "type": "string",
-      "description": "The result_id of a previous investigate_question answer, exactly as returned. Opaque: do not build or parse it. Access is re-checked against your credential on every call, so an id from another organization or one you are not allowed to read is refused.",
+      "description": "The result_id of a previous investigate_question (if listed) answer, exactly as returned. Opaque: do not build or parse it. Access is re-checked against your credential on every call, so an id from another organization or one you are not allowed to read is refused.",
       "minLength": 8,
       "maxLength": 256
     }

@@ -228,7 +228,7 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 		"needs: mirror-preflight",
 		"TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX",
 		"isolated-dedicated devhealthsource",
-		"CHAOS-6342",
+		"scripts/ci/run-isolated-budget.sh",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("race-devhealthsource job must contain %q; block:\n%s", want, block)
