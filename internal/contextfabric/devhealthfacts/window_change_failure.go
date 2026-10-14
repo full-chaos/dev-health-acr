@@ -5,12 +5,13 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts/internal/opschangefailure"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
-// The window change failure rate is the share of deployments linked to an
-// incident, over the window and subject (one repository, or the repositories a
+// The window change failure rate is the share of failed deployments (linked to
+// an incident, or failed by their own status), over the window and subject (one repository, or the repositories a
 // team owns). It is read from repo_change_failure_daily, never from the
 // deprecated repo_metrics_daily.change_failure_rate and never as an average of
 // daily rates: the counts of every stored day in the window are summed and one
@@ -21,7 +22,8 @@ import (
 //   - no deployments in the window           -> no rate, state not_applicable_no_deployments
 //   - deployments, no incident tied and no deployment with a final status
 //     -> no rate, state unknown_no_incident_evidence
-//   - else (failed native + heuristic + status) / deployments; 0 is a measured 0
+//   - else failed / D with incident evidence (basis incident or both), failed /
+//     K with status evidence alone (basis status); 0 is a measured 0
 //
 // Missing is not healthy: a repository that deploys but has no incident
 // evidence never reads 0. Whenever no rate is served, change_failure_unknown_reason
@@ -51,13 +53,6 @@ const (
 
 	changeFailureTierNative    = "native"
 	changeFailureTierHeuristic = "heuristic"
-
-	changeFailureReasonNoDeployments  = "no_deployments_in_window"
-	changeFailureReasonNotCollected   = "not_collected"
-	changeFailureReasonWithoutOutcome = "deployments_without_outcome"
-	changeFailureBasisIncident        = "incident"
-	changeFailureBasisBoth            = "both"
-	changeFailureBasisStatus          = "status"
 )
 
 // changeFailureCounts are the summed stored counts of a view and the number of
@@ -82,51 +77,50 @@ type changeFailureOutcome struct {
 	linkTier string
 	reason   string
 	basis    string
+	coverage *float64
 }
 
-// evaluateChangeFailure is the one rule every read here applies to a view. It
-// is acr's own copy of the ops rule (the vendored oracle executes the ops
-// function against it over every count combination):
+// evaluateChangeFailure is the one rule every read here applies to a view. The
+// rule is the ops function itself, vendored byte for byte
+// (internal/opschangefailure, re-vendored by vendor.sh): acr maps its summed
+// counts to the rule's inputs and serves the rule's answer, so basis, reason,
+// denominator and coverage are the ops values and no second derivation exists.
 //
-//   - no stored row                                -> no state, reason not_collected
-//   - no deployments                               -> not applicable, reason no_deployments_in_window
-//   - no incident evidence and no known status     -> unknown, reason deployments_without_outcome
-//   - else (native + heuristic + status failed) / deployments, 0 a measured 0;
-//     the basis names the evidence: incident, status or both.
-//
-// Failed by status counts the failed deployments no incident link names, so a
-// failed deployment counts once. A table without the status columns has both
-// status counts at 0 and so reads the incident rule alone.
+// The inputs: failed by status counts the failed deployments no incident link
+// names, so a failed deployment counts once; incident evidence is a direct or
+// a via-deployment incident tied to the view. A table without the status
+// columns carries K = 0 and no failed-by-status, so it reads the incident
+// rule alone, the answer it gave before the columns existed.
 func evaluateChangeFailure(c changeFailureCounts) changeFailureOutcome {
-	switch {
-	case c.storedRows == 0:
-		return changeFailureOutcome{state: changeFailureStateNoCounts, reason: changeFailureReasonNotCollected}
-	case c.deployments == 0:
-		return changeFailureOutcome{state: changeFailureStateNotApplicable, reason: changeFailureReasonNoDeployments}
+	result := opschangefailure.ApplyRule(opschangefailure.RuleInputs{
+		StoredRows:           uint64(c.storedRows),
+		Deployments:          uint64(c.deployments),
+		StatusKnown:          uint64(c.statusKnown),
+		FailedStatusOnly:     uint64(c.failedStatus),
+		FailedIncidentLinked: uint64(c.failedNative + c.failedHeuristic),
+		IncidentEvidence:     c.incidentsDirect+c.incidentsViaDeployment > 0,
+	})
+	out := changeFailureOutcome{reason: string(result.UnknownReason), coverage: result.Coverage}
+	switch result.UnknownReason {
+	case opschangefailure.ReasonNotCollected:
+		out.state = changeFailureStateNoCounts
+		return out
+	case opschangefailure.ReasonNoDeploymentsInWindow:
+		out.state = changeFailureStateNotApplicable
+		return out
+	case opschangefailure.ReasonDeploymentsWithoutOutcome:
+		out.state = changeFailureStateUnknown
+		return out
 	}
-	incidentEvidence := c.incidentsDirect+c.incidentsViaDeployment > 0
-	statusEvidence := c.statusKnown > 0
-	if !incidentEvidence && !statusEvidence {
-		return changeFailureOutcome{state: changeFailureStateUnknown, reason: changeFailureReasonWithoutOutcome}
-	}
-	out := changeFailureOutcome{
-		value:    float64(c.failedNative+c.failedHeuristic+c.failedStatus) / float64(c.deployments),
-		measured: true,
-		state:    changeFailureStateMeasured,
+	out.measured, out.state, out.basis = true, changeFailureStateMeasured, string(result.Basis)
+	if result.Rate != nil {
+		out.value = *result.Rate
 	}
 	switch {
 	case c.failedHeuristic > 0:
 		out.linkTier = changeFailureTierHeuristic
 	case c.failedNative > 0:
 		out.linkTier = changeFailureTierNative
-	}
-	switch {
-	case incidentEvidence && statusEvidence:
-		out.basis = changeFailureBasisBoth
-	case statusEvidence:
-		out.basis = changeFailureBasisStatus
-	default:
-		out.basis = changeFailureBasisIncident
 	}
 	return out
 }
@@ -190,7 +184,7 @@ WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
 func setChangeFailure(fields map[string]contextfabric.FactValue, counts *changeFailureCounts, notCollected bool) {
 	if counts == nil {
 		if notCollected {
-			fields[changeFailureUnknownReason] = contextfabric.StringFactValue(changeFailureReasonNotCollected)
+			fields[changeFailureUnknownReason] = contextfabric.StringFactValue(string(opschangefailure.ReasonNotCollected))
 		}
 		return
 	}
@@ -204,8 +198,8 @@ func setChangeFailure(fields map[string]contextfabric.FactValue, counts *changeF
 	if counts.statusColumns {
 		fields[changeFailureStatusFailedField] = contextfabric.IntegerFactValue(counts.failedStatus)
 		fields[changeFailureStatusKnownField] = contextfabric.IntegerFactValue(counts.statusKnown)
-		if counts.deployments > 0 {
-			fields[changeFailureStatusCoverage] = contextfabric.NumberFactValue(float64(counts.statusKnown) / float64(counts.deployments))
+		if outcome.coverage != nil {
+			fields[changeFailureStatusCoverage] = contextfabric.NumberFactValue(*outcome.coverage)
 		}
 	}
 	if outcome.measured {

@@ -15,8 +15,13 @@ src=internal/jobs/metrics
     sed 's#github.com/full-chaos/dev-health-ops/internal/jobs/metrics/deploymentstatus#github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts/internal/deploymentstatus#; s#^package changefailure$#package opschangefailure#'
 } > "$here/changefailure.go"
 {
+  printf '// Code generated from dev-health-ops %s/changefailure/rule.go\n' "$src"
+  printf '// at commit %s (CHAOS-9621). DO NOT EDIT.\n\n' "$sha"
+  git -C "$ops" show "$sha:$src/changefailure/rule.go" | sed 's#^package changefailure$#package opschangefailure#'
+} > "$here/rule.go"
+{
   printf '// Code generated from dev-health-ops %s/deploymentstatus/deploymentstatus.go\n' "$src"
   printf '// at commit %s (CHAOS-9621). DO NOT EDIT.\n\n' "$sha"
   git -C "$ops" show "$sha:$src/deploymentstatus/deploymentstatus.go"
 } > "$here/../deploymentstatus/deploymentstatus.go"
-sha256sum "$here/changefailure.go" "$here/../deploymentstatus/deploymentstatus.go"
+sha256sum "$here/changefailure.go" "$here/rule.go" "$here/../deploymentstatus/deploymentstatus.go"

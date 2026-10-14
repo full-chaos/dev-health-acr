@@ -1,5 +1,5 @@
 // Code generated from dev-health-ops internal/jobs/metrics/deploymentstatus/deploymentstatus.go
-// at commit 2c7bf2761cf61e5f7fc9d83a01f6e4048ce15689 (CHAOS-9621). DO NOT EDIT.
+// at commit 4cf2a69680681385eece1ac52fec1765c6d682e8 (CHAOS-9621). DO NOT EDIT.
 
 // Package deploymentstatus holds the one meaning of a deployment's own status
 // for every delivery metric (CHAOS-9621): change failure rate, deployment

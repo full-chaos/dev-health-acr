@@ -16,8 +16,9 @@ import (
 // header (internal/opschangefailure/vendor.sh), and must pass the executed
 // comparison below.
 var opsVendoredDigests = map[string]string{
-	"internal/opschangefailure/changefailure.go":    "af1756cec4e31a9be3fb7903fa7ce6f8bd612a0c22df597a1e8f0c8fb5e8c09e",
-	"internal/deploymentstatus/deploymentstatus.go": "3879ba2b16d97118772603bc1fefcdab864fdc40924bcd8b5dc561c0e2464aae",
+	"internal/opschangefailure/changefailure.go":    "456a9723c678082271cbcec8678305e65b7bf17163d9ff4c3dd6af69b810309c",
+	"internal/deploymentstatus/deploymentstatus.go": "a0361f5adf141cb89265e48a89667952a645d400257aa62577fb89086854135b",
+	"internal/opschangefailure/rule.go":             "de610133216893f25c28a6fb98ca47e051df0d4127892cf299f7d13df0ff9043",
 }
 
 func TestVendoredOpsChangeFailureRuleIsPinned(t *testing.T) {
@@ -59,13 +60,16 @@ func TestChangeFailureRuleAgreesWithTheOpsRuleOnEveryCount(t *testing.T) {
 										FailedStatus: uint64(failedStatus), StatusKnown: uint64(known),
 									}
 									theirs := opschangefailure.Evaluate(opschangefailure.View{Counts: ops, StoredRows: uint64(stored)})
-									if mine.state != string(theirs.State) || mine.linkTier != theirs.LinkTier || mine.basis != theirs.Basis ||
-										mine.measured != (theirs.Value != nil) || (theirs.Value != nil && mine.value != *theirs.Value) {
+									wantBasis := ""
+									if theirs.BasisOrNil() != nil {
+										wantBasis = *theirs.BasisOrNil()
+									}
+									if mine.state != string(theirs.State) || mine.linkTier != theirs.LinkTier || mine.basis != wantBasis ||
+										mine.reason != string(theirs.UnknownReason) ||
+										mine.measured != (theirs.Value != nil) || (theirs.Value != nil && mine.value != *theirs.Value) ||
+										(mine.coverage == nil) != (theirs.Coverage == nil) || (theirs.Coverage != nil && *mine.coverage != *theirs.Coverage) {
 										t.Fatalf("stored=%d dep=%d native=%d heur=%d direct=%d via=%d status=%d known=%d: acr %+v, ops %+v",
 											stored, deployments, failedNative, failedHeuristic, direct, via, failedStatus, known, mine, theirs)
-									}
-									if mine.measured == (mine.reason != "") {
-										t.Fatalf("reason %q with measured=%v: a reason is served exactly when no rate is", mine.reason, mine.measured)
 									}
 									points++
 								}
@@ -103,6 +107,7 @@ func TestChangeFailureRuleAgreesWithTheOpsRuleOnProducedCounts(t *testing.T) {
 		{"all success is a measured zero", []opschangefailure.Deployment{dep("d1", "success"), dep("d2", "success")}, nil, nil, "measured", "status", 0},
 		{"a failed status counts without an incident", []opschangefailure.Deployment{dep("d1", "failure"), dep("d2", "success")}, nil, nil, "measured", "status", 0.5},
 		{"canceled is neither failed nor a deployment", []opschangefailure.Deployment{dep("d1", "canceled"), dep("d2", "success")}, nil, nil, "measured", "status", 0},
+		{"status only rates over the known statuses", []opschangefailure.Deployment{dep("d1", "failed"), dep("d2", "success"), dep("d3", "queued"), dep("d4", "")}, nil, nil, "measured", "status", 0.5},
 		{"only canceled has no deployment", []opschangefailure.Deployment{dep("d1", "cancelled")}, nil, nil, "not_applicable_no_deployments", "", 0},
 		{"no status and no incident is unknown", []opschangefailure.Deployment{dep("d1", ""), dep("d2", "queued")}, nil, nil, "unknown_no_incident_evidence", "", 0},
 		{"a failed deployment with a link counts once", []opschangefailure.Deployment{dep("d1", "failed"), dep("d2", "success")}, tie, link, "measured", "both", 0.5},
@@ -115,7 +120,11 @@ func TestChangeFailureRuleAgreesWithTheOpsRuleOnProducedCounts(t *testing.T) {
 			incidentsDirect: int64(counts.IncidentsDirect), incidentsViaDeployment: int64(counts.IncidentsViaDeployment),
 			failedStatus: int64(counts.FailedStatus), statusKnown: int64(counts.StatusKnown), statusColumns: true,
 		})
-		if mine.state != tc.state || string(theirs.State) != tc.state || mine.basis != tc.basis || theirs.Basis != tc.basis {
+		opsBasis := ""
+		if theirs.BasisOrNil() != nil {
+			opsBasis = *theirs.BasisOrNil()
+		}
+		if mine.state != tc.state || string(theirs.State) != tc.state || mine.basis != tc.basis || opsBasis != tc.basis {
 			t.Errorf("%s: acr %+v ops %+v, want state %s basis %q", tc.name, mine, theirs, tc.state, tc.basis)
 		}
 		if tc.state == "measured" && (mine.value != tc.value || *theirs.Value != tc.value) {
@@ -143,6 +152,7 @@ func TestChangeFailureRuleKeepsTheStatesApart(t *testing.T) {
 		{"failed deployments without incident evidence", changeFailureCounts{storedRows: 1, deployments: 4, failedNative: 1}, changeFailureStateUnknown, false, 0, ""},
 		{"measured zero", changeFailureCounts{storedRows: 1, deployments: 4, incidentsDirect: 1}, changeFailureStateMeasured, true, 0, ""},
 		{"all success by status is a measured zero", changeFailureCounts{storedRows: 1, deployments: 4, statusKnown: 4, statusColumns: true}, changeFailureStateMeasured, true, 0, ""},
+		{"status only divides by the known deployments", changeFailureCounts{storedRows: 1, deployments: 4, statusKnown: 2, failedStatus: 1, statusColumns: true}, changeFailureStateMeasured, true, 0.5, ""},
 		{"failed by status alone has no link tier", changeFailureCounts{storedRows: 1, deployments: 4, statusKnown: 4, failedStatus: 1, statusColumns: true}, changeFailureStateMeasured, true, 0.25, ""},
 		{"via-deployment incident, heuristic tier", changeFailureCounts{storedRows: 1, deployments: 4, failedHeuristic: 1, incidentsViaDeployment: 1}, changeFailureStateMeasured, true, 0.25, changeFailureTierHeuristic},
 		{"native and heuristic both count", changeFailureCounts{storedRows: 2, deployments: 4, failedNative: 1, failedHeuristic: 1, incidentsDirect: 1}, changeFailureStateMeasured, true, 0.5, changeFailureTierHeuristic},
