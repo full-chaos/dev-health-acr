@@ -110,12 +110,13 @@ const (
 	linkedShapePeakBoundMiB  = 96.0
 	linkedShapeSplitFactor   = 1.25
 	linkedShapeSplitSlackMiB = 8.0
-	// The unit that names one pull request three times, and its effort: large
-	// enough that a team's feature_delivery effort shows whether the repeated
-	// pull request was counted once (half of the effort) or per mention.
-	linkedShapeRepeatedUnit   = "wu-repeated-key"
-	linkedShapeRepeatedEffort = 9e8
-	linkedShapeRepeatedTeam   = "T-1"
+	// The unit that names one pull request three times. Its weight is one,
+	// and it carries a theme no other unit has, so a team's value of that
+	// theme shows whether the repeated pull request was counted once (0.5) or
+	// per mention. Its stored effort is 0: an unsized unit is kept.
+	linkedShapeRepeatedUnit  = "wu-repeated-key"
+	linkedShapeRepeatedTheme = "repeated_probe"
+	linkedShapeRepeatedTeam  = "T-1"
 )
 
 func seedLinkedProdShape(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, s linkedProdShape) []string {
@@ -229,7 +230,7 @@ SELECT ?, 'issue', concat('n', toString(number)), `+s.unitIDSQL("number")+`, 'th
 	repoLabel := fmt.Sprintf("shape-r-%d", pr%s.ownedRepos)
 	number := 1 + pr/s.ownedRepos
 	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,NULL,?,?,?,?,?,?)`,
-		linkedShapeRepeatedUnit, at, at, linkedShapeRepeatedEffort, map[string]float64{"feature_delivery": 1.0}, map[string]float64{},
+		linkedShapeRepeatedUnit, at, at, 0.0, map[string]float64{linkedShapeRepeatedTheme: 1.0}, map[string]float64{},
 		fmt.Sprintf(`{"issues":["ghpr:acme/%s#%d","ghpr:acme/%s#%d"],"prs":["%s#pr%d","%s#pr1"]}`, repoLabel, number, repoLabel, number, repoUUID(repoLabel), number, repoUUID(fmt.Sprintf("shape-r-%d", s.repos-1))),
 		at, orgID)
 	exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?, 'issue', 'n-repeated', ?, 'theme', 'feature_delivery', ?, 'run-1')`,
@@ -339,11 +340,10 @@ func fragmentNamed(t *testing.T, fragments []devhealthfacts.LinkedMixFragment, n
 }
 
 // repeatedKeyShare is true when a team row carries half of the repeated-key
-// unit's effort: the repeated pull request counted once.
+// unit's weight: the repeated pull request counted once.
 func repeatedKeyShare(rows map[string]linkedMixRow) (float64, bool) {
-	share := rows[linkedShapeRepeatedTeam].theme["feature_delivery"]
-	half := linkedShapeRepeatedEffort / 2
-	return share, share >= half && share <= half+1e6
+	share := rows[linkedShapeRepeatedTeam].theme[linkedShapeRepeatedTheme]
+	return share, closeEnough(share, 0.5)
 }
 
 // assertLinkedMixDifferential compares the production statement with the
@@ -361,7 +361,7 @@ func assertLinkedMixDifferential(t *testing.T, ctx context.Context, query contex
 		t.Fatalf("%s: differential did not happen: the production statement returned %d team rows", stage, len(served))
 	}
 	if share, ok := repeatedKeyShare(served); !ok {
-		t.Errorf("%s: production statement: team %s feature_delivery effort %v, want half of the repeated-key unit (%v) plus the small units", stage, linkedShapeRepeatedTeam, share, linkedShapeRepeatedEffort/2)
+		t.Errorf("%s: production statement: team %s %s effort %v, want half of the repeated-key unit (0.5)", stage, linkedShapeRepeatedTeam, linkedShapeRepeatedTheme, share)
 	}
 	for _, name := range []string{"legacy_statement", "reference_array_above_expansion"} {
 		other := readLinkedMixRows(t, ctx, query, orgID, teams, fragmentNamed(t, fragments, name))
@@ -382,7 +382,7 @@ func assertLinkedMixDifferential(t *testing.T, ctx context.Context, query contex
 			}
 		}
 		if share, ok := repeatedKeyShare(other); !ok {
-			t.Errorf("%s: %s: team %s feature_delivery effort %v, want half of the repeated-key unit", stage, name, linkedShapeRepeatedTeam, share)
+			t.Errorf("%s: %s: team %s %s effort %v, want half of the repeated-key unit", stage, name, linkedShapeRepeatedTeam, linkedShapeRepeatedTheme, share)
 		}
 	}
 	// The repeated-key row can tell a repeat counted from a repeat ignored.

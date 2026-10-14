@@ -1,8 +1,8 @@
 package devhealthfacts_test
 
-// A team whose owned repositories carry work units that all have zero effort
-// is not a team with "no unit in the window": the units exist, their effort
-// is not measurable. The served reason must say so. EXECUTED against a real
+// A team whose owned repositories carry work units that all have zero
+// persisted effort is served: every work unit weighs 1 whatever its persisted
+// effort, so the units are kept and counted. EXECUTED against a real
 // ClickHouse.
 
 import (
@@ -20,7 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func TestTeamWithOnlyZeroEffortUnitsServesAnEffortNotMeasurableReasonAgainstRealClickHouse(t *testing.T) {
+func TestTeamWithOnlyZeroEffortUnitsKeepsThemAtWeightOneAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
@@ -66,16 +66,18 @@ func TestTeamWithOnlyZeroEffortUnitsServesAnEffortNotMeasurableReasonAgainstReal
 	}
 
 	zero, served := read("team-zero")
-	if len(zero.Facts) != 0 {
-		t.Fatalf("zero-effort team facts = %d, want 0 (a zero mix is never fabricated)", len(zero.Facts))
+	if len(zero.Facts) != 1 {
+		t.Fatalf("zero-effort team facts = %d, want 1 (the units are kept at weight 1): %q", len(zero.Facts), served)
 	}
-	for _, want := range []string{"investment_team_effort_not_measurable", "2 work unit", "no line counts", "not told apart"} {
-		if !strings.Contains(served, want) {
-			t.Fatalf("zero-effort team reason = %q, missing %q", served, want)
-		}
+	if strings.Contains(served, "investment_team_effort_not_measurable") || strings.Contains(served, "investment_team_no_unit_in_window") {
+		t.Fatalf("zero-effort team reason = %q, want no empty cause", served)
 	}
-	if strings.Contains(served, "investment_team_no_unit_in_window") {
-		t.Fatalf("zero-effort team reason = %q, must not claim no unit in the window", served)
+	gotEffort := 0.0
+	for _, row := range zero.Facts[0].Fields["theme_breakdown"].Table.Rows {
+		gotEffort += *row.Fields["weighted_effort"].Number
+	}
+	if gotEffort != 2 {
+		t.Fatalf("zero-effort team weighted effort = %v, want 2 (two units, weight 1 each)", gotEffort)
 	}
 
 	empty, emptyServed := read("team-empty")
@@ -84,9 +86,9 @@ func TestTeamWithOnlyZeroEffortUnitsServesAnEffortNotMeasurableReasonAgainstReal
 	}
 }
 
-// The same property at the read_facts boundary: the served coverage row of the
-// zero-effort team names the reason and counts the units, and no fact is served.
-func TestZeroEffortTeamReasonIsServedAtTheReadFactsBoundary(t *testing.T) {
+// The same property at the read_facts boundary: the zero-effort team's units
+// are kept, a fact is served, and no effort-not-measurable coverage row exists.
+func TestZeroEffortTeamUnitsAreServedAtTheReadFactsBoundary(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
@@ -125,16 +127,12 @@ func TestZeroEffortTeamReasonIsServedAtTheReadFactsBoundary(t *testing.T) {
 		t.Fatalf("read_facts: %v", err)
 	}
 	raw, _ := json.Marshal(response)
-	if len(response.Facts) != 0 {
-		t.Fatalf("a zero-effort team serves no fact: %s", raw)
+	if len(response.Facts) != 1 {
+		t.Fatalf("a team whose units carry no persisted effort serves one fact (weight 1 per unit), got %d: %s", len(response.Facts), raw)
 	}
-	named := false
 	for _, row := range response.Coverage {
-		if row.Subject.CanonicalID == team.CanonicalID && strings.Contains(row.Reason, "investment_team_effort_not_measurable") && strings.Contains(row.Reason, "3 work unit") && !strings.Contains(row.Reason, "investment_team_no_unit_in_window") {
-			named = true
+		if row.Subject.CanonicalID == team.CanonicalID && strings.Contains(row.Reason, "investment_team_effort_not_measurable") {
+			t.Fatalf("coverage names investment_team_effort_not_measurable for a team whose units are kept: %s", raw)
 		}
-	}
-	if !named {
-		t.Fatalf("coverage has no investment_team_effort_not_measurable row with 3 units (missing must not be silent): %s", raw)
 	}
 }

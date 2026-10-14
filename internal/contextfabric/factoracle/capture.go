@@ -41,6 +41,8 @@ type VenueConfig struct {
 	// serve through graphql_query and through run_operation (Oracle).
 	ListenerDark  []string
 	OperationDark []string
+	// Logf receives the rate-limit waits of the run and their total.
+	Logf func(format string, args ...any)
 }
 
 type clickHouseQuerier struct{ conn clickhouse.Conn }
@@ -119,6 +121,10 @@ type LiveRun struct {
 // is read before and after, and a run over a store that moved is refused
 // (the error names the tables). Rows a job writes and rows a background merge
 // removes both read as a store that moved.
+// venuePaceInterval keeps a run under the venue's default request budget of
+// 60 per minute per request class and credential.
+const venuePaceInterval = 1100 * time.Millisecond
+
 func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 	if cfg.MCPURL == "" || cfg.TokenFile == "" || cfg.ClickHouseDSNFile == "" || cfg.OrgID == "" {
 		return nil, fmt.Errorf("venue configuration is incomplete")
@@ -144,9 +150,13 @@ func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 		if err != nil {
 			return nil, err
 		}
-		oracle := &Oracle{Policy: policy, Planes: &VenuePlanes{URL: cfg.MCPURL, TokenFile: cfg.TokenFile}, Store: store, Window: cfg.Window,
+		planes := &VenuePlanes{URL: cfg.MCPURL, TokenFile: cfg.TokenFile, MinInterval: venuePaceInterval, Logf: cfg.Logf}
+		oracle := &Oracle{Policy: policy, Planes: planes, Store: store, Window: cfg.Window,
 			ListenerDark: cfg.ListenerDark, OperationDark: cfg.OperationDark}
 		report, err := oracle.Run(ctx)
+		if count, waited := planes.LimitedCalls(); cfg.Logf != nil {
+			cfg.Logf("venue rate limit: %d limited answers, %s spent waiting on them", count, waited)
+		}
 		if err != nil {
 			return nil, err
 		}

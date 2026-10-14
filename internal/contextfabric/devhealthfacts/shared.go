@@ -1174,7 +1174,12 @@ import (
 // admitted link to tracked work. A team with no pull request, or with any
 // linked pull request, keeps investment_team_no_unit_in_window. An answer
 // saved under v229 gives both the old reason.
-const QueryVersion = "devhealthfacts.clickhouse.v230"
+//
+// v230 -> v231: every Investment weight is one per work unit (a unit with no
+// size counts one); the served weighted_effort, share_in_scope, unit_effort_value
+// and effort_unit_count are counts of work units, not lines of code. An answer
+// saved under v230 carries the old weights and is not reused.
+const QueryVersion = "devhealthfacts.clickhouse.v231"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

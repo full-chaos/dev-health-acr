@@ -107,7 +107,11 @@ func (s *fakeScannerSim) Scan(dest ...any) error {
 		case *uint8:
 			*value = row[index].(uint8)
 		case *float64:
-			*value = row[index].(float64)
+			if n, ok := row[index].(int64); ok {
+				*value = float64(n)
+			} else {
+				*value = row[index].(float64)
+			}
 		default:
 			return fmt.Errorf("unsupported scan target %T", target)
 		}

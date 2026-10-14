@@ -247,16 +247,17 @@ func TestTeamThemeMixCurrentAndPriorWindowsShareOnePassAgainstRealClickHouse(t *
 			continue
 		}
 		found = true
-		// current window: cur (10) + both (4), all feature.
+		// current window: cur + both (1 each), all feature.
 		if cur.Number == nil || *cur.Number != 1.0 {
 			t.Fatalf("current feature share = %v, want 1.0", cur.Number)
 		}
-		// prior window: prior (8 risk) + prior-stale's LATEST (2 risk) + both
-		// (4 feature); outside excluded; the stale 999 never counted.
+		// prior window: prior (1 risk) + prior-stale (1 risk) + both
+		// (1 feature); each unit weighs 1; outside excluded; the stale
+		// version is never counted.
 		priorRisk := f.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeRisk)].Number
 		priorFeature := f.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeFeatureDelivery)].Number
-		if priorRisk == nil || priorFeature == nil || *priorRisk < 10.0/14-1e-9 || *priorRisk > 10.0/14+1e-9 || *priorFeature < 4.0/14-1e-9 || *priorFeature > 4.0/14+1e-9 {
-			t.Fatalf("prior shares risk=%v feature=%v, want %v / %v", priorRisk, priorFeature, 10.0/14, 4.0/14)
+		if priorRisk == nil || priorFeature == nil || *priorRisk < 2.0/3-1e-9 || *priorRisk > 2.0/3+1e-9 || *priorFeature < 1.0/3-1e-9 || *priorFeature > 1.0/3+1e-9 {
+			t.Fatalf("prior shares risk=%v feature=%v, want %v / %v", priorRisk, priorFeature, 2.0/3, 1.0/3)
 		}
 	}
 	if !found {

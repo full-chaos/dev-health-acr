@@ -25,7 +25,7 @@ const zeroRepoUUID = "00000000-0000-0000-0000-000000000000"
 // seedCHAOS7073Ownership seeds the K11 org:
 //
 //	repos: acme/repo-k, acme/repo-b (github) and acme/zero (github, zero UUID).
-//	work: repo-k 10 feature, repo-b 4 maintenance, zero 50 operational,
+//	work: repo-k, repo-b, zero: one unit each (weight 1);
 //	      an orphan id (in no repos row) 20 risk.
 //	ownership:
 //	  team-name      github "ACME/Repo-K", repo_id NULL      -> repo-k (case-insensitive name)
@@ -61,9 +61,9 @@ func TestCHAOS7073TeamMixResolvesOwnershipWithoutRepoIDByName(t *testing.T) {
 	f := newCHAOS7073Fixture(t, "org-7073-owned-by-name")
 	seedCHAOS7073Ownership(f)
 
-	f.assertMix(teamSubject("team-name"), map[string]float64{"feature_delivery": 10},
+	f.assertMix(teamSubject("team-name"), map[string]float64{"feature_delivery": 1},
 		`ownership "ACME/Repo-K" with no repo_id must resolve to acme/repo-k`)
-	f.assertMix(teamSubject("team-id-wins"), map[string]float64{"maintenance": 4},
+	f.assertMix(teamSubject("team-id-wins"), map[string]float64{"maintenance": 1},
 		"a row's own repo_id wins over its name")
 	for _, team := range []string{"team-ghost", "team-provider", "team-orphan"} {
 		if got := f.mix(teamSubject(team)); got != nil {

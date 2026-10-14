@@ -167,7 +167,7 @@ FROM (
 					SELECT work_unit_id,
 						argMaxIf(tuple(repo_id, from_ts, to_ts, effort_value, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest
 					FROM (
-						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
+						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, toFloat64(1) AS effort_value, theme_distribution_json,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS unit_bugfix_share,
 							` + referenceKeys + `,
 							` + reaches + ` AS reaches,

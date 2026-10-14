@@ -32,9 +32,7 @@ func nativeMixUnitsFor(project string, work, effortN, spanning, multi int, fd, o
 	units := make([]nativePhasedUnit, 0, work)
 	for i := 0; i < work; i++ {
 		u := nativePhasedUnit{id: fmt.Sprintf("%s-u%d", project, i), project: project}
-		if i < effortN {
-			u.effort = 1
-		}
+		u.effort = 1
 		if i == 0 && effortN > 0 {
 			u.fd, u.op, u.bg = fd, op, bugfix
 		}
@@ -47,8 +45,8 @@ func nativeMixUnitsFor(project string, work, effortN, spanning, multi int, fd, o
 	return units
 }
 
-// nativeMixUnits is the default project: 9 work units, effortUnits of them with
-// effort, feature_delivery 6, operational 4, bugfix 1, 2 spanning, 3 multi-placed.
+// nativeMixUnits is the default project: 9 work units, every one weighing one
+// (effortUnits only decides whether the first unit carries the themes), feature_delivery 6, operational 4, bugfix 1, 2 spanning, 3 multi-placed.
 func nativeMixUnits(project string, effortUnits int) []nativePhasedUnit {
 	return nativeMixUnitsFor(project, 9, effortUnits, 2, 3, 6, 4, 1)
 }
@@ -116,7 +114,7 @@ func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 	if got := factNumber(t, fact, "theme_quality_bugfix"); got != 0.1 {
 		t.Errorf("theme_quality_bugfix = %v, want 0.1", got)
 	}
-	if got, want := [4]int64{factInt(t, fact, "work_unit_count"), factInt(t, fact, "effort_unit_count"), factInt(t, fact, "spanning_unit_count"), factInt(t, fact, "native_multi_placed_unit_count")}, [4]int64{9, 7, 2, 3}; got != want {
+	if got, want := [4]int64{factInt(t, fact, "work_unit_count"), factInt(t, fact, "effort_unit_count"), factInt(t, fact, "spanning_unit_count"), factInt(t, fact, "native_multi_placed_unit_count")}, [4]int64{9, 9, 2, 3}; got != want {
 		t.Errorf("populations = %v, want %v (work, effort, spanning, multi-placed)", got, want)
 	}
 	if result.Truncated {
