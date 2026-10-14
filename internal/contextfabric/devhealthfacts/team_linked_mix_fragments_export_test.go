@@ -43,7 +43,7 @@ func TeamLinkedMixFragmentsForTest(scopeIDs []string) (fragments []LinkedMixFrag
 	add("statement", statement)
 	add("legacy_statement", legacyLinkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1))
 
-	const countsNow = "1 AS c, n,"
+	const countsNow = "2 AS c, n,"
 	const lengthInFold = ",\n\t\tlength(pairs) AS n\n\tFROM ("
 	if strings.Count(statement, countsNow) != 1 || strings.Count(statement, lengthInFold) != 1 {
 		return nil, "reference_array_above_expansion"
@@ -51,7 +51,7 @@ func TeamLinkedMixFragmentsForTest(scopeIDs []string) (fragments []LinkedMixFrag
 	above := strings.Replace(statement, countsNow, "countEqual(pairs, (rp.1, concat(rp.1, '#', rp.2))) AS c, length(pairs) AS n,", 1)
 	above = strings.Replace(above, lengthInFold, "\n\tFROM (", 1)
 	add("reference_array_above_expansion", above)
-	add("repeats_counted", strings.Replace(statement, countsNow, "2 AS c, n,", 1))
+	add("repeats_counted", strings.Replace(statement, countsNow, "3 AS c, n,", 1))
 	add("split_rows", "SELECT count() FROM ("+linkedPullRequestSplitRows(memberships, scope, linked)+")")
 	add("linked_set", "SELECT length("+linked+")")
 	return fragments, ""

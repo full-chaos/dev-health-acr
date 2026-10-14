@@ -121,7 +121,7 @@ func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipSc
 		// same reference rows, so the key of a resolved rp (rp.1 != '', the
 		// only rows the WHERE keeps) is in the unit's pairs exactly once.
 		head = `SELECT win, work_unit_id, rp.1 AS repo_uuid, rp.2 AS pr_number,
-	1 AS c, n,`
+	2 AS c, n,`
 		unitAgg = `
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
 		pairs += `,
