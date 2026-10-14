@@ -72,14 +72,15 @@ func seedAuthorizationSites(t *testing.T, ctx context.Context, direct clickhouse
 		return fmt.Sprintf("concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(%s), 12, '0'))", expr)
 	}
 	tables := []string{"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
-		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions", "work_graph_edges"}
-	for _, statement := range devhealthschema.DDL(tables...) {
+		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions"}
+	const workGraphEdgesDDL = `CREATE TABLE work_graph_edges (edge_id String, source_type String, source_id String, target_type String, target_id String, edge_type String, repo_id UUID, provider String, provenance String, confidence Float64, evidence Nullable(String), discovered_at DateTime64(3), last_synced DateTime64(3), org_id String) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, edge_id)`
+	for _, statement := range append(devhealthschema.DDL(tables...), workGraphEdgesDDL) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
 	if s.multipart {
-		for _, table := range tables {
+		for _, table := range append(tables, "work_graph_edges") {
 			// devhealthschema:not-a-production-replica: test merge control over tables the shared DDL creates; it declares no table.
 			if err := direct.Exec(ctx, `SYSTEM STOP MERGES `+table); err != nil {
 				t.Fatalf("stop merges on %s: %v", table, err)
@@ -140,7 +141,7 @@ SELECT ?, {{REPO}}, `+id("number % {{WI}}")+`, concat('team-', toString(number %
 	ins(`INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id)
 SELECT ?, NULL, `+repo("number % 11")+`, 'work_item', `+id("number % 17000")+`, 'linear', concat('proj-', toString(number % 33)), concat('proj-', toString((number + 1) % 33)), '', '', '', ? + toIntervalMinute(number), ? + toIntervalMinute(number), concat('event-', toString(number)) FROM numbers(?, ?)`, 9075, org, at, at)
 	if !s.multipart {
-		for _, table := range tables {
+		for _, table := range append(tables, "work_graph_edges") {
 			// devhealthschema:not-a-production-replica: test merge control over tables the shared DDL creates; it declares no table.
 			if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
 				t.Fatalf("optimize %s: %v", table, err)
