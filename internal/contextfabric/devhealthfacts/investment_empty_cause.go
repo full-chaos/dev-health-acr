@@ -17,7 +17,7 @@ const (
 )
 
 const (
-	investmentTeamUnitsOutsideRunReason = investmentTeamUnitsOutsideRun + ": the team's owned repositories have persisted work units in the requested window, and none of them is in the latest complete membership run"
+	investmentTeamUnitsOutsideRunReason = investmentTeamUnitsOutsideRun + ": the team's owned repositories have persisted work units in the requested window, and at least one of them is outside the latest complete membership run"
 	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository, or to a repository the team does not own; the count follows)"
 )
 
