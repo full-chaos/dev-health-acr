@@ -181,7 +181,7 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 	maxIf(query_duration_ms, position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0),
 	maxIf(query_duration_ms, position(query, 'uniqExact(m.repo_uuid)') > 0),
 	countIf(Settings['readonly'] = '2'), count()
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND NOT has(databases, 'system')
 	AND (position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0 OR position(query, 'uniqExact(m.repo_uuid)') > 0)`, mark).Scan(&read.setMs, &read.mixMs, &readonlyRuns, &served); err != nil {
 			t.Fatalf("read the served statements' durations (measurement did not happen): %v", err)
 		}
