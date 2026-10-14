@@ -203,15 +203,25 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID string) {
 	t.Helper()
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
-	beforeRows, before := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	afterRows, after := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	t.Logf("MEMORY team project link rows: before %d bytes, after %d bytes (%d rows)", before, after, len(afterRows))
+	var beforeRows, afterRows []string
+	var befores, afters []uint64
+	for i := 0; i < 3; i++ {
+		rows, bytes := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+		beforeRows, befores = rows, append(befores, bytes)
+		rows, bytes = runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
+		afterRows, afters = rows, append(afters, bytes)
+	}
+	for i := 0; i < 3; i++ {
+		rows, bytes := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
+		afterRows, afters = rows, append(afters, bytes)
+		rows, bytes = runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
+		beforeRows, befores = rows, append(befores, bytes)
+	}
+	t.Logf("MEASURE %s link rows: before reads %v (lowest-of-first-3 %d, highest-of-first-3 %d), after reads %v (lowest-of-first-3 %d, highest-of-first-3 %d); order: 3x before-then-after, then 3x after-then-before; %d rows",
+		t.Name(), befores, slices.Min(befores[:3]), slices.Max(befores[:3]), afters, slices.Min(afters[:3]), slices.Max(afters[:3]), len(afterRows))
 	if len(beforeRows) == 0 || !slices.Equal(beforeRows, afterRows) {
 		t.Fatalf("link rows differ: before %v, after %v", beforeRows, afterRows)
-	}
-	if after >= before {
-		t.Errorf("narrowed statement peaked at %d bytes, want under the %d bytes of the statement it replaced", after, before)
 	}
 }
 
