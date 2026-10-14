@@ -120,7 +120,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	var projectsNoMix []contextfabric.SubjectRef
 	var teamsRequested int
 	var teamsOwningNothing, teamsNoUnit []contextfabric.SubjectRef
-	var teamsNoUnitCause map[string]string
+	var teamsNoUnitCause map[string]emptyCause
 	var teamLinksUnwindowed bool
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		// CHAOS-6559: a team's investment is ONLY the canonical theme mix
@@ -250,13 +250,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
 	if mixUnavailable != "" {
 		addRequestNote(&result, mixUnavailable)
-		byCause := map[string][]contextfabric.SubjectRef{}
 		for _, subject := range teamsNoUnit {
 			cause := teamsNoUnitCause[strings.TrimPrefix(subject.CanonicalID, teamPrefix)]
-			byCause[cause] = append(byCause[cause], subject)
-		}
-		for cause, subjects := range byCause {
-			addSubjectReasons(&result, subjects, emptyCauseReason(cause))
+			addSubjectReasons(&result, []contextfabric.SubjectRef{subject}, cause.reason())
 		}
 	}
 	if len(projectsNoMix) > 0 {
@@ -331,7 +327,7 @@ var canonicalInvestmentThemes = [...]string{
 // exactly nothing" rather than "we have no mix to report". Such teams are
 // counted in unavailable so the caller can say so; shapeRejected counts
 // subjects whose id did not have the team shape (CHAOS-5026).
-func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, noOwned, noUnit []contextfabric.SubjectRef, noUnitCause map[string]string, linksUnwindowed bool, err error) {
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (shapeRejected, unavailable int, noOwned, noUnit []contextfabric.SubjectRef, noUnitCause map[string]emptyCause, linksUnwindowed bool, err error) {
 	ids, bySubject, shapeRejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
 		return shapeRejected, 0, nil, nil, nil, false, nil
@@ -523,10 +519,10 @@ func rejectedProjectCount(subjects []contextfabric.SubjectRef) int {
 
 // causeCounts counts the teams per named cause; a team with no cause stays in
 // the generic no-unit-in-window count.
-func causeCounts(teams []contextfabric.SubjectRef, cause map[string]string) map[string]int {
+func causeCounts(teams []contextfabric.SubjectRef, cause map[string]emptyCause) map[string]int {
 	counts := map[string]int{}
 	for _, subject := range teams {
-		if token := cause[strings.TrimPrefix(subject.CanonicalID, teamPrefix)]; token != "" {
+		if token := cause[strings.TrimPrefix(subject.CanonicalID, teamPrefix)].token; token != "" {
 			counts[token]++
 		}
 	}
@@ -545,7 +541,7 @@ func investmentMixUnavailableReason(unavailable, noOwned, requested int, waterma
 	for _, token := range []string{investmentTeamUnitsOutsideRun, investmentTeamUnitsUnattrib} {
 		if n := caused[token]; n > 0 {
 			causedTotal += n
-			reason += fmt.Sprintf("; %s for %d: %s", token, n, emptyCauseReason(token)[len(token)+2:])
+			reason += fmt.Sprintf("; %s for %d: %s", token, n, emptyCause{token: token}.summary())
 		}
 	}
 	if noUnit := unavailable - noOwned - causedTotal; noUnit > 0 {

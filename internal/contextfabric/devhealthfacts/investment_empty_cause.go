@@ -18,7 +18,7 @@ const (
 
 const (
 	investmentTeamUnitsOutsideRunReason = investmentTeamUnitsOutsideRun + ": the team's owned repositories have persisted work units in the requested window, and none of them is in the latest complete membership run"
-	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository, or zero effort)"
+	investmentTeamUnitsUnattribReason   = investmentTeamUnitsUnattrib + ": the team's owned repositories have persisted work units in scope, and none of them reached a positive share (a reference that resolves to no repository, or zero effort; the counts follow)"
 )
 
 // ownedUnitCountStatement counts, per repository, the distinct latest work
@@ -26,12 +26,13 @@ const (
 // follows references: it names which stage dropped a team's units, it serves
 // no mix.
 func ownedUnitCountStatement(bound factTimeBound, scope membershipScope) string {
-	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units
+	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units, uniqExactIf(work_unit_id, effort_value > 0) AS positive
 FROM (
 	SELECT work_unit_id,
 		(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 		argMax(from_ts, computed_at) AS from_ts,
-		argMax(to_ts, computed_at) AS to_ts
+		argMax(to_ts, computed_at) AS to_ts,
+		argMax(effort_value, computed_at) AS effort_value
 	FROM work_unit_investments
 	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 	GROUP BY work_unit_id
@@ -40,8 +41,10 @@ WHERE repo_id IS NOT NULL AND toString(repo_id) IN {ids:Array(String)} AND ` + m
 GROUP BY repo`
 }
 
-func (p *InvestmentProvider) ownedUnitCounts(ctx context.Context, orgID string, repoIDs []string, bound factTimeBound, scope membershipScope) (map[string]uint64, error) {
-	counts := map[string]uint64{}
+type ownedUnitCount struct{ units, positive uint64 }
+
+func (p *InvestmentProvider) ownedUnitCounts(ctx context.Context, orgID string, repoIDs []string, bound factTimeBound, scope membershipScope) (map[string]ownedUnitCount, error) {
+	counts := map[string]ownedUnitCount{}
 	var extra []readers.Binding
 	for _, tb := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: tb.Name, Value: tb.Value})
@@ -54,11 +57,14 @@ func (p *InvestmentProvider) ownedUnitCounts(ctx context.Context, orgID string, 
 		}
 		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadOwnedUnitCounts", ownedUnitCountStatement(bound, scope), orgID, repoIDs[start:end], func(row contextpacket.ClickHouseRowScanner) error {
 			var repo string
-			var units uint64
-			if err := row.Scan(&repo, &units); err != nil {
+			var units, positive uint64
+			if err := row.Scan(&repo, &units, &positive); err != nil {
 				return err
 			}
-			counts[repo] += units
+			c := counts[repo]
+			c.units += units
+			c.positive += positive
+			counts[repo] = c
 			return nil
 		}, extra...)
 		if err != nil {
@@ -70,7 +76,7 @@ func (p *InvestmentProvider) ownedUnitCounts(ctx context.Context, orgID string, 
 
 // teamEmptyCauses names why each given team (team id -> owned repository ids)
 // has no mix: "" keeps the generic no-unit-in-window reason.
-func (p *InvestmentProvider) teamEmptyCauses(ctx context.Context, orgID string, owned map[string][]string, bound factTimeBound) (map[string]string, error) {
+func (p *InvestmentProvider) teamEmptyCauses(ctx context.Context, orgID string, owned map[string][]string, bound factTimeBound) (map[string]emptyCause, error) {
 	repoSet := map[string]bool{}
 	for _, repos := range owned {
 		for _, id := range repos {
@@ -97,29 +103,48 @@ func (p *InvestmentProvider) teamEmptyCauses(ctx context.Context, orgID string, 
 	if err != nil {
 		return nil, err
 	}
-	causes := make(map[string]string, len(owned))
+	causes := make(map[string]emptyCause, len(owned))
 	for teamID, repos := range owned {
-		var all, in uint64
+		var all, in, positive uint64
 		for _, id := range repos {
-			all += everything[id]
-			in += scoped[id]
+			all += everything[id].units
+			in += scoped[id].units
+			positive += scoped[id].positive
 		}
 		switch {
+		case all > in:
+			causes[teamID] = emptyCause{token: investmentTeamUnitsOutsideRun, outside: all - in}
 		case in > 0:
-			causes[teamID] = investmentTeamUnitsUnattrib
-		case all > 0:
-			causes[teamID] = investmentTeamUnitsOutsideRun
+			causes[teamID] = emptyCause{token: investmentTeamUnitsUnattrib, positive: positive, zero: in - positive}
 		}
 	}
 	return causes, nil
 }
 
-func emptyCauseReason(cause string) string {
-	switch cause {
+// emptyCause is a team's named cause with the counts behind it.
+type emptyCause struct {
+	token          string
+	outside        uint64
+	positive, zero uint64
+}
+
+func (c emptyCause) reason() string {
+	switch c.token {
 	case investmentTeamUnitsOutsideRun:
-		return investmentTeamUnitsOutsideRunReason
+		return fmt.Sprintf("%s (%d units outside the run)", investmentTeamUnitsOutsideRunReason, c.outside)
 	case investmentTeamUnitsUnattrib:
-		return investmentTeamUnitsUnattribReason
+		return fmt.Sprintf("%s (%d units with positive effort and an unresolved reference, %d units with zero effort)", investmentTeamUnitsUnattribReason, c.positive, c.zero)
+	}
+	return investmentTeamNoUnitReason
+}
+
+// summary is the one-line disclosure of a cause in the request note.
+func (c emptyCause) summary() string {
+	switch c.token {
+	case investmentTeamUnitsOutsideRun:
+		return "owned repositories have persisted work units in the requested window, and at least one is outside the latest complete membership run"
+	case investmentTeamUnitsUnattrib:
+		return "owned repositories have persisted work units in scope, and none reached a positive share (a reference that resolves to no repository, or zero effort; counts per team in the subject reason)"
 	}
 	return investmentTeamNoUnitReason
 }

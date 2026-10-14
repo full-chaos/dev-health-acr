@@ -99,6 +99,19 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		{"unres-jira", "team-jira", `{"issues":["jira:SUP-9"],"prs":["00000000-0000-0000-0000-000000000009#pr9"]}`},
 		{"unres-lin", "team-linear", `{"issues":["linear:CHK-9"],"prs":["00000000-0000-0000-0000-000000000009#pr9"]}`},
 	}
+	both := []matrixUnit{
+		{"both-out", "team-gitlab", `{"issues":["gitlab:chaos-gl/data/pipeline#1"],"prs":[]}`},
+		{"both-unres", "team-gitlab", `{"issues":["gitlab:vendor/unknown!9"],"prs":[]}`},
+		{"both-gh", "team-github", `{"issues":["gh:acme/payments#1"],"prs":[]}`},
+		{"both-jira", "team-jira", `{"issues":["jira:SUP-1"],"prs":[]}`},
+		{"both-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
+	}
+	scenarios = append(scenarios, scenario{
+		name: "a team with a unit outside the run and an unresolved reference names the run first", org: "org-matrix-both", units: both,
+		runs:  [][]string{{"both-unres", "both-gh", "both-jira", "both-lin"}},
+		want:  map[string]float64{"team-gitlab": 0, "team-github": 1, "team-jira": 1, "team-linear": 1},
+		token: map[string]string{"team-gitlab": "investment_team_units_outside_membership_run"},
+	})
 	scenarios = append(scenarios, scenario{
 		name: "one reference resolves to no repository", org: "org-matrix-unresolved", units: unresolved, runs: [][]string{ids(unresolved, nil)}, want: map[string]float64{"team-gitlab": 0, "team-github": 0, "team-jira": 0, "team-linear": 0},
 		token: map[string]string{"team-gitlab": "investment_team_units_unattributed", "team-github": "investment_team_units_unattributed", "team-jira": "investment_team_units_unattributed", "team-linear": "investment_team_units_unattributed"},
