@@ -12,6 +12,8 @@ services:
       ACR_RUNTIME_DB_PASSWORD_FILE: /run/secrets/acr_runtime_db_password
       ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}
       ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
+      ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}
+      ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
@@ -49,6 +51,8 @@ services:
       ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}
       ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
       ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
+      ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}
+      ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro

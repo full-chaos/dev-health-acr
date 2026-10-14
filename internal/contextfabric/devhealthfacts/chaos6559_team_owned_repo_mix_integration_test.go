@@ -94,10 +94,11 @@ func TestTeamThemeMixIsTheSumOfOwnedRepositoriesAgainstRealClickHouse(t *testing
 			t.Fatalf("team-2 %s = %v, want repo-b = %v", theme, w2[theme], wb[theme])
 		}
 	}
-	// Concrete numbers: repo-a = wu1/2 (5 feature) + wu2 (4 risk, 4 quality);
-	// repo-b = wu1/2 (5 feature) + wu3 (6 maintenance). repo-c's operational
-	// 50 is owned by nobody and reaches neither team.
-	if w1["feature_delivery"] != 10 || w1["risk"] != 4 || w1["maintenance"] != 6 || w1["operational"] != 0 {
+	// Concrete numbers (each unit weighs 1): repo-a = wu1/2 (0.5 feature) +
+	// wu2 (0.5 risk, 0.5 quality); repo-b = wu1/2 (0.5 feature) + wu3 (1
+	// maintenance). repo-c's operational unit is owned by nobody and reaches
+	// neither team.
+	if w1["feature_delivery"] != 1 || w1["risk"] != 0.5 || w1["maintenance"] != 1 || w1["operational"] != 0 {
 		t.Fatalf("team-1 weighted = %v", w1)
 	}
 	if got := *team1.Fields["owned_repository_count"].Integer; got != 2 {

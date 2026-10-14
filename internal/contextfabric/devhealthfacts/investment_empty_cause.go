@@ -26,13 +26,13 @@ const (
 // follows references: it names which stage dropped a team's units, it serves
 // no mix.
 func ownedUnitCountStatement(bound factTimeBound, scope membershipScope) string {
-	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units, uniqExactIf(work_unit_id, effort_value > 0) AS positive
+	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units, uniqExact(work_unit_id) AS positive
 FROM (
 	SELECT work_unit_id,
 		(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 		argMax(from_ts, computed_at) AS from_ts,
 		argMax(to_ts, computed_at) AS to_ts,
-		argMax(effort_value, computed_at) AS effort_value
+		toFloat64(1) AS effort_value
 	FROM work_unit_investments
 	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 	GROUP BY work_unit_id

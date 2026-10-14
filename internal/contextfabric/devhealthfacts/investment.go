@@ -902,7 +902,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			continue
 		}
 		currentTotal := row.FeatureDelivery + row.Operational + row.Maintenance + row.Quality + row.Risk
-		if row.EffortUnits == 0 || currentTotal <= 0 {
+		if row.WorkUnits == 0 || currentTotal <= 0 {
 			// No native mix. A project whose only counted units carry no
 			// effort still discloses its multi-placed units.
 			if row.MultiPlacedUnits > 0 {
@@ -927,7 +927,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceProjectNative)
 		fields["rollup_basis"] = contextfabric.StringFactValue(projectNativeMixBasis)
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
-		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.EffortUnits))
+		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
 		fields["native_multi_placed_unit_count"] = contextfabric.IntegerFactValue(int64(row.MultiPlacedUnits))
 		if timeBound.active {

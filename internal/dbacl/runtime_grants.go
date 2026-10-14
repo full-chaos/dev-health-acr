@@ -144,11 +144,15 @@ type Statement struct {
 	SQL        string
 }
 
-// GrantStatements returns the idempotent GRANTs for role under features: bare
-// grants that never revoke, safe on a role serving traffic.
+// GrantStatements returns the idempotent GRANTs for the runtime role under
+// features: bare grants that never revoke, safe on a role serving traffic.
 func GrantStatements(quotedRole string, features Features) []Statement {
+	return grantStatements(RuntimeGrants, quotedRole, features)
+}
+
+func grantStatements(grants []Grant, quotedRole string, features Features) []Statement {
 	var statements []Statement
-	for _, grant := range RuntimeGrants {
+	for _, grant := range grants {
 		if !features.enabled(grant.Feature) {
 			continue
 		}

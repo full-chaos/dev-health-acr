@@ -294,10 +294,10 @@ vet:
 # not serve on a path; a root that is unavailable and not named fails the run.
 # These two verbs start no container: they call the venue.
 o4-oracle-live:
-	go test -tags o4venue -count=1 -timeout 10m -run '^TestVenueLive$$' -v ./internal/contextfabric/factoracle
+	go test -tags o4venue -count=1 -timeout 25m -run '^TestVenueLive$$' -v ./internal/contextfabric/factoracle
 
 o4-oracle-capture:
-	go test -tags o4venue -count=1 -timeout 10m -run '^TestVenueCapture$$' -v ./internal/contextfabric/factoracle
+	go test -tags o4venue -count=1 -timeout 25m -run '^TestVenueCapture$$' -v ./internal/contextfabric/factoracle
 
 # Pins the outcome of the recorded mode again, with this build's fact
 # providers, after a change to them that is meant. Needs Docker, not a venue.

@@ -10,10 +10,10 @@ import (
 )
 
 // Store is the reference reading of the extract rows: what the two planes
-// read. It restates, in Go and over the rows, the reading the oracle compares
-// the acr repository mix with (ExpectedRepositoryEffort, the pull request
-// reference share of devhealthfacts repoMixStatement). The ops organization
-// reading (OrgThemeEffort) is retired with the investment_org compare (9699). It is a test model, not a producer:
+// read. It restates, in Go and over the rows, the two readings the oracle
+// compares: the ops organization value (OrgThemeEffort) and the acr
+// repository mix (ExpectedRepositoryEffort, the pull request reference share
+// of devhealthfacts repoMixStatement). It is a test model, not a producer:
 // the live mode and the recorded mode both hold it against the real planes on
 // real rows, so a wrong model fails there before it can excuse a difference.
 type Store struct {
@@ -37,7 +37,6 @@ type unitGeneration struct {
 	fromTS     time.Time
 	toTS       time.Time
 	repoID     *string
-	effort     float64
 	themes     map[string]float64
 	subcats    map[string]float64
 	prs        []string
@@ -121,9 +120,6 @@ func NewStore(extract *Extract) (*Store, error) {
 		if gen.toTS, err = rowTime(row, "to_ts"); err != nil {
 			return nil, err
 		}
-		if gen.effort, err = rowFloat(row, "effort_value"); err != nil {
-			return nil, err
-		}
 		if gen.themes, err = rowMap(row, "theme_distribution_json"); err != nil {
 			return nil, err
 		}
@@ -199,6 +195,23 @@ func (s *Store) inScope(id string) bool {
 	return s.scopeRun == "" || s.inRun[id]
 }
 
+// OrgThemeEffort is the ops ORG reading under COUNT by theme: the sum,
+// over the latest generation of every work unit in scope and in the window,
+// of one per work unit x subcategory share, grouped by the theme prefix of the
+// subcategory key, with the share as the Float32 ops casts it to
+// (dev-health-ops internal/queryapi/analytics investmentContextFor).
+func (s *Store) OrgThemeEffort(w Window) map[string]float64 {
+	out := map[string]float64{}
+	for _, id := range s.unitIDs() {
+		unit := s.units[id]
+		if !s.inScope(id) || !w.holds(unit.latest) {
+			continue
+		}
+		addSubcategoryEffort(out, unit.latest)
+	}
+	return out
+}
+
 func addSubcategoryEffort(out map[string]float64, gen unitGeneration) {
 	keys := make([]string, 0, len(gen.subcats))
 	for k := range gen.subcats {
@@ -207,7 +220,7 @@ func addSubcategoryEffort(out map[string]float64, gen unitGeneration) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		theme, _, _ := strings.Cut(key, ".")
-		out[theme] += float64(float32(gen.subcats[key])) * gen.effort
+		out[theme] += float64(float32(gen.subcats[key]))
 	}
 }
 
@@ -322,7 +335,7 @@ func reachTotal(reach map[string]float64) float64 {
 }
 
 // ExpectedRepositoryEffort is the acr repository mix the store rows give:
-// per repository and theme, effort_value x theme share x the repository's
+// per repository and theme, one per work unit x theme share x the repository's
 // share of the unit, over the latest generation of every work unit in scope
 // and in the window.
 func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64 {
@@ -337,7 +350,7 @@ func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64
 				out[repo] = map[string]float64{}
 			}
 			for theme, themeShare := range unit.latest.themes {
-				out[repo][theme] += unit.latest.effort * themeShare * share
+				out[repo][theme] += themeShare * share
 			}
 		}
 	}
@@ -356,7 +369,7 @@ func (s *Store) Witnesses(w Window) Witnesses {
 	out := Witnesses{ClassSupersession: {}, ClassMembershipScope: {}, ClassNullableArgmax: {}}
 	add := func(class Class, gen unitGeneration, share float64) {
 		for theme, themeShare := range gen.themes {
-			out[class][theme] += gen.effort * themeShare * share
+			out[class][theme] += themeShare * share
 		}
 	}
 	for _, id := range s.unitIDs() {

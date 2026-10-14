@@ -683,6 +683,57 @@ type VenuePlanes struct {
 	// never logged.
 	TokenFile string
 	Client    *http.Client
+	// MinInterval is the least time between two calls, retries included: the
+	// run paces itself under the venue's request budget instead of spending
+	// its deadline in Retry-After waits. Zero is no pacing.
+	MinInterval time.Duration
+	// Logf receives every Retry-After wait and nothing else (never a body, a
+	// credential or an address).
+	Logf func(format string, args ...any)
+
+	mu      sync.Mutex
+	last    time.Time
+	limited int
+	waited  time.Duration
+}
+
+// LimitedCalls is how many answers were the venue's rate limit and how long
+// the run waited on them: a run that spent time in Retry-After says so.
+func (p *VenuePlanes) LimitedCalls() (count int, waited time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.limited, p.waited
+}
+
+func (p *VenuePlanes) noteLimited(tool, via string, attempt int, wait time.Duration) {
+	p.mu.Lock()
+	p.limited++
+	p.waited += wait
+	count := p.limited
+	p.mu.Unlock()
+	if p.Logf != nil {
+		p.Logf("venue %s rate limited via %s (attempt %d, 429 count %d): waiting %s", tool, via, attempt+1, count, wait)
+	}
+}
+
+// pace holds a call until MinInterval has passed since the last one.
+func (p *VenuePlanes) pace(ctx context.Context) error {
+	if p.MinInterval <= 0 {
+		return nil
+	}
+	p.mu.Lock()
+	next := p.last.Add(p.MinInterval)
+	if now := time.Now(); next.Before(now) {
+		next = now
+	}
+	p.last = next
+	p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Until(next)):
+		return nil
+	}
 }
 
 // venueRetries bounds how often one call waits out a rate limit answer.
@@ -702,6 +753,7 @@ func (p *VenuePlanes) call(ctx context.Context, tool string, arguments any) (jso
 			if seconds, perr := strconv.Atoi(strings.TrimSpace(retryAfter)); perr == nil && seconds > 0 {
 				wait = time.Duration(min(seconds, 60)) * time.Second
 			}
+			p.noteLimited(tool, "HTTP 429", attempt, wait)
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("venue call %s: rate limited and the run deadline passed", tool)
@@ -716,6 +768,7 @@ func (p *VenuePlanes) call(ctx context.Context, tool string, arguments any) (jso
 		if limited && attempt < venueRetries {
 			// The API behind the MCP server answered its own rate limit; the
 			// server hands that on as a tool error.
+			p.noteLimited(tool, "tool error", attempt, 5*time.Second)
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("venue call %s: rate limited and the run deadline passed", tool)
@@ -728,6 +781,9 @@ func (p *VenuePlanes) call(ctx context.Context, tool string, arguments any) (jso
 }
 
 func (p *VenuePlanes) post(ctx context.Context, tool string, arguments any) (raw []byte, status int, retryAfter string, err error) {
+	if err := p.pace(ctx); err != nil {
+		return nil, 0, "", fmt.Errorf("venue call %s: run deadline passed while pacing", tool)
+	}
 	token, err := os.ReadFile(p.TokenFile)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("venue credential file is not readable")

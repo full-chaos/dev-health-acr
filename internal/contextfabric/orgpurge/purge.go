@@ -263,7 +263,7 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 		var n int64
 		for _, child := range spec.CascadedByDeviceCode {
 			var c int64
-			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM acr."+child+" WHERE device_code_hash IN (SELECT device_code_hash FROM acr."+spec.Name+" WHERE "+spec.Where+")", orgID).Scan(&c)
+			err = tx.QueryRowContext(ctx, cascadeCountSQL(spec, child), orgID).Scan(&c)
 			if err != nil {
 				return fmt.Errorf("count %s: %w", child, err)
 			}
@@ -271,10 +271,10 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 			report.TotalRows += c
 		}
 		if opts.DryRun {
-			err = tx.QueryRowContext(ctx, "SELECT count(*) FROM acr."+spec.Name+" WHERE "+spec.Where, orgID).Scan(&n)
+			err = tx.QueryRowContext(ctx, countSQL(spec), orgID).Scan(&n)
 		} else {
 			var res sql.Result
-			res, err = tx.ExecContext(ctx, "DELETE FROM acr."+spec.Name+" WHERE "+spec.Where, orgID)
+			res, err = tx.ExecContext(ctx, deleteSQL(spec), orgID)
 			if err == nil {
 				n, err = res.RowsAffected()
 			}
@@ -286,10 +286,10 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 		report.TotalRows += n
 		report.TableOrderApplied = append(report.TableOrderApplied, spec.Name)
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid`, orgID).Scan(&report.KeptAuditEvents); err != nil {
+	if err := tx.QueryRowContext(ctx, auditCountSQL, orgID).Scan(&report.KeptAuditEvents); err != nil {
 		return fmt.Errorf("count audit events: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM acr.agent_episodes WHERE org_id = $1::uuid AND retention_class = 'legal_hold'`, orgID).Scan(&report.KeptLegalHold); err != nil {
+	if err := tx.QueryRowContext(ctx, legalHoldCountSQL, orgID).Scan(&report.KeptLegalHold); err != nil {
 		return fmt.Errorf("count legal hold episodes: %w", err)
 	}
 	if opts.DryRun {
@@ -368,10 +368,7 @@ func (p *Purger) logger() *slog.Logger {
 // is the canonical lowercase UUID, which is what the coordinator checks, and
 // its time is the database clock, the one a discovery compares it with.
 func (p *Purger) writePurgeMarker(ctx context.Context, tx *sql.Tx, orgID string) error {
-	_, err := tx.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at)
-VALUES ($1, clock_timestamp())
-ON CONFLICT (org_id) DO UPDATE SET purged_at = EXCLUDED.purged_at`, orgID)
+	_, err := tx.ExecContext(ctx, markerUpsertSQL, orgID)
 	if err != nil {
 		return fmt.Errorf("write purge marker: %w", err)
 	}
@@ -387,9 +384,7 @@ func (p *Purger) writeAudit(ctx context.Context, tx *sql.Tx, orgID string, repor
 	if err != nil {
 		return fmt.Errorf("encode audit metadata: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `
-INSERT INTO acr.audit_events (audit_event_id, org_id, actor_type, actor_id, action, resource_type, resource_id, status, metadata, created_at)
-VALUES ($1::uuid, $2::uuid, 'operator', 'acr-projector', 'org_purged', 'organization', $3, 'success', $4::jsonb, $5)`,
+	_, err = tx.ExecContext(ctx, purgedAuditInsertSQL,
 		uuid.NewString(), orgID, report.OrgKey, string(metadata), now().UTC())
 	if err != nil {
 		return fmt.Errorf("insert audit event: %w", err)
@@ -408,9 +403,36 @@ func (p *Purger) writeIncompleteAudit(ctx context.Context, orgID string, report 
 	if err != nil {
 		return false
 	}
-	_, err = p.DB.ExecContext(context.WithoutCancel(ctx), `
-INSERT INTO acr.audit_events (audit_event_id, org_id, actor_type, actor_id, action, resource_type, resource_id, status, metadata, created_at)
-VALUES ($1::uuid, $2::uuid, 'operator', 'acr-projector', 'org_purge_incomplete', 'organization', $3, 'failure', $4::jsonb, $5)`,
+	_, err = p.DB.ExecContext(context.WithoutCancel(ctx), incompleteAuditInsertSQL,
 		uuid.NewString(), orgID, report.OrgKey, string(metadata), now().UTC())
 	return err == nil
 }
+
+// The statements the purge issues, as functions and constants so that
+// Statements and Privileges describe exactly what Run executes.
+func cascadeCountSQL(spec tableSpec, child string) string {
+	return "SELECT count(*) FROM acr." + child + " WHERE device_code_hash IN (SELECT device_code_hash FROM acr." + spec.Name + " WHERE " + spec.Where + ")"
+}
+
+func countSQL(spec tableSpec) string {
+	return "SELECT count(*) FROM acr." + spec.Name + " WHERE " + spec.Where
+}
+
+func deleteSQL(spec tableSpec) string {
+	return "DELETE FROM acr." + spec.Name + " WHERE " + spec.Where
+}
+
+const (
+	auditCountSQL     = `SELECT count(*) FROM acr.audit_events WHERE org_id = $1::uuid`
+	legalHoldCountSQL = `SELECT count(*) FROM acr.agent_episodes WHERE org_id = $1::uuid AND retention_class = 'legal_hold'`
+	markerUpsertSQL   = `
+INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at)
+VALUES ($1, clock_timestamp())
+ON CONFLICT (org_id) DO UPDATE SET purged_at = EXCLUDED.purged_at`
+	purgedAuditInsertSQL = `
+INSERT INTO acr.audit_events (audit_event_id, org_id, actor_type, actor_id, action, resource_type, resource_id, status, metadata, created_at)
+VALUES ($1::uuid, $2::uuid, 'operator', 'acr-projector', 'org_purged', 'organization', $3, 'success', $4::jsonb, $5)`
+	incompleteAuditInsertSQL = `
+INSERT INTO acr.audit_events (audit_event_id, org_id, actor_type, actor_id, action, resource_type, resource_id, status, metadata, created_at)
+VALUES ($1::uuid, $2::uuid, 'operator', 'acr-projector', 'org_purge_incomplete', 'organization', $3, 'failure', $4::jsonb, $5)`
+)

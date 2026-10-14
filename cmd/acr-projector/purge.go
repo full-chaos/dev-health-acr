@@ -19,7 +19,24 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 )
 
+// purgeDSNEnvironment names the DSN of the org purge's own database role. The
+// purge deletes rows in tables the runtime role must not delete from, so it never
+// runs on the runtime DSN.
+const purgeDSNEnvironment = "ACR_POSTGRES_PURGE_DSN"
+
+// errPurgeDSNRequired is what `acr-projector purge` returns when no purge DSN is
+// set. It names the variable, so an operator who ran the purge as before sees
+// what changed and what to set.
+var errPurgeDSNRequired = errors.New("acr-projector purge requires " + purgeDSNEnvironment + " (or " + purgeDSNEnvironment + "_FILE): the purge runs as its own database role, not the runtime role, and refuses to run without it")
+
 func purge(args []string) error {
+	purgeDSN, err := config.SecretValue(os.LookupEnv, purgeDSNEnvironment)
+	if err != nil {
+		return fmt.Errorf("%s: %w", purgeDSNEnvironment, err)
+	}
+	if strings.TrimSpace(purgeDSN) == "" {
+		return errPurgeDSNRequired
+	}
 	cfg, err := config.LoadProjector()
 	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
@@ -41,6 +58,7 @@ func purge(args []string) error {
 	}
 	defer entitlementClient.Close()
 
+	cfg.PostgresDSN = purgeDSN
 	cfg.ProjectionEnabled = true
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration: %w", err)

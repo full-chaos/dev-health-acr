@@ -90,17 +90,18 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	}
 
 	org := read(organizationSubject(orgID))
-	// Each repository once: feature 10, risk 4, quality 4, maintenance 6,
-	// operational 50 = 74. The unresolved unit (10) and the no-reference unit (10) are not in the shares.
-	want := map[string]float64{"feature_delivery": 10, "risk": 4, "quality": 4, "maintenance": 6, "operational": 50}
+	// Each repository once, every unit weighing 1: feature 1, risk 0.5,
+	// quality 0.5, maintenance 1, operational 1 = 4. The unresolved unit and the
+	// no-reference unit are not in the shares.
+	want := map[string]float64{"feature_delivery": 1, "risk": 0.5, "quality": 0.5, "maintenance": 1, "operational": 1}
 	got := weighted(org)
 	for theme, w := range want {
 		if math.Abs(got[theme]-w) > 1e-9 {
 			t.Fatalf("org %s = %v, want %v (all: %v)", theme, got[theme], w, got)
 		}
 	}
-	if share := *org.Fields["theme_operational"].Number; math.Abs(share-50.0/74.0) > 1e-9 {
-		t.Fatalf("theme_operational = %v, want %v", share, 50.0/74.0)
+	if share := *org.Fields["theme_operational"].Number; math.Abs(share-1.0/4.0) > 1e-9 {
+		t.Fatalf("theme_operational = %v, want %v", share, 1.0/4.0)
 	}
 	if n := *org.Fields["repositories_in_scope"].Integer; n != 3 {
 		t.Fatalf("repositories_in_scope = %d, want 3", n)
@@ -108,8 +109,8 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	if s := *org.Fields["scope"].String; s != "organization" {
 		t.Fatalf("scope = %q", s)
 	}
-	if u := *org.Fields["unattributed_effort_share"].Number; math.Abs(u-20.0/94.0) > 1e-9 {
-		t.Fatalf("unattributed_effort_share = %v, want %v", u, 20.0/94.0)
+	if u := *org.Fields["unattributed_effort_share"].Number; math.Abs(u-2.0/6.0) > 1e-9 {
+		t.Fatalf("unattributed_effort_share = %v, want %v", u, 2.0/6.0)
 	}
 
 	// The sum of the two team facts counts repo-b twice: it is NOT the org.
@@ -118,10 +119,10 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	for _, theme := range []string{"feature_delivery", "operational", "maintenance", "quality", "risk"} {
 		teamSum += team1[theme] + team2[theme]
 	}
-	if math.Abs(teamSum-85) > 1e-9 {
-		t.Fatalf("team facts sum = %v, want 85 (repo-b counted in both teams)", teamSum)
+	if math.Abs(teamSum-5.5) > 1e-9 {
+		t.Fatalf("team facts sum = %v, want 5.5 (repo-b counted in both teams)", teamSum)
 	}
-	if math.Abs(teamSum-74) < 1e-9 {
+	if math.Abs(teamSum-4) < 1e-9 {
 		t.Fatalf("team facts sum equals the org total; the fixture no longer shows the double count")
 	}
 	if team1["feature_delivery"]+team2["feature_delivery"] == got["feature_delivery"] {

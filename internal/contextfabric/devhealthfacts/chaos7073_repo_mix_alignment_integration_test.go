@@ -145,9 +145,9 @@ func TestCHAOS7073SupersededWorkUnitIsExcludedFromRepositoryAndTeamMix(t *testin
 	f.unit("wu-retired", "repo-a", 7, "risk", f.at)
 	f.superseded("wu-retired")
 
-	want := map[string]float64{"feature_delivery": 10}
-	f.assertMix(repositorySubject("repo-a"), want, "superseded wu-retired's 7 risk must not count")
-	f.assertMix(teamSubject("team-a"), want, "superseded wu-retired's 7 risk must not reach the team")
+	want := map[string]float64{"feature_delivery": 1}
+	f.assertMix(repositorySubject("repo-a"), want, "superseded wu-retired's risk unit must not count")
+	f.assertMix(teamSubject("team-a"), want, "superseded wu-retired's risk unit must not reach the team")
 }
 
 // K16b: only the work units of the latest complete membership run count.
@@ -168,7 +168,7 @@ func TestCHAOS7073WorkUnitOutsideCurrentMembershipRunIsExcluded(t *testing.T) {
 	// latest marker is the legacy one, which here it is not.
 	f.member("", "ISS-9", "wu-previous", f.at.Add(-3*time.Hour))
 
-	want := map[string]float64{"feature_delivery": 10}
+	want := map[string]float64{"feature_delivery": 1}
 	f.assertMix(repositorySubject("repo-a"), want, "wu-previous is outside the latest complete run run-2")
 	f.assertMix(teamSubject("team-a"), want, "wu-previous is outside the latest complete run run-2")
 }
@@ -182,7 +182,7 @@ func TestCHAOS7073NoMembershipRunRecordedFiltersNothing(t *testing.T) {
 	f.unit("wu-2", "repo-a", 7, "risk", f.at)
 	f.member("run-unmarked", "ISS-1", "wu-1", f.at)
 
-	want := map[string]float64{"feature_delivery": 10, "risk": 7}
+	want := map[string]float64{"feature_delivery": 1, "risk": 1}
 	f.assertMix(repositorySubject("repo-a"), want, "no complete run recorded: every unit counts")
 	f.assertMix(teamSubject("team-a"), want, "no complete run recorded: every unit counts")
 }
@@ -207,7 +207,7 @@ func TestCHAOS7073LegacyMembershipRunReadsEachNodesLatestRow(t *testing.T) {
 	// legacy branch reads run_id = '' rows only.
 	f.member("run-x", "ISS-1", "wu-unmembered", f.at.Add(-time.Hour))
 
-	want := map[string]float64{"feature_delivery": 10, "maintenance": 3}
+	want := map[string]float64{"feature_delivery": 1, "maintenance": 1}
 	f.assertMix(repositorySubject("repo-a"), want, "legacy marker: only each node's latest pre-run row's unit counts")
 	f.assertMix(teamSubject("team-a"), want, "legacy marker: only each node's latest pre-run row's unit counts")
 }
@@ -221,7 +221,7 @@ func TestCHAOS7073NullLatestRepoIDDoesNotReviveOlderRepository(t *testing.T) {
 	f.unit("wu-moved", "repo-a", 7, "risk", f.at.Add(-time.Hour))
 	f.unit("wu-moved", "", 7, "risk", f.at)
 
-	want := map[string]float64{"feature_delivery": 10}
+	want := map[string]float64{"feature_delivery": 1}
 	f.assertMix(repositorySubject("repo-a"), want, "wu-moved's latest row has no repository")
 	f.assertMix(teamSubject("team-a"), want, "wu-moved's latest row has no repository")
 }

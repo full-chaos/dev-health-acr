@@ -1,0 +1,10 @@
+# devhealthsource race job 3 (mid half): tests run only in race-devhealthsource-mid.
+# Names are exact top-level test names of internal/contextfabric/devhealthsource, one per line.
+# Cut by measured seconds (non-race unit-leg 8 go-test.json, main run 38590971230): the
+# three slowest heavy tests, 211s of the 411s the heavy list sums to, so the heavy race job and
+# this one each land near 250s of tests. The rest job skips every listed name, so a test
+# absent from all lists runs there. A name in the mid list that no longer exists fails
+# scripts/ci/race-split.sh (race-partition, verify).
+TestLiveMembershipStatementRunsPerTick
+TestLiveWholeClickHouseSourceTickStaysUnderTheByteLimit
+TestRemovedBlockerLinkRuleStaysUnderTheProjectorStatementCap

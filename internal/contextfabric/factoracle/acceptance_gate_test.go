@@ -29,13 +29,6 @@ import (
 //
 // Re-run this gate after every change to the comparator.
 
-// retiredReplyGateReason is why the gate of the ops reply against the store is
-// skipped: that pair is the retired ops value of the Investment breakdown
-// (retiredInvestmentOrgReason), so no ops value is read and there is nothing
-// for a wrong reply to be found against. It is not a passing gate; it returns
-// with the pair (9699).
-const retiredReplyGateReason = "RETIRED (9699): the ops value of the Investment breakdown is not compared, so a reply of another store cannot be found; this gate returns with the pair"
-
 // gateRun runs root analytics with reference as the store both the ops reply
 // and the witnesses describe, and acr as the store the acr plane reads.
 func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, acr *Extract) (*Oracle, *RootReport) {
@@ -48,8 +41,8 @@ func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, ac
 		t.Fatalf("replay listener failures: %v", failures)
 	}
 	rr := report.Root("analytics")
-	if rr == nil || rr.Compared == 0 || len(rr.Retired) == 0 {
-		t.Fatalf("root analytics was not run on its acr pairs: %+v", rr)
+	if rr == nil || rr.ShapesRun == 0 || rr.Compared == 0 {
+		t.Fatalf("root analytics was not run: %+v", rr)
 	}
 	// A run that is not a valid measurement proves nothing about the class.
 	if len(rr.Invalid) > 0 {
@@ -173,7 +166,7 @@ func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values m
 	if len(rr.Findings) > 0 {
 		t.Errorf("planted run has findings beside the named class: %+v", rr.Findings)
 	}
-	if len(rr.Retired) == 0 && (rr.ShapesRun == 0 || rr.Leaves == 0) {
+	if rr.ShapesRun == 0 || rr.Leaves == 0 {
 		t.Errorf("the shape pass did not run on the planted store")
 	}
 }
@@ -222,7 +215,7 @@ func directUnit(t *testing.T, extract *Extract, window Window) (id string, row R
 		}
 		total := 0.0
 		for _, share := range unit.latest.themes {
-			total += share * unit.latest.effort
+			total += share
 		}
 		if total > best || (total == best && unitID < id) {
 			best, id, row = total, unitID, candidate
@@ -244,17 +237,13 @@ func cloneRow(row Row) Row {
 
 func unitThemeEffort(t *testing.T, row Row) map[string]float64 {
 	t.Helper()
-	effort, err := rowFloat(row, "effort_value")
-	if err != nil {
-		t.Fatal(err)
-	}
 	themes, err := rowMap(row, "theme_distribution_json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]float64{}
 	for theme, share := range themes {
-		out[theme] = share * effort
+		out[theme] = share
 	}
 	return out
 }
@@ -378,8 +367,52 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	planted := reference.Clone()
 	rows := planted.Tables[tableWorkUnitInvestments]
 	rows[len(rows)-1]["repo_id"] = source["repo_id"]
+	// The venue's own units whose latest generation has no repository and an
+	// older one has (unsized units among them) are planted the same way:
+	// every unit weighs one, so each reaching nothing but its repository adds
+	// its whole theme distribution to the mix a NULL-skipping argMax serves.
+	wantEffort := map[string]float64{}
+	plantedUnits := 0
+	refStore, err := NewStore(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for unitID, unit := range refStore.units {
+		if unit.revivedRepo == "" {
+			continue
+		}
+		var latest Row
+		latestAt := ""
+		for _, row := range rows {
+			if rowID, _ := rowString(row, "work_unit_id"); rowID != unitID {
+				continue
+			}
+			if at, _ := rowString(row, "computed_at"); latest == nil || at > latestAt {
+				latest, latestAt = row, at
+			}
+		}
+		if latest == nil {
+			t.Fatalf("unit %s has no row in the planted extract", unitID)
+		}
+		latest["repo_id"] = unit.revivedRepo
+		plantedUnits++
+		// The witness of this class holds the units no other class owns: not
+		// superseded, in the membership run, and in the window.
+		if refStore.superseded[unitID] || (refStore.scopeRun != "" && !refStore.inRun[unitID]) || !manifest.Window.holds(unit.latest) {
+			continue
+		}
+		if len(unit.latest.prs) > 0 || len(unit.latest.issues) > 0 || !refStore.repoIDs[strings.ToLower(unit.revivedRepo)] {
+			continue
+		}
+		for theme, share := range unit.latest.themes {
+			wantEffort[theme] += share
+		}
+	}
+	if plantedUnits == 0 {
+		t.Fatal("no unit has a revivable repository: the gate case cannot be built")
+	}
 	_, rr := gateRun(t, manifest, recording, reference, planted)
-	wantPlanted(t, rr, "investment_org", ClassNullableArgmax, unitThemeEffort(t, source))
+	wantPlanted(t, rr, "investment_org", ClassNullableArgmax, wantEffort)
 }
 
 func acceptanceGateNullRepoID(t *testing.T) {
@@ -548,9 +581,16 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	for _, row := range planted.Tables[tableEstimateCoverageMetricsDaily] {
 		bump(row, "unestimated_count", 1)
 	}
+	// A unit weighs one however it is sized, so a changed value is a unit
+	// that is gone: the unit that reaches organization repositories whole.
+	droppedUnit, _ := directUnit(t, extract, manifest.Window)
+	kept := planted.Tables[tableWorkUnitInvestments][:0]
 	for _, row := range planted.Tables[tableWorkUnitInvestments] {
-		bump(row, "effort_value", 1)
+		if rowID, _ := rowString(row, "work_unit_id"); rowID != droppedUnit {
+			kept = append(kept, row)
+		}
 	}
+	planted.Tables[tableWorkUnitInvestments] = kept
 	name, _ := rowString(planted.Tables[tableRepos][0], "repo")
 	planted.Tables[tableRepos][0]["repo"] = name + "x"
 
@@ -562,7 +602,22 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	for _, root := range []string{"analytics", "capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"} {
 		rr := report.Root(root)
 		want := manifest.Expect[root]
-		if rr == nil || len(rr.Findings) <= len(want.Findings) {
+		// A finding the pinned outcome does not hold: one more, or one whose
+		// text is another (a venue that already differs on a pair still has to
+		// show that the changed store changed it).
+		pinned := map[string]bool{}
+		for _, f := range want.Findings {
+			pinned[f.Pair+"\x00"+f.Detail] = true
+		}
+		fresh := rr != nil && len(rr.Findings) > len(want.Findings)
+		if rr != nil {
+			for _, f := range rr.Findings {
+				if !pinned[f.Pair+"\x00"+f.Detail] {
+					fresh = true
+				}
+			}
+		}
+		if !fresh {
 			t.Errorf("root %s reports no new finding for a changed acr store: %+v", root, rr)
 		}
 	}
@@ -625,16 +680,18 @@ func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 // A recorded reply that is not the reply of the reference store is a
 // finding before anything is said about acr.
 func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
-	t.Skip(retiredReplyGateReason)
 	manifest, recording, extract := loadedCapture(t)
 	other := extract.Clone()
+	// Every unit weighs one, so a reference store that is not the venue's is
+	// one with a unit fewer: the unit that reaches organization repositories.
+	droppedUnit, _ := directUnit(t, extract, manifest.Window)
+	kept := other.Tables[tableWorkUnitInvestments][:0]
 	for _, row := range other.Tables[tableWorkUnitInvestments] {
-		value, err := rowFloat(row, "effort_value")
-		if err != nil {
-			t.Fatal(err)
+		if rowID, _ := rowString(row, "work_unit_id"); rowID != droppedUnit {
+			kept = append(kept, row)
 		}
-		row["effort_value"] = json.Number(formatFloat(value * 2))
 	}
+	other.Tables[tableWorkUnitInvestments] = kept
 	_, rr := gateRun(t, manifest, recording, other, extract)
 	found := 0
 	for _, f := range rr.Findings {

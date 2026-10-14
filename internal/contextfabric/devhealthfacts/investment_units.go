@@ -15,7 +15,7 @@ import (
 )
 
 // The work units behind an investment allocation. A unit's row in one
-// repository carries share_in_scope = c / n * effort_value (c: distinct PR refs
+// repository carries share_in_scope = c / n (c: distinct PR refs
 // of the unit in that repository, n: distinct refs of the unit overall, a ref
 // that resolves to no repository counting in n only) -- the exact weight
 // repoMixStatement sums, so

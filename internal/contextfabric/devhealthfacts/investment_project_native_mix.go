@@ -54,14 +54,14 @@ func projectNativeMixStatement(timeBound factTimeBound, rowLimit int) string {
 SELECT project_key, feature_delivery, operational, maintenance, quality, risk, bugfix_weighted, work_units, effort_units, spanning_units, multi_placed_units FROM (
 SELECT
     concat(a.project_provider, ':', a.project_id) AS project_key,
-    sumIf(a.theme_feature_delivery * a.effort_value, a.effort_value > 0) AS feature_delivery,
-    sumIf(a.theme_operational * a.effort_value, a.effort_value > 0) AS operational,
-    sumIf(a.theme_maintenance * a.effort_value, a.effort_value > 0) AS maintenance,
-    sumIf(a.theme_quality * a.effort_value, a.effort_value > 0) AS quality,
-    sumIf(a.theme_risk * a.effort_value, a.effort_value > 0) AS risk,
-    sumIf(a.bugfix_share * a.effort_value, a.effort_value > 0) AS bugfix_weighted,
+    sum(a.theme_feature_delivery * a.effort_value) AS feature_delivery,
+    sum(a.theme_operational * a.effort_value) AS operational,
+    sum(a.theme_maintenance * a.effort_value) AS maintenance,
+    sum(a.theme_quality * a.effort_value) AS quality,
+    sum(a.theme_risk * a.effort_value) AS risk,
+    sum(a.bugfix_share * a.effort_value) AS bugfix_weighted,
     count() AS work_units,
-    countIf(a.effort_value > 0) AS effort_units,
+    count() AS effort_units,
     countIf(a.project_count > 1) AS spanning_units,
     countIf(a.multi_placed = 1) AS multi_placed_units
 FROM (
@@ -104,7 +104,7 @@ FROM (
                             work_unit_id,
                             argMax(from_ts, computed_at) AS from_ts,
                             argMax(to_ts, computed_at) AS to_ts,
-                            argMax(effort_value, computed_at) AS effort_value,
+                            toFloat64(1) AS effort_value,
                             argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
                             argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
                             argMax(structural_evidence_json, computed_at) AS structural_evidence_json

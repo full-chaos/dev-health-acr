@@ -97,18 +97,18 @@ func TestReadFactsServesTeamReachedOnlyThroughProjectLinksAgainstRealClickHouse(
 		t.Fatalf("field %s = %#v, want a number", name, investment.Fields[name])
 		return 0
 	}
-	// linked: repo-a#1 (5 feature), repo-r#2 (5 feature), repo-r#3 (4 risk).
+	// linked: repo-a#1 (0.5 feature), repo-r#2 (0.5 feature), repo-r#3 (0.5 risk).
 	if got := number("project_reached_repository_count"); got != 2 {
 		t.Fatalf("project_reached_repository_count = %v, want 2", got)
 	}
 	if got := number("owned_repository_count"); got != 0 {
 		t.Fatalf("owned_repository_count = %v, want 0", got)
 	}
-	if got := number("theme_feature_delivery"); got < 0.71 || got > 0.72 {
-		t.Fatalf("theme_feature_delivery = %v, want 10 of 14 linked effort", got)
+	if got := number("theme_feature_delivery"); got < 0.66 || got > 0.67 {
+		t.Fatalf("theme_feature_delivery = %v, want 1 of 1.5 linked units", got)
 	}
-	if got := number("theme_risk"); got < 0.28 || got > 0.29 {
-		t.Fatalf("theme_risk = %v, want 4 of 14 linked effort", got)
+	if got := number("theme_risk"); got < 0.33 || got > 0.34 {
+		t.Fatalf("theme_risk = %v, want 0.5 of 1.5 linked units", got)
 	}
 	if got, _ := investment.Fields["repository_link_basis"].(string); got != "heuristic" {
 		t.Fatalf("repository_link_basis = %#v, want the weakest tier heuristic, never native", investment.Fields["repository_link_basis"])
