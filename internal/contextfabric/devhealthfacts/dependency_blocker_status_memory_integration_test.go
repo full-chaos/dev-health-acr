@@ -22,8 +22,6 @@ const (
 	blockerStatusFillerItems = 150000
 )
 
-const orgWideBlockerStatusSubquery = "SELECT work_item_id, if(uniqExact(repo_id) = 1, any(status), '') AS status FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id"
-
 func blockerStatusPeakMin(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) uint64 {
 	t.Helper()
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
@@ -86,13 +84,25 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 			catalog = candidate
 		}
 	}
-	start := strings.Index(catalog.Statement, "LEFT JOIN (SELECT work_item_id")
-	end := strings.Index(catalog.Statement, ") AS b ON")
-	if start < 0 || end < 0 {
-		t.Fatalf("the blocker status join was not found in the statement")
+	// The organization-wide form drops the repository's blocker id set, so the
+	// status join groups every work item of the organization.
+	orgWideStatement := catalog.Statement
+	for {
+		start := strings.Index(orgWideStatement, " AND work_item_id IN (")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(orgWideStatement[start:], ") GROUP BY work_item_id")
+		if end < 0 {
+			t.Fatalf("the blocker status id set was not closed in the statement")
+		}
+		orgWideStatement = orgWideStatement[:start] + orgWideStatement[start+end+1:]
+	}
+	if orgWideStatement == catalog.Statement {
+		t.Fatalf("the blocker status id set was not found in the statement")
 	}
 	orgWide := catalog
-	orgWide.Statement = catalog.Statement[:start] + "LEFT JOIN (" + orgWideBlockerStatusSubquery + catalog.Statement[end:]
+	orgWide.Statement = orgWideStatement
 	plan := contextpacket.ReadPlan{OrgID: blockerProdShapeOrg, RepoID: "00000000-0000-4000-8000-000000000000", RepoSlug: "acme/repo-0"}
 
 	smallScoped := blockerStatusPeakMin(t, ctx, query, direct, catalog, plan, 3)

@@ -82,7 +82,7 @@ func actionFindingEvidence(team TeamActionFindings, observedFallback time.Time) 
 	return contractsv1.EvidenceRef{
 		SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: team.EvidenceRefID,
 		Source:     contractsv1.EvidenceSource{System: "dev_health", EntityType: "recommendation", EntityID: team.TeamID, DisplayLabel: label},
-		Provenance: "native", Confidence: 1, Citation: truncateRunes("Operations rules fired for the owning team; this suggests: "+strings.Join(parts, "; "), 1900),
+		Provenance: contractsv1.EvidenceProvenanceNative, Confidence: 1, Citation: truncateRunes("Operations rules fired for the owning team; this suggests: "+strings.Join(parts, "; "), 1900),
 		ObservedAt: observed, Availability: contractsv1.EvidenceAvailable, SourceVersion: actionSourceVersion,
 	}, true
 }
