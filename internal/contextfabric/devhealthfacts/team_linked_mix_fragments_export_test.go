@@ -37,6 +37,17 @@ func TeamLinkedMixStatementsForTest() (sent, inlined string) {
 	return sent, inlineSentLinkedMix(sent, factTimeBound{})
 }
 
+// TeamLinkedMixInlineStatementForTest is the production statement for a
+// current read with its external tables inlined: under the membership scope by
+// ids (bound as scope_json) or, with subquery set, under the scope subqueries.
+func TeamLinkedMixInlineStatementForTest(subquery bool) string {
+	scope := membershipScope{mode: membershipScopeIDs, ids: []string{"a"}}
+	if subquery {
+		scope = subqueryMembershipScope
+	}
+	return inlineSentLinkedMix(linkedPullRequestMixStatement(factTimeBound{}, scope, linkedMixTeamChunk+1), factTimeBound{})
+}
+
 // LinkedMixValues is one team's row of the team linked pull request mix.
 type LinkedMixValues struct {
 	Repos  uint64

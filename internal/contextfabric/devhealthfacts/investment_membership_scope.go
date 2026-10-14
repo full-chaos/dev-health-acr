@@ -148,6 +148,20 @@ const (
 	membershipScopeTableIDs
 )
 
+// modeName is the scope's mode in a closed vocabulary for telemetry.
+func (s membershipScope) modeName() string {
+	switch s.mode {
+	case membershipScopeNone:
+		return "none"
+	case membershipScopeIDs:
+		return "ids"
+	case membershipScopeTableIDs:
+		return "ids_table"
+	default:
+		return "subquery"
+	}
+}
+
 // sentAsTable is the scope a statement that sends the ids as an external table
 // applies; the other modes carry no ids and are unchanged.
 func (s membershipScope) sentAsTable() membershipScope {

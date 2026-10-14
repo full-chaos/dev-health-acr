@@ -3,11 +3,13 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -147,9 +149,6 @@ func (p *InvestmentProvider) readLinkedPullRequestMixRows(ctx context.Context, o
 	if err != nil {
 		return nil, err
 	}
-	if scope.mode == membershipScopeIDs && len(scope.ids) == 0 {
-		return out, nil
-	}
 	bindings := boundReaderBindings(bound)
 	statement := linkedPullRequestMixStatement(bound, scope, linkedMixTeamChunk+1)
 	for start := 0; start < len(sorted); start += linkedMixTeamChunk {
@@ -158,6 +157,11 @@ func (p *InvestmentProvider) readLinkedPullRequestMixRows(ctx context.Context, o
 		if err != nil {
 			return nil, err
 		}
+		outcome := "sent"
+		if len(repos) == 0 {
+			outcome = "empty_set_mix_skipped"
+		}
+		slog.InfoContext(ctx, "devhealthfacts.team_linked_mix_set", "outcome", contextfabric.SanitizeLogAttr(outcome), "teams", len(chunk), "linked_pull_requests", len(repos), "scope_mode", contextfabric.SanitizeLogAttr(scope.modeName()))
 		if len(repos) == 0 {
 			continue
 		}

@@ -39,6 +39,21 @@ const (
 	wideIDUncappedCeiling = 2 << 30
 )
 
+// readonlyQueryClient runs every statement as the prod API user does, with
+// readonly=2, keeping the statement memory cap the capped client above it set:
+// a driver settings option replaces the settings it finds.
+type readonlyQueryClient struct {
+	inner contextpacket.ClickHouseQueryClient
+}
+
+func (c readonlyQueryClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	settings := clickhousedriver.Settings{"readonly": 2}
+	if capBytes, ok := contextpacket.StatementMemoryCapFromContext(ctx); ok {
+		settings["max_memory_usage"] = capBytes
+	}
+	return c.inner.Query(clickhousedriver.Context(ctx, clickhousedriver.WithSettings(settings)), statement, bindings)
+}
+
 type linkedFormRun struct {
 	mib  float64
 	ms   uint64
@@ -71,6 +86,23 @@ WHERE type != 'QueryStart' AND log_comment = ? ORDER BY event_time_microseconds 
 		code = exception.Code
 	}
 	return linkedFormRun{mib: float64(mem) / (1 << 20), ms: ms, code: code, err: err}
+}
+
+// assertReadonlyInForce shows readonly=2 is in force on the served client, not
+// only set: a statement that changes readonly is refused through it, and a
+// write (an INSERT) is refused under the same settings.
+func assertReadonlyInForce(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID string) {
+	t.Helper()
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadonlyProbe", "SELECT 1 SETTINGS readonly = 0", orgID, nil, func(readers.RowScanner) error { return nil })
+	var exception *clickhousedriver.Exception
+	if !errors.As(err, &exception) || exception.Code != 164 {
+		t.Fatalf("readonly is not in force on the served client: lifting it returned %v, want code 164 (READONLY)", err)
+	}
+	writeErr := direct.Exec(clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{"readonly": 2})), "INSERT INTO FUNCTION null('x UInt8') VALUES (1)")
+	if !errors.As(writeErr, &exception) || exception.Code != 164 {
+		t.Fatalf("readonly=2 does not refuse a write: an INSERT returned %v, want code 164 (READONLY)", writeErr)
+	}
+	t.Logf("readonly=2 in force: lifting readonly refused (code 164), an INSERT refused (code 164)")
 }
 
 func linkedFormRuns(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID, name, statement, settings string, bindings []readers.Binding) []linkedFormRun {
@@ -147,11 +179,17 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 		for _, p := range mixPeaks {
 			read.mixMiB = float64(p) / (1 << 20)
 		}
+		var readonlyRuns, served uint64
 		if err := direct.QueryRow(ctx, `SELECT
 	maxIf(query_duration_ms, position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0),
-	maxIf(query_duration_ms, position(query, 'uniqExact(m.repo_uuid)') > 0)
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'`, mark).Scan(&read.setMs, &read.mixMs); err != nil {
+	maxIf(query_duration_ms, position(query, 'uniqExact(m.repo_uuid)') > 0),
+	countIf(Settings['readonly'] = '2'), count()
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+	AND (position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0 OR position(query, 'uniqExact(m.repo_uuid)') > 0)`, mark).Scan(&read.setMs, &read.mixMs, &readonlyRuns, &served); err != nil {
 			t.Fatalf("read the served statements' durations (measurement did not happen): %v", err)
+		}
+		if served != 2 || readonlyRuns != served {
+			t.Fatalf("the served linked set and mix statements did not both run under readonly=2: %d of %d", readonlyRuns, served)
 		}
 		out = append(out, read)
 	}
@@ -195,8 +233,9 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	}
 	t.Logf("seeded: %d scope ids, average width %.1f characters, scope literal %.2f MiB", len(ids), float64(width)/float64(len(ids)), float64(len(scopeJSON))/(1<<20))
 	bindings := []readers.Binding{{Name: "scope_json", Value: string(scopeJSON)}}
-	capped := contextpacket.NewMemoryCappedQueryClient(query, contextpacket.APIStatementMaxMemoryUsage)
+	capped := contextpacket.NewMemoryCappedQueryClient(readonlyQueryClient{inner: query}, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
+	assertReadonlyInForce(t, ctx, capped, direct, orgID)
 	rev88 := readWideIDForm(t, "team_linked_mix_rev88.sql")
 	inlined := readWideIDForm(t, "team_linked_mix_inline_sets.sql")
 	uncapped := fmt.Sprintf("max_memory_usage = %d, max_result_rows = 0", wideIDUncappedCeiling)
@@ -261,26 +300,56 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("production linked mix read: %v", err)
 	}
-	t.Logf("value equality over %d teams: production %d team rows, rev 88 form %d", len(teams), len(got), len(want))
+	compareLinkedMixRows(t, "all teams", got, want)
 	if len(want) < 2 {
 		t.Fatalf("value equality did not happen: the rev 88 form returned %d team rows", len(want))
 	}
+	if share := got[linkedShapeRepeatedTeam].Theme["feature_delivery"]; share < linkedShapeRepeatedEffort/2 || share > linkedShapeRepeatedEffort/2+1e6 {
+		t.Errorf("production: team %s feature_delivery effort %v, want half of the repeated-key unit", linkedShapeRepeatedTeam, share)
+	}
+
+	// A team whose owned projects link no pull request: the production read
+	// sends no mix statement; the inlined statement returns no row either.
+	const noLinks = "T-without-links"
+	inlineIDs := devhealthfacts.LinkedMixFragment{Name: "inline_sets", SQL: devhealthfacts.TeamLinkedMixInlineStatementForTest(false), Bindings: bindings}
+	gotNone, err := devhealthfacts.TeamLinkedMixRowsForTest(ctx, provider, orgID, []string{noLinks})
+	if err != nil {
+		t.Fatalf("production linked mix read for a team without links: %v", err)
+	}
+	compareLinkedMixRows(t, "empty linked set", gotNone, readLinkedMixRows(t, ctx, query, orgID, []string{noLinks}, inlineIDs))
+
+	// A newer complete membership run with no unit: the scope resolves to the
+	// scope subqueries (an empty run is never sent as ids), and the production
+	// read equals the inlined statement under them for every team.
+	if err := direct.Exec(ctx, `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?, 'run-empty', ?)`, orgID, time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	inlineSubquery := devhealthfacts.LinkedMixFragment{Name: "inline_sets_subquery_scope", SQL: devhealthfacts.TeamLinkedMixInlineStatementForTest(true)}
+	gotEmptyRun, err := devhealthfacts.TeamLinkedMixRowsForTest(ctx, provider, orgID, teams)
+	if err != nil {
+		t.Fatalf("production linked mix read under an empty membership run: %v", err)
+	}
+	compareLinkedMixRows(t, "empty membership run", gotEmptyRun, readLinkedMixRows(t, ctx, query, orgID, teams, inlineSubquery))
+}
+
+// compareLinkedMixRows holds the production read's rows equal to a reference
+// form's, every team and every field.
+func compareLinkedMixRows(t *testing.T, label string, got map[string]devhealthfacts.LinkedMixValues, want map[string]linkedMixRow) {
+	t.Helper()
+	t.Logf("value equality, %s: production %d team rows, reference %d", label, len(got), len(want))
 	if len(got) != len(want) {
-		t.Errorf("production returned %d team rows, the rev 88 form %d", len(got), len(want))
+		t.Errorf("%s: production returned %d team rows, the reference %d", label, len(got), len(want))
 	}
 	for team, w := range want {
 		g, ok := got[team]
 		if !ok || g.Repos != w.repos || !closeEnough(g.Bugfix, w.bugfix) || len(g.Theme) != len(w.theme) {
-			t.Errorf("team %s: production %+v, rev 88 form %+v", team, g, w)
+			t.Errorf("%s: team %s: production %+v, reference %+v", label, team, g, w)
 			continue
 		}
 		for theme, v := range w.theme {
 			if gv, ok := g.Theme[theme]; !ok || !closeEnough(gv, v) {
-				t.Errorf("team %s theme %s: production %v, rev 88 form %v", team, theme, g.Theme[theme], v)
+				t.Errorf("%s: team %s theme %s: production %v, reference %v", label, team, theme, g.Theme[theme], v)
 			}
 		}
-	}
-	if share := got[linkedShapeRepeatedTeam].Theme["feature_delivery"]; share < linkedShapeRepeatedEffort/2 || share > linkedShapeRepeatedEffort/2+1e6 {
-		t.Errorf("production: team %s feature_delivery effort %v, want half of the repeated-key unit", linkedShapeRepeatedTeam, share)
 	}
 }
