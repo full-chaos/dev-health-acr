@@ -27,11 +27,11 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 		}
 		refs = append(refs, ref)
 	}
-	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], goal, roles) })
-	orderCauseByTier(refs, roles)
+	scores := effectiveGoalScores(refs, goal, roles)
+	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
 	refs = deduplicateEvidence(refs)
 	refs = requestedEvidenceCategories(refs, requested, roles)
-	refs, truncated := allocateCategories(refs, goal, maxItems, roles)
+	refs, truncated := allocateCategories(refs, scores, maxItems, roles)
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
 	for _, ref := range refs {
 		items = append(items, evidenceItemWithRoles(ref, scope, roles))
@@ -59,8 +59,13 @@ func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []con
 	return filtered
 }
 
-func evidenceBefore(left, right contractsv1.EvidenceRef, goal string, roles roleResolver) bool {
-	if l, r := goalScore(left, goal), goalScore(right, goal); l != r {
+func evidenceBefore(left, right contractsv1.EvidenceRef, scores map[string]int, roles roleResolver) bool {
+	if l, r := scores[left.EvidenceRefID], scores[right.EvidenceRefID]; l != r {
+		return l > r
+	}
+	// A stronger match tier ranks before a weaker one at an equal score,
+	// before any provenance or recency key can reorder them.
+	if l, r := causeTier(roles.rule(left)), causeTier(roles.rule(right)); l != r {
 		return l > r
 	}
 	if provenanceRank(left.Provenance) != provenanceRank(right.Provenance) {
@@ -72,9 +77,6 @@ func evidenceBefore(left, right contractsv1.EvidenceRef, goal string, roles role
 	l, r := roles.rule(left), roles.rule(right)
 	if l.categoryRank != r.categoryRank {
 		return l.categoryRank < r.categoryRank
-	}
-	if l.subRank != r.subRank {
-		return l.subRank > r.subRank
 	}
 	if left.Confidence != right.Confidence {
 		return left.Confidence > right.Confidence
@@ -156,7 +158,7 @@ func evidenceTieKey(ref contractsv1.EvidenceRef) string {
 	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel, ref.Source.SafeURI, ref.Provenance, string(ref.Availability), ref.SourceVersion, ref.SnapshotHash, string(metadata)}, "\000")
 }
 
-func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
+func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
 	if len(refs) <= maxItems {
 		return refs, false
 	}
@@ -170,7 +172,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 	}
 	selectedIDs := map[string]bool{}
 	for _, ref := range refs {
-		if len(selected) >= (maxItems+1)/2 || goalScore(ref, goal) == 0 {
+		if len(selected) >= (maxItems+1)/2 || scores[ref.EvidenceRefID] == 0 {
 			break
 		}
 		category := roles.rule(ref).category
@@ -194,8 +196,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, goal string, maxItems in
 			selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
 		}
 	}
-	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], goal, roles) })
-	orderCauseByTier(selected, roles)
+	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
 	return selected, true
 }
 
@@ -253,23 +254,44 @@ func itemEvidenceRefIDs(ref contractsv1.EvidenceRef, r rule) []string {
 	return ids
 }
 
-// orderCauseByTier makes a weaker match tier never outrank a stronger one
-// inside the cause role, whatever the goal words say. It keeps every
-// non-cause item where the (total, transitive) comparator put it and refills
-// the cause items' own positions strongest tier first, stable within a tier, so
-// the ordering stays deterministic and an item budget cuts the weakest tier
-// first.
-func orderCauseByTier(refs []contractsv1.EvidenceRef, roles roleResolver) {
-	var positions []int
-	var causes []contractsv1.EvidenceRef
-	for index, ref := range refs {
-		if roles.rule(ref).category == contractsv1.CategoryCause {
-			positions = append(positions, index)
-			causes = append(causes, ref)
+// effectiveGoalScores is the goal score every item ranks by. A cause is ranked
+// at least as high as every cause of a weaker match tier: its score is the
+// largest goal score among the causes of its own tier and weaker ones. The
+// score is a per-item scalar, so the comparator built on it stays a strict
+// weak order; a weaker tier can therefore never outrank, or survive an item
+// budget ahead of, a stronger one, while a goal-less exact cause still ranks
+// below ordinary evidence that names the goal when no weaker cause does.
+func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles roleResolver) map[string]int {
+	scores := make(map[string]int, len(refs))
+	bestAtOrBelow := map[int]int{}
+	for _, ref := range refs {
+		own := goalScore(ref, goal)
+		if own > scores[ref.EvidenceRefID] {
+			scores[ref.EvidenceRefID] = own
+		}
+		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
+			if own > bestAtOrBelow[rule.subRank] {
+				bestAtOrBelow[rule.subRank] = own
+			}
 		}
 	}
-	sort.SliceStable(causes, func(i, j int) bool { return roles.rule(causes[i]).subRank > roles.rule(causes[j]).subRank })
-	for slot, index := range positions {
-		refs[index] = causes[slot]
+	for _, ref := range refs {
+		rule := roles.rule(ref)
+		if rule.category != contractsv1.CategoryCause || rule.subRank == 0 {
+			continue
+		}
+		for tier := 1; tier <= rule.subRank; tier++ {
+			if score := bestAtOrBelow[tier]; score > scores[ref.EvidenceRefID] {
+				scores[ref.EvidenceRefID] = score
+			}
+		}
 	}
+	return scores
+}
+
+func causeTier(r rule) int {
+	if r.category == contractsv1.CategoryCause {
+		return r.subRank
+	}
+	return 0
 }
