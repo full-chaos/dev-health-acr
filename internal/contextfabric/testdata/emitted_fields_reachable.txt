@@ -197,7 +197,7 @@ FactInvestment
     calls followed            1152
     calls accounted           15
     calls not_a_call          34
-    calls excluded_by_design  643
+    calls excluded_by_design  644
     calls leaked              63
   fields             attribution attribution_basis effort_unit_count investment_mix_source link_tier mix_source native_multi_placed_unit_count next_cursor owned_repository_count owning_team_rollup_work_unit_count page_share_total population_window project_reached_repositories project_reached_repositories_omitted_count project_reached_repository_count repo_count repositories_in_scope repository_id repository_link_basis repository_name rollup_basis scope scope_share_total scope_unattributed_rows scope_unattributed_total scope_unit_rows share share_in_scope source spanning_unit_count team_count theme theme_breakdown theme_quality_bugfix unattributed_effort_share unit_attribution_basis unit_effort_value unit_from unit_kind unit_mix_source unit_pull_request_count unit_refs_unresolved unit_to unit_unresolved_refs unit_weight units_refs_unresolved units_returned weighted_effort work_unit_count work_unit_id work_units_without_repo_link
 
