@@ -630,15 +630,12 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 				firstFrom[key] = v.from
 			}
 		}
-		if v.effort > 0 {
-			r.FeatureDelivery += v.feature * v.effort
-			r.Operational += v.operational * v.effort
-			r.Maintenance += v.maintenance * v.effort
-			r.Quality += v.quality * v.effort
-			r.Risk += v.risk * v.effort
-			r.BugfixWeighted += v.bugfix * v.effort
-			r.EffortUnits++
-		}
+		r.FeatureDelivery += v.feature * v.effort
+		r.Operational += v.operational * v.effort
+		r.Maintenance += v.maintenance * v.effort
+		r.Quality += v.quality * v.effort
+		r.Risk += v.risk * v.effort
+		r.BugfixWeighted += v.bugfix * v.effort
 		if projectCount[unit] > 1 {
 			r.SpanningUnits++
 		}

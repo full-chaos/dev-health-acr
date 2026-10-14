@@ -70,7 +70,7 @@ func runNativePhased(t *testing.T, ctx context.Context, query *runtimeclickhouse
 	var out []nativeRow
 	for _, r := range rows {
 		out = append(out, nativeRow{Key: r.ProjectSubjectKey, Themes: [5]float64{r.FeatureDelivery, r.Operational, r.Maintenance, r.Quality, r.Risk},
-			Bugfix: r.BugfixWeighted, WorkUnits: r.WorkUnits, EffortUnits: r.EffortUnits, Spanning: r.SpanningUnits, MultiPlaced: r.MultiPlacedUnits})
+			Bugfix: r.BugfixWeighted, WorkUnits: r.WorkUnits, EffortUnits: r.WorkUnits, Spanning: r.SpanningUnits, MultiPlaced: r.MultiPlacedUnits})
 	}
 	return out
 }
