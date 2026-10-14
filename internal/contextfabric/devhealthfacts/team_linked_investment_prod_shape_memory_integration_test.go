@@ -229,7 +229,8 @@ type linkedFragmentPeak struct {
 }
 
 // measureLinkedMixFragments runs each form linkedShapeRuns times with no
-// memory cap and no result row cap and keeps its lowest peak.
+// memory cap and no result row cap and keeps its lowest peak: the forms are
+// the floor (split rows) and the negative control, never the bounded read.
 func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID, stage string, fragments []devhealthfacts.LinkedMixFragment) map[string]linkedFragmentPeak {
 	t.Helper()
 	out := map[string]linkedFragmentPeak{}
@@ -372,10 +373,10 @@ func assertLinkedMixDifferential(t *testing.T, ctx context.Context, query contex
 
 // servedLinkedMixPeak drives the team investment read through the provider on
 // a client with the API's statement settings and returns the linked mix
-// statement's lowest peak over warm runs.
-func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabric.FactProvider, direct clickhousedriver.Conn, orgID string) float64 {
+// statement's lowest and highest peak over warm runs.
+func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabric.FactProvider, direct clickhousedriver.Conn, orgID string) (lowest, highest float64) {
 	t.Helper()
-	best := -1.0
+	lowest = -1.0
 	for run := 0; run < linkedShapeRuns+1; run++ {
 		mark := serverNowMicros(t, ctx, direct)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
@@ -394,12 +395,16 @@ func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabr
 			continue
 		}
 		for _, peak := range peaks {
-			if mib := float64(peak) / (1 << 20); best < 0 || mib < best {
-				best = mib
+			mib := float64(peak) / (1 << 20)
+			if lowest < 0 || mib < lowest {
+				lowest = mib
+			}
+			if mib > highest {
+				highest = mib
 			}
 		}
 	}
-	return best
+	return lowest, highest
 }
 
 // The team linked pull request mix at the largest prod organization's
@@ -468,9 +473,14 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	check := func(stage string) {
 		t.Helper()
 		peaks := measureLinkedMixFragments(t, ctx, query, direct, orgID, stage, fragments)
-		served := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
-		t.Logf("%sserved through the provider (API settings, %d MiB cap), stage=%s: %.2f MiB", linkedFragmentTable(stage, fragments, peaks), contextpacket.APIStatementMaxMemoryUsage>>20, stage, served)
+		// Every warm served read must hold the bounds, so the highest one is
+		// compared; the split rows and the form that must break the bounds are
+		// taken at their lowest, the side that makes each check harder.
+		lowest, served := servedLinkedMixPeak(t, ctx, provider, direct, orgID)
 		mechanism := linkedShapeSplitFactor*peaks["split_rows"].mib + linkedShapeSplitSlackMiB
+		t.Logf("%sserved through the provider (API settings, %d MiB cap), stage=%s: highest %.2f MiB, lowest %.2f MiB over %d warm reads; bounds: peak %.0f MiB, mechanism %.2f MiB (%.2f x split rows %.2f MiB + %.0f MiB)",
+			linkedFragmentTable(stage, fragments, peaks), contextpacket.APIStatementMaxMemoryUsage>>20, stage, served, lowest, linkedShapeRuns,
+			linkedShapePeakBoundMiB, mechanism, linkedShapeSplitFactor, peaks["split_rows"].mib, linkedShapeSplitSlackMiB)
 		if served > linkedShapePeakBoundMiB {
 			t.Errorf("%s: the served team linked pull request mix peaked at %.2f MiB at the prod shape, bound %.0f MiB", stage, served, linkedShapePeakBoundMiB)
 		}
