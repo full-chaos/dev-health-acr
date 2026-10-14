@@ -1155,7 +1155,7 @@ import (
 // named the oldest blocker. Team and project blockers facts carry
 // blocker_dependencies_writer_unresolved_current. An answer saved under v226
 // can count a removed link.
-const QueryVersion = "devhealthfacts.clickhouse.v227"
+const QueryVersion = "devhealthfacts.clickhouse.v231"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
