@@ -19,8 +19,8 @@ import (
 const captureDir = "testdata/venue"
 
 // captureSchemaDigest is the SDL digest the recorded capture was taken at
-// (the venue at ops b1d7e1f1, pin 31).
-const captureSchemaDigest = "sha256:a5bb8eca55047d939f39fc3317e0bb016a485fb79d5f42b0c440786cfa8ac45b"
+// (the venue at ops b1d7e1f1, pin 31, captured again 2026-10-14 on the COUNT measure).
+const captureSchemaDigest = "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462"
 
 // contractsAtCapture is contractDigest of every served operation under the SDL
 // the capture was taken at. A build that pins another SDL may replay the

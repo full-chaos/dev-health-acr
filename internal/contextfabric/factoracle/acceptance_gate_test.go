@@ -396,6 +396,11 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 		}
 		latest["repo_id"] = unit.revivedRepo
 		plantedUnits++
+		// The witness of this class holds the units no other class owns: not
+		// superseded, in the membership run, and in the window.
+		if refStore.superseded[unitID] || (refStore.scopeRun != "" && !refStore.inRun[unitID]) || !manifest.Window.holds(unit.latest) {
+			continue
+		}
 		if len(unit.latest.prs) > 0 || len(unit.latest.issues) > 0 || !refStore.repoIDs[strings.ToLower(unit.revivedRepo)] {
 			continue
 		}
@@ -597,7 +602,22 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	for _, root := range []string{"analytics", "capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"} {
 		rr := report.Root(root)
 		want := manifest.Expect[root]
-		if rr == nil || len(rr.Findings) <= len(want.Findings) {
+		// A finding the pinned outcome does not hold: one more, or one whose
+		// text is another (a venue that already differs on a pair still has to
+		// show that the changed store changed it).
+		pinned := map[string]bool{}
+		for _, f := range want.Findings {
+			pinned[f.Pair+"\x00"+f.Detail] = true
+		}
+		fresh := rr != nil && len(rr.Findings) > len(want.Findings)
+		if rr != nil {
+			for _, f := range rr.Findings {
+				if !pinned[f.Pair+"\x00"+f.Detail] {
+					fresh = true
+				}
+			}
+		}
+		if !fresh {
 			t.Errorf("root %s reports no new finding for a changed acr store: %+v", root, rr)
 		}
 	}
