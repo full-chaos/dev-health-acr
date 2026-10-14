@@ -720,10 +720,11 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	added := countNewOrgs(previous, effective)
 	c.orgIDs = effective
 	staticCount, discoveredCount, effectiveCount := len(c.staticOrgIDs), len(c.discoveredOrgs), len(effective)
+	discoveredNow := append([]string(nil), c.discoveredOrgs...)
 	c.orgsMu.Unlock()
 
 	if listErr == nil {
-		c.clearPurgeMarkers(ctx, effective, clearMarkers, markerErr)
+		c.clearPurgeMarkers(ctx, discoveredNow, clearMarkers, markerErr)
 	}
 	releaseMarkers()
 
@@ -765,7 +766,9 @@ func (c *Coordinator) orgPurged(ctx context.Context, orgID string) (bool, error)
 	return purged, err
 }
 
-// clearPurgeMarkers lifts the fence for organizations discovery lists again.
+// clearPurgeMarkers lifts the fence for organizations this discovery listed.
+// A static allowlist entry is not discovery: it never lifts a fence, so an
+// operator removes a purged organization from the allowlist instead.
 // A failure leaves the marker in place, which keeps the organization fenced.
 func (c *Coordinator) clearPurgeMarkers(ctx context.Context, effective []string, clearMarkers func(context.Context, []string) ([]string, error), beginErr error) {
 	if c.purgeMarkers == nil || len(effective) == 0 {

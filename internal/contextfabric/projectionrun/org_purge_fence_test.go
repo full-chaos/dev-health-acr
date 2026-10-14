@@ -325,3 +325,48 @@ func TestPurgeFence_TheDiscoverySnapshotIsReleasedOnEveryPath(t *testing.T) {
 		})
 	}
 }
+
+func TestPurgeFence_AStaticAllowlistEntryIsNotDiscoveryAndNeverLiftsTheFence(t *testing.T) {
+	t.Parallel()
+	backend := newFakeBackend()
+	checkpoints := newFakeCheckpointStore()
+	marker := newFakePurgeMarker("org-static")
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:    []string{"org-static"},
+		OrgSource: &fakeOrgSource{results: []fakeOrgResult{{orgs: []string{"org-other"}}}},
+		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend:   backend, Checkpoints: checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		PurgeMarkers: marker, DrainBatchBudget: -1, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	ctx := context.Background()
+	coordinator.Tick(ctx)
+	if got := appliedOrgs(backend)["org-static"]; got != 0 {
+		t.Fatalf("a static entry absent from discovery must stay fenced, applied=%d", got)
+	}
+	if purged, _ := marker.IsPurged(ctx, "org-static"); !purged {
+		t.Fatal("a static allowlist entry must not clear the purge marker")
+	}
+	if appliedOrgs(backend)["org-other"] == 0 {
+		t.Fatalf("a discovered organization must still project: %v", appliedOrgs(backend))
+	}
+}
+
+func TestOrgLockKey_EverySpellingOfOneUUIDSharesOneKey(t *testing.T) {
+	t.Parallel()
+	canonical := "f00d1234-5678-4abc-8def-0123456789ab"
+	for _, spelling := range []string{canonical, "F00D1234-5678-4ABC-8DEF-0123456789AB", "{F00D1234-5678-4ABC-8DEF-0123456789AB}", "urn:uuid:F00D1234-5678-4ABC-8DEF-0123456789AB", "f00d1234567 84abc8def0123456789ab", " F00D1234-5678-4ABC-8DEF-0123456789AB "} {
+		want := canonical
+		if spelling == "f00d1234567 84abc8def0123456789ab" {
+			want = spelling
+		}
+		if got := projectionrun.OrgLockKey(spelling); got != want {
+			t.Fatalf("OrgLockKey(%q) = %q, want %q", spelling, got, want)
+		}
+	}
+	if got := projectionrun.OrgLockKey("org-1"); got != "org-1" {
+		t.Fatalf("a non-UUID id is used as given, got %q", got)
+	}
+}
