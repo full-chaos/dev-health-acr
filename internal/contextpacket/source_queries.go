@@ -34,10 +34,13 @@ var blockerWorkItemIDSQL = "multiIf(" + dependencyRelationKeySQL + " = 'blocks:f
 const blockerSetSQL = "SELECT d2.source_work_item_id FROM work_item_dependencies AS d2 FINAL INNER JOIN work_items AS w2 FINAL ON d2.source_work_item_id = w2.work_item_id WHERE d2.org_id = {org_id:String} AND w2.org_id = {org_id:String} AND w2.repo_id = {repo_id:UUID} " +
 	"UNION ALL SELECT d2.target_work_item_id FROM work_item_dependencies AS d2 FINAL INNER JOIN work_items AS w2 FINAL ON d2.source_work_item_id = w2.work_item_id WHERE d2.org_id = {org_id:String} AND w2.org_id = {org_id:String} AND w2.repo_id = {repo_id:UUID}"
 
-// blockerStatusSubquerySQL reads the stored status only of the work items in
-// blockerSetSQL: the id set is the small IN subquery, never the
-// organization's work items.
-const blockerStatusSubquerySQL = "SELECT work_item_id, if(uniqExact(repo_id) = 1, any(status), '') AS status FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (" + blockerSetSQL + ") GROUP BY work_item_id"
+// blockerStatusSubquerySQL reads the stored status only of the work items of
+// THIS repository in blockerSetSQL: the id set is the small IN subquery, never
+// the organization's work items, and a blocker in another repository carries no
+// status (unknown, never pressure), so a repository-scoped answer never
+// discloses another repository's work item state. A request with an as_of
+// instant carries no status either: only the current status is stored.
+const blockerStatusSubquerySQL = "SELECT work_item_id, if({as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL, any(status), '') AS status FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id IN (" + blockerSetSQL + ") GROUP BY work_item_id"
 
 const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v5"
 

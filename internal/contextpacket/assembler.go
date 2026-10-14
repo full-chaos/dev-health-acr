@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -113,7 +115,8 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(warnings(bundle), roleWarnings(bundle.Evidence)...))
-	actionEvidence, actionReason := a.actionEvidence(ctx, principal, scope, packet.Freshness.AsOf)
+	actionEvidence, actionReason, actionNotes := a.actionEvidence(ctx, principal, request, scope, packet.Freshness.AsOf)
+	packet.Warnings = sortedUnique(append(packet.Warnings, actionNotes...))
 	if actionReason != "" {
 		packet.Warnings = sortedUnique(append(packet.Warnings, "action_items_unavailable:"+actionReason))
 		markActionSourceUnavailable(&packet, request, actionReason)
@@ -250,16 +253,22 @@ func packetID(p storage.Principal, r contractsv1.ContextPacketRequest) string {
 // actionEvidence turns the stored findings of the repository's owning team(s)
 // into recommendation evidence. Nothing is generated: with no source, no
 // owner, no grant or no fired finding it returns none and the closed reason.
-func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Principal, scope contractsv1.ResolvedScope, asOf time.Time) ([]contractsv1.EvidenceRef, string) {
+func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest, scope contractsv1.ResolvedScope, asOf time.Time) ([]contractsv1.EvidenceRef, string, []string) {
+	if len(request.Options.RequestedCategories) > 0 && !slices.Contains(request.Options.RequestedCategories, contractsv1.CategoryAction) {
+		return nil, "", nil
+	}
 	if a.options.ActionFindings == nil {
-		return nil, ActionUnavailableNoSource
+		return nil, ActionUnavailableNoSource, nil
+	}
+	if request.Scope.AsOf != nil {
+		return nil, ActionUnavailableHistorical, nil
 	}
 	if scope.RepoID == "" || strings.HasPrefix(scope.RepoID, "unresolved:") {
-		return nil, ActionUnavailableNoOwner
+		return nil, ActionUnavailableNoOwner, nil
 	}
 	result, err := a.options.ActionFindings.ActionFindings(ctx, principal, scope.RepoID)
 	if err != nil {
-		return nil, ActionUnavailableReadFailed
+		return nil, ActionUnavailableReadFailed, nil
 	}
 	served := []contractsv1.EvidenceRef{}
 	findingsRead := 0
@@ -273,8 +282,15 @@ func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Princi
 	if len(served) == 0 {
 		reason = result.Reason
 	}
-	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "reason", reason)
-	return served, reason
+	var notes []string
+	if len(served) > 0 && result.WithheldTeams > 0 {
+		notes = append(notes, "action_items_partial:"+ActionUnavailableNoGrant+":"+strconv.Itoa(result.WithheldTeams))
+	}
+	if len(served) > 0 && result.NotEvaluatedTeams > 0 {
+		notes = append(notes, "action_items_partial:"+ActionUnavailableNotEvaluated+":"+strconv.Itoa(result.NotEvaluatedTeams))
+	}
+	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "withheld_teams", result.WithheldTeams, "not_evaluated_teams", result.NotEvaluatedTeams, "reason", reason)
+	return served, reason, notes
 }
 
 // markActionSourceUnavailable records, in the packet's own coverage, that the

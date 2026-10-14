@@ -479,3 +479,88 @@ func TestAnOpenIncidentMappedToTheRepositoryHeuristicallyIsNotPressure(t *testin
 		t.Errorf("a heuristically mapped open incident became pressure")
 	}
 }
+
+type countingFindings struct {
+	result contextpacket.ActionFindingsResult
+	calls  *int
+}
+
+func (c countingFindings) ActionFindings(context.Context, storage.Principal, string) (contextpacket.ActionFindingsResult, error) {
+	*c.calls++
+	return c.result, nil
+}
+
+func assembleWithFindings(t *testing.T, mutate func(*contractsv1.ContextPacketRequest), result contextpacket.ActionFindingsResult) (contractsv1.ContextPacket, int) {
+	t.Helper()
+	request := fixtureRequest("req-findings-axis", "main", "")
+	if mutate != nil {
+		mutate(&request)
+	}
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{roleRow("ev-commit-axis", "commit", "abcdef1", "work", "work", at)},
+	}}
+	calls := 0
+	options := fixedOptions()
+	options.ActionFindings = countingFindings{result: result, calls: &calls}
+	packet, err := contextpacket.NewAssembler(store, options).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	return packet, calls
+}
+
+func coverageHasAction(packet contractsv1.ContextPacket, reason string) bool {
+	for _, source := range packet.Coverage.SourcesUnavailable {
+		if source.Source == "action_findings.v1" && source.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAHistoricalRequestReadsNoCurrentFindingsAndSaysSo(t *testing.T) {
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	packet, calls := assembleWithFindings(t, func(r *contractsv1.ContextPacketRequest) { r.Scope.AsOf = &asOf }, contextpacket.ActionFindingsResult{})
+	if calls != 0 {
+		t.Errorf("a historical request read the current findings (%d calls)", calls)
+	}
+	if !coverageHasAction(packet, contextpacket.ActionUnavailableHistorical) {
+		t.Errorf("coverage does not name the historical limit: %+v", packet.Coverage)
+	}
+}
+
+func TestARequestWithoutTheActionCategoryReadsNoFindings(t *testing.T) {
+	packet, calls := assembleWithFindings(t, func(r *contractsv1.ContextPacketRequest) {
+		r.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryEvidence}
+	}, contextpacket.ActionFindingsResult{})
+	if calls != 0 {
+		t.Errorf("findings were read for a request that excludes action (%d calls)", calls)
+	}
+	for _, source := range packet.Coverage.SourcesUnavailable {
+		if source.Source == "action_findings.v1" {
+			t.Errorf("an excluded category is listed as unavailable: %+v", source)
+		}
+	}
+}
+
+func TestWithheldAndUnevaluatedOwningTeamsAreNamedNextToTheServedFindings(t *testing.T) {
+	result := contextpacket.ActionFindingsResult{
+		Teams:         []contextpacket.TeamActionFindings{{TeamID: "A", EvidenceRefID: "acr:v1:team:A", Findings: []contextpacket.ActionFinding{{RuleID: "saturation", Severity: "high", Title: "Team is saturating"}}}},
+		WithheldTeams: 1, NotEvaluatedTeams: 2,
+	}
+	packet, _ := assembleWithFindings(t, nil, result)
+	for _, want := range []string{"action_items_partial:owning_team_not_readable:1", "action_items_partial:findings_not_evaluated:2"} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+}
+
+func TestNeverEvaluatedOwningTeamsAreNotReadAsNothingFired(t *testing.T) {
+	packet, _ := assembleWithFindings(t, nil, contextpacket.ActionFindingsResult{Reason: contextpacket.ActionUnavailableNotEvaluated, NotEvaluatedTeams: 1})
+	if !coverageHasAction(packet, contextpacket.ActionUnavailableNotEvaluated) {
+		t.Errorf("an unevaluated team is shown as measured zero: %+v", packet.Coverage)
+	}
+}

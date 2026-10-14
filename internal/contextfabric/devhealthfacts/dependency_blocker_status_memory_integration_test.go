@@ -87,11 +87,11 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 			catalog = candidate
 		}
 	}
-	// The organization-wide form drops the repository's blocker id set, so the
-	// status join groups every work item of the organization.
+	// The organization-wide form drops the repository filter and the blocker id
+	// set, so the status join groups every work item of the organization.
 	orgWideStatement := catalog.Statement
 	for {
-		start := strings.Index(orgWideStatement, " AND work_item_id IN (")
+		start := strings.Index(orgWideStatement, " AND repo_id = {repo_id:UUID} AND work_item_id IN (")
 		if start < 0 {
 			break
 		}
@@ -146,4 +146,81 @@ SELECT concat('unrelated-%d-', lpad(toString(number), 12, '0')), toUUID('0000000
 		t.Fatalf("counterpart peak: %v", err)
 	}
 	t.Logf("BLOCKERSTATUS counterpart-repository join shape (org-wide GROUP BY work_item_id) over %d groups: peak %d bytes (%.1f MiB)", counterpartRows, counterpartPeak, float64(counterpartPeak)/(1<<20))
+}
+
+func TestDependencyBlockerStatusIsCarriedOnlyForTheRepositoryAndTheCurrentAxisOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_dependencies") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	const org = "5b1c6e0a-7d94-4a23-9f58-3e7a1c2d4b60"
+	const repoA, repoB = "00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b2"
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	at := ts(2026, 10, 1, 0, 0, 0)
+	for _, repo := range []struct{ id, name string }{{repoA, "acme/a"}, {repoB, "acme/b"}} {
+		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repo.id, org, repo.name, "github", at)
+	}
+	for _, item := range []struct{ id, repo, status string }{
+		{"a1", repoA, "in_progress"}, {"a2", repoA, "open"}, {"a3", repoA, "open"}, {"a4", repoA, "done"},
+		{"a6", repoA, "open"}, {"b1", repoB, "open"},
+	} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
+VALUES (?, ?, ?, 'title', 'issue', ?, '', ?, ?, '', 'linear', '', NULL, ?)`, item.id, item.repo, org, item.status, at, at, at)
+	}
+	for _, dep := range []struct{ source, target, kind string }{
+		{"a1", "a2", "blocks"}, {"a3", "a1", "blocked_by"}, {"a4", "a2", "blocks"}, {"a6", "b1", "blocked_by"}, {"a3", "a2", "relates_to"},
+	} {
+		exec(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, relation_started_at) VALUES (?,?,?,?,?,?,NULL)`,
+			org, dep.source, dep.target, dep.kind, dep.kind, at)
+	}
+	var catalog contextpacket.SourceQuery
+	for _, candidate := range contextpacket.SourceQueryCatalogV1 {
+		if candidate.ID == "work_item_dependencies.v1" {
+			catalog = candidate
+		}
+	}
+	read := func(plan contextpacket.ReadPlan) map[string][3]string {
+		t.Helper()
+		rows, err := contextpacket.NewClickHouseSourceExecutor(query).QueryEvidence(ctx, catalog, plan.Bindings())
+		if err != nil {
+			t.Fatalf("query evidence: %v", err)
+		}
+		out := map[string][3]string{}
+		for _, row := range rows {
+			key, _ := row.Metadata["relation_key"].(string)
+			blocker, _ := row.Metadata["blocker_work_item_id"].(string)
+			status, _ := row.Metadata["blocker_status"].(string)
+			out[row.Source.DisplayLabel] = [3]string{key, blocker, status}
+		}
+		return out
+	}
+	plan := contextpacket.ReadPlan{OrgID: org, RepoID: repoA, RepoSlug: "acme/a"}
+	got := read(plan)
+	want := map[string][3]string{
+		"a1 blocks a2":     {"blocks:fwd", "a1", "in_progress"},
+		"a3 blocked_by a1": {"blocks:inv", "a1", "in_progress"},
+		"a4 blocks a2":     {"blocks:fwd", "a4", "done"},
+		"a6 blocked_by b1": {"blocks:inv", "b1", ""},
+		"a3 relates_to a2": {"relates_to:fwd", "", ""},
+	}
+	for label, expected := range want {
+		if got[label] != expected {
+			t.Errorf("%s: (relation, blocker, status) = %v, want %v (all: %v)", label, got[label], expected, got)
+		}
+	}
+	asOf := ts(2026, 10, 2, 0, 0, 0)
+	plan.AsOf = &asOf
+	for label, row := range read(plan) {
+		if row[2] != "" {
+			t.Errorf("%s: a historical request carried the current blocker status %q", label, row[2])
+		}
+	}
 }

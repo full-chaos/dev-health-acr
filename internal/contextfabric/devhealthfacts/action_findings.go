@@ -104,7 +104,10 @@ func (s *ActionFindingsSource) ActionFindings(ctx context.Context, principal sto
 			Title: factString(fact, "title"), SuccessCriterion: factString(fact, "success_criterion"),
 		})
 	}
-	out := contextpacket.ActionFindingsResult{}
+	out := contextpacket.ActionFindingsResult{WithheldTeams: len(requested) - len(subjects)}
+	if notEvaluated := len(subjects) - len(result.EvaluatedSubjects); notEvaluated > 0 {
+		out.NotEvaluatedTeams = notEvaluated
+	}
 	ids := make([]string, 0, len(byTeam))
 	for id := range byTeam {
 		ids = append(ids, id)
@@ -112,6 +115,9 @@ func (s *ActionFindingsSource) ActionFindings(ctx context.Context, principal sto
 	sort.Strings(ids)
 	for _, id := range ids {
 		out.Teams = append(out.Teams, *byTeam[id])
+	}
+	if len(out.Teams) == 0 && out.NotEvaluatedTeams > 0 {
+		out.Reason = contextpacket.ActionUnavailableNotEvaluated
 	}
 	return out, nil
 }

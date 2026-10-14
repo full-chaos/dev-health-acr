@@ -58,3 +58,11 @@ func TestActionFindingsNameNoOwnerWhenNoTeamOwnsTheRepository(t *testing.T) {
 		t.Fatalf("served = %#v", result)
 	}
 }
+
+func TestActionFindingsCountTheOwningTeamsTheGateWithheld(t *testing.T) {
+	t.Parallel()
+	result := actionFindingsFor(t, []string{"CHAOS"}, [][]any{{"CHAOS"}, {"OTHER"}}, [][]any{deficiencyRow("CHAOS")})
+	if result.WithheldTeams != 1 || len(result.Teams) != 1 || result.Teams[0].TeamID != "CHAOS" {
+		t.Fatalf("served = %#v", result)
+	}
+}

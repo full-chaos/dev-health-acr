@@ -11,11 +11,13 @@ import (
 )
 
 const (
-	ActionUnavailableNoSource   = "no_stored_recommendation_source"
-	ActionUnavailableNoOwner    = "owning_team_unknown"
-	ActionUnavailableNoGrant    = "owning_team_not_readable"
-	ActionUnavailableReadFailed = "stored_findings_read_failed"
-	actionSourceVersion         = "operational_deficiencies.v1"
+	ActionUnavailableNoSource     = "no_stored_recommendation_source"
+	ActionUnavailableNoOwner      = "owning_team_unknown"
+	ActionUnavailableNoGrant      = "owning_team_not_readable"
+	ActionUnavailableReadFailed   = "stored_findings_read_failed"
+	ActionUnavailableHistorical   = "historical_request_not_supported"
+	ActionUnavailableNotEvaluated = "findings_not_evaluated"
+	actionSourceVersion           = "operational_deficiencies.v1"
 )
 
 // ActionFinding is one stored, rule-fired finding of an owning team. It is
@@ -38,6 +40,10 @@ type TeamActionFindings struct {
 type ActionFindingsResult struct {
 	Teams  []TeamActionFindings
 	Reason string
+	// WithheldTeams counts owning teams the grant did not admit;
+	// NotEvaluatedTeams counts admitted teams the rule engine never evaluated.
+	WithheldTeams     int
+	NotEvaluatedTeams int
 }
 
 // ActionFindingsSource reads the stored findings of the team(s) that own a
