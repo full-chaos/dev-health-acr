@@ -10,9 +10,12 @@ import (
 )
 
 var (
-	ErrNotFound                   = errors.New("storage record not found")
-	ErrConflict                   = errors.New("storage record conflicts with an existing record")
-	ErrUnavailable                = errors.New("storage operation unavailable")
+	ErrNotFound    = errors.New("storage record not found")
+	ErrConflict    = errors.New("storage record conflicts with an existing record")
+	ErrUnavailable = errors.New("storage operation unavailable")
+	// ErrOrgPurged means the organization was purged and has not returned
+	// to discovery: the database refused to write a row keyed by it.
+	ErrOrgPurged                  = errors.New("organization was purged")
 	ErrInvalidAuditMetadata       = errors.New("storage audit metadata is invalid")
 	ErrInvalidCredentialLifecycle = credentiallifecycle.ErrInvalidLifecycle
 	ErrInvalidCredentialInput     = credentiallifecycle.ErrInvalidInput

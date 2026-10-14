@@ -1120,13 +1120,19 @@ import (
 // dropped (their references reach no repository the team owns). Still no fact. An
 // answer saved under v220 names only the generic no-unit reason.
 //
-// v221 -> v222: the team and project blocker statements read in blocks of
+// v221 -> v222: the team linked pull request mix reads its linked set in a
+// statement of its own and takes it, with the membership scope ids, as external
+// tables instead of inlining the link chain four times and the ids in its text.
+// The rows are unchanged; the statements and their memory are not, so an answer
+// saved under v221 is not reused as one produced by the new statements.
+//
+// v222 -> v223: the team and project blocker statements read in blocks of
 // 8,192 rows instead of the server default of 65,536, and the age
 // statements read the first-seen rows of the organization without
 // narrowing them to the blocker edges. The rows are unchanged; the
-// statements served are not, so an answer saved under v221 is not reused as
+// statements served are not, so an answer saved under v222 is not reused as
 // one produced by them.
-const QueryVersion = "devhealthfacts.clickhouse.v222"
+const QueryVersion = "devhealthfacts.clickhouse.v223"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
