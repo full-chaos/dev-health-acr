@@ -1138,9 +1138,18 @@ import (
 // question asks for the pull requests themselves. The answer changes; an answer
 // saved under v223 is not reused as one produced by the new read.
 //
-// v224 -> v225: the file_hotspots fact kind is served for a repository. An
-// answer saved under v224 cannot carry it.
-const QueryVersion = "devhealthfacts.clickhouse.v225"
+// v224 -> v225: repository and team metrics serve the change failure rate by
+// the ops rule that counts a deployment's own failed status: the failed count
+// includes failures by status, a window with final-status deployments and no
+// incident evidence is a measured rate (basis status, over the deployments with
+// a final status), and change_failure_unknown_reason, change_failure_evidence_basis,
+// the two status counts and change_failure_status_coverage are served. A
+// candidate saved under v224 may hold an unknown rate that is now measured and
+// must not be reused.
+//
+// v225 -> v226: the file_hotspots fact kind is served for a repository. An
+// answer saved under v225 cannot carry it.
+const QueryVersion = "devhealthfacts.clickhouse.v226"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
