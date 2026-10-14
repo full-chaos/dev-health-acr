@@ -277,7 +277,6 @@ func themes(values ...float64) map[string]float64 {
 }
 
 func TestClassifyInvestment(t *testing.T) {
-	ops := themes(1000, 500, 200)
 	witnesses := Witnesses{ClassSupersession: themes(50, 20, 0), ClassMembershipScope: themes(400, 300, 100), ClassNullableArgmax: themes(0, 0, 0)}
 	classesOfVerdict := func(v investmentVerdict) []Class {
 		var out []Class
@@ -287,72 +286,54 @@ func TestClassifyInvestment(t *testing.T) {
 		return out
 	}
 
-	equal := classifyInvestment(ops, themes(1000, 500, 200), themes(1000, 500, 200), witnesses)
+	equal := classifyInvestment(themes(1000, 500, 200), themes(1000, 500, 200), witnesses)
 	if equal.Matches != 3 || len(equal.Differences) != 0 || len(equal.Findings) != 0 {
-		t.Fatalf("equal planes: %+v", equal)
-	}
-
-	// acr equals what the store rows give and is below ops: effort that
-	// reaches no repository.
-	below := classifyInvestment(ops, themes(900, 500, 200), themes(900, 500, 200), witnesses)
-	if got := classesOfVerdict(below); len(got) != 1 || got[0] != ClassAttributionBasis || below.Matches != 2 || len(below.Findings) != 0 {
-		t.Fatalf("acr below ops, as the store rows give: %+v", below)
-	}
-	if below.Residual["feature_delivery"] != 100 {
-		t.Fatalf("residual %v, want 100", below.Residual)
-	}
-
-	// acr equals the store rows and is above ops: the two readings of the
-	// store disagree; never accepted.
-	above := classifyInvestment(ops, themes(1100, 500, 200), themes(1100, 500, 200), witnesses)
-	if len(above.Findings) != 1 || len(above.Differences) != 0 {
-		t.Fatalf("acr above ops: %+v", above)
+		t.Fatalf("acr equals the store rows: %+v", equal)
 	}
 
 	// acr is off the store rows by exactly one witness.
-	exact := classifyInvestment(ops, themes(950, 520, 200), themes(900, 500, 200), witnesses)
+	exact := classifyInvestment(themes(950, 520, 200), themes(900, 500, 200), witnesses)
 	if got := classesOfVerdict(exact); len(got) != 1 || got[0] != ClassSupersession || !exact.Differences[0].Exact || len(exact.Findings) != 0 {
 		t.Fatalf("a difference equal to the supersession witness: %+v", exact)
 	}
 
 	// A difference a witness only bounds is not named.
-	bounded := classifyInvestment(ops, themes(1100, 600, 250), themes(900, 500, 200), witnesses)
+	bounded := classifyInvestment(themes(1100, 600, 250), themes(900, 500, 200), witnesses)
 	if len(bounded.Findings) != 1 || len(bounded.Differences) != 0 {
 		t.Fatalf("a difference below the membership witness was named: %+v", bounded)
 	}
 
 	// Equal to the witness in one theme only: not named.
-	oneTheme := classifyInvestment(ops, themes(950, 500, 200), themes(900, 500, 200), witnesses)
+	oneTheme := classifyInvestment(themes(950, 500, 200), themes(900, 500, 200), witnesses)
 	if len(oneTheme.Findings) != 1 || len(oneTheme.Differences) != 0 {
 		t.Fatalf("a difference equal to a witness in one theme only was named: %+v", oneTheme)
 	}
 
 	// Two classes with the same witness: not named.
 	twins := Witnesses{ClassSupersession: themes(50, 20, 0), ClassMembershipScope: themes(50, 20, 0)}
-	ambiguous := classifyInvestment(ops, themes(950, 520, 200), themes(900, 500, 200), twins)
+	ambiguous := classifyInvestment(themes(950, 520, 200), themes(900, 500, 200), twins)
 	if len(ambiguous.Findings) != 1 || len(ambiguous.Differences) != 0 {
 		t.Fatalf("a difference two witnesses equal was named: %+v", ambiguous)
 	}
 
-	// A tiny effort is not rounded to nothing: 5e-7 on the acr side and in the
-	// store rows, 0 on the ops side, is a difference (the compare was once
-	// held to an absolute 1e-6).
-	tiny := classifyInvestment(themes(1000, 500, 0), themes(1000, 500, 5e-7), themes(1000, 500, 5e-7), witnesses)
-	if len(tiny.Findings) != 1 || len(tiny.Differences) != 0 || tiny.Matches != 2 {
-		t.Fatalf("a tiny effort that ops does not hold was a match: %+v", tiny)
+	// A tiny effort is not rounded to nothing: 5e-7 on the acr side and 0 in
+	// the store rows is a difference (the compare was once held to an absolute
+	// 1e-6).
+	tiny := classifyInvestment(themes(1000, 500, 5e-7), themes(1000, 500, 0), witnesses)
+	if len(tiny.Findings) != 1 || len(tiny.Differences) != 0 || tiny.Matches != 0 {
+		t.Fatalf("a tiny effort the store rows do not hold was a match: %+v", tiny)
 	}
 
-	// acr against the store rows is held to the sum tolerance (1e-9), not to
-	// the Float32 tolerance of the ops side: a drift of 1e-7 of the value is a
-	// finding.
-	drift := classifyInvestment(ops, themes(1000.0001, 500, 200), themes(1000, 500, 200), witnesses)
+	// acr against the store rows is held to the sum tolerance (1e-9): a drift
+	// of 1e-7 of the value is a finding.
+	drift := classifyInvestment(themes(1000.0001, 500, 200), themes(1000, 500, 200), witnesses)
 	if len(drift.Findings) != 1 || len(drift.Differences) != 0 {
 		t.Fatalf("acr off the store rows by 1e-7 relative was accepted: %+v", drift)
 	}
 
 	// acr lost effort: no class explains a loss, and a zero witness explains
 	// nothing.
-	lost := classifyInvestment(ops, themes(800, 500, 200), themes(900, 500, 200), witnesses)
+	lost := classifyInvestment(themes(800, 500, 200), themes(900, 500, 200), witnesses)
 	if len(lost.Findings) != 1 || len(lost.Differences) != 0 {
 		t.Fatalf("acr below what the store rows give: %+v", lost)
 	}
@@ -689,9 +670,6 @@ func TestStoreReadsScopeSupersessionAndTheNullGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	window := Window{Start: mustDay(t, "2026-09-01"), End: mustDay(t, "2026-10-01")}
-	if got := store.OrgThemeEffort(window)["quality"]; got != 20 {
-		t.Fatalf("ops organization reading is %v, want 20 (the live and the nulled unit)", got)
-	}
 	w := store.Witnesses(window)
 	if w[ClassSupersession]["quality"] != 10 || w[ClassMembershipScope]["quality"] != 10 || w[ClassNullableArgmax]["quality"] != 10 {
 		t.Fatalf("witnesses %+v, want 10 for each class", w)
@@ -701,7 +679,7 @@ func TestStoreReadsScopeSupersessionAndTheNullGeneration(t *testing.T) {
 	if got := store.ExpectedRepositoryEffort(window); len(got) != 1 || got["r1"]["quality"] != 10 {
 		t.Fatalf("expected repository mix %+v, want r1 quality 10", got)
 	}
-	if got := store.OrgThemeEffort(Window{Start: mustDay(t, "2026-09-12"), End: mustDay(t, "2026-10-01")})["quality"]; got != 0 {
+	if got := store.ExpectedRepositoryEffort(Window{Start: mustDay(t, "2026-09-12"), End: mustDay(t, "2026-10-01")}); len(got) != 0 {
 		t.Fatalf("a unit that ended before the window is read: %v", got)
 	}
 }

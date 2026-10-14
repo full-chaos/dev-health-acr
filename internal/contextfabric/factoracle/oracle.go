@@ -684,7 +684,7 @@ func (o *Oracle) variableValues(operation, path string) ([]string, error) {
 
 func investmentVariables(w Window, dimension string) map[string]any {
 	return map[string]any{"batch": map[string]any{"breakdowns": []any{map[string]any{
-		"dimension": dimension, "measure": "CHURN_LOC",
+		"dimension": dimension, "measure": "COUNT",
 		"dateRange": map[string]any{"startDate": w.startDate(), "endDate": w.endDate()},
 		"topN":      100,
 	}}}}

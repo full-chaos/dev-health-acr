@@ -232,12 +232,14 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 			}
 		}
 	}
-	if valueRoots != 5 {
-		t.Fatalf("%d value roots were compared, want 5 (analytics, capacityForecasts, catalog, compoundingRisk, throughputForecast)", valueRoots)
+	if valueRoots != 4 {
+		t.Fatalf("%d value roots were compared, want 4 (capacityForecasts, catalog, compoundingRisk, throughputForecast; analytics is retired, 9699)", valueRoots)
 	}
-	for theme, want := range manifest.Residual {
-		if got := oracle.Residual[theme]; math.Abs(got-want) > themeTolerance(got, want) {
-			t.Errorf("investment residual of %s is %v, the venue gave %v", theme, got, want)
+	if !slices.Contains(skipped, "analytics") {
+		for theme, want := range manifest.Residual {
+			if got := oracle.Residual[theme]; math.Abs(got-want) > themeTolerance(got, want) {
+				t.Errorf("investment residual of %s is %v, the venue gave %v", theme, got, want)
+			}
 		}
 	}
 }
@@ -370,7 +372,9 @@ func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) 
 // whose registry document or shape the venue did not serve when the capture
 // was taken. The capture of the venue at ops 5c9a3d32 records every root, so
 // the list is empty; a root added here again must say why the capture lacks it.
-var notRecordedRoots = map[string]string{}
+var notRecordedRoots = map[string]string{
+	"analytics": "RETIRED (9699): the capture asks the Investment breakdown under CHURN_LOC, which ops dropped and the operation policy no longer lets a client send; the recorded replies stay as recorded and are not replayed. Retake the capture on a venue once acr weights by work unit",
+}
 
 // withoutNotRecordedRoots returns the manifest without the shape cases and
 // the pinned outcome of a root the capture does not record, and the sorted
@@ -399,7 +403,7 @@ func withoutNotRecordedRoots(t *testing.T, manifest Manifest) (Manifest, []strin
 				missing = true
 			}
 		}
-		if !missing {
+		if !missing && !strings.HasPrefix(why, "RETIRED") {
 			t.Fatalf("root %s is listed as not recorded, but the capture has a case for every shape of it: remove it from notRecordedRoots", root)
 		}
 		skipped = append(skipped, root)
@@ -452,22 +456,27 @@ func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 	return false
 }
 
-// The capture of the venue at ops 5c9a3d32 records every root: nothing is
-// excluded, so a root added to notRecordedRoots has to be a root the capture
-// really lacks.
+// The capture of the venue records every root. The one root the recorded run
+// does not measure is analytics, retired with the CHURN_LOC capture (9699): its
+// pinned outcome and shape cases leave the run, its recorded replies stay as
+// recorded and are never replayed.
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	filtered, skipped := withoutNotRecordedRoots(t, manifest)
-	if len(skipped) != 0 {
-		t.Fatalf("not recorded roots = %v", skipped)
+	if !slices.Equal(skipped, []string{"analytics"}) {
+		t.Fatalf("not recorded roots = %v, want only the retired analytics", skipped)
 	}
-	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
-		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	if len(filtered.Expect) != len(manifest.Expect)-1 || len(filtered.ShapeCases) >= len(manifest.ShapeCases) {
+		t.Fatalf("the retired root is still in the run: %d of %d pinned roots, %d of %d shape cases", len(filtered.Expect), len(manifest.Expect), len(filtered.ShapeCases), len(manifest.ShapeCases))
 	}
+	retiredReplies := 0
 	for key := range recording.Replies {
 		if isNotRecordedKey(t, key, skipped) {
-			t.Fatalf("reply %s belongs to a not recorded root", key)
+			retiredReplies++
 		}
+	}
+	if retiredReplies == 0 {
+		t.Fatal("the capture holds no recorded reply of the retired root: the exclusion measured nothing")
 	}
 	if _, ok := manifest.Expect["capacityForecast"]; !ok {
 		t.Fatal("the capture pins no outcome for capacityForecast")

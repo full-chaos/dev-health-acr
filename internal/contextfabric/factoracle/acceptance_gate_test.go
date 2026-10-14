@@ -29,10 +29,18 @@ import (
 //
 // Re-run this gate after every change to the comparator.
 
+// retiredGateReason is why every acceptance gate that runs root analytics is
+// skipped: the capture holds the Investment breakdown under CHURN_LOC, which ops
+// dropped, so root analytics is not replayed (notRecordedRoots) and these
+// gates have no run to judge. They are NOT passing: the gates return with the
+// capture retaken once acr weights by work unit (9699).
+const retiredGateReason = "RETIRED (9699): root analytics is not replayed from the capture (CHURN_LOC dropped by ops); this acceptance gate is not run until the capture is retaken"
+
 // gateRun runs root analytics with reference as the store both the ops reply
 // and the witnesses describe, and acr as the store the acr plane reads.
 func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, acr *Extract) (*Oracle, *RootReport) {
 	t.Helper()
+	t.Skip(retiredGateReason)
 	planes := localPlanes(t, seedStore(t, acr), &recording)
 	oracle := oracleFor(t, manifest, planes, reference)
 	oracle.OnlyRoots = []string{"analytics"}
@@ -538,7 +546,7 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	oracle := oracleFor(t, manifest, planes, extract)
 	oracle.OnlyRoots = rootsExcept(t, skipped)
 	report := runOracle(t, oracle)
-	for _, root := range []string{"analytics", "capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"} {
+	for _, root := range []string{"capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"} {
 		rr := report.Root(root)
 		want := manifest.Expect[root]
 		if rr == nil || len(rr.Findings) <= len(want.Findings) {
