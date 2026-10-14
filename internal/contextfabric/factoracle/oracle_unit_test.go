@@ -668,7 +668,7 @@ func mustDay(t *testing.T, day string) time.Time {
 func TestStoreReadsScopeSupersessionAndTheNullGeneration(t *testing.T) {
 	unit := func(id, at string, repo any) Row {
 		return Row{"work_unit_id": id, "computed_at": at, "structural_evidence_json": `{"prs":[],"issues":[]}`, "from_ts": "2026-09-10 00:00:00.000", "to_ts": "2026-09-11 00:00:00.000",
-			"repo_id": repo, "effort_value": json.Number("10"), "theme_distribution_json": map[string]any{"quality": json.Number("1")},
+			"repo_id": repo, "effort_value": json.Number("0"), "theme_distribution_json": map[string]any{"quality": json.Number("1")},
 			"subcategory_distribution_json": map[string]any{"quality.bugfix": json.Number("1")}}
 	}
 	extract := &Extract{Tables: map[string][]Row{
@@ -689,17 +689,17 @@ func TestStoreReadsScopeSupersessionAndTheNullGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	window := Window{Start: mustDay(t, "2026-09-01"), End: mustDay(t, "2026-10-01")}
-	if got := store.OrgThemeEffort(window)["quality"]; got != 20 {
-		t.Fatalf("ops organization reading is %v, want 20 (the live and the nulled unit)", got)
+	if got := store.OrgThemeEffort(window)["quality"]; got != 2 {
+		t.Fatalf("ops organization reading is %v, want 2 (the live and the nulled unit, each one, unsized)", got)
 	}
 	w := store.Witnesses(window)
-	if w[ClassSupersession]["quality"] != 10 || w[ClassMembershipScope]["quality"] != 10 || w[ClassNullableArgmax]["quality"] != 10 {
-		t.Fatalf("witnesses %+v, want 10 for each class", w)
+	if w[ClassSupersession]["quality"] != 1 || w[ClassMembershipScope]["quality"] != 1 || w[ClassNullableArgmax]["quality"] != 1 {
+		t.Fatalf("witnesses %+v, want 1 for each class", w)
 	}
 	// Only the live unit reaches the repository: the nulled one has no
 	// reference and no repo_id in its latest generation.
-	if got := store.ExpectedRepositoryEffort(window); len(got) != 1 || got["r1"]["quality"] != 10 {
-		t.Fatalf("expected repository mix %+v, want r1 quality 10", got)
+	if got := store.ExpectedRepositoryEffort(window); len(got) != 1 || got["r1"]["quality"] != 1 {
+		t.Fatalf("expected repository mix %+v, want r1 quality 1", got)
 	}
 	if got := store.OrgThemeEffort(Window{Start: mustDay(t, "2026-09-12"), End: mustDay(t, "2026-10-01")})["quality"]; got != 0 {
 		t.Fatalf("a unit that ended before the window is read: %v", got)

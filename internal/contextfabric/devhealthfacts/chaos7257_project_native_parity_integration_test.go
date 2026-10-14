@@ -246,8 +246,8 @@ func TestProjectNativeSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 		// two items; spanning: nu-3 (n-p2) and nu-4 (n-p4, unrequested);
 		// multi-placed: nu-5 and nu-mp.
 		"linear:n-p1": {10, 10, 2, 2},
-		// nu-3, nu-6 (duplicate ref once), nu-9 (zero), nu-neg, nu-re, nu-t.
-		"linear:n-p2": {6, 4, 1, 0},
+		// nu-3, nu-6 (duplicate ref once), nu-9 (zero, kept: every unit weighs one), nu-neg, nu-re, nu-t.
+		"linear:n-p2": {6, 6, 1, 0},
 	}
 	for _, r := range oracle {
 		w, ok := want[r.Key]
