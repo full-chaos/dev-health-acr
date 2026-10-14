@@ -85,6 +85,9 @@ func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) writeEpisodeError(w http.ResponseWriter, r *http.Request, principal storage.Principal, create contractsv1.AgentEpisodeCreate, err error) {
+	if a.writeOrgPurged(w, r, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, episode.ErrNoPersistAccepted):
 		if usageErr := CompleteUsage(r.Context(), limits.ResourceUsage{Items: 1, Tokens: 0, Bytes: 0}); usageErr != nil {

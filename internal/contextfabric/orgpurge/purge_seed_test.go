@@ -17,7 +17,20 @@ import (
 func seedPostgres(t *testing.T, db *sql.DB, org string) {
 	t.Helper()
 	suffix := strings.ReplaceAll(org[:8], "-", "")
-	statements := []string{
+	for _, statement := range seedStatements() {
+		args := []any{org}
+		if strings.Contains(statement, "$2") {
+			args = append(args, suffix)
+		}
+		_, err := db.ExecContext(context.Background(), statement, args...)
+		require.NoError(t, err, statement)
+	}
+}
+
+// seedStatements is one insert per purged table (more where a table has more
+// than one organization column or spelling), plus one audit event.
+func seedStatements() []string {
+	return []string{
 		`INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, created_at, created_by)
 		 VALUES ('wb-' || $2, $1::uuid, 'td-' || $2, 'ns', 'sa', 'uid-' || $2, 'read', now(), 'seed')`,
 		`INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, created_at, workload_binding_id)
@@ -62,14 +75,6 @@ func seedPostgres(t *testing.T, db *sql.DB, org string) {
 		`INSERT INTO acr.context_fabric_graph_build_source_progress (org_id, epoch, source, updated_at) VALUES ($1, 2, 'src', now())`,
 		`INSERT INTO acr.context_fabric_graph_epoch_retirements (org_id, epoch, reason, drain_start, created_at, updated_at) VALUES ($1, 1, 'grace_expired', now(), now(), now())`,
 		`INSERT INTO acr.context_fabric_graph_lifecycle (org_id, active_epoch, last_allocated_epoch, updated_at) VALUES ($1, 2, 2, now())`,
-	}
-	for _, statement := range statements {
-		args := []any{org}
-		if strings.Contains(statement, "$2") {
-			args = append(args, suffix)
-		}
-		_, err := db.ExecContext(context.Background(), statement, args...)
-		require.NoError(t, err, statement)
 	}
 }
 

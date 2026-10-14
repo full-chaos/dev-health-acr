@@ -204,8 +204,16 @@ func (s *rowScanner) Next() bool { return s.row < len(s.rows) }
 func (s *rowScanner) Scan(dest ...any) error {
 	// Checked assertions: a fake row shaped for the evidence read must make the
 	// freshness (max/count) read fail softly, not panic (CHAOS-6565).
-	if s.row >= len(s.rows) || len(dest) > len(s.rows[s.row]) {
+	if s.row >= len(s.rows) {
 		return errors.New("scan shape mismatch")
+	}
+	// A source with typed columns after the standard ten scans extra string
+	// destinations; the fixture row carries only the standard ten.
+	for index := len(s.rows[s.row]); index < len(dest); index++ {
+		if _, isString := dest[index].(*string); !isString {
+			return errors.New("scan shape mismatch")
+		}
+		s.rows[s.row] = append(s.rows[s.row], "")
 	}
 	for index, target := range dest {
 		var ok bool
