@@ -189,3 +189,72 @@ func TestTeamPullRequestsByStateSeparatesMeasuredZeroFromNoData(t *testing.T) {
 		}
 	}
 }
+
+// The counts of a repository a team reaches only through an owned project
+// cover the linked pull requests alone, and a historical read leaves out the
+// pull requests created after the requested instant.
+func TestTeamPullRequestStatesProjectReachedCountLinkedPullRequestsAsOfTheInstant(t *testing.T) {
+	ctx := context.Background()
+	orgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
+	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_graph_issue_pr", "projects", "team_project_ownership", "team_repo_ownership") {
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	at := time.Now().UTC().Truncate(time.Second)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	const team, project, item = "REACH-TEAM", "reach-project", "WI-REACH"
+	reached := repoUUID("reach-only")
+	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, reached, orgID, "acme/reach-only", "github", at)
+	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`, team, team, at, orgID, "linear", uint8(1))
+	exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, project, orgID, "linear", nil, project, uint8(1), "active", "", at)
+	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", team, project, nil, "native", at.Add(-48*time.Hour), nil, at)
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+		item, reached, orgID, "linked", at, project)
+	for number := uint32(1); number <= 2; number++ {
+		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+			reached, orgID, number, "pr", "open", at, at, "feat/x", "")
+	}
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		reached, item, uint32(1), float32(1), "native", "", at, orgID)
+
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{ScopeExpander: devhealthfacts.NewScopeExpander(query)})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	read := func(timeContext contextfabric.TimeContext) contextfabric.CanonicalFact {
+		t.Helper()
+		bundle, readErr := registry.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.CanonicalFactRequest{
+			Question:     contextfabric.InterpretedQuestion{TimeContext: timeContext},
+			Subjects:     []contextfabric.SubjectRef{teamSubject(team)},
+			Requirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}},
+		})
+		if readErr != nil {
+			t.Fatalf("ReadFacts: %v", readErr)
+		}
+		for _, fact := range bundle.Facts {
+			if fact.Kind == contextfabric.FactPullRequests && fact.Subject.Kind == contextfabric.SubjectTeam {
+				return fact
+			}
+		}
+		t.Fatalf("no team fact: %+v", bundle.Facts)
+		return contextfabric.CanonicalFact{}
+	}
+	current := read(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+	table := current.Fields["pull_requests_by_state"]
+	if table.Table == nil || len(table.Rows) != 1 || table.Rows[0].Fields["pull_request_count"].Integer == nil || *table.Rows[0].Fields["pull_request_count"].Integer != 1 {
+		t.Fatalf("project-reached counts = %+v, want one open row of 1 (the linked pull request only)", table)
+	}
+	before := at.AddDate(0, 0, -30)
+	past := read(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &before})
+	if v, has := past.Fields["pull_requests_by_state"]; has && v.Table != nil && len(v.Rows) > 0 {
+		t.Fatalf("a pull request created after the requested instant is counted: %+v", v)
+	}
+}

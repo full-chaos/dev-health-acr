@@ -452,6 +452,9 @@ func pullRequestFields() []fieldDecl {
 			// (no repository_id, reach_basis team_total).
 			declAggregate(fInt("pull_requests_by_state_omitted_count", "count")),
 			fStr("pull_requests_by_state_basis"),
+			// Pull requests whose stored state is empty: not a state, so not a
+			// row of the table.
+			declAggregate(fInt("pull_requests_without_state_count", "count")),
 			fTable("pull_requests_by_state",
 				cNullable(cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),

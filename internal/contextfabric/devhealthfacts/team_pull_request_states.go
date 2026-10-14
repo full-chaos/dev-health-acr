@@ -110,13 +110,14 @@ func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.
 	}
 	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequestStates", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "team_id", repoExpr: "repo", repoType: "String"},
-		boundReaderBindings(bound),
+		append(boundReaderBindings(bound), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
 		func(having string, limit int) string {
 			return `SELECT team_id, repo, ` + statePairsExpression() + `
 FROM (
 	SELECT lr.team_id AS team_id, toString(lr.pr_repo_id) AS repo, ` + pullRequestStateExpression("lp", bound) + ` AS st, toInt64(count()) AS c
 	FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
 	INNER JOIN git_pull_requests AS lp FINAL ON lp.org_id = {org_id:String} AND lp.repo_id = lr.pr_repo_id AND lp.number = lr.pr_number
+	WHERE lp.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_ids:Array(String)}) AS id))` + bound.neutral().ExistencePredicate("lp.created_at") + `
 	GROUP BY team_id, repo, st
 )
 GROUP BY team_id, repo
@@ -138,11 +139,36 @@ LIMIT ` + fmt.Sprint(limit)
 	return counts, nil
 }
 
+// reachedRepoKeys is the set of project-reached repository ids the linked
+// pull request state read is pruned to.
+func reachedRepoKeys(reachedOnly map[string][]teamReachedRepo) []string {
+	seen := map[string]struct{}{}
+	var keys []string
+	for _, repos := range reachedOnly {
+		for _, repo := range repos {
+			if _, ok := seen[repo.key]; !ok {
+				seen[repo.key] = struct{}{}
+				keys = append(keys, repo.key)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// withoutState is the number of pull requests whose stored state is empty. The
+// per pull request fact serves that as a null state, so the table does not
+// invent a category for it: they are counted beside the table instead.
+func (c pullRequestStateCounts) withoutState() int64 { return c[""] }
+
 // pullRequestsByStateRows lays one count per (repository, state) row, in
 // repository then state order.
 func pullRequestsByStateRows(repoID, repoName, reachBasis, linkTier string, counts pullRequestStateCounts) []contextfabric.FactValueRow {
 	states := make([]string, 0, len(counts))
 	for state := range counts {
+		if state == "" {
+			continue
+		}
 		states = append(states, state)
 	}
 	sort.Strings(states)
@@ -177,6 +203,9 @@ func (c pullRequestStateCounts) add(other pullRequestStateCounts) {
 func pullRequestsByStateTotalRows(counts pullRequestStateCounts) []contextfabric.FactValueRow {
 	states := make([]string, 0, len(counts))
 	for state := range counts {
+		if state == "" {
+			continue
+		}
 		states = append(states, state)
 	}
 	sort.Strings(states)

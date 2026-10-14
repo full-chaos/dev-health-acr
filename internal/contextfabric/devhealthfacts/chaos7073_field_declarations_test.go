@@ -58,6 +58,7 @@ var declaredButNotExercised = map[contextfabric.FactKind]map[string]string{
 		"team:project_reached_repository_count":          "project reach, exercised by team_project_reach_integration_test.go",
 		"team:repository_link_basis":                     "project reach, exercised by team_project_reach_integration_test.go",
 		"team:repository_breakdown.link_tier":            "project reach, exercised by team_project_reach_integration_test.go",
+		"team:pull_requests_without_state_count":         "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
 		"team:pull_requests_by_state":                    "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
 		"team:pull_requests_by_state_basis":              "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",
 		"team:pull_requests_by_state_omitted_count":      "counts by state need git_pull_requests rows the canned-row cases do not seed; exercised by team_pull_requests_empty_facts_integration_test.go against a real ClickHouse",

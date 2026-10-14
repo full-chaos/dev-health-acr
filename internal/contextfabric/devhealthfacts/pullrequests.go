@@ -379,6 +379,9 @@ ORDER BY repo_id`
 		if !perRepository {
 			byState = pullRequestsByStateTotalRows(teamStates)
 		}
+		if n := teamStates.withoutState(); n > 0 {
+			fields["pull_requests_without_state_count"] = contextfabric.IntegerFactValue(n)
+		}
 		if table, omitted, ok := pullRequestsByStateFactValue(byState, grainExact, perRepository); ok {
 			fields["pull_requests_by_state"] = table
 			fields["pull_requests_by_state_basis"] = contextfabric.StringFactValue(pullRequestsByStateBasis)
