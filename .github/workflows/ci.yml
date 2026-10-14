@@ -1046,6 +1046,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated factoracle)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -v"
           GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle' "$packages"
 
 
