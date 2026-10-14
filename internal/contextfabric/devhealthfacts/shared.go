@@ -1120,15 +1120,21 @@ import (
 // dropped (their references reach no repository the team owns). Still no fact. An
 // answer saved under v220 names only the generic no-unit reason.
 //
-// v221 -> v222: repository and team metrics serve the change failure rate by
+// v221 -> v222: the team linked pull request mix reads its linked set in a
+// statement of its own and takes it, with the membership scope ids, as external
+// tables instead of inlining the link chain four times and the ids in its text.
+// The rows are unchanged; the statements and their memory are not, so an answer
+// saved under v221 is not reused as one produced by the new statements.
+//
+// v222 -> v223: repository and team metrics serve the change failure rate by
 // the ops rule that counts a deployment's own failed status: the failed count
 // includes failures by status, a window with final-status deployments and no
 // incident evidence is a measured rate (basis status, over the deployments with
 // a final status), and change_failure_unknown_reason, change_failure_evidence_basis,
 // the two status counts and change_failure_status_coverage are served. A
-// candidate saved under v221 may hold an unknown rate that is now measured and
+// candidate saved under v222 may hold an unknown rate that is now measured and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v222"
+const QueryVersion = "devhealthfacts.clickhouse.v223"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

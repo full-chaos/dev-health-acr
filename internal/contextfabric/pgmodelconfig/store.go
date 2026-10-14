@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelconfigcrypto"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -241,6 +242,9 @@ func (s *Store) ready() error {
 }
 
 func sanitizeError(err error) error {
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
+	}
 	if err == nil || errors.Is(err, sql.ErrNoRows) {
 		return err
 	}

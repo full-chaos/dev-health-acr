@@ -200,6 +200,9 @@ func mapDevicePollStoreError(err error) error {
 }
 
 func mapDeviceRedemptionStoreError(err error) error {
+	if errors.Is(err, storage.ErrOrgPurged) {
+		return newDevicePollError(DevicePollAccessDenied, 0)
+	}
 	if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
 		return newDevicePollError(DevicePollInvalidGrant, 0)
 	}

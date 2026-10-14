@@ -174,7 +174,7 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 	unitBindings := append(boundReaderBindings(current), readers.Binding{Name: unitLimitParam, Value: strconv.Itoa(unitLimit)})
 	orgUnits := investmentUnitsStatementFor(current, false, scope, true)
 	orgMix := orgMixStatement(current)
-	linked := linkedPullRequestMixStatement(current, scope, 1000)
+	linked := inlineSentLinkedMix(linkedPullRequestMixStatement(current, scope, 1000), current)
 	return []SplitStatementPair{
 		{Name: "repository mix", Bindings: mixBindings,
 			New: repoMixStatementScoped([]factTimeBound{current, prior}, scope, 100000),

@@ -32,6 +32,10 @@ func (a *App) handleDeviceAuthorization(w http.ResponseWriter, r *http.Request) 
 	}
 	started, err := a.deviceFlow.Start(r.Context(), hints)
 	if err != nil {
+		if errors.Is(err, storage.ErrOrgPurged) {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device authorization request is invalid", false, nil)
+			return
+		}
 		a.writeDeviceDependencyError(w, r)
 		return
 	}
@@ -180,6 +184,9 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, err error) {
+	if a.writeOrgPurged(w, r, err) {
+		return
+	}
 	if errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
 		writeError(w, r, http.StatusConflict, "device_authorization_conflict", "Device authorization is no longer pending", false, nil)
 		return
@@ -349,6 +356,9 @@ func (a *App) writeDeviceDependencyError(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *App) writeSelfLifecycleError(w http.ResponseWriter, r *http.Request, err error) {
+	if a.writeOrgPurged(w, r, err) {
+		return
+	}
 	if errors.Is(err, auth.ErrInvalidCredential) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential lifecycle request is invalid", false, nil)
 		return
