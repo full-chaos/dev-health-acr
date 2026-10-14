@@ -83,6 +83,7 @@ FROM (SELECT number AS n FROM numbers(?) WHERE number >= ? AND number < ?)`,
 type fragmentPeak struct {
 	name     string
 	mib      float64
+	maxMiB   float64
 	readRows uint64
 	rows     int
 }
@@ -95,6 +96,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 			continue
 		}
 		best := fragmentPeak{name: frag.Name, mib: -1}
+		highest := 0.0
 		for run := 0; run < memoryShapeRuns; run++ {
 			tag := fmt.Sprintf("pto-%s-%s-%d-%d", stage, frag.Name, run, time.Now().UnixNano())
 			bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: f.h.orgID}}
@@ -135,10 +137,14 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 			}
 			_ = r.Close()
 			mib := float64(mem) / (1 << 20)
+			if mib > highest {
+				highest = mib
+			}
 			if best.mib < 0 || mib < best.mib {
 				best = fragmentPeak{name: frag.Name, mib: mib, readRows: readRows, rows: n}
 			}
 		}
+		best.maxMiB = highest
 		out = append(out, best)
 	}
 	return out
@@ -163,9 +169,9 @@ func peakOf(t *testing.T, peaks []fragmentPeak, name string) fragmentPeak {
 func fragmentTable(stage string, peaks []fragmentPeak) string {
 	var b strings.Builder
 	b.WriteString("settings: paged statements = prod projector settings (max_memory_usage 192 MiB, max_bytes_to_read 256 MiB, driver max_result_rows); other fragments = diagnostic, max_result_rows=0 and max_memory_usage=0\n")
-	fmt.Fprintf(&b, "project-team ownership statement, stage=%s (min of %d warm runs; %d pairs)\n", stage, memoryShapeRuns, memoryShapePairs)
+	fmt.Fprintf(&b, "project-team ownership statement, stage=%s (lowest of %d warm runs, highest in brackets; %d pairs)\n", stage, memoryShapeRuns, memoryShapePairs)
 	for _, p := range peaks {
-		fmt.Fprintf(&b, "  %-24s peak=%7.2f MiB read_rows=%9d rows_out=%d\n", p.name, p.mib, p.readRows, p.rows)
+		fmt.Fprintf(&b, "  %-24s peak=%7.2f MiB (highest %7.2f) read_rows=%9d rows_out=%d\n", p.name, p.mib, p.maxMiB, p.readRows, p.rows)
 	}
 	return b.String()
 }
@@ -184,8 +190,9 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 			report(t, fmt.Sprintf("%d active parts\n%s", m.parts, fragmentTable(layout, peaks)))
 			paged := peakOf(t, peaks, "paged_statement")
 			raw := peakOf(t, peaks, "ownership_raw_final_x1")
-			if paged.mib > memoryBoundMiB {
-				t.Errorf("%s: the paged statement peaked at %.2f MiB, bound %.0f MiB", layout, paged.mib, memoryBoundMiB)
+			// An absolute bound is a cap margin: the worst warm read decides.
+			if paged.maxMiB > memoryBoundMiB {
+				t.Errorf("%s: the paged statement peaked at %.2f MiB (lowest read %.2f), bound %.0f MiB", layout, paged.maxMiB, paged.mib, memoryBoundMiB)
 			}
 			// The ownership table is read once: the statement's whole read is the
 			// raw FINAL read plus the small projects and teams tables.
@@ -273,7 +280,10 @@ func freshDatabaseFixture(t *testing.T, orgID, layout string, versions int) layo
 // The statement's memory against the length of the ownership history, in a
 // merged layout and in a fixed 12-part layout (a fresh database per point).
 // Merged: flat, the rule is fail when large > 1.15x small and large > small +
-// 2 MiB over 1,000 versus 2,000 versions per pair. Twelve parts: FINAL over
+// 2 MiB over 1,000 versus 2,000 versions per pair, on the lowest of three warm
+// reads per size (noise removal). The absolute bounds (48 MiB at the prod shape
+// and the 12-part line) use the highest of three: a cap is hit by the worst
+// read, not the best. Twelve parts: FINAL over
 // overlapping unmerged parts costs more per version, so the peak is bounded by
 // a line in versions per pair (partsBoundBaseMiB + partsBoundPerVersion x v);
 // the 100 point is measured as well to show the climb to block saturation.
@@ -290,8 +300,8 @@ func TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory(t *testin
 				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
 				peaks[versions] = peak.mib
 				if layout == "parts" {
-					if limit := partsBoundBaseMiB + partsBoundPerVersion*float64(versions); peak.mib > limit {
-						t.Errorf("parts: the paged statement peaked at %.2f MiB at %d versions per pair, bound %.2f MiB (%.0f + %.4f x versions)", peak.mib, versions, limit, partsBoundBaseMiB, partsBoundPerVersion)
+					if limit := partsBoundBaseMiB + partsBoundPerVersion*float64(versions); peak.maxMiB > limit {
+						t.Errorf("parts: the paged statement peaked at %.2f MiB (lowest read %.2f) at %d versions per pair, bound %.2f MiB (%.0f + %.4f x versions)", peak.maxMiB, peak.mib, versions, limit, partsBoundBaseMiB, partsBoundPerVersion)
 					}
 				}
 			}
