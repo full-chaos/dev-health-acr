@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -125,4 +126,45 @@ func TestInvestigationForAnOrganizationPurgedDuringTheModelCallAnswersInvalidTok
 		t.Fatal("the engine must reach the result save")
 	}
 	assertPurgedOrgAnswer(t, recorder)
+}
+
+// The model configuration write commits, the purge runs, and the follow-up
+// reuse invalidation is refused: the request must not report success for
+// state the purge removed.
+func TestModelConfigWriteWhoseFollowUpWriteIsRefusedForAPurgedOrganizationAnswersInvalidToken(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			app, token, invalidator := newContextFabricModelConfigTestAppWithReuseInvalidator(t)
+			if method == http.MethodDelete {
+				put := httptest.NewRecorder()
+				app.Handler().ServeHTTP(put, modelConfigRequest(t, http.MethodPut, token, modelConfigWriteBody()))
+				if put.Code != http.StatusOK {
+					t.Fatalf("PUT status = %d, want 200", put.Code)
+				}
+			}
+			invalidator.err = fmt.Errorf("invalidate organization reuse: %w", storage.ErrOrgPurged)
+			var body any
+			if method == http.MethodPut {
+				body = modelConfigWriteBody()
+			}
+			response := httptest.NewRecorder()
+
+			app.Handler().ServeHTTP(response, modelConfigRequest(t, method, token, body))
+
+			assertPurgedOrgAnswer(t, response)
+		})
+	}
+}
+
+func TestTokenExchangeForAnOrganizationPurgedInFlightIsAnInvalidGrant(t *testing.T) {
+	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: fmt.Errorf("issue workload access token: %w", storage.ErrOrgPurged)})
+	form := url.Values{}
+	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
+	form.Set("subject_token", "jwt")
+	form.Set("subject_token_type", contractsv1.TokenExchangeSubjectTokenTypeJWT)
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, tokenExchangeFormRequest(form))
+
+	assertTokenExchangeError(t, response, http.StatusBadRequest, contractsv1.TokenExchangeErrorInvalidGrant)
 }

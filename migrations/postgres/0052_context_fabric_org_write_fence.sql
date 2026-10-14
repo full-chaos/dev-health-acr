@@ -22,12 +22,14 @@
 --
 -- The lock key and the marker both use the canonical lower-case UUID. A TEXT
 -- organization column can hold another spelling of the same UUID (upper case,
--- braces, no hyphens, a urn:uuid: prefix); it is folded the way the purge's
--- own predicate folds it. A value that is not a UUID cannot have been purged.
+-- braces, no hyphens, a urn:uuid: prefix); it is folded exactly the way the
+-- purge's own predicate (orgpurge.matchOrg) folds it, so the fence refuses a
+-- value if and only if the purge would delete it. A value that is not a UUID
+-- cannot have been purged.
 --
 -- A snapshot isolation level would read the marker from a snapshot older than
--- the lock wait, so a write to a fenced table outside READ COMMITTED is
--- refused.
+-- the lock wait, so a write that names an organization in a fenced table
+-- outside READ COMMITTED is refused, whatever the value.
 --
 -- The function is SECURITY DEFINER, owned by the role that runs migrations,
 -- which owns the marker table. So the fence needs no privilege of the
@@ -59,15 +61,15 @@ BEGIN
         IF candidate IS NULL THEN
             CONTINUE;
         END IF;
-        folded := lower(regexp_replace(btrim(candidate), '^urn:uuid:|[{}-]', '', 'gi'));
-        IF folded !~ '^[0-9a-f]{32}$' THEN
-            CONTINUE;
-        END IF;
-        canonical := folded::uuid::text;
         IF current_setting('transaction_isolation') <> 'read committed' THEN
             RAISE EXCEPTION 'organization write fence requires read committed isolation'
                 USING ERRCODE = 'ACR02';
         END IF;
+        folded := lower(regexp_replace(candidate, '^urn:uuid:|[{}-]', '', 'gi'));
+        IF folded !~ '^[0-9a-f]{32}$' THEN
+            CONTINUE;
+        END IF;
+        canonical := folded::uuid::text;
         PERFORM pg_advisory_xact_lock_shared(20261014, hashtext(canonical));
         IF EXISTS (SELECT 1 FROM acr.context_fabric_org_purge_markers WHERE org_id = canonical) THEN
             RAISE EXCEPTION 'organization was purged'

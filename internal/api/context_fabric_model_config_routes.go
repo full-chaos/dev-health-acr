@@ -147,6 +147,9 @@ func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModel
 			// left un-invalidated for this organization, but the request
 			// still reports its own success to the caller.
 			if err := invalidator.InvalidateOrganizationReuse(r.Context(), principal.OrgID); err != nil {
+				if a.writeOrgPurged(w, r, err) {
+					return
+				}
 				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config write", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_reuse_invalidation")
 			}
 		}
@@ -208,6 +211,9 @@ func (a *App) ContextFabricOrgModelConfigDeleteHandler(store contextfabric.OrgMo
 			// See the matching comment in ContextFabricOrgModelConfigPutHandler:
 			// a failed invalidation must not be treated as a failed delete.
 			if err := invalidator.InvalidateOrganizationReuse(r.Context(), principal.OrgID); err != nil {
+				if a.writeOrgPurged(w, r, err) {
+					return
+				}
 				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config delete", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_reuse_invalidation")
 			}
 		}

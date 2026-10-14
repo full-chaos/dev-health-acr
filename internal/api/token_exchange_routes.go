@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/authverify"
 )
 
@@ -60,7 +61,7 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	result, err := a.runtime.WorkloadTokenExchange.Exchange(r.Context(), request.SubjectToken, request.ScopeList())
 	if err != nil {
 		switch {
-		case errors.Is(err, authverify.ErrSubjectTokenInvalid), errors.Is(err, authverify.ErrWorkloadBindingNotFound):
+		case errors.Is(err, authverify.ErrSubjectTokenInvalid), errors.Is(err, authverify.ErrWorkloadBindingNotFound), errors.Is(err, storage.ErrOrgPurged):
 			// Deliberately the SAME error code for an invalid subject
 			// token and an unresolved/disabled binding -- a disabled
 			// binding must not be distinguishable from one that never

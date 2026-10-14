@@ -256,7 +256,7 @@ func TestWriteFenceRefusesEveryFencedTableAfterAPurge(t *testing.T) {
 	requireNothingLeft(t, r.db, orgGone)
 
 	for _, spelling := range []string{
-		orgGone, strings.ToUpper(orgGone), "{" + orgGone + "}", "urn:uuid:" + orgGone, strings.ReplaceAll(orgGone, "-", ""), "  " + strings.ToUpper(orgGone) + " ",
+		orgGone, strings.ToUpper(orgGone), "{" + orgGone + "}", "urn:uuid:" + orgGone, strings.ReplaceAll(orgGone, "-", ""),
 	} {
 		_, err := r.db.ExecContext(ctx, fenceInsertRebuildMarker, spelling)
 		require.Equal(t, orgfence.PurgedSQLState, sqlState(err), "text organization column spelled %q: %v", spelling, err)
@@ -393,6 +393,44 @@ func TestWriteFenceRefusesAnUpsertOverASurvivingRowAndAMoveIntoAMarkedOrganizati
 	_, err = r.db.ExecContext(ctx, `UPDATE acr.context_fabric_projection_rebuild_markers SET org_id = $1 WHERE org_id = $2`, strings.ToUpper(orgGone), orgKept)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rowCounts(t, r.db, orgGone)["context_fabric_projection_rebuild_markers"], "with the update trigger off the row moves into the purged organization")
+}
+
+// The fence and the purge must agree on which spellings name the
+// organization: a value the purge deletes is refused after it, and a value
+// the purge leaves is not refused (it is not the organization's).
+func TestWriteFenceRefusesExactlyTheSpellingsThePurgeDeletes(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	seedPostgres(t, r.db, orgGone)
+	spellings := []string{
+		orgGone, strings.ToUpper(orgGone), "{" + orgGone + "}", "{" + strings.ToUpper(orgGone) + "}",
+		"urn:uuid:" + orgGone, "URN:UUID:" + strings.ToUpper(orgGone), strings.ReplaceAll(orgGone, "-", ""),
+		"-" + orgGone, " " + orgGone, orgGone + " ", "\t" + orgGone, "urn:uuid:{" + orgGone + "}", orgGone + "0",
+	}
+	for _, spelling := range spellings {
+		_, err := r.db.ExecContext(ctx, fenceInsertRebuildMarker, spelling)
+		require.NoError(t, err, "before the purge %q", spelling)
+	}
+	purgeOrg(t, r, orgGone)
+	deletedByThePurge, refusedByTheFence := 0, 0
+	for _, spelling := range spellings {
+		var left int
+		require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_projection_rebuild_markers WHERE org_id = $1`, spelling).Scan(&left))
+		_, err := r.db.ExecContext(ctx, `INSERT INTO acr.context_fabric_projection_rebuild_markers (org_id, started_at) VALUES ($1, now()) ON CONFLICT (org_id) DO UPDATE SET started_at = now()`, spelling)
+		refused := sqlState(err) == orgfence.PurgedSQLState
+		if !refused {
+			require.NoError(t, err, "after the purge %q", spelling)
+		}
+		require.Equal(t, left == 0, refused, "spelling %q: deleted by the purge = %t, refused by the fence = %t", spelling, left == 0, refused)
+		if left == 0 {
+			deletedByThePurge++
+		}
+		if refused {
+			refusedByTheFence++
+		}
+	}
+	require.Equal(t, 9, deletedByThePurge, "spellings the purge deletes")
+	require.Equal(t, deletedByThePurge, refusedByTheFence)
 }
 
 func TestWriteFenceProductionWritersReturnTheTypedError(t *testing.T) {
@@ -551,7 +589,12 @@ func TestWriteFenceRefusesAFencedWriteOutsideReadCommitted(t *testing.T) {
 		require.Equal(t, orgfence.IsolationSQLState, sqlState(err), "%s: %v", level, err)
 		require.NoError(t, tx.Rollback())
 	}
-	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, fenceInsertRebuildMarker, "not-a-uuid")
+	require.Equal(t, orgfence.IsolationSQLState, sqlState(err), "a value that is not a UUID is refused outside read committed too: %v", err)
+	require.NoError(t, tx.Rollback())
+	tx, err = r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, fenceInsertRebuildMarker, orgKept)
 	require.NoError(t, err)
