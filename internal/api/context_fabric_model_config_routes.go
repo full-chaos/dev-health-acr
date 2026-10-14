@@ -222,6 +222,9 @@ func (a *App) writeContextFabricOrgModelConfigError(w http.ResponseWriter, r *ht
 	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
 		return
 	}
+	if a.writeOrgPurged(w, r, err) {
+		return
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "The Context Fabric model configuration request timed out", true, nil)
 		return

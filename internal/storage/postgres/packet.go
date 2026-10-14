@@ -14,6 +14,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 type PacketStore struct {
@@ -56,7 +57,7 @@ ON CONFLICT (context_packet_id) DO NOTHING`,
 		packet.QueryVersion, packet.RankingVersion, packet.ResolvedScope.Resolution, packet.Status, string(payload), packet.GeneratedAt, expiresAt.UTC(), s.now().UTC(),
 	)
 	if err != nil {
-		return fmt.Errorf("insert packet snapshot: %w", err)
+		return fmt.Errorf("insert packet snapshot: %w", orgfence.Classify(err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {

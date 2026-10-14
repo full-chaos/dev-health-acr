@@ -1722,6 +1722,8 @@ Run it with the projector `serve` process for that organization stopped, or run 
 
 Kept on purpose: `audit_events` (no retention rule exists in this repository), and episodes with `retention_class = legal_hold`. A purge that deletes any row adds one `org_purged` audit event holding counts only. A second run is a no-op.
 
+Write fence: from the moment the purge commits until the organization returns to discovery, the database refuses every write of a row keyed by it. A trigger on each purged table (migration 0052) takes the organization's write-fence advisory lock in shared mode and then reads the purge marker; the purge takes the same lock in exclusive mode at the start of its delete transaction. A request that was already in flight when the purge ran gets `401 invalid_token`, the answer every later request of that organization gets. A write that was open when the purge started is waited for (30 seconds at most) and then deleted with the rest; if the wait times out, the verb fails with `timed out waiting for in-flight writers`, reports `incomplete`, deletes no database row, and is safe to run again. The fence also refuses `acr-projector priors` writes for a purged organization. A write to a fenced table in a transaction above READ COMMITTED is refused for every organization.
+
 ### CHAOS-3916 production graph cutover runbook
 
 This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,
