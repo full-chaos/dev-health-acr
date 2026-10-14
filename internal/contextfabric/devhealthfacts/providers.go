@@ -42,5 +42,6 @@ func NewProvidersWithOperations(client contextpacket.ClickHouseQueryClient, oper
 		newLandscapeProvider(client),
 		newSecurityAlertsProvider(client),
 		newCommitmentProvider(client),
+		newFileHotspotsProvider(client),
 	}
 }

@@ -55,7 +55,6 @@ func TestCatalogQueriesExecutableAgainstDeclaredSchema(t *testing.T) {
 		"ai_workflow_runs.v1":      "ai_workflow_runs",
 		"ai_workflow_artifacts.v1": "ai_workflow_artifact_edges",
 		"ai_review_outcomes.v1":    "work_graph_pr_review_outcome_edges",
-		"file_hotspots.v1":         "file_hotspot_daily",
 		"file_complexity.v1":       "file_complexity_snapshots",
 	}
 

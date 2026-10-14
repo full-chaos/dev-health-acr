@@ -215,6 +215,7 @@ const (
 	FactLandscape               = contractsv1.ContextFabricFactLandscape
 	FactSecurityAlerts          = contractsv1.ContextFabricFactSecurityAlerts
 	FactCommitment              = contractsv1.ContextFabricFactCommitment
+	FactFileHotspots            = contractsv1.ContextFabricFactFileHotspots
 )
 
 type InvestigationRequest = contractsv1.ContextFabricInvestigationRequest

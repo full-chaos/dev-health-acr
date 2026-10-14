@@ -71,8 +71,8 @@ func TestCHAOS7120NoDeclaredFieldOrColumnNamesAPerson(t *testing.T) {
 			}
 		}
 	}
-	if kinds != 23 || scanned == 0 {
-		t.Fatalf("scanned %d names across %d kinds, want all 23 kinds", scanned, kinds)
+	if kinds != 24 || scanned == 0 {
+		t.Fatalf("scanned %d names across %d kinds, want all 24 kinds", scanned, kinds)
 	}
 }
 
