@@ -381,7 +381,7 @@ func TestTheOriginRowsFitTheCoverageBoundAtTheVocabularyMaximum(t *testing.T) {
 		codes = append(codes, fmt.Sprintf("%s=%d", code, n))
 	}
 	sort.Strings(codes)
-	const bound = 100 // contextFabricWriteBounds.coverageEntries; the served write below is the authority
+	const bound = contractsv1.ContextFabricCoverageEntriesMaxCount // the served write below is the authority
 	t.Logf("vocabulary-maximal grouped coverage: %d fact kinds, %d details served (%s), bound %d",
 		contractsv1.ContextFabricFactKindCount, len(served.Details), strings.Join(codes, " "), bound)
 	// KINDS, NOT READS x KINDS. This is the number the bound is safe

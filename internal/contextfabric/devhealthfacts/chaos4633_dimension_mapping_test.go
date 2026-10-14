@@ -22,8 +22,8 @@ func TestGeneratedDimensionFactKindRankingFamilyTableMatchesDoc(t *testing.T) {
 		capabilities = append(capabilities, provider.Capability())
 	}
 	rows := contextfabric.GenerateDimensionFactKindRankingFamilyTable(capabilities)
-	if len(rows) != 22 {
-		t.Fatalf("got %d rows, want 22 (one per registered FactKind -- FactEvidence is deliberately unregistered)", len(rows))
+	if len(rows) != 23 {
+		t.Fatalf("got %d rows, want 23 (one per registered FactKind -- FactEvidence is deliberately unregistered)", len(rows))
 	}
 	for _, row := range rows {
 		if !contextfabric.ValidHealthDimension(row.Dimension) {
