@@ -170,6 +170,72 @@ func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickh
 	return out
 }
 
+// blockerProdShapePlantedReading runs read once warm and then three times,
+// and reports whether some statement reached its frozen ceiling in EVERY one
+// of the three reads: by its peak memory at completion, or by the server's
+// memory-limit exception (code 241) in all three. Any other exception (a
+// missing table, a timeout) fails the test: it must not satisfy the control.
+func blockerProdShapePlantedReading(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, read func()) bool {
+	t.Helper()
+	const memoryLimitExceeded = 241
+	read()
+	type seen struct {
+		head         string
+		low          uint64
+		memoryLimits int
+		rounds       int
+	}
+	byHash := map[uint64]*seen{}
+	for round := 0; round < 3; round++ {
+		mark := serverNowMicros(t, ctx, direct)
+		read()
+		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+			t.Fatalf("flush logs: %v", err)
+		}
+		rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(exception_code), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+GROUP BY normalized_query_hash`, mark)
+		if err != nil {
+			t.Fatalf("read query_log: %v", err)
+		}
+		for rows.Next() {
+			var hash, peak uint64
+			var code int32
+			var head string
+			if err := rows.Scan(&hash, &peak, &code, &head); err != nil {
+				t.Fatal(err)
+			}
+			if code != 0 && code != memoryLimitExceeded {
+				t.Fatalf("%s: statement %q failed with exception code %d, not the memory limit: the control is not measuring what it claims", label, head, code)
+			}
+			entry := byHash[hash]
+			if entry == nil {
+				entry = &seen{head: head, low: peak}
+				byHash[hash] = entry
+			}
+			entry.rounds++
+			if peak < entry.low {
+				entry.low = peak
+			}
+			if code == memoryLimitExceeded {
+				entry.memoryLimits++
+			}
+		}
+		rows.Close()
+	}
+	exceeded := false
+	for hash, entry := range byHash {
+		ceiling := blockerProdShapeCeilingFor(entry.head)
+		hit := entry.memoryLimits == entry.rounds || entry.low >= ceiling
+		if hit {
+			exceeded = true
+		}
+		t.Logf("PRODSHAPE planted-control reading [%s] statement %d lowest %.1f MiB, memory-limit exceptions %d of %d reads, ceiling %.1f MiB, reached %v: %s", label, hash, float64(entry.low)/(1<<20), entry.memoryLimits, entry.rounds, float64(ceiling)/(1<<20), hit, entry.head)
+	}
+	return exceeded
+}
+
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -394,20 +460,19 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 
 	// Planted defect, absolute: the first-seen rows narrowed to the blocker edge
 	// endpoints before the join (the form the shipped statements dropped for
-	// memory) must put some statement's LOWEST of three warm reads at or over its
-	// frozen ceiling. If it does not, the ceilings could not catch the defect
-	// they exist for.
-	restoreVariant := devhealthfacts.SetBlockerStartVariantForTest("legacy")
-	lowPlanted, highPlanted := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
-	restoreVariant()
-	exceeded := false
-	for key, peak := range lowPlanted {
-		if peak >= blockerProdShapeCeilingFor(key) {
-			exceeded = true
-		}
-		t.Logf("PRODSHAPE planted defect [org-wide, first-seen narrowed to the endpoints] min %.1f max %.1f MiB (ceiling %.1f): %s", float64(peak)/(1<<20), float64(highPlanted[key])/(1<<20), float64(blockerProdShapeCeilingFor(key))/(1<<20), key)
+	// memory) must put some statement at or over its frozen ceiling in every one
+	// of three warm reads (by peak, or by the memory-limit exception, code 241
+	// asserted, never any error). The same reading of the shipped shape must NOT
+	// reach a ceiling: that is what makes the control discriminate. If the planted
+	// reading did not reach one, the ceilings could not catch the defect they
+	// exist for.
+	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape", func() { read(orgWide) }) {
+		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
 	}
-	if !exceeded {
+	restoreVariant := devhealthfacts.SetBlockerStartVariantForTest("legacy")
+	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: first-seen narrowed to the endpoints", func() { read(orgWide) })
+	restoreVariant()
+	if !planted {
 		t.Error("with the first-seen rows narrowed to the endpoints, no statement reached its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
