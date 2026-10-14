@@ -131,7 +131,7 @@ func evaluateChangeFailure(c changeFailureCounts) changeFailureOutcome {
 // set), so the rate is over the union of their deployments. A repository or
 // team with no stored row has no entry. probe says which statement form the
 // table answers; a nil probe reads the older form.
-func readWindowChangeFailure(ctx context.Context, client contextpacket.ClickHouseQueryClient, probe *changeFailureStatusColumnsProbe, orgID string, repoKeys []string, window rollupWindow, grouped bool) (map[string]changeFailureCounts, error) {
+func readWindowChangeFailure(ctx context.Context, client contextpacket.ClickHouseQueryClient, probe *changeFailureStatusColumnsProbe, now time.Time, orgID string, repoKeys []string, window rollupWindow, grouped bool) (map[string]changeFailureCounts, error) {
 	out := map[string]changeFailureCounts{}
 	if len(repoKeys) == 0 {
 		return out, nil
@@ -140,7 +140,7 @@ func readWindowChangeFailure(ctx context.Context, client contextpacket.ClickHous
 	if grouped {
 		keyExpr, groupBy = "toString(repo_id)", "\nGROUP BY repo_id"
 	}
-	statusColumns := probe.availableAt(ctx, client, time.Now())
+	statusColumns := probe.availableAt(ctx, client, now)
 	statusSelect := ""
 	if statusColumns {
 		statusSelect = `,

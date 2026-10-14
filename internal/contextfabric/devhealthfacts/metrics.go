@@ -432,7 +432,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	if err != nil {
 		return 0, rejected, false, err
 	}
-	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, p.changeFailureColumns, orgID, ids, rateWindow, true)
+	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, p.changeFailureColumns, clock(), orgID, ids, rateWindow, true)
 	if err != nil {
 		return 0, rejected, false, err
 	}
@@ -628,7 +628,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		// A team that owns no repository has no repository keys, so the
 		// readers return empty and no window field is served for it; the
 		// caller names the reason through applyTeamsOwningNothing.
-		if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields); err != nil {
+		if err := p.setTeamWindowFamilies(ctx, orgID, r.TeamID, owned[r.TeamID], window, fields, true); err != nil {
 			return 0, rejected, nil, nil, err
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
@@ -649,7 +649,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		}
 		seen[teamID] = struct{}{}
 		fields := map[string]contextfabric.FactValue{}
-		if err := p.setTeamWindowFamilies(ctx, orgID, teamID, owned[teamID], window, fields); err != nil {
+		if err := p.setTeamWindowFamilies(ctx, orgID, teamID, owned[teamID], window, fields, false); err != nil {
 			return 0, rejected, nil, nil, err
 		}
 		if len(fields) == 0 {
@@ -750,17 +750,19 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 
 // setTeamWindowFamilies reads and attaches every window family a team's
 // owned repositories can serve, whether or not team_metrics_daily has a row.
-func (p *MetricsProvider) setTeamWindowFamilies(ctx context.Context, orgID, teamID string, owned []teamOwnedRepo, window rollupWindow, fields map[string]contextfabric.FactValue) error {
+func (p *MetricsProvider) setTeamWindowFamilies(ctx context.Context, orgID, teamID string, owned []teamOwnedRepo, window rollupWindow, fields map[string]contextfabric.FactValue, hasDailyRow bool) error {
 	keys := repoKeysOf(map[string][]teamOwnedRepo{teamID: owned})
 	cycles, err := readWindowPRCycle(ctx, p.facts.client, orgID, keys, window, false)
 	if err != nil {
 		return err
 	}
-	failures, err := readWindowChangeFailure(ctx, p.facts.client, p.changeFailureColumns, orgID, keys, window, false)
+	failures, err := readWindowChangeFailure(ctx, p.facts.client, p.changeFailureColumns, clock(), orgID, keys, window, false)
 	if err != nil {
 		return err
 	}
-	setWindowFamilies(fields, cycles, failures, "", true)
+	// The reason a rate is absent is served on a team fact that exists for
+	// another reason and that owns repositories; never a fact of its own.
+	setWindowFamilies(fields, cycles, failures, "", hasDailyRow && len(owned) > 0)
 	return nil
 }
 
