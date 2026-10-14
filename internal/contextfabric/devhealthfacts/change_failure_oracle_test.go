@@ -16,9 +16,9 @@ import (
 // header (internal/opschangefailure/vendor.sh), and must pass the executed
 // comparison below.
 var opsVendoredDigests = map[string]string{
-	"internal/opschangefailure/changefailure.go":    "456a9723c678082271cbcec8678305e65b7bf17163d9ff4c3dd6af69b810309c",
-	"internal/deploymentstatus/deploymentstatus.go": "a0361f5adf141cb89265e48a89667952a645d400257aa62577fb89086854135b",
-	"internal/opschangefailure/rule.go":             "de610133216893f25c28a6fb98ca47e051df0d4127892cf299f7d13df0ff9043",
+	"internal/opschangefailure/changefailure.go":    "8bab2b75bece9c807b39cd4669a143860898822b59525f1b1a3669ae767d332c",
+	"internal/deploymentstatus/deploymentstatus.go": "85fb1cb41f185ddc905aeb13c69ee3fae98ab898aaa65a14dd6da85850ee4991",
+	"internal/opschangefailure/rule.go":             "86fce0d6ddfcfc175875947f0600ae1cba7acd811c48d9caee9feda2eed9cf82",
 }
 
 func TestVendoredOpsChangeFailureRuleIsPinned(t *testing.T) {
