@@ -52,11 +52,11 @@
         },
         "available": {
           "type": "boolean",
-          "description": "False when run_operation cannot serve for your credential now; reason says why."
+          "description": "False when run_operation (if listed) cannot serve for your credential now; reason says why."
         },
         "reason": {
           "type": "string",
-          "description": "Why run_operation is not available now: scope_missing_data_read, data_query_not_configured or subject_gate_unavailable."
+          "description": "Why run_operation (if listed) is not available now: scope_missing_data_read, data_query_not_configured or subject_gate_unavailable."
         },
         "operations": {
           "type": "array",
@@ -80,7 +80,7 @@
             "properties": {
               "name": {
                 "type": "string",
-                "description": "Operation name to pass to run_operation."
+                "description": "Operation name to pass to run_operation (if listed)."
               },
               "purpose": {
                 "type": "string",
@@ -273,7 +273,7 @@
     },
     "facts": {
       "type": "object",
-      "description": "The facts section: the kinds read_facts serves, or a note that it is not available.",
+      "description": "The facts section: the kinds read_facts (if listed) serves, or a note that it is not available.",
       "required": [
         "served",
         "note"
@@ -281,7 +281,7 @@
       "properties": {
         "served": {
           "type": "boolean",
-          "description": "True when read_facts is wired in this deployment."
+          "description": "True when read_facts (if listed) is wired in this deployment."
         },
         "note": {
           "type": "string",
@@ -289,7 +289,7 @@
         },
         "kinds": {
           "type": "array",
-          "description": "The fact kinds read_facts accepts, read from the registry it validates against. Present when read_facts is served.",
+          "description": "The fact kinds read_facts (if listed) accepts, read from the registry it validates against. Present when read_facts (if listed) is served.",
           "items": {
             "type": "object",
             "required": [
@@ -316,7 +316,7 @@
               "max_window_days": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "The widest range or trailing window, in days, one read_facts call takes for this kind. A read over several kinds is held to the smallest."
+                "description": "The widest range or trailing window, in days, one read_facts (if listed) call takes for this kind. A read over several kinds is held to the smallest."
               }
             }
           }
@@ -347,7 +347,7 @@
               },
               "listable": {
                 "type": "boolean",
-                "description": "True when find_subjects can list this kind."
+                "description": "True when find_subjects (if listed) can list this kind."
               },
               "default_name_kind": {
                 "type": "boolean",
@@ -427,7 +427,7 @@
       "properties": {
         "max_bytes_default": {
           "type": "integer",
-          "description": "Default max_bytes of run_operation."
+          "description": "Default max_bytes of run_operation (if listed)."
         },
         "max_bytes_cap": {
           "type": "integer",
@@ -435,19 +435,19 @@
         },
         "operation_request_bytes": {
           "type": "integer",
-          "description": "Largest run_operation request body."
+          "description": "Largest run_operation (if listed) request body."
         },
         "deadline_seconds": {
           "type": "integer",
-          "description": "Longest run_operation deadline."
+          "description": "Longest run_operation (if listed) deadline."
         },
         "find_page_default": {
           "type": "integer",
-          "description": "Default find_subjects page size."
+          "description": "Default find_subjects (if listed) page size."
         },
         "find_page_max": {
           "type": "integer",
-          "description": "Largest find_subjects page size."
+          "description": "Largest find_subjects (if listed) page size."
         },
         "find_name_kinds_max": {
           "type": "integer",
@@ -469,7 +469,7 @@
     },
     "schema": {
       "type": "object",
-      "description": "The allowed part of the ops GraphQL schema for your credential: the root fields graphql_query accepts, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those. Anything not listed is refused.",
+      "description": "The allowed part of the ops GraphQL schema for your credential: the root fields graphql_query (if listed) accepts, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those. Anything not listed is refused.",
       "required": [
         "caller_class",
         "available",
@@ -490,11 +490,11 @@
         },
         "available": {
           "type": "boolean",
-          "description": "False when graphql_query cannot serve you; see reason."
+          "description": "False when graphql_query (if listed) cannot serve you; see reason."
         },
         "reason": {
           "type": "string",
-          "description": "Why graphql_query is not available. Open vocabulary; documented values: scope_missing_data_read, data_graphql_not_configured, subject_gate_unavailable. A client must tolerate values it does not know.",
+          "description": "Why graphql_query (if listed) is not available. Open vocabulary; documented values: scope_missing_data_read, data_graphql_not_configured, subject_gate_unavailable. A client must tolerate values it does not know.",
           "x-documented-values": [
             "scope_missing_data_read",
             "data_graphql_not_configured",
@@ -636,7 +636,7 @@
                           },
                           "subject_kind": {
                             "type": "string",
-                            "description": "The canonical subject kind of an id path; take ids from find_subjects."
+                            "description": "The canonical subject kind of an id path; take ids from find_subjects (if listed)."
                           }
                         }
                       }
@@ -717,7 +717,7 @@
         },
         "grant_class": {
           "type": "string",
-          "description": "Repository grant class only: unrestricted, or restricted to a set of repositories. It does not say whether run_operation can serve you; effective_access does. Open vocabulary; documented values: unrestricted, restricted. A client must tolerate values it does not know.",
+          "description": "Repository grant class only: unrestricted, or restricted to a set of repositories. It does not say whether run_operation (if listed) can serve you; effective_access does. Open vocabulary; documented values: unrestricted, restricted. A client must tolerate values it does not know.",
           "x-documented-values": [
             "unrestricted",
             "restricted"
@@ -725,7 +725,7 @@
         },
         "effective_access": {
           "type": "string",
-          "description": "What run_operation (only) does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment). See tool_access for the other tools. Open vocabulary; documented values: data_read, no_data_read, not_servable. A client must tolerate values it does not know.",
+          "description": "What run_operation (only, if listed) does for your credential now: data_read (can run), no_data_read (data:read scope missing), not_servable (not available in this deployment). See tool_access for the other tools. Open vocabulary; documented values: data_read, no_data_read, not_servable. A client must tolerate values it does not know.",
           "x-documented-values": [
             "data_read",
             "no_data_read",
@@ -734,7 +734,7 @@
         },
         "tool_access": {
           "type": "object",
-          "description": "Access per data tool for your credential now, keyed by tool name (run_operation, graphql_query, read_facts, find_subjects, read_relationships). Evaluated at this call: it is not a grant, and every tool call re-checks access. The key set is open: a new data tool adds a key. A client must tolerate keys it does not know.",
+          "description": "Access per data tool for your credential now, keyed by tool name (run_operation, graphql_query, read_facts, find_subjects, read_relationships; if listed). Evaluated at this call: it is not a grant, and every tool call re-checks access. The key set is open: a new data tool adds a key. A client must tolerate keys it does not know.",
           "additionalProperties": {
             "type": "string",
             "description": "available, no_data_read (data:read scope missing) or not_servable (not available in this deployment). Open vocabulary; documented values: available, no_data_read, not_servable. A client must tolerate values it does not know.",
