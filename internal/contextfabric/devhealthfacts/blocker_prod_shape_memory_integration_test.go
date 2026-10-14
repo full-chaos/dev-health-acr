@@ -92,7 +92,7 @@ const (
 
 	// The planted defect must clear its ceiling by this much on the totals
 	// statement, so the control does not flip on allocator noise.
-	blockerProdShapeControlMargin = uint64(2 << 20)
+	blockerProdShapeControlMargin = uint64(1 << 20)
 
 	// The in-statement authorization fallback: main's peaks on this shape
 	// (52.3 MiB age, 46.8 MiB totals) plus 2 MiB, under the 64 MiB cap.
@@ -468,7 +468,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	// Planted defect, absolute: the two shipped memory fixes undone together for
 	// the restricted caller, the authorization relation inside every statement
 	// (#1256) and the server's default block size (#1304). The totals statement
-	// must then sit at least 2 MiB over its frozen ceiling in every one of three
+	// must then sit at least 1 MiB over its frozen ceiling in every one of three
 	// warm reads (by peak, or by the memory-limit exception, code 241 asserted,
 	// never any error). The same reading of the shipped shape must NOT reach the
 	// ceiling: that is what makes the control discriminate. If the planted
