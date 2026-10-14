@@ -136,8 +136,12 @@ func TestChangeFailureReadsBothTableShapesAgainstRealClickHouse(t *testing.T) {
 				if got := stringField(t, fact, "change_failure_rate_state"); got != "measured" {
 					t.Fatalf("state = %q", got)
 				}
-				if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0.25 {
-					t.Fatalf("rate = %#v, want 0.25 (incident-linked 1 of 4)", v)
+				wantRate := 0.25
+				if tc.newShape && repo == repoID {
+					wantRate = 0.75
+				}
+				if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != wantRate {
+					t.Fatalf("rate = %#v, want %v", v, wantRate)
 				}
 				_, hasKnown := fact.Fields["change_failure_status_known_deployments_count"]
 				if hasKnown != tc.newShape {

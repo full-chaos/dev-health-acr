@@ -83,6 +83,12 @@ func TestChangeFailureNewTableShapeReadsAndServesTheStatusCounts(t *testing.T) {
 	}
 	requireString(t, fact, "change_failure_rate_state", "measured")
 	requireString(t, fact, "change_failure_evidence_basis", "both")
+	if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0.75 {
+		t.Fatalf("rate = %#v, want (1 native + 2 status) / 4", v)
+	}
+	if v := fact.Fields["change_failure_status_coverage"]; v.Number == nil || *v.Number != 0.75 {
+		t.Fatalf("coverage = %#v, want 3 known of 4", v)
+	}
 	requireString(t, fact, "change_failure_link_tier", "native")
 	requireAbsent(t, fact, "change_failure_unknown_reason")
 }
@@ -100,4 +106,16 @@ func TestChangeFailureUnknownReasonsAreThreeDistinctAnswers(t *testing.T) {
 	fact, _ = readFailure(t, repoSubject("repo-1"), repoFailureTables(failureRow("repo-1", 1, 4, 1, 0, 1, 0))...)
 	requireAbsent(t, fact, "change_failure_unknown_reason")
 	requireString(t, fact, "change_failure_evidence_basis", "incident")
+}
+
+func TestChangeFailureStatusAloneMeasuresWithoutAnIncident(t *testing.T) {
+	tables := append([]fakeTable{{match: "system.columns", rows: [][]any{{uint64(2)}}}},
+		repoFailureTables(statusFailureRow("repo-1", 2, 4, 0, 0, 0, 0, 0, 4))...)
+	fact, _ := readFailure(t, repoSubject("repo-1"), tables...)
+	requireString(t, fact, "change_failure_rate_state", "measured")
+	requireString(t, fact, "change_failure_evidence_basis", "status")
+	if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0 {
+		t.Fatalf("all-success by status = %#v, want a measured 0", v)
+	}
+	requireAbsent(t, fact, "change_failure_unknown_reason", "change_failure_link_tier")
 }

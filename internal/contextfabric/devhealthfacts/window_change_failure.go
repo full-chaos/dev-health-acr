@@ -19,8 +19,9 @@ import (
 //
 //   - no stored row in the window            -> no rate and no state, reason not_collected
 //   - no deployments in the window           -> no rate, state not_applicable_no_deployments
-//   - deployments, no incident tied          -> no rate, state unknown_no_incident_evidence
-//   - else (failed native + heuristic) / deployments; 0 is a measured 0
+//   - deployments, no incident tied and no deployment with a final status
+//     -> no rate, state unknown_no_incident_evidence
+//   - else (failed native + heuristic + status) / deployments; 0 is a measured 0
 //
 // Missing is not healthy: a repository that deploys but has no incident
 // evidence never reads 0. Whenever no rate is served, change_failure_unknown_reason
@@ -56,6 +57,7 @@ const (
 	changeFailureReasonWithoutOutcome = "deployments_without_outcome"
 	changeFailureBasisIncident        = "incident"
 	changeFailureBasisBoth            = "both"
+	changeFailureBasisStatus          = "status"
 )
 
 // changeFailureCounts are the summed stored counts of a view and the number of
@@ -82,18 +84,33 @@ type changeFailureOutcome struct {
 	basis    string
 }
 
-// evaluateChangeFailure is the one rule every read here applies to a view.
+// evaluateChangeFailure is the one rule every read here applies to a view. It
+// is acr's own copy of the ops rule (the vendored oracle executes the ops
+// function against it over every count combination):
+//
+//   - no stored row                                -> no state, reason not_collected
+//   - no deployments                               -> not applicable, reason no_deployments_in_window
+//   - no incident evidence and no known status     -> unknown, reason deployments_without_outcome
+//   - else (native + heuristic + status failed) / deployments, 0 a measured 0;
+//     the basis names the evidence: incident, status or both.
+//
+// Failed by status counts the failed deployments no incident link names, so a
+// failed deployment counts once. A table without the status columns has both
+// status counts at 0 and so reads the incident rule alone.
 func evaluateChangeFailure(c changeFailureCounts) changeFailureOutcome {
 	switch {
 	case c.storedRows == 0:
 		return changeFailureOutcome{state: changeFailureStateNoCounts, reason: changeFailureReasonNotCollected}
 	case c.deployments == 0:
 		return changeFailureOutcome{state: changeFailureStateNotApplicable, reason: changeFailureReasonNoDeployments}
-	case c.incidentsDirect+c.incidentsViaDeployment == 0:
-		return applyStatusEvidence(c, changeFailureOutcome{state: changeFailureStateUnknown, reason: changeFailureReasonWithoutOutcome})
+	}
+	incidentEvidence := c.incidentsDirect+c.incidentsViaDeployment > 0
+	statusEvidence := c.statusKnown > 0
+	if !incidentEvidence && !statusEvidence {
+		return changeFailureOutcome{state: changeFailureStateUnknown, reason: changeFailureReasonWithoutOutcome}
 	}
 	out := changeFailureOutcome{
-		value:    float64(c.failedNative+c.failedHeuristic) / float64(c.deployments),
+		value:    float64(c.failedNative+c.failedHeuristic+c.failedStatus) / float64(c.deployments),
 		measured: true,
 		state:    changeFailureStateMeasured,
 	}
@@ -103,21 +120,13 @@ func evaluateChangeFailure(c changeFailureCounts) changeFailureOutcome {
 	case c.failedNative > 0:
 		out.linkTier = changeFailureTierNative
 	}
-	return applyStatusEvidence(c, out)
-}
-
-// applyStatusEvidence is the one place the deployment status evidence meets
-// the incident rule. PENDING THE FINAL OPS RULE: it returns the incident-only
-// result, and names the evidence basis the incident evidence and the known
-// statuses already decide. When the ops rule is final, the status branch (a
-// window with terminal-status deployments and no incident evidence is a
-// measurement, not unknown) lands here and nowhere else.
-func applyStatusEvidence(c changeFailureCounts, out changeFailureOutcome) changeFailureOutcome {
-	if out.measured {
+	switch {
+	case incidentEvidence && statusEvidence:
+		out.basis = changeFailureBasisBoth
+	case statusEvidence:
+		out.basis = changeFailureBasisStatus
+	default:
 		out.basis = changeFailureBasisIncident
-		if c.statusColumns && c.statusKnown > 0 {
-			out.basis = changeFailureBasisBoth
-		}
 	}
 	return out
 }
