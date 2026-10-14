@@ -476,8 +476,8 @@ func t4Cases() []t4Case {
 	}})
 	add(t4Case{name: "blockers/work_item", kind: contextfabric.FactBlockers, subjects: work, tables: []fakeTable{
 		{match: "FROM work_item_dependencies", rows: [][]any{
-			{"WIDGET-099", "WIDGET-101", "repo-1", "repo-1", uint64(1)},
-			{"WIDGET-098", "WIDGET-101", "repo-1", "repo-2", uint64(2)},
+			{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1)},
+			{"WIDGET-098", "WIDGET-101", "blocks", "repo-1", "repo-2", uint64(2)},
 		}},
 	}})
 	add(t4Case{name: "required_children/work_item", kind: contextfabric.FactRequiredChildren, subjects: work, tables: []fakeTable{

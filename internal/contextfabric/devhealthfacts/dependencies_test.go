@@ -11,13 +11,15 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func TestBlockersProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "repo-1", "repo-9", uint64(1)}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -53,8 +55,8 @@ func TestDependencyCounterpartRefOnlyWhenOneRepository(t *testing.T) {
 		row   []any
 		field string
 	}{
-		{"blocker in two repositories", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "repo-1", "repo-9", uint64(2)}, "blocked_by_work_item_ref"},
-		{"blocker unmatched", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "repo-1", "", uint64(0)}, "blocked_by_work_item_ref"},
+		{"blocker in two repositories", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(2)}, "blocked_by_work_item_ref"},
+		{"blocker unmatched", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "", uint64(0)}, "blocked_by_work_item_ref"},
 		{"child in two repositories", contextfabric.FactRequiredChildren, []any{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(2)}, "required_child_work_item_ref"},
 		{"child unmatched", contextfabric.FactRequiredChildren, []any{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "", uint64(0)}, "required_child_work_item_ref"},
 	} {
@@ -195,7 +197,7 @@ const maxFactRowsPerQueryForTest = 200
 func blockerRows(n int) [][]any {
 	rows := make([][]any, n)
 	for i := 0; i < n; i++ {
-		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "repo-1", "repo-1", uint64(1)}
+		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1)}
 	}
 	return rows
 }
@@ -375,9 +377,9 @@ func TestBlockersProviderDedupesCaseVariantRows(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM work_item_dependencies", rows: [][]any{
-			{"WIDGET-200", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
-			{"WIDGET-200", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
-			{"WIDGET-300", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-300", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
@@ -446,7 +448,80 @@ func TestBlockersProviderQueryDedupesBeforeProbeLimit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(client.queries[0].statement, "ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id\nLIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id\nLIMIT 201") {
+	statement := client.queries[0].statement
+	limitBy := strings.Index(statement, "LIMIT 1 BY toString(t.repo_id), ")
+	if limitBy < 0 || strings.Index(statement, "\nLIMIT 201") < limitBy {
 		t.Fatal("blockers query does not dedupe per pair before the probe limit")
+	}
+}
+
+func blockerFactsFor(t *testing.T, rows [][]any) []contextfabric.CanonicalFact {
+	t.Helper()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: rows}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	return result.Facts
+}
+
+// A pair stored only as blocked_by names the subject as the SOURCE; the blocker
+// is the target, and the evidence ref names the stored row (its direction and
+// inverse key), not a forward blocks row that does not exist.
+func TestBlockersProviderServesInverseSpellingRow(t *testing.T) {
+	t.Parallel()
+	for _, spelling := range []string{"blocked_by", "IS_BLOCKED_BY", " Blocked_By\t"} {
+		facts := blockerFactsFor(t, [][]any{{"WIDGET-101", "WIDGET-200", spelling, "repo-1", "repo-9", uint64(1)}})
+		if len(facts) != 1 {
+			t.Fatalf("%q: facts = %d, want 1", spelling, len(facts))
+		}
+		if got := *facts[0].Fields["blocked_by_work_item_id"].String; got != "WIDGET-200" {
+			t.Fatalf("%q: blocker = %q, want WIDGET-200 (the target of an inverse row)", spelling, got)
+		}
+		want, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "WIDGET-101", "WIDGET-200", dependencyrelation.Key("blocked_by"))
+		if len(facts[0].EvidenceRefIDs) != 1 || facts[0].EvidenceRefIDs[0] != want {
+			t.Fatalf("%q: evidence = %v, want the stored inverse row %q", spelling, facts[0].EvidenceRefIDs, want)
+		}
+	}
+}
+
+// blocks A->B and blocked_by B->A state one blocker; it is served once.
+func TestBlockersProviderCollapsesForwardAndInverseTwins(t *testing.T) {
+	t.Parallel()
+	facts := blockerFactsFor(t, [][]any{
+		{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
+		{"WIDGET-101", "WIDGET-200", "blocked_by", "repo-1", "repo-9", uint64(1)},
+	})
+	if len(facts) != 1 {
+		t.Fatalf("facts = %d, want 1 (one pair blocks once)", len(facts))
+	}
+}
+
+func TestBlockerStatementsSelectEverySpellingAndNeverDoubleCount(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: nil}}}
+	for _, kind := range []contextfabric.FactKind{contextfabric.FactBlockers, contextfabric.FactRequiredChildren} {
+		provider := findProvider(t, devhealthfacts.NewProviders(client), kind)
+		if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: kind, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blockers, children := client.queries[0].statement, client.queries[1].statement
+	pred := dependencyrelation.BlockerPredicateSQL("d.relationship_type")
+	if !strings.Contains(blockers, pred) || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
+		t.Fatalf("blockers statement does not select by the shared spelling map:\n%s", blockers)
+	}
+	if strings.Contains(blockers, "FINAL AS ") || !strings.Contains(blockers, "work_item_dependencies AS d FINAL") {
+		t.Fatalf("blockers statement puts an alias after FINAL (a ClickHouse syntax error):\n%s", blockers)
+	}
+	if !strings.Contains(children, "NOT ("+pred+")") {
+		t.Fatalf("required children statement does not exclude every blocker spelling:\n%s", children)
 	}
 }

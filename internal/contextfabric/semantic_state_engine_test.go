@@ -159,6 +159,7 @@ func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
 		"confirmed_needs":                "CHAOS-5639: the per-need confirmation ledger, not a component of the reading itself -- it is read and extended by its own identity-keyed admission (chaos5639_confirmed_need.go), independent of this comparison, and the fresh side has no ledger of its own to disagree with.",
 
 		// Its own alignment block, so adding it leaves the entries above untouched.
+		"frame.organization_survey_member_kind":  "provenance of how the subject expression was reached, not a component of the reading: the subject expression itself is compared, and the stamp exists only so the served answer names its roll-up basis",
 		"frame.collapsed_group_axis_member_kind": "provenance of how the subject expression was reached, not a component of the reading: the subject expression itself is compared, and the stamp exists only so the carried frame passes the same group-axis checks the turn that produced it passed",
 	}
 	keys := func(prefix string, typ reflect.Type) []string {

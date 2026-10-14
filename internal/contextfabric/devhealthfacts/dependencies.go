@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -28,7 +29,7 @@ import (
 // BlockersProvider's sibling, RequiredChildrenProvider -- see its doc
 // comment for why that split, rather than a second hardcoded string, is the
 // honest choice here.
-const blockerRelationshipType = "blocks"
+const blockerRelationshipType = relationcurrent.RelationshipType
 
 // The counterpart's canonical work item id (CHAOS-7120). A dependency row
 // names the OTHER work item by its bare work_item_id, which carries no
@@ -155,30 +156,33 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if settingsErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
 	}
-	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`
+	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`
 FROM work_item_dependencies AS d FINAL
-INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-`+counterpartRepositoryJoinSQL("d.source_work_item_id")+`
-WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+relationCurrentSQL("d")+`
-  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
-ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id
-LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), settings)
+INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = `+blockedExpr("d")+`
+`+counterpartRepositoryJoinSQL(blockerExpr("d"))+`
+WHERE `+blockerRowsWhereSQL(authorized)+relationcurrent.BlockerCurrentSQL("d")+` AND concat(toString(t.repo_id), ':', `+blockedExpr("d")+`) IN {ids:Array(String)}
+ORDER BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")+`, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
+LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), settings)
 	rowCount := 0
 	seenBlockers := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
-		var sourceID, targetID, targetRepoID, sourceRepoID string
+		var storedSourceID, storedTargetID, relationshipType, targetRepoID, sourceRepoID string
 		var sourceRepoCount uint64
-		if err := row.Scan(&sourceID, &targetID, &targetRepoID, &sourceRepoID, &sourceRepoCount); err != nil {
+		if err := row.Scan(&storedSourceID, &storedTargetID, &relationshipType, &targetRepoID, &sourceRepoID, &sourceRepoCount); err != nil {
 			return err
 		}
-		subject, ok := bySubject[targetRepoID+":"+targetID]
+		relationKey := dependencyrelation.Key(relationshipType)
+		blockedID, blockerID := storedTargetID, storedSourceID
+		if relationKey == blockerInverseKey {
+			blockedID, blockerID = storedSourceID, storedTargetID
+		}
+		subject, ok := bySubject[targetRepoID+":"+blockedID]
 		if !ok {
 			return nil
 		}
-		// CHAOS-7177: the predicate above is case-insensitive, and the table key
-		// carries the raw type, so 'blocks' and 'BLOCKS' rows for one pair both
-		// survive FINAL. One pair blocks once.
-		blockKey := targetRepoID + "\x00" + targetID + "\x00" + sourceID
+		// One pair blocks once, whatever spellings or directions its rows
+		// are stored under; the SQL order makes the surviving row stable.
+		blockKey := targetRepoID + "\x00" + blockedID + "\x00" + blockerID
 		if _, dup := seenBlockers[blockKey]; dup {
 			return nil
 		}
@@ -187,14 +191,14 @@ LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), 
 		if !budget.admit() {
 			return nil
 		}
-		fields := map[string]contextfabric.FactValue{"blocked_by_work_item_id": contextfabric.StringFactValue(sourceID)}
-		if ref, ok := counterpartWorkItemRef(sourceRepoID, sourceRepoCount, sourceID); ok {
+		fields := map[string]contextfabric.FactValue{"blocked_by_work_item_id": contextfabric.StringFactValue(blockerID)}
+		if ref, ok := counterpartWorkItemRef(sourceRepoID, sourceRepoCount, blockerID); ok {
 			fields["blocked_by_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
 			Fields:         fields,
-			EvidenceRefIDs: []string{dependencyEvidenceRefID(sourceID, targetID, dependencyrelation.Key(blockerRelationshipType))},
+			EvidenceRefIDs: []string{dependencyEvidenceRefID(storedSourceID, storedTargetID, relationKey)},
 		})
 		return nil
 	}, authorizationBindings...)
@@ -262,7 +266,7 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 `+counterpartRepositoryJoinSQL("d.target_work_item_id")+`
-WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
+WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND NOT (`+blockerPredicateSQL("d")+`)
   AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized+`
 ORDER BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
 LIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+dependencyrelation.KeySQL("d.relationship_type")), settings)
@@ -349,7 +353,7 @@ type blockerTeamTotals struct {
 	// items); projectWeakestRank is 0 when no project item contributed.
 	projectBlockedItems, projectWeakestRank int64
 	// writerUnresolved is the open blocker edges counted although the writer
-	// of their link could not be derived (relation_current.go).
+	// of their link could not be derived (internal/contextfabric/relationcurrent).
 	writerUnresolved int64
 }
 
@@ -424,7 +428,7 @@ const blockerPairSeparator = "\x1f"
 // edges. The team blocker statements read work items, their link rows and
 // their authorization for these ids only, so a statement's cost follows the
 // blocker edges, not the size of the organization's work item table.
-const blockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND lower(ifNull(be.relationship_type, '')) = '` + blockerRelationshipType + `')`
+var blockerEndpointIDsSQL = relationcurrent.BlockerEndpointIDsSQL
 
 // blockerWorkItemsSQL is the work_items rows of the blocker edge endpoints
 // under alias, with the columns the team blocker statements read.
@@ -446,7 +450,7 @@ func blockerStartJoinFor(variant string) string {
 		restriction = ` AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL
 	}
 	return ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
-    FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `'` + restriction + `
+    FROM work_item_dependency_first_seen AS fsr WHERE fsr.org_id = {org_id:String} AND ` + blockerPredicateSQL("fsr") + restriction + `
     GROUP BY source_work_item_id, target_work_item_id, relationship_type) AS fs
     ON fs.source_work_item_id = d.source_work_item_id AND fs.target_work_item_id = d.target_work_item_id AND fs.relationship_type = d.relationship_type`
 }
@@ -473,12 +477,11 @@ const blockerStartOutputSQL = `, min(if(d.relation_started_at IS NOT NULL, toNul
 // (linkedPullRequestOnSQL, workItemIsIssueSQL).
 func blockerEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT l.pr_repo_id AS rid, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
+	return `SELECT l.pr_repo_id AS rid, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, (` + statusPredicate + `) AS is_open, max(l.link_rank) AS item_rank, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
-  INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = d.target_work_item_id
-  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND toString(l.pr_repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + current + `
-    AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
+  INNER JOIN ` + admittedIssueLinksAmongSQL(blockerEndpointIDsSQL) + ` AS l ON l.work_item_id = ` + blockedExpr("d") + `
+  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = ` + blockerExpr("d") + `
+  WHERE ` + blockerRowsWhereSQL(authorized) + current + ` AND toString(l.pr_repo_id) IN {ids:Array(String)}
   GROUP BY rid, tgt, src, is_open`
 }
 
@@ -489,14 +492,13 @@ func blockerEdgeRowsSQL(statusPredicate, authorized, current string, withStart b
 // issue, status and authorization rules as blockerEdgeRowsSQL.
 func blockerProjectEdgeRowsSQL(statusPredicate, authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT pl.team_id AS team_id, d.target_work_item_id AS tgt, d.source_work_item_id AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
+	return `SELECT pl.team_id AS team_id, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, (` + statusPredicate + `) AS is_open, max(pl.link_rank) AS item_rank, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
-  INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-  INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = d.target_work_item_id
-  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-  WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'` + current + `
+  INNER JOIN ` + blockerWorkItemsSQL("t") + ` ON t.org_id = d.org_id AND t.work_item_id = ` + blockedExpr("d") + `
+  INNER JOIN ` + teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL) + ` AS pl ON pl.work_item_id = ` + blockedExpr("d") + `
+  INNER JOIN ` + blockerWorkItemsSQL("s") + ` ON s.org_id = d.org_id AND s.work_item_id = ` + blockerExpr("d") + `
+  WHERE ` + blockerRowsWhereSQL(authorized) + current + `
     AND ` + workItemIsIssueSQL("t") + `
-    AND d.target_work_item_id IN ` + authorized + ` AND d.source_work_item_id IN ` + authorized + `
   GROUP BY team_id, tgt, src, is_open`
 }
 
@@ -702,14 +704,13 @@ ORDER BY team_id`, settings)
 			memo = &blockerAuthorizationMemo{authorized, current, authorizationBindings, settings}
 		}
 		authorized, current, authorizationBindings, settings := memo.sql, memo.current, memo.bindings, memo.settings
-		statement := blockerStatement(`SELECT toInt64(uniqExact(d.target_work_item_id))
+		statement := blockerStatement(`SELECT toInt64(uniqExact(`+blockedExpr("d")+`))
 FROM work_item_dependencies AS d FINAL
-INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'`+current+`
+INNER JOIN `+blockerWorkItemsSQL("t")+` ON t.org_id = d.org_id AND t.work_item_id = `+blockedExpr("d")+`
+INNER JOIN `+blockerWorkItemsSQL("s")+` ON s.org_id = d.org_id AND s.work_item_id = `+blockerExpr("d")+`
+WHERE `+blockerRowsWhereSQL(authorized)+current+`
   AND `+statusPredicate+` AND `+workItemIsIssueSQL("t")+`
-  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
-  AND d.target_work_item_id NOT IN (SELECT work_item_id FROM `+admittedIssueLinksAmongSQL(blockerEndpointIDsSQL)+`)`, settings)
+  AND `+blockedExpr("d")+` NOT IN (SELECT work_item_id FROM `+admittedIssueLinksAmongSQL(blockerEndpointIDsSQL)+`)`, settings)
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerUnlinkedItems", statement, orgID, nil, func(row readers.RowScanner) error {
 			return row.Scan(&withoutLink)
 		}, authorizationBindings...); scanErr != nil {
@@ -814,4 +815,34 @@ WHERE d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = '`
 		})
 	}
 	return outcome, nil
+}
+
+var (
+	blockerForwardKey = dependencyrelation.Key(blockerRelationshipType)
+	blockerInverseKey = dependencyrelation.Key("blocked_by")
+)
+
+// blockerPredicateSQL holds for a stored row that states a blocker in either
+// direction: every spelling the graph projection maps onto a blocks edge. It is
+// generated from the same spelling map as the projection's key.
+func blockerPredicateSQL(alias string) string {
+	return dependencyrelation.BlockerPredicateSQL(alias + ".relationship_type")
+}
+
+// blockedExpr and blockerExpr name the two ends of a stored blocker row
+// whatever its direction: an inverse spelling (blocked_by) states the blocked
+// item as the source. Function-call syntax only, so they can sit in a JOIN ON.
+func blockedExpr(alias string) string {
+	return "if(" + dependencyrelation.BlockerInverseSQL(alias+".relationship_type") + ", " + alias + ".source_work_item_id, " + alias + ".target_work_item_id)"
+}
+
+func blockerExpr(alias string) string {
+	return "if(" + dependencyrelation.BlockerInverseSQL(alias+".relationship_type") + ", " + alias + ".target_work_item_id, " + alias + ".source_work_item_id)"
+}
+
+// blockerRowsWhereSQL selects the blocker rows of the organization whose two
+// stored ends are authorized. The authorization test stays on the table's own
+// columns so the read prunes by them before the FINAL merge.
+func blockerRowsWhereSQL(authorized string) string {
+	return "d.org_id = {org_id:String} AND " + blockerPredicateSQL("d") + " AND d.source_work_item_id IN " + authorized + " AND d.target_work_item_id IN " + authorized
 }

@@ -800,7 +800,7 @@ source for the SAME kind).
 | status | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join; **+`work_item_transitions`** (a second, keyed read over ONLY the (repository, work item) pairs the scoped status read returned in the same request — no authorization relation repeated, same SETTINGS, probe limit one past the output bound): `status_since` is the occurred_at of the item's latest transition when that transition enters its current status, `status_duration_seconds` is measured at read time, `status_since_basis` is `transition_observed`, `no_transition_recorded` (no rows) or `transition_inconsistent` (latest transition went elsewhere or is dated after the clock); null is never zero and never the creation time | work_item |
 | work | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | actual_completion | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
-| blockers | `work_item_dependencies` (insert-only: a link the provider removed leaves its row, so every blocker read keeps only rows no writer item has synced past without rewriting them, the ops `RelationIsCurrent` rule in `relation_current.go`; `blocker_dependencies_writer_unresolved_current` counts kept links whose writer could not be derived); team: ⋈ `work_items` over the repositories the team owns (`team_repo_ownership`), counting OPEN blockers only (blocking item not done or canceled; `blocker_status_basis`), the excluded edges counted apart; `oldest_blocked_age_days` = whole days from the earliest known edge start (`relation_started_at`, else the first sync that wrote the relation, `work_item_dependency_first_seen`; never an item's creation time) to read time, with `oldest_blocked_age_basis` `exact` (every open edge has the provider time) or `lower_bound`, and `oldest_blocked_age_unavailable_reason` (`none_open` / `no_relation_start` / `start_unavailable` when the age statement failed and the counts are still served) instead when no age is known | work_item, **team** |
+| blockers | `work_item_dependencies` (insert-only: a link the provider removed leaves its row, so every blocker read keeps only rows no writer item has synced past without rewriting them, the ops `RelationIsCurrent` rule in `internal/contextfabric/relationcurrent`, the same rule the graph projection (`devhealthsource` `queryWorkItemDependencies`) applies: it retracts the edge at the time the link ended and bumps the source version so a rebuild drops edges projected earlier; `blocker_dependencies_writer_unresolved_current` counts kept links whose writer could not be derived); team: ⋈ `work_items` over the repositories the team owns (`team_repo_ownership`), counting OPEN blockers only (blocking item not done or canceled; `blocker_status_basis`), the excluded edges counted apart; `oldest_blocked_age_days` = whole days from the earliest known edge start (`relation_started_at`, else the first sync that wrote the relation, `work_item_dependency_first_seen`; never an item's creation time) to read time, with `oldest_blocked_age_basis` `exact` (every open edge has the provider time) or `lower_bound`, and `oldest_blocked_age_unavailable_reason` (`none_open` / `no_relation_start` / `start_unavailable` when the age statement failed and the counts are still served) instead when no age is known | work_item, **team** |
 | required_children | `work_item_dependencies` | work_item |
 | pull_requests | `git_pull_requests` (`state`: member state and drivers); team: rollup over the repositories the team owns, with a `pull_requests_by_state` table (repository, stored state, count; a state with no pull request has no row); a team read serves no fact per pull request unless the question asks for pull requests (status filter or pull request members) | pull_request, **team** |
 | reviews | `git_pull_request_reviews` | pull_request_review |
@@ -2604,6 +2604,35 @@ own deployments rollup is read beside them; a deployment and its repository
 carry the same repository grant (`repoAuthorization`), so the rollup reveals
 nothing the cohort list does not. The repository and team cohorts do not ask
 for the rollups.
+
+An `organization_scope` frame that counts nothing ("what is our biggest
+delivery risk", "where is delivery stuck across the organization") is answered,
+never refused. The organization as one subject has only the investment and
+source-health facts, so the bounded repair `organization_scope_survey`
+(`frame_repair.go`) re-reads the frame as a `discovered_kind` survey of the
+organization's own members, with `rank_or_survey` added: the frame's own member
+kind when servable, else the interpretation's requested kind when servable,
+else `team` (the ownership unit every burden composite fact serves). The answer
+then carries the cohort's evidence, coverage and uncertainty like any cohort
+survey, and a fixed sentence that names its basis: a roll-up over the
+organization's teams (or projects, repositories, ...), not an organization-wide
+measure. The repair stamps `QuestionFrame.OrganizationSurveyMemberKind` so the
+served answer, and a carried frame, can say so; the sentence is attached only
+when the served member set is that kind, has members and no subject was
+committed in its place. When the survey finds no
+member, the engine reads the caller's organization subject instead of ending in
+`no_match`, and the answer says no member was found: a missing member set is
+not a healthy one. An organization-scope investment question
+(`allocate_investment`) is not repaired: when no subject resolves, the engine
+reads the caller's organization subject, whose investment fact covers every
+repository once, and the answer names that roll-up only when the fact was read
+(else it says the fact was not found). An answer read from the organization
+subject is served `partial`, never `complete`, while any requirement it derived
+is unavailable (`applyOrganizationSubjectStatusFloor`), and the decision line
+`context fabric organization subject read` records the reason and the facts
+read. The former
+`organization_scope_unsupported` refusal has no producer; the basis stays in
+the contract only so stored results that carry it still validate.
 
 The FOURTH reason is a runtime fact nobody can decide at derivation time: a
 perfectly servable kind whose search retains no members. `DiscoveredCohort`

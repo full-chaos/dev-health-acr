@@ -10,10 +10,10 @@ import (
 )
 
 // Store is the reference reading of the extract rows: what the two planes
-// read. It restates, in Go and over the rows, the two readings the oracle
-// compares: the ops organization value (OrgThemeEffort) and the acr
-// repository mix (ExpectedRepositoryEffort, the pull request reference share
-// of devhealthfacts repoMixStatement). It is a test model, not a producer:
+// read. It restates, in Go and over the rows, the reading the oracle compares
+// the acr repository mix with (ExpectedRepositoryEffort, the pull request
+// reference share of devhealthfacts repoMixStatement). The ops organization
+// reading (OrgThemeEffort) is retired with the investment_org compare (9699). It is a test model, not a producer:
 // the live mode and the recorded mode both hold it against the real planes on
 // real rows, so a wrong model fails there before it can excuse a difference.
 type Store struct {
@@ -197,23 +197,6 @@ func (s *Store) inScope(id string) bool {
 		return false
 	}
 	return s.scopeRun == "" || s.inRun[id]
-}
-
-// OrgThemeEffort is the ops ORG reading under CHURN_LOC by theme: the sum,
-// over the latest generation of every work unit in scope and in the window,
-// of effort_value x subcategory share, grouped by the theme prefix of the
-// subcategory key, with the share as the Float32 ops casts it to
-// (dev-health-ops internal/queryapi/analytics investmentContextFor).
-func (s *Store) OrgThemeEffort(w Window) map[string]float64 {
-	out := map[string]float64{}
-	for _, id := range s.unitIDs() {
-		unit := s.units[id]
-		if !s.inScope(id) || !w.holds(unit.latest) {
-			continue
-		}
-		addSubcategoryEffort(out, unit.latest)
-	}
-	return out
 }
 
 func addSubcategoryEffort(out map[string]float64, gen unitGeneration) {
