@@ -697,7 +697,7 @@ func (s *OAuthService) bindConsentUser(ctx context.Context, request storage.OAut
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, storage.ErrConflict), errors.Is(err, storage.ErrNotFound):
+	case errors.Is(err, storage.ErrConflict), errors.Is(err, storage.ErrNotFound), errors.Is(err, storage.ErrOrgPurged):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	default:
 		return fmt.Errorf("%w: bind consent user", ErrOAuthUnavailable)

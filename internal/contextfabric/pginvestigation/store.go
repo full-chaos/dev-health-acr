@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 // ErrNotFound identifies a Get that found no row for the requested
@@ -1354,6 +1355,9 @@ func rejectExplicitNullDegradedReasons(payload []byte) error {
 func sanitizeError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err

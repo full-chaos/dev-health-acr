@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 const (
@@ -391,7 +392,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		event.Selected.ReceiptID, event.Selected.SubjectKind, event.Selected.SubjectCanonicalID,
 		event.SelectionProvenance, offeredJSON, pipelineJSON)
 	if err != nil {
-		return fmt.Errorf("pgclarification: insert selection: %w", err)
+		return fmt.Errorf("pgclarification: insert selection: %w", orgfence.Classify(err))
 	}
 	return nil
 }
