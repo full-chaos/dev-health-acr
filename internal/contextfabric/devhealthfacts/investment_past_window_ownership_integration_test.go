@@ -21,6 +21,7 @@ func TestPastRangeWindowReadsOwnershipAsSyncedAgainstRealClickHouse(t *testing.T
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
+	createPullRequestLinkTables(t, ctx, direct)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	const orgID = "org-past-window"
 	end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)

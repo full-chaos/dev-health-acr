@@ -1168,10 +1168,17 @@ import (
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
 // the direction the row states. An answer saved under v228 omits those pairs.
 //
-// v229 -> v231: every Investment weight is one per work unit (a unit with no
+// v229 -> v230: a team that owns repositories and has no work unit in the
+// window is named investment_team_prs_without_linked_work, with the pull
+// request count, when it has pull requests in the window and none has an
+// admitted link to tracked work. A team with no pull request, or with any
+// linked pull request, keeps investment_team_no_unit_in_window. An answer
+// saved under v229 gives both the old reason.
+//
+// v230 -> v231: every Investment weight is one per work unit (a unit with no
 // size counts one); the served weighted_effort, share_in_scope, unit_effort_value
 // and effort_unit_count are counts of work units, not lines of code. An answer
-// saved under v229 carries the old weights and is not reused.
+// saved under v230 carries the old weights and is not reused.
 const QueryVersion = "devhealthfacts.clickhouse.v231"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
