@@ -649,6 +649,13 @@ watermark:
   `review` ref `<repository id>:<review id>`, which named one ref for a review
   id on several pull requests of one repository. Reviews projected before v10
   carry the retired ref, which expands from a stored result's record only.
+- `ClickHouseSourceVersion` v10 → v11
+  (`internal/contextfabric/devhealthsource/clickhouse.go`): a `blocks` link the
+  provider removed keeps its `work_item_dependencies` row, and the producer now
+  retracts its edge (a relationship tombstone, at the time the link ended)
+  instead of asserting it, by the same relation-current rule the blocker facts
+  use (`internal/contextfabric/relationcurrent`). Edges projected before v11
+  for links removed earlier stay until the rebuild.
 - `TeamsProjectsSourceVersion` v13 → v14: a team owning more than 200
   repositories is no longer quarantined (the entity authorization bound is
   5000), so its `team_repo_ownership` edges project.

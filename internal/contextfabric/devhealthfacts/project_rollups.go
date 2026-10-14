@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -188,7 +189,7 @@ func splitProjectKey(key string) (provider, id string) {
 // pass the work-item authorization rule.
 func projectBlockerEdgeRowsSQL(authorized, current string, withStart bool) string {
 	startOutput, startJoin := blockerStartParts(withStart)
-	return `SELECT t.project_key AS project_key, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open, max(toUInt8(` + relationWriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
+	return `SELECT t.project_key AS project_key, ` + blockedExpr("d") + ` AS tgt, ` + blockerExpr("d") + ` AS src, toUInt8(` + blockerOpenPredicate + `) AS is_open, max(toUInt8(` + relationcurrent.WriterCodeSQL("d") + ` = 4)) AS writer_unresolved` + startOutput + `
   FROM work_item_dependencies AS d FINAL` + startJoin + `
   INNER JOIN (
     SELECT DISTINCT w.work_item_id AS work_item_id, k.project_key AS project_key
