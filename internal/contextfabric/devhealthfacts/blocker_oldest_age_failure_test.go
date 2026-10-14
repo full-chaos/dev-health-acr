@@ -18,7 +18,7 @@ func TestFailedAgeStatementServesTheCountsAndAbsentAgeWithAReason(t *testing.T) 
 	teamTables := []fakeTable{
 		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "00000000-0000-4000-8000-000000000001", "acme/repo"}}},
 		{match: "is_open AND start_unix IS NOT NULL", err: failed},
-		{match: "SELECT toInt64(uniqExact(d.blocked_id))", rows: [][]any{{int64(0)}}},
+		{match: "SELECT toInt64(uniqExact(if(", rows: [][]any{{int64(0)}}},
 		{match: "arrayJoin({team_repo_pairs", rows: [][]any{{"CHAOS", int64(4), int64(5), int64(0), int64(0), int64(0)}}},
 		{match: "FROM work_item_dependencies", rows: [][]any{{"00000000-0000-4000-8000-000000000001", int64(4), int64(5), int64(0), int64(3)}}},
 	}
