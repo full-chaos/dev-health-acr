@@ -20,7 +20,7 @@ stub() { # name rc body...
 }
 expect() { # name want_rc want_pattern budget stub
   local name="$1" want="$2" pat="$3" budget="$4" r="$5" rc=0 out
-  out="$(RUNNER="$r" "$here/run-isolated-budget.sh" t "$budget" example/pkg 2>&1)" || rc=$?
+  out="$(RUNNER="$r" GOTEST_TIMEOUT="${budget}s" "$here/run-isolated-budget.sh" t example/pkg 2>&1)" || rc=$?
   if [ "$rc" -ne "$want" ] || ! grep -q -- "$pat" <<<"$out"; then
     echo "FAIL $name: rc=$rc want=$want pattern='$pat'"; printf '    %s\n' "${out//$'\n'/$'\n    '}"
     fails=$((fails + 1))
@@ -46,5 +46,12 @@ expect test-failure-fails 1 'printed FAIL' 600 "$tmp/testfail.sh"
 # runner exit non-zero but a passing-looking ok line: runner status wins
 stub badrc 3 $'ok  \texample/pkg\t10.0s'
 expect runner-status-wins 3 'top 5 packages' 600 "$tmp/badrc.sh"
+
+rc=0
+GOTEST_TIMEOUT=20m RUNNER="$tmp/real.sh" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/m.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'budget 1200s' "$tmp/m.out"; then echo "ok   minutes-budget"; else echo "FAIL minutes-budget rc=$rc"; fails=$((fails + 1)); fi
+rc=0
+GOTEST_TIMEOUT='' RUNNER="$tmp/real.sh" "$here/run-isolated-budget.sh" t example/pkg >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then echo "ok   missing-budget-fails"; else echo "FAIL missing-budget rc=$rc"; fails=$((fails + 1)); fi
 
 [ "$fails" -eq 0 ]
