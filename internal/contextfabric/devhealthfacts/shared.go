@@ -1113,11 +1113,18 @@ import (
 // their memory are not, so an answer saved under v219 is not reused as one
 // produced by the new statements.
 //
-// v220 -> v221: a team pull_requests read serves its pull requests counted by
+// v220 -> v221: a team with owned repositories and no mix is named by its
+// cause: investment_team_units_outside_membership_run when a work unit on an
+// owned repository is outside the latest complete membership run, or
+// investment_team_units_unattributed when positive-effort units in scope were
+// dropped (their references reach no repository the team owns). Still no fact. An
+// answer saved under v220 names only the generic no-unit reason.
+//
+// v221 -> v222: a team pull_requests read serves its pull requests counted by
 // stored state (pull_requests_by_state) and no fact per pull request unless the
 // question asks for the pull requests themselves. The answer changes; an answer
-// saved under v220 is not reused as one produced by the new read.
-const QueryVersion = "devhealthfacts.clickhouse.v221"
+// saved under v221 is not reused as one produced by the new read.
+const QueryVersion = "devhealthfacts.clickhouse.v222"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

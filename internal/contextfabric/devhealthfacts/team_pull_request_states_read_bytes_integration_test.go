@@ -19,9 +19,11 @@ const (
 	pullRequestStatesFillerSmall = 50_000
 	pullRequestStatesFillerMore  = 150_000
 	pullRequestStatesSlope       = 1.15
-	// The bound is frozen: the statements read the owned repositories' own
-	// pull requests, so the bytes follow those and never the organization.
-	pullRequestStatesReadBytesBound = 6 << 20
+	// The bound is frozen at the measured read plus 25%: 27201 bytes at both
+	// sizes on CI (400 owned pull requests, 50k and 200k organization ones).
+	// The statements read the owned repositories' own pull requests, so the
+	// bytes follow those and never the organization.
+	pullRequestStatesReadBytesBound = 34_000
 	pullRequestStatesWarmReads      = 3
 )
 
