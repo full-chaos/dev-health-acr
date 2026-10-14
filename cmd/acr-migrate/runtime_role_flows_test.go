@@ -21,7 +21,8 @@ import (
 func TestRuntimeRoleCanRotateAndRollBackACredential(t *testing.T) {
 	ctx := context.Background()
 	database := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_rotation_runtime_test"})
-	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	// The credential store reads the real clock, so the rollback deadline is relative to it.
+	now := time.Now().UTC().Truncate(time.Second)
 	audit, err := storagepostgres.NewAuditStore(database.Runtime)
 	require.NoError(t, err)
 	lifecycle, err := storagepostgres.NewCredentialStore(database.Runtime, audit)

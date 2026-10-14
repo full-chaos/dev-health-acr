@@ -84,3 +84,24 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 	return &runtimeRoleDatabase{Owner: owner, Runtime: runtime, Role: options.Role, DSN: migrationDSN}
 }
+
+// NewRole creates one more login role on the same database, applies the given
+// statements as the owner, and returns a connection as that role. It stands for
+// a role other than the runtime role, such as a purge role.
+func (d *runtimeRoleDatabase) NewRole(t *testing.T, ctx context.Context, role string, statements ...string) *sql.DB {
+	t.Helper()
+	for _, statement := range append([]string{
+		`CREATE ROLE ` + dbacl.QuoteIdent(role) + ` LOGIN PASSWORD 'role-test-password'`,
+		`GRANT CONNECT ON DATABASE acr TO ` + dbacl.QuoteIdent(role),
+		`GRANT USAGE ON SCHEMA acr TO ` + dbacl.QuoteIdent(role),
+	}, statements...) {
+		_, err := d.Owner.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	config, err := pgx.ParseConfig(d.DSN)
+	require.NoError(t, err)
+	config.User, config.Password = role, "role-test-password"
+	db := stdlib.OpenDB(*config)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return db
+}

@@ -10,7 +10,9 @@
   "expected_packet_status": "complete",
   "expected_scope_resolution": "exact_commit",
   "status_reasoning": "task-001 is commit-pinned with no branch, so it executes every catalog scope class. The fixture seeds every catalog source, including operational_incidents. incidents.v1 reads the canonical operational_incidents table and scanEvidenceRow reads the catalog's normalized Float32 confidence projection, so all sources are available and the packet is complete.",
-  "expected_unavailable_sources": [],
+  "expected_unavailable_sources": [
+    {"source": "action_findings.v1", "reason": "no_stored_recommendation_source"}
+  ],
   "expected_unavailable_sources_exact": true,
   "expected_unavailable_sources_note": "Exact empty-set semantics prevent any catalog query failure or missing seeded source from silently degrading task-001.",
   "required_evidence": [
@@ -20,8 +22,8 @@
       "derived_locator": "acr:v1:commit:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
       "entity_type": "commit",
       "entity_id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-      "packet_category": "cause",
-      "rule_id": "evidence.observed.cause.v1"
+      "packet_category": "evidence",
+      "rule_id": "evidence.observed.reference.v1"
     },
     {
       "corpus_evidence_id": "ev-ci-checkout-001",
@@ -38,8 +40,8 @@
       "derived_locator": "acr:v1:incident:incident-widget-001",
       "entity_type": "incident",
       "entity_id": "incident-widget-001",
-      "packet_category": "evidence",
-      "rule_id": "evidence.observed.reference.v1"
+      "packet_category": "pressure",
+      "rule_id": "evidence.observed.pressure.v1"
     },
     {
       "corpus_evidence_id": "ev-commit-checkout-001",
@@ -79,9 +81,9 @@
       "reason": "mapped only to example-org/other-service; must never appear in a widget-service packet"
     }
   ],
-  "required_packet_categories": ["cause", "evidence"],
-  "required_rule_ids": ["evidence.observed.cause.v1", "evidence.observed.reference.v1"],
-  "required_checks": ["check.evidence.observed.cause.v1", "check.evidence.observed.reference.v1"],
+  "required_packet_categories": ["evidence", "pressure"],
+  "required_rule_ids": ["evidence.observed.reference.v1", "evidence.observed.pressure.v1"],
+  "required_checks": ["check.evidence.observed.pressure.v1", "check.evidence.observed.reference.v1"],
   "min_expandable_evidence": 4,
   "min_expandable_evidence_reasoning": "The commit, two commit-file rows, and CI run are always expandable.",
   "required_findings": [

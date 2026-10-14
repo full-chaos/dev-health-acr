@@ -166,9 +166,11 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.client_credentials TO :"runtime_user";
 GRANT DELETE ON TABLE acr.client_credentials TO :"runtime_user";
 \endif
 
--- read only, no write path: internal/storage/postgres/workload_bindings.go:36
+-- read only, no write path; the resolver is built only when workload token exchange is configured: internal/storage/postgres/workload_bindings.go:36, internal/runtime/hosted/workload_token_exchange.go:57
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.workload_bindings FROM :"runtime_user";
+\if :workload_token_exchange
 GRANT SELECT ON TABLE acr.workload_bindings TO :"runtime_user";
+\endif
 
 -- SELECT internal/storage/postgres/packet.go:69, INSERT packet.go:49, DELETE packet_retention.go:28; UPDATE because the purge locks rows with FOR UPDATE SKIP LOCKED (packet_retention.go:20), which Postgres checks as UPDATE; the readiness check asserts it
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_packet_snapshots FROM :"runtime_user";

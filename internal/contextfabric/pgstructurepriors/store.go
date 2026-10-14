@@ -29,6 +29,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
 
 // Telemetry is the write-side signal sink (design brief §3.4's
@@ -506,6 +507,9 @@ ON CONFLICT (org_id, entry_id) DO NOTHING`, orgID, entryID, ratifiedBy, time.Now
 }
 
 func sanitize(err error) error {
+	if orgfence.Refused(err) {
+		return orgfence.Classify(err)
+	}
 	if err == nil {
 		return nil
 	}

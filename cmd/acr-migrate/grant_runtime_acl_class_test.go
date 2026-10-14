@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	createTablePattern       = regexp.MustCompile(`(?i)CREATE TABLE(?: IF NOT EXISTS)?\s+acr\.([a-z0-9_]+)`)
+	createTablePattern       = regexp.MustCompile(`(?i)CREATE TABLE(?: IF NOT EXISTS)?\s+acr\."?([a-z0-9_]+)"?`)
 	readinessPrivilegePatten = regexp.MustCompile(`has_table_privilege\(current_user, 'acr\.([a-z0-9_]+)', '([A-Z]+)'\)`)
 )
 
