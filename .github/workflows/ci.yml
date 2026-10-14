@@ -735,10 +735,13 @@ jobs:
   # (>= 9s each, one ClickHouse container per test) sum to 553s, the remaining
   # 634 tests to 593s. The single job ran 1260s against its 20m (1200s) cap.
   # The race run needed more than two jobs: the halves took 918s and 945s on
-  # main 38353218963. It is split three ways (race-heavy, race-mid, rest); the
-  # third job takes scripts/ci/devhealthfacts-race-mid-tests.txt, each job has
-  # the same 20m cap, and the rest job is `-skip` of the heavy and mid names,
-  # so a test absent from both lists runs there. The unit legs keep two halves.
+  # main 38353218963. It is split four ways (race-heavy, race-mid,
+  # race-fourth, rest); the third and fourth jobs take
+  # scripts/ci/devhealthfacts-race-mid-tests.txt and ...-race-fourth-tests.txt,
+  # each job has the same 20m cap, and the rest job is `-skip` of the heavy,
+  # mid and fourth names, so a test absent from all lists runs there. The
+  # lists are cut by measured seconds so each job lands near 560s of tests
+  # (heavy half alone was 980s of tests on main). The unit legs keep two halves.
   race-devhealthfacts:
     name: race (devhealthfacts, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -845,6 +848,41 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-mid)"
           GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (mid third)' "$packages"
+
+  race-devhealthfacts-fourth:
+    name: race (devhealthfacts fourth, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as the `race` job above -- needs mirror-preflight so it cannot
+    # start before every mirrored image is confirmed resolvable.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh devhealthfacts verify
+      - name: Run isolated devhealthfacts race suite (fourth quarter)
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-fourth)"
+          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (fourth quarter)' "$packages"
 
   # CHAOS-6342: devhealthsource is the OTHER shared-container HEAVY package
   # (see race-devhealthfacts above) and used to round-robin into race shard 1
@@ -1457,6 +1495,7 @@ jobs:
       - race-devhealthfacts
       - race-devhealthfacts-heavy
       - race-devhealthfacts-mid
+      - race-devhealthfacts-fourth
       - race-devhealthsource
       - race-devhealthsource-heavy
       - race-factoracle
