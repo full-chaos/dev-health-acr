@@ -17,26 +17,30 @@ func (e originSplitExpander) ExpandFactScope(_ context.Context, request contextf
 	if len(request.Origins) > 0 && request.Origins[0].Kind == contractsv1.ContextFabricSubjectProject {
 		return contextfabric.FactScopeExpansionResult{}, errors.New("expansion store down")
 	}
-	return contextfabric.FactScopeExpansionResult{Targets: []contextfabric.SubjectRef{e.pull}, Counts: contextfabric.FactScopeExpansionCounts{CandidateCount: 1}}, nil
+	target := e.pull
+	if request.TargetKind != "" {
+		target.Kind = request.TargetKind
+	}
+	return contextfabric.FactScopeExpansionResult{Targets: []contextfabric.SubjectRef{target}, Counts: contextfabric.FactScopeExpansionCounts{CandidateCount: 1}}, nil
 }
 
 // One root's expansion failing marks the kind-level read truncated; the other
 // root, whose own expansion completed, is not cut by it.
 func TestAnotherRootsFailedExpansionDoesNotCutARootWhoseExpansionCompleted(t *testing.T) {
-	pull := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: "pull_request:t1", Label: "#1"}
-	provider := perSubjectProvider(contextfabric.FactPullRequests, contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectTeam)
-	reader := directExpandingReader(t, graph7073(), originSplitExpander{pull: pull}, nil, provider)
-	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"pull_requests"}, Subjects: []RequestSubject{
+	item := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:t1", Label: "#1"}
+	provider := perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectTeam)
+	reader := directExpandingReader(t, graph7073(), originSplitExpander{pull: item}, nil, provider)
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"blockers"}, Subjects: []RequestSubject{
 		{Kind: "project", CanonicalID: projectQ7073.CanonicalID}, {Kind: "team", CanonicalID: teamT.CanonicalID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertRowsHonest(t, response)
-	team := coverageOf(t, response, "pull_requests", teamT)
+	team := coverageOf(t, response, "blockers", teamT)
 	if team.Outcome != OutcomeFactServed || team.Expansion == nil || team.Expansion.Outcome != string(contextfabric.FactScopeExpanded) {
 		t.Errorf("team row %+v, want fact_served with its completed expansion", team)
 	}
-	project := coverageOf(t, response, "pull_requests", projectQ7073)
+	project := coverageOf(t, response, "blockers", projectQ7073)
 	if project.Outcome != OutcomeUnavailable || project.Expansion == nil || project.Expansion.Outcome != string(contextfabric.FactScopeFailed) {
 		t.Errorf("project row %+v, want unavailable naming its failed expansion", project)
 	}

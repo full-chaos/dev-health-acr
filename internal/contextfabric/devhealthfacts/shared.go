@@ -1133,11 +1133,16 @@ import (
 // statements served are not, so an answer saved under v222 is not reused as
 // one produced by them.
 //
-// v223 -> v224: the blocker facts (work item, team and project) read a blocker
+// v223 -> v224: a team pull_requests read serves its pull requests counted by
+// stored state (pull_requests_by_state) and no fact per pull request unless the
+// question asks for the pull requests themselves. The answer changes; an answer
+// saved under v223 is not reused as one produced by the new read.
+//
+// v224 -> v225: the blocker facts (work item, team and project) read a blocker
 // stored under any spelling the graph projection maps onto a blocks edge
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
-// the direction the row states. An answer saved under v223 omits those pairs.
-const QueryVersion = "devhealthfacts.clickhouse.v224"
+// the direction the row states. An answer saved under v224 omits those pairs.
+const QueryVersion = "devhealthfacts.clickhouse.v225"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
