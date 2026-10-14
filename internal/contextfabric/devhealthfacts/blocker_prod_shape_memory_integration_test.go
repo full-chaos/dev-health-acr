@@ -85,19 +85,29 @@ const (
 	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
 )
 
+// The in-statement authorization variant is the fallback path for an
+// authorized endpoint set over the bound. It never met the ceilings above: main
+// peaked at 52.3 MiB (age) and 46.8 MiB (totals) on this shape, under the 64
+// MiB statement cap. These are main's figures plus 2 MiB of noise, frozen so
+// the fallback cannot get worse than main.
+const (
+	blockerProdShapeInStatementCeiling       = uint64(54 << 20)
+	blockerProdShapeInStatementTotalsCeiling = uint64(48 << 20)
+)
+
 type blockerProdShapeStatement struct {
 	hash, peak, readRows uint64
 	head                 string
 }
 
 func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
-	return blockerProdShapeStatementsWithCeilings(t, ctx, direct, label, mark, true)
+	return blockerProdShapeStatementsWithCeilings(t, ctx, direct, label, mark, blockerProdShapeCeiling, blockerProdShapeTotalsCeiling)
 }
 
-// blockerProdShapeStatementsWithCeilings measures the statements; a variant
-// that is only measured (the in-statement authorization fallback, which main
-// already runs above these ceilings) passes enforce false.
-func blockerProdShapeStatementsWithCeilings(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64, enforce bool) []blockerProdShapeStatement {
+// blockerProdShapeStatementsWithCeilings measures the statements against the
+// given ceilings: ageCeiling for every statement, totalsCeiling for the team
+// totals statement.
+func blockerProdShapeStatementsWithCeilings(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64, ageCeiling, totalsCeiling uint64) []blockerProdShapeStatement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
@@ -123,11 +133,11 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
 	}
 	for _, st := range out {
-		ceiling := blockerProdShapeCeiling
+		ceiling := ageCeiling
 		if strings.HasPrefix(st.head, blockerProdShapeTotalsHead) {
-			ceiling = blockerProdShapeTotalsCeiling
+			ceiling = totalsCeiling
 		}
-		if enforce && st.peak >= ceiling {
+		if st.peak >= ceiling {
 			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, st.peak, ceiling, st.head)
 		}
 	}
@@ -184,7 +194,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	read(restricted)
 	mark = serverNowMicros(t, ctx, direct)
 	inStatement := read(restricted)
-	blockerProdShapeStatementsWithCeilings(t, ctx, direct, "restricted-in-statement", mark, false)
+	blockerProdShapeStatementsWithCeilings(t, ctx, direct, "restricted-in-statement", mark, blockerProdShapeInStatementCeiling, blockerProdShapeInStatementTotalsCeiling)
 	restore()
 	for _, pair := range []struct {
 		label     string
