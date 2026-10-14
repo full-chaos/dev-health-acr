@@ -89,20 +89,17 @@ WHERE type != 'QueryStart' AND log_comment = ? ORDER BY event_time_microseconds 
 }
 
 // assertReadonlyInForce shows readonly=2 is in force on the served client, not
-// only set: a statement that changes readonly is refused through it, and a
-// write (an INSERT) is refused under the same settings.
-func assertReadonlyInForce(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID string) {
+// only set: lifting readonly through it is refused by the server (code 164,
+// READONLY). A write cannot reach the server through this client at all: the
+// client refuses any statement that is not a read before it sends it.
+func assertReadonlyInForce(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string) {
 	t.Helper()
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadonlyProbe", "SELECT 1 SETTINGS readonly = 0", orgID, nil, func(readers.RowScanner) error { return nil })
 	var exception *clickhousedriver.Exception
 	if !errors.As(err, &exception) || exception.Code != 164 {
 		t.Fatalf("readonly is not in force on the served client: lifting it returned %v, want code 164 (READONLY)", err)
 	}
-	writeErr := direct.Exec(clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{"readonly": 2})), "INSERT INTO FUNCTION null('x UInt8') VALUES (1)")
-	if !errors.As(writeErr, &exception) || exception.Code != 164 {
-		t.Fatalf("readonly=2 does not refuse a write: an INSERT returned %v, want code 164 (READONLY)", writeErr)
-	}
-	t.Logf("readonly=2 in force: lifting readonly refused (code 164), an INSERT refused (code 164)")
+	t.Logf("readonly=2 in force on the served client: lifting readonly refused (code 164)")
 }
 
 func linkedFormRuns(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, orgID, name, statement, settings string, bindings []readers.Binding) []linkedFormRun {
@@ -235,7 +232,7 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	bindings := []readers.Binding{{Name: "scope_json", Value: string(scopeJSON)}}
 	capped := contextpacket.NewMemoryCappedQueryClient(readonlyQueryClient{inner: query}, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
-	assertReadonlyInForce(t, ctx, capped, direct, orgID)
+	assertReadonlyInForce(t, ctx, capped, orgID)
 	rev88 := readWideIDForm(t, "team_linked_mix_rev88.sql")
 	inlined := readWideIDForm(t, "team_linked_mix_inline_sets.sql")
 	uncapped := fmt.Sprintf("max_memory_usage = %d, max_result_rows = 0", wideIDUncappedCeiling)
