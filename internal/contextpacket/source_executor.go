@@ -165,7 +165,7 @@ func scanEvidenceRow(rows ClickHouseRowScanner) (contractsv1.EvidenceRef, error)
 // Metadata under its own name.
 var typedEvidenceColumns = map[string][]string{
 	"deployments.v1":                    {metadataDeploymentStatus, metadataPullRequestNumber},
-	"deployment_incident_provenance.v1": {metadataDeploymentID},
+	"deployment_incident_provenance.v1": {metadataDeploymentID, metadataIncidentID},
 }
 
 func scanTypedEvidenceRow(names []string) func(ClickHouseRowScanner) (contractsv1.EvidenceRef, error) {

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v2"
+	RankingVersionV1          = "ranker.v3"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -204,7 +204,7 @@ func evidenceItemWithRoles(ref contractsv1.EvidenceRef, scope contractsv1.Resolv
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
 		WhyIncluded: whyIncluded(rule), RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
-		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence, UntrustedContent: true},
+		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence || (rule.why != "" && rule.claim == contractsv1.ClaimInferred), UntrustedContent: true},
 		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: []string{ref.EvidenceRefID}}
 }
 
