@@ -97,7 +97,7 @@ func TestChangeFailureRuleKeepsTheStatesApart(t *testing.T) {
 // serve no field at all, whatever the sums say.
 func TestSetChangeFailureServesNothingForCountsWithNoStoredRow(t *testing.T) {
 	fields := map[string]contextfabric.FactValue{}
-	setChangeFailure(fields, &changeFailureCounts{deployments: 4, failedNative: 1, incidentsDirect: 1})
+	setChangeFailure(fields, &changeFailureCounts{deployments: 4, failedNative: 1, incidentsDirect: 1}, true)
 	if len(fields) != 0 {
 		t.Fatalf("fields served with no stored row: %v", fields)
 	}

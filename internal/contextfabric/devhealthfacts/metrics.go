@@ -143,10 +143,14 @@ const MetricsSeriesPerRepositoryRowCap = 200
 // is arbitrary (there is no "more correct" row among an exact tie) but
 // STABLE -- the same tied inputs always hash to the same value, so the
 // same row wins every time.
-type MetricsProvider struct{ facts clickhouseFacts }
+type MetricsProvider struct {
+	facts clickhouseFacts
+	// changeFailureColumns caches which shape repo_change_failure_daily has.
+	changeFailureColumns *changeFailureStatusColumnsProbe
+}
 
 func newMetricsProvider(client contextpacket.ClickHouseQueryClient) *MetricsProvider {
-	return &MetricsProvider{facts: clickhouseFacts{client: client}}
+	return &MetricsProvider{facts: clickhouseFacts{client: client}, changeFailureColumns: &changeFailureStatusColumnsProbe{}}
 }
 
 func (p *MetricsProvider) Capability() contextfabric.FactCapability {
@@ -428,7 +432,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	if err != nil {
 		return 0, rejected, false, err
 	}
-	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, orgID, ids, rateWindow, true)
+	windowFailures, err := readWindowChangeFailure(ctx, p.facts.client, p.changeFailureColumns, orgID, ids, rateWindow, true)
 	if err != nil {
 		return 0, rejected, false, err
 	}
@@ -553,7 +557,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		// The window change failure rate is over the summed stored counts
 		// of repo_change_failure_daily (window_change_failure.go); the
 		// state is always served, the rate only when it is measured.
-		setWindowFamilies(fields, windowCycles, windowFailures, repoID)
+		setWindowFamilies(fields, windowCycles, windowFailures, repoID, true)
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
@@ -571,7 +575,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 			continue
 		}
 		fields := map[string]contextfabric.FactValue{}
-		setWindowFamilies(fields, windowCycles, windowFailures, repoID)
+		setWindowFamilies(fields, windowCycles, windowFailures, repoID, false)
 		if len(fields) == 0 {
 			continue
 		}
@@ -752,18 +756,18 @@ func (p *MetricsProvider) setTeamWindowFamilies(ctx context.Context, orgID, team
 	if err != nil {
 		return err
 	}
-	failures, err := readWindowChangeFailure(ctx, p.facts.client, orgID, keys, window, false)
+	failures, err := readWindowChangeFailure(ctx, p.facts.client, p.changeFailureColumns, orgID, keys, window, false)
 	if err != nil {
 		return err
 	}
-	setWindowFamilies(fields, cycles, failures, "")
+	setWindowFamilies(fields, cycles, failures, "", true)
 	return nil
 }
 
 // setWindowFamilies is the one attach site for the window families, shared
 // by the daily-row and no-daily-row paths of the repository and team
 // readers: no family's presence gates another's.
-func setWindowFamilies(fields map[string]contextfabric.FactValue, cycles map[string]windowPRCycle, failures map[string]changeFailureCounts, key string) {
+func setWindowFamilies(fields map[string]contextfabric.FactValue, cycles map[string]windowPRCycle, failures map[string]changeFailureCounts, key string, notCollected bool) {
 	if c, ok := cycles[key]; ok {
 		setWindowPRCycle(fields, c)
 	}
@@ -771,5 +775,5 @@ func setWindowFamilies(fields map[string]contextfabric.FactValue, cycles map[str
 	if c, ok := failures[key]; ok {
 		failure = &c
 	}
-	setChangeFailure(fields, failure)
+	setChangeFailure(fields, failure, notCollected)
 }
