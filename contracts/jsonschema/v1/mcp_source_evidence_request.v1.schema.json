@@ -18,7 +18,7 @@
   "properties": {
     "evidence_ref_id": {
       "type": "string",
-      "description": "An evidence reference exactly as a previous context_for_task or investigate_question response returned it (its evidence_ref_ids, or an evidence reference on a context item). Opaque: pass it back unchanged; never build or parse one yourself.",
+      "description": "An evidence reference exactly as a previous context_for_task or investigate_question (if listed) response returned it (its evidence_ref_ids, or an evidence reference on a context item). Opaque: pass it back unchanged; never build or parse one yourself.",
       "minLength": 1,
       "maxLength": 256
     },
@@ -35,7 +35,7 @@
     },
     "result_id": {
       "type": "string",
-      "description": "The result_id of the investigate_question answer that returned evidence_ref_id. Required when evidence_ref_id is a Context Fabric reference (acr:v1:...): the reference names its subject, not its answer, so without the result_id the citation of a different result could be returned. Opaque: pass it back unchanged.",
+      "description": "The result_id of the investigate_question (if listed) answer that returned evidence_ref_id. Required when evidence_ref_id is a Context Fabric reference (acr:v1:...): the reference names its subject, not its answer, so without the result_id the citation of a different result could be returned. Opaque: pass it back unchanged.",
       "minLength": 8,
       "maxLength": 256
     }

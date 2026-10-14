@@ -217,6 +217,8 @@ jobs:
         run: scripts/ci/test-shard-closure.sh
       - name: Test the shard budget guard
         run: scripts/ci/test-shard-budget-guard.sh
+      - name: Test the isolated-job budget wrapper
+        run: scripts/ci/test-run-isolated-budget.sh
       - name: Check known Go vulnerabilities
         run: scripts/ci/retry.sh go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
@@ -772,14 +774,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts race-rest)"
-          start=$SECONDS
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
-          elapsed=$((SECONDS - start))
-          printf 'devhealthfacts (rest half) race wall time: %ss (budget 1200s)\n' "$elapsed"
-          if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
-            printf '::error::devhealthfacts (rest half) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-heavy-tests.txt\n' "$elapsed"
-            exit 1
-          fi
+          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (rest half)' "$packages"
 
   race-devhealthfacts-heavy:
     name: race (devhealthfacts heavy, isolated scope)
@@ -814,14 +809,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-heavy)"
-          start=$SECONDS
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
-          elapsed=$((SECONDS - start))
-          printf 'devhealthfacts (heavy half) race wall time: %ss (budget 1200s)\n' "$elapsed"
-          if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
-            printf '::error::devhealthfacts (heavy half) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-heavy-tests.txt\n' "$elapsed"
-            exit 1
-          fi
+          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (heavy half)' "$packages"
 
   race-devhealthfacts-mid:
     name: race (devhealthfacts mid, isolated scope)
@@ -856,14 +844,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-mid)"
-          start=$SECONDS
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
-          elapsed=$((SECONDS - start))
-          printf 'devhealthfacts (mid third) race wall time: %ss (budget 1200s)\n' "$elapsed"
-          if [ $((elapsed * 100)) -gt $((1200 * 85)) ]; then
-            printf '::error::devhealthfacts (mid third) took %ss, over 85%% of its 1200s budget; rebalance scripts/ci/devhealthfacts-race-mid-tests.txt\n' "$elapsed"
-            exit 1
-          fi
+          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (mid third)' "$packages"
 
   # CHAOS-6342: devhealthsource is the OTHER shared-container HEAVY package
   # (see race-devhealthfacts above) and used to round-robin into race shard 1
@@ -874,7 +855,7 @@ jobs:
   # dedicated_isolated_packages in scripts/ci/test-shard.sh), under its own
   # Makefile budget GOTEST_DEVHEALTHSOURCE_TIMEOUT. That budget is a
   # measurement-based guess, not a blanket raise: the step prints the
-  # package's measured wall time and FAILS if it exceeds 85% of the budget,
+  # package's measured test time and FAILS if it exceeds 85% of the budget,
   # so a creeping suite is caught loudly here instead of being eaten by the
   # timeout. Re-measure from the first hosted run and retune the Makefile.
   # Measured on run 38086240597's non-race go-test.json: 438 top-level tests,
@@ -916,15 +897,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource rest)"
-          start=$SECONDS
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
-          elapsed=$((SECONDS - start))
-          limit=${timeout%s}
-          printf 'devhealthsource (rest half) race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
-          if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
-            printf '::error::CHAOS-6342: devhealthsource (rest half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
-            exit 1
-          fi
+          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (rest half)' "$packages"
 
   race-devhealthsource-heavy:
     name: race (devhealthsource heavy, isolated scope)
@@ -959,15 +932,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource heavy)"
-          start=$SECONDS
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
-          elapsed=$((SECONDS - start))
-          limit=${timeout%s}
-          printf 'devhealthsource (heavy half) race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
-          if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
-            printf '::error::CHAOS-6342: devhealthsource (heavy half) took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); rebalance scripts/ci/devhealthsource-heavy-tests.txt\n' "$elapsed" "$limit"
-            exit 1
-          fi
+          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (heavy half)' "$packages"
 
   # The O4 oracle package (factoracle) seeds a ClickHouse store from the venue
   # capture and replays 95 cases; it ran 100s in a shared race shard and was
@@ -1006,15 +971,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated factoracle)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
-          start=$SECONDS
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
-          elapsed=$((SECONDS - start))
-          limit=${timeout%s}
-          printf 'factoracle race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
-          if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
-            printf '::error::factoracle took %ss, over 85%% of its %ss budget (GOTEST_FACTORACLE_TIMEOUT); retune the budget or shrink the suite\n' "$elapsed" "$limit"
-            exit 1
-          fi
+          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle' "$packages"
 
 
   build:

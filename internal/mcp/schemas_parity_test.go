@@ -66,6 +66,8 @@ func TestEmbeddedSchemasMatchCanonicalSource(t *testing.T) {
 		{findSubjectsResponseSchemaFile, "contracts/jsonschema/v1/mcp_find_subjects_response.v1.schema.json"},
 		{runOperationRequestSchemaFile, "contracts/jsonschema/v1/mcp_run_operation_request.v1.schema.json"},
 		{runOperationResponseSchemaFile, "contracts/jsonschema/v1/mcp_run_operation_response.v1.schema.json"},
+		{graphqlQueryRequestSchemaFile, "contracts/jsonschema/v1/mcp_graphql_query_request.v1.schema.json"},
+		{graphqlQueryResponseSchemaFile, "contracts/jsonschema/v1/mcp_graphql_query_response.v1.schema.json"},
 	}
 
 	for _, tc := range cases {
