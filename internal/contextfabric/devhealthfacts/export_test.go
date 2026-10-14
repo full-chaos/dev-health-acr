@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"strings"
 	"time"
 
@@ -24,7 +25,7 @@ func StatusSinceStatementForTest(settings readers.Settings) string {
 // every blocker row of orgID: source, target, whether the provider still
 // reports the row, and whether its writer could not be derived.
 func RelationCurrentProbeForTest(orgID string) string {
-	probe := `SELECT s, t, toUInt8(NOT ended), toUInt8(code = 4) FROM ` + relationRowsSQL()
+	probe := `SELECT s, t, toUInt8(NOT ended), toUInt8(code = 4) FROM ` + relationcurrent.RowsSQL()
 	return strings.ReplaceAll(probe, "{org_id:String}", "'"+orgID+"'")
 }
 
@@ -93,12 +94,12 @@ func RunBlockerFragmentsForTest(ctx context.Context, client contextpacket.ClickH
 		"endpoints":           blockerEndpointIDsSQL,
 		"authorized":          authorized,
 		"admitted_links":      admittedIssueLinksAmongSQL(blockerEndpointIDsSQL),
-		"edge_rows_repo":      "(" + blockerEdgeRowsSQL(blockerOpenPredicate, authorized, relationCurrentSQL("d"), true) + ")",
-		"edge_rows_project":   "(" + blockerProjectEdgeRowsSQL(blockerOpenPredicate, authorized, relationCurrentSQL("d"), true) + ")",
+		"edge_rows_repo":      "(" + blockerEdgeRowsSQL(blockerOpenPredicate, authorized, relationcurrent.CurrentSQL("d"), true) + ")",
+		"edge_rows_project":   "(" + blockerProjectEdgeRowsSQL(blockerOpenPredicate, authorized, relationcurrent.CurrentSQL("d"), true) + ")",
 		"owned_projects":      "(SELECT t.team_id FROM " + teamOwnedProjectsAsOfSQL(factTimeBound{}) + " AS t INNER JOIN " + resolvedProjectsSQL + " AS p ON p.provider = t.provider AND p.id = t.id WHERE p.key_resolution_count = 1 AND t.team_id IN {team_ids:Array(String)})",
 		"project_link_rows":   teamProjectLinkRowsAmongSQL("team_ids", factTimeBound{}, blockerEndpointIDsSQL),
 		"work_items_s":        "(SELECT * FROM " + blockerWorkItemsSQL("s") + ")",
-		"relation_ended_keys": relationEndedKeysSQL(),
+		"relation_ended_keys": relationcurrent.EndedKeysSQL(),
 	}
 	for _, name := range BlockerFragmentNames {
 		statement := readers.WithSettings("SELECT 'frag-"+name+"', count() FROM "+fragments[name], settings)
