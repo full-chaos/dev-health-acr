@@ -423,9 +423,9 @@ jobs:
           heavy_half=""
           case '${{ matrix.shard }}' in
             5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"; split_pkg=devhealthfacts ;;
-            6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource rest)"; split_pkg=devhealthsource ;;
+            6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource ;;
             7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"; split_pkg=devhealthfacts; heavy_half=1 ;;
-            8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource heavy)"; split_pkg=devhealthsource; heavy_half=1 ;;
+            8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource; heavy_half=1 ;;
           esac
           case '${{ matrix.shard }}' in 5 | 6 | 7 | 8) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
           set +e

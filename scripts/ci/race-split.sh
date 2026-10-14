@@ -69,11 +69,18 @@ case "${2:-}" in
   partition)
     cd "$root"
     wf="$root/.github/workflows/ci.yml"
-    for want in "race-split.sh $name rest)" "race-split.sh $name heavy)"; do
+    unit_mode=heavy
+    unit_regex="$(regex)"
+    if [ "$name" = devhealthsource ]; then
+      unit_mode=unit-heavy
+      unit_regex="$(race_heavy)"
+    fi
+    for want in "race-split.sh $name rest)" "race-split.sh $name $unit_mode)"; do
+      [ "$unit_mode" = unit-heavy ] && [ "$want" = "race-split.sh $name rest)" ] && want="race-split.sh $name unit-heavy)"
       grep -qF -- "$want" "$wf" || { printf 'ci.yml never uses "%s"\n' "$want" >&2; exit 1; }
     done
     all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-    a="$(go test -list "$(regex)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    a="$(go test -list "$unit_regex" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$a"))"
     both="$(LC_ALL=C comm -12 <(printf '%s\n' "$a") <(printf '%s\n' "$c"))"
     lost="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n%s\n' "$a" "$c" | grep -v '^$' | LC_ALL=C sort -u))"
@@ -84,6 +91,7 @@ case "${2:-}" in
     printf 'split ok: %s tests = %s heavy + %s rest\n' "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" \
       "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
     ;;
+  unit-heavy) race_heavy ;;
   race-heavy) race_heavy ;;
   race-mid) race_mid ;;
   race-fourth) race_fourth ;;
