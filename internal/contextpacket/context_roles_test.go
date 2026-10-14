@@ -44,7 +44,7 @@ func deploymentRow(id, deploymentID, status, pullRequest string, at time.Time) c
 	return ref
 }
 
-func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *testing.T) {
+func TestCheckoutShapeServesFailuresAsPressureAndTheirPullRequestsAsRelations(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	evidence := []contractsv1.EvidenceRef{
 		roleRow("ev-pr-feat-a", "pull_request", "41", "One-page checkout", "merged", at),
@@ -60,13 +60,13 @@ func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *tes
 	}
 	roles, packet := servedRoles(t, evidence)
 	for _, item := range packet.Items {
-		if item.EvidenceRefIDs[0] == "ev-pr-regress" && item.WhyIncluded != "The provider stored pull request 42 for the deployed commit of a failed or incident-linked deployment; the provider's match tier is not stored, so this appears to be the change that deployment carried." {
-			t.Errorf("cause text = %q, want what is stored and no more", item.WhyIncluded)
+		if item.EvidenceRefIDs[0] == "ev-pr-regress" && (!strings.Contains(item.WhyIncluded, "pull request 42 for a failed deployment") || !strings.Contains(item.WhyIncluded, "match tier is not stored") || !strings.Contains(item.WhyIncluded, "not shown as the cause")) {
+			t.Errorf("relation text = %q, want what is stored and no more", item.WhyIncluded)
 		}
 	}
 	want := map[string]contractsv1.PacketCategory{
 		"ev-pr-feat-a": contractsv1.CategoryEvidence, "ev-pr-feat-b": contractsv1.CategoryEvidence, "ev-c-feat-a": contractsv1.CategoryEvidence,
-		"ev-pr-regress": contractsv1.CategoryCause, "ev-pr-hotfix": contractsv1.CategoryCause,
+		"ev-pr-regress": contractsv1.CategoryEvidence, "ev-pr-hotfix": contractsv1.CategoryEvidence,
 		"ev-d-ok-1": contractsv1.CategoryState, "ev-d-fail-1": contractsv1.CategoryPressure, "ev-d-fail-2": contractsv1.CategoryPressure,
 		"ev-ci-ok": contractsv1.CategoryEvidence, "ev-ci-bad": contractsv1.CategoryPressure,
 	}
@@ -79,6 +79,9 @@ func TestCheckoutShapeServesFailuresAsPressureAndOnlyLinkedChangesAsCause(t *tes
 		if item.Category == contractsv1.CategoryAction {
 			t.Errorf("action item served without a stored source: %s", item.Title)
 		}
+	}
+	if !slices.Contains(packet.Warnings, "cause_links_demoted:2:link_tier_not_stored") {
+		t.Errorf("demoted links are not counted: %v", packet.Warnings)
 	}
 	if !slices.Contains(packet.Warnings, contextpacket.ActionItemsUnavailableWarning) {
 		t.Errorf("no coverage line for absent action items: %v", packet.Warnings)
@@ -130,7 +133,7 @@ func TestAnIncidentLinkedDeploymentNeedsANonHeuristicEdgeAndAnOpenIncident(t *te
 	}
 	roles, packet := servedRoles(t, evidence)
 	want := map[string]contractsv1.PacketCategory{
-		"ev-pr-open": contractsv1.CategoryCause, "ev-pr-heur": contractsv1.CategoryEvidence,
+		"ev-pr-open": contractsv1.CategoryEvidence, "ev-pr-heur": contractsv1.CategoryEvidence,
 		"ev-pr-gone": contractsv1.CategoryEvidence, "ev-pr-closed": contractsv1.CategoryEvidence,
 	}
 	for id, category := range want {
@@ -138,10 +141,20 @@ func TestAnIncidentLinkedDeploymentNeedsANonHeuristicEdgeAndAnOpenIncident(t *te
 			t.Errorf("%s served as %q, want %q", id, roles[id], category)
 		}
 	}
+	related := map[string]string{}
 	for _, item := range packet.Items {
-		if item.EvidenceRefIDs[0] == "ev-pr-open" && (item.ClaimKind != contractsv1.ClaimInferred || !item.Flags.Uncertain || !strings.Contains(item.WhyIncluded, "match tier is not stored")) {
-			t.Errorf("cause item claims more than is stored: claim=%s uncertain=%v why=%q", item.ClaimKind, item.Flags.Uncertain, item.WhyIncluded)
+		related[item.EvidenceRefIDs[0]] = item.WhyIncluded
+	}
+	if !strings.Contains(related["ev-pr-open"], "a deployment linked to an open incident") {
+		t.Errorf("the incident-linked pull request carries no relation text: %q", related["ev-pr-open"])
+	}
+	for _, id := range []string{"ev-pr-heur", "ev-pr-gone", "ev-pr-closed"} {
+		if strings.Contains(related[id], "match tier is not stored") {
+			t.Errorf("%s was related through a link the rule rejects: %q", id, related[id])
 		}
+	}
+	if !slices.Contains(packet.Warnings, "cause_links_demoted:1:link_tier_not_stored") {
+		t.Errorf("exactly one demoted link must be counted: %v", packet.Warnings)
 	}
 }
 
@@ -154,7 +167,10 @@ func TestARevertPrefixSharedByTwoCommitsMarksNeither(t *testing.T) {
 		roleRow("ev-c-revert-1", "commit", "5555555dddddddddddddddddddddddddddddddd", "Revert", "This reverts commit 2222222.", at),
 		roleRow("ev-c-revert-2", "commit", "6666666eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Revert", "This reverts commit 4444444.", at),
 	}
-	roles, _ := servedRoles(t, evidence)
+	roles, packet := servedRoles(t, evidence)
+	if !slices.Contains(packet.Warnings, "revert_links_ambiguous:1") {
+		t.Errorf("the ambiguous revert prefix is not counted: %v", packet.Warnings)
+	}
 	if roles["ev-c-one"] == contractsv1.CategoryCause || roles["ev-c-two"] == contractsv1.CategoryCause {
 		t.Errorf("an ambiguous prefix marked a commit: %v", roles)
 	}
@@ -177,7 +193,7 @@ func TestFreeFormArtifactTextNeverChoosesARole(t *testing.T) {
 	}
 }
 
-func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.T) {
+func TestARevertIsACauseAndAnIncidentLinkedDeploymentsPullRequestIsOnlyARelation(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	const reverted = "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	evidence := []contractsv1.EvidenceRef{
@@ -190,7 +206,7 @@ func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.
 		incidentEdge("ev-e-link", "dep-9", "inc-9", "native", at),
 	}
 	roles, _ := servedRoles(t, evidence)
-	if roles["ev-pr-carried"] != contractsv1.CategoryCause || roles["ev-c-reverted"] != contractsv1.CategoryCause {
+	if roles["ev-pr-carried"] != contractsv1.CategoryEvidence || roles["ev-c-reverted"] != contractsv1.CategoryCause {
 		t.Errorf("roles = %v", roles)
 	}
 	if roles["ev-pr-other"] != contractsv1.CategoryEvidence || roles["ev-c-revert"] != contractsv1.CategoryEvidence {
@@ -198,7 +214,7 @@ func TestIncidentLinkedDeploymentAndRevertMakeTheCarriedChangeACause(t *testing.
 	}
 }
 
-func TestAFailedDeploymentWithNoPullRequestLinkIsPressureOnlyAndNamesNoCause(t *testing.T) {
+func TestAFailedDeploymentIsPressureAndItsStoredPullRequestIsOnlyARelation(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	evidence := []contractsv1.EvidenceRef{
 		roleRow("ev-pr-unlinked", "pull_request", "50", "Unrelated change", "merged", at),
@@ -209,7 +225,7 @@ func TestAFailedDeploymentWithNoPullRequestLinkIsPressureOnlyAndNamesNoCause(t *
 	roles, _ := servedRoles(t, evidence)
 	want := map[string]contractsv1.PacketCategory{
 		"ev-d-nolink": contractsv1.CategoryPressure, "ev-d-link": contractsv1.CategoryPressure,
-		"ev-pr-unlinked": contractsv1.CategoryEvidence, "ev-pr-linked": contractsv1.CategoryCause,
+		"ev-pr-unlinked": contractsv1.CategoryEvidence, "ev-pr-linked": contractsv1.CategoryEvidence,
 	}
 	for id, category := range want {
 		if roles[id] != category {

@@ -110,7 +110,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
-	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), append(warnings(bundle), ActionItemsUnavailableWarning)
+	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(append(warnings(bundle), ActionItemsUnavailableWarning), roleWarnings(bundle.Evidence)...))
 	applyEvidenceQuarantine(&packet, validation)
 	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
