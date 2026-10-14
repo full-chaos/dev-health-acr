@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -88,4 +90,80 @@ SELECT has_table_privilege('acr_fence_runtime', 'acr.context_fabric_org_purge_ma
 	require.NoError(t, err)
 	_, err = runtime.ExecContext(ctx, insertRebuild, "cccccccc-0000-4000-8000-000000000003")
 	require.Equal(t, denied, state(err), "as security invoker the fence needs the marker grant: %v", err)
+}
+
+// The purge runs as its own role and the writer as the runtime role. Advisory
+// locks belong to the database, not to a role, so a runtime-role write that
+// starts while a purge-role transaction holds the fence waits for it, then
+// sees the marker that transaction wrote.
+func TestWriteFenceExcludesARuntimeRoleWriterFromAPurgeRunAsAnotherRole(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := newTestPostgresDSN(t, ctx)
+	var output bytes.Buffer
+	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &output))
+	ownerConfig, err := pgx.ParseConfig(migrationDSN)
+	require.NoError(t, err)
+	owner := stdlib.OpenDB(*ownerConfig)
+	t.Cleanup(func() { require.NoError(t, owner.Close()) })
+	for _, statement := range []string{
+		`CREATE ROLE acr_fence_writer LOGIN PASSWORD 'writer-test-password'`,
+		`CREATE ROLE acr_fence_purger LOGIN PASSWORD 'purger-test-password'`,
+		`GRANT CONNECT ON DATABASE acr TO acr_fence_writer, acr_fence_purger`,
+		`GRANT USAGE ON SCHEMA acr TO acr_fence_writer, acr_fence_purger`,
+		`GRANT SELECT, INSERT ON TABLE acr.context_fabric_projection_rebuild_markers TO acr_fence_writer`,
+		`GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_org_purge_markers TO acr_fence_purger`,
+	} {
+		_, err := owner.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	as := func(role, password string) *sql.DB {
+		config, err := pgx.ParseConfig(migrationDSN)
+		require.NoError(t, err)
+		config.User, config.Password = role, password
+		db := stdlib.OpenDB(*config)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		return db
+	}
+	writer, purger := as("acr_fence_writer", "writer-test-password"), as("acr_fence_purger", "purger-test-password")
+	const org = "dddddddd-0000-4000-8000-000000000004"
+
+	purge, err := purger.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = purge.Rollback() })
+	_, err = purge.ExecContext(ctx, `SELECT pg_advisory_xact_lock(20261014, hashtext($1))`, org)
+	require.NoError(t, err)
+
+	written := make(chan error, 1)
+	go func() {
+		_, err := writer.ExecContext(ctx, `INSERT INTO acr.context_fabric_projection_rebuild_markers (org_id, started_at) VALUES ($1, now())`, "{"+org+"}")
+		written <- err
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var waiting int
+		require.NoError(t, owner.QueryRowContext(ctx, `
+SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE l.locktype = 'advisory' AND l.classid::bigint = 20261014 AND l.mode = 'ShareLock' AND NOT l.granted AND a.usename = 'acr_fence_writer'`).Scan(&waiting))
+		if waiting == 1 {
+			break
+		}
+		require.True(t, time.Now().Before(deadline), "the runtime-role writer never waited on the purge role's fence")
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case err := <-written:
+		t.Fatalf("the writer finished while the purge role held the fence: %v", err)
+	default:
+	}
+
+	_, err = purge.ExecContext(ctx, `INSERT INTO acr.context_fabric_org_purge_markers (org_id, purged_at) VALUES ($1, clock_timestamp())`, org)
+	require.NoError(t, err)
+	require.NoError(t, purge.Commit())
+	err = <-written
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr), "%v", err)
+	require.Equal(t, "ACR01", pgErr.Code)
+	var rows int
+	require.NoError(t, owner.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_projection_rebuild_markers`).Scan(&rows))
+	require.Zero(t, rows)
 }
