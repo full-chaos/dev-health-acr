@@ -843,5 +843,5 @@ func blockerExpr(alias string) string {
 // stored ends are authorized. The authorization test stays on the table's own
 // columns so the read prunes by them before the FINAL merge.
 func blockerRowsWhereSQL(authorized string) string {
-	return "d.org_id = {org_id:String} AND " + blockerPredicateSQL("d") + " AND d.source_work_item_id IN " + authorized + " AND d.target_work_item_id IN " + authorized
+	return "d.org_id = {org_id:String} AND lower(ifNull(d.relationship_type, '')) = 'blocks' AND d.source_work_item_id IN " + authorized + " AND d.target_work_item_id IN " + authorized
 }
