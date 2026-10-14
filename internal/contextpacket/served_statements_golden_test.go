@@ -23,6 +23,10 @@ func (r *statementRecorder) Query(_ context.Context, statement string, _ []Click
 // The golden holds the digest of every evidence statement as built before the
 // provenance values came from constants.
 func TestSourceStatementsAreByteIdenticalToTheGolden(t *testing.T) {
+	// The executed statement of a shaped query depends on the cached column
+	// probe; start from no answer so the digest is order independent.
+	ResetStatementShapeProbesForTest()
+	defer ResetStatementShapeProbesForTest()
 	var out bytes.Buffer
 	line := func(id, statement string) {
 		fmt.Fprintf(&out, "%s %x\n", id, sha256.Sum256([]byte(statement)))
