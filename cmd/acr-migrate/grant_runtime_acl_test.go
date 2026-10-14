@@ -109,7 +109,7 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	// Then it succeeds and reports the role it granted.
 	require.NoError(t, grantErr)
 	require.Contains(t, grantOutput.String(), "acr_mcp_runtime_test")
-	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, DELETE on acr.oauth_clients to acr_mcp_runtime_test")
+	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, UPDATE, DELETE on acr.oauth_clients to acr_mcp_runtime_test")
 	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, UPDATE, DELETE on acr.oauth_authorization_requests to acr_mcp_runtime_test")
 	require.Contains(t, grantOutput.String(), "granted SELECT, INSERT, UPDATE, DELETE on acr.device_authorizations to acr_mcp_runtime_test")
 
@@ -119,7 +119,6 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 		require.True(t, hasPrivilege(table, "DELETE"), "%s: grant-runtime-acl must give the runtime role DELETE for the OAuth purge loop", table)
 		require.False(t, hasPrivilege(table, "TRUNCATE"), "%s: no TRUNCATE", table)
 	}
-	require.False(t, hasPrivilege("acr.oauth_clients", "UPDATE"), "acr.oauth_clients: nothing updates it, so the runtime role holds no UPDATE")
 
 	for _, privilege := range []string{"SELECT", "INSERT", "DELETE"} {
 		require.True(t, hasPrivilege("acr.web_assertion_replays", privilege), "acr.web_assertion_replays: grant-runtime-acl must give the runtime role %s for the shared web-assertion replay record", privilege)

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"github.com/stretchr/testify/require"
@@ -22,7 +24,8 @@ func TestARefusedGrantIsNamedByClassAndTableInTheCredentialLookupError(t *testin
 	store, err := storagepostgres.NewCredentialStore(database.Runtime, audit)
 	require.NoError(t, err)
 
-	_, err = store.FindByTokenHash(ctx, "a-token-hash-that-does-not-exist")
+	raw := make([]byte, 32)
+	_, err = store.FindByTokenHash(ctx, auth.HashToken(auth.TokenPrefix+base64.RawURLEncoding.EncodeToString(raw)))
 	require.Error(t, err)
 	var class *storage.DependencyErrorClass
 	require.True(t, errors.As(err, &class), "the lookup error carries a classification: %v", err)

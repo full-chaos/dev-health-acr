@@ -82,10 +82,12 @@ case "$ACR_ENABLE_EPISODE_WRITEBACK" in
   *) printf 'ACR_ENABLE_EPISODE_WRITEBACK must be true or false\n' >&2; exit 2 ;;
 esac
 
-# Workload token exchange is configured when both of its settings are set,
-# the same rule the hosted runtime applies (workloadTokenExchangeConfigured).
+# Workload token exchange is configured when both of its settings are set to
+# something other than whitespace, the same rule the hosted runtime applies
+# (workloadTokenExchangeConfigured trims both).
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
 workload_token_exchange=false
-if [ -n "$ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE" ] && [ -n "$ACR_WORKLOAD_TRUST_DOMAIN" ]; then
+if [ -n "$(trim "$ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE")" ] && [ -n "$(trim "$ACR_WORKLOAD_TRUST_DOMAIN")" ]; then
   workload_token_exchange=true
 fi
 
@@ -168,7 +170,7 @@ GRANT DELETE ON TABLE acr.client_credentials TO :"runtime_user";
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.workload_bindings FROM :"runtime_user";
 GRANT SELECT ON TABLE acr.workload_bindings TO :"runtime_user";
 
--- SELECT internal/storage/postgres/packet.go:69, INSERT packet.go:49, DELETE packet_retention.go:28; UPDATE is asserted by the readiness check internal/runtime/hosted/postgres_readiness.go:21
+-- SELECT internal/storage/postgres/packet.go:69, INSERT packet.go:49, DELETE packet_retention.go:28; UPDATE because the purge locks rows with FOR UPDATE SKIP LOCKED (packet_retention.go:20), which Postgres checks as UPDATE; the readiness check asserts it
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_packet_snapshots FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots TO :"runtime_user";
 
@@ -186,9 +188,9 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.device_authorizations TO :"runtime_user";
 
--- SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:109; nothing updates it
+-- SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:109; UPDATE because the idle-client purge locks rows with FOR UPDATE OF c SKIP LOCKED (oauth_purge.go:103), which Postgres checks as UPDATE
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_clients FROM :"runtime_user";
-GRANT SELECT, INSERT, DELETE ON TABLE acr.oauth_clients TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_clients TO :"runtime_user";
 
 -- SELECT internal/storage/postgres/oauth.go:165, INSERT oauth.go:68, UPDATE oauth.go:185, DELETE oauth_purge.go:59
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_authorization_requests FROM :"runtime_user";

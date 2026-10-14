@@ -153,3 +153,47 @@ func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testin
 		})
 	}
 }
+
+// TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate: Postgres checks
+// SELECT ... FOR UPDATE, FOR SHARE and FOR KEY SHARE as UPDATE, so a table a
+// statement locks needs UPDATE even when no statement updates it. Every table
+// read FROM or JOINed in a Go SQL literal that carries a row lock must declare UPDATE.
+func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
+	updatable := map[string]bool{}
+	for _, grant := range dbacl.RuntimeGrants {
+		for _, privilege := range grant.Privileges {
+			if privilege == "UPDATE" {
+				updatable[grant.Table] = true
+			}
+		}
+	}
+	rowLock := regexp.MustCompile(`(?i)\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b`)
+	literal := regexp.MustCompile("(?s)`([^`]*)`")
+	table := regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+acr\.([a-z0-9_]+)`)
+	var missing []string
+	scanned := 0
+	require.NoError(t, filepath.Walk("../../internal", func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.Contains(path, "orgpurge") {
+			return err
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range literal.FindAllStringSubmatch(string(source), -1) {
+			if !rowLock.MatchString(match[1]) {
+				continue
+			}
+			scanned++
+			for _, name := range table.FindAllStringSubmatch(match[1], -1) {
+				if !updatable[name[1]] {
+					missing = append(missing, name[1]+" in "+path)
+				}
+			}
+		}
+		return nil
+	}))
+	require.NotZero(t, scanned, "no row-locking statements found: the scan is broken")
+	sort.Strings(missing)
+	require.Empty(t, missing, "a statement locks rows of a table the runtime role cannot UPDATE")
+}

@@ -89,10 +89,12 @@ spec:
             # same settings the workloads read (templates/configmap.yaml).
             - name: ACR_ENABLE_EPISODE_WRITEBACK
               value: {{ .Values.config.enableEpisodeWriteback | quote }}
+            {{- if .Values.workloadTokenExchange.enabled }}
             - name: ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
               value: {{ .Values.workloadTokenExchange.audience | quote }}
             - name: ACR_WORKLOAD_TRUST_DOMAIN
               value: {{ .Values.workloadTokenExchange.trustDomain | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:

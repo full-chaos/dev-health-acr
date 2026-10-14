@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"regexp"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -50,8 +51,16 @@ type DependencyErrorClass struct {
 	Table string
 }
 
+var dependencyTablePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// Error names the class and, when the driver named a plain identifier as the
+// table, the table. Nothing else from the driver error is carried.
 func (c *DependencyErrorClass) Error() string {
-	return "dependency error class " + c.Class + " (" + c.SQLState + ")"
+	text := "dependency error class " + c.Class + " (" + c.SQLState + ")"
+	if dependencyTablePattern.MatchString(c.Table) {
+		text += " on table " + c.Table
+	}
+	return text
 }
 
 const MaximumCredentialOverlap = credentiallifecycle.MaximumOverlap
