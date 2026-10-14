@@ -24,6 +24,7 @@ func TestTeamWithOnlyZeroEffortUnitsServesAnEffortNotMeasurableReasonAgainstReal
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
+	createPullRequestLinkTables(t, ctx, direct)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	const orgID = "org-zero-effort"
 	end := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
@@ -89,6 +90,7 @@ func TestZeroEffortTeamReasonIsServedAtTheReadFactsBoundary(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
+	createPullRequestLinkTables(t, ctx, direct)
 	at := ts(2026, 9, 18, 0, 0, 0)
 	const orgID = "org-zero-effort-served"
 	exec := func(stmt string, args ...any) {

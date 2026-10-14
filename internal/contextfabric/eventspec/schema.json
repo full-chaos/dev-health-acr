@@ -2958,7 +2958,8 @@
           "compare_grouped_collapse",
           "compare_ranking_collapse",
           "member_kind_fact_alias_collapse",
-          "self_group_flat_cohort"
+          "self_group_flat_cohort",
+          "organization_scope_survey"
         ]
       },
       {
