@@ -63,6 +63,9 @@ func blockerStatusSlopeViolated(small, large uint64) bool {
 // grow it past 1.15x + 2 MiB (minimum of three warm runs). The same guard is
 // applied to the organization-wide form and must flag it.
 func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRealClickHouse(t *testing.T) {
+	if raceDetectorEnabled {
+		t.Skip("the bound is the ClickHouse server peak, which the race detector does not change; the unit leg runs this row")
+	}
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
