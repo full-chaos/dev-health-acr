@@ -339,12 +339,15 @@ func TestAnOrganizationSurveyWithNoMembersIsAnsweredNotRefused(t *testing.T) {
 	receipt := validModelReceiptFixture(ModelOperationInterpret)
 	run := runOrganizationQuestionOver(t, receipt, organizationProposal(nil, GoalAssessState, GoalExplainDrivers), []FactRequirement{{Kind: FactHealth}}, true, true)
 	result := run.result
-	t.Logf("served status=%s", result.Status)
+	t.Logf("served status=%s completeness=%+v coverage_partial=%v", result.Status, result.Completeness, result.Coverage.Partial)
 	if result.Status == InvestigationNoMatch || result.Status == InvestigationClarificationRequired || result.RefusalBasis != "" {
 		t.Fatalf("status/basis = %q/%q, want an answered turn", result.Status, result.RefusalBasis)
 	}
 	if !roleContains(result.Limitations, contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation) {
 		t.Fatalf("limitations = %#v, want the no-members sentence", result.Limitations)
+	}
+	if result.Completeness.State != contractsv1.ContextFabricAnswerCompletenessDegraded {
+		t.Fatalf("completeness state = %q, want degraded: a missing member set is not a complete answer", result.Completeness.State)
 	}
 	if roleContains(result.Limitations, contractsv1.ContextFabricOrganizationSurveyTeamLimitation) {
 		t.Fatalf("limitations = %#v claim a roll-up over teams that were never read", result.Limitations)
