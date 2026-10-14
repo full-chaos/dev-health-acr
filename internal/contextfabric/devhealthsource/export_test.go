@@ -409,6 +409,9 @@ func MembershipStatementForTest(orgID string, since time.Time, after string, lim
 	return membershipStatement(cursor, ingest, pruned), rowLimitBindings(orgID, cursor, limit)
 }
 
+// SetEndedLinksBoundForTest lowers the removed-link set bound of this source.
+func (s *ClickHouseProjectionSource) SetEndedLinksBoundForTest(bound int) { s.endedLinksBound = bound }
+
 // ProjectTeamsFragment is one named, self-contained piece of the project-team
 // ownership statement that a memory test runs on its own.
 type ProjectTeamsFragment struct {
