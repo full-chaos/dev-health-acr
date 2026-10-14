@@ -178,7 +178,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots TO :"
 
 -- INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.audit_events FROM :"runtime_user";
-GRANT SELECT, INSERT ON TABLE acr.audit_events TO :"runtime_user";
+GRANT INSERT ON TABLE acr.audit_events TO :"runtime_user";
 
 -- SELECT internal/storage/postgres/episodes.go:92, INSERT episodes.go:63, UPDATE episodes.go:126
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.agent_episodes FROM :"runtime_user";
