@@ -210,15 +210,15 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 
 // OrgPurgeMarker is the durable per-organization purge fence. IsPurged
 // reports whether `acr-projector purge` removed the organization and it has
-// not returned to discovery. DiscoveryClock reads the marker store's own
-// clock; a discovery takes it before it lists organizations. ClearPurged
-// removes only markers written before that instant, so a discovery answer that
-// began before a purge committed can never erase that purge's marker. It
-// returns the ids whose marker was removed.
+// not returned to discovery. BeginDiscovery is called before organizations are
+// listed and pins the store's view of the markers at that instant: the
+// returned clear removes only markers already committed then, so a discovery
+// answer that began before a purge committed can never erase that purge's
+// marker. clear returns the ids whose marker was removed. release must be
+// called once, whether or not clear ran.
 type OrgPurgeMarker interface {
 	IsPurged(ctx context.Context, orgID string) (bool, error)
-	DiscoveryClock(ctx context.Context) (time.Time, error)
-	ClearPurged(ctx context.Context, orgIDs []string, discoveryStarted time.Time) ([]string, error)
+	BeginDiscovery(ctx context.Context) (clear func(context.Context, []string) ([]string, error), release func(), err error)
 }
 
 // RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
@@ -683,10 +683,14 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
 
-	var discoveryStarted time.Time
-	var clockErr error
+	var clearMarkers func(context.Context, []string) ([]string, error)
+	var markerErr error
 	if c.purgeMarkers != nil {
-		discoveryStarted, clockErr = c.purgeMarkers.DiscoveryClock(ctx)
+		var release func()
+		clearMarkers, release, markerErr = c.purgeMarkers.BeginDiscovery(ctx)
+		if release != nil {
+			defer release()
+		}
 	}
 	discovery, listErr := c.orgSource.ListOrgs(ctx)
 	// The deny list is applied HERE rather than inside the adapter so it
@@ -718,7 +722,7 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	c.orgsMu.Unlock()
 
 	if listErr == nil {
-		c.clearPurgeMarkers(ctx, effective, discoveryStarted, clockErr)
+		c.clearPurgeMarkers(ctx, effective, clearMarkers, markerErr)
 	}
 
 	skipCounts := countOrgSkips(skipped)
@@ -761,14 +765,14 @@ func (c *Coordinator) orgPurged(ctx context.Context, orgID string) (bool, error)
 
 // clearPurgeMarkers lifts the fence for organizations discovery lists again.
 // A failure leaves the marker in place, which keeps the organization fenced.
-func (c *Coordinator) clearPurgeMarkers(ctx context.Context, effective []string, discoveryStarted time.Time, clockErr error) {
+func (c *Coordinator) clearPurgeMarkers(ctx context.Context, effective []string, clearMarkers func(context.Context, []string) ([]string, error), beginErr error) {
 	if c.purgeMarkers == nil || len(effective) == 0 {
 		return
 	}
-	err := clockErr
+	err := beginErr
 	var cleared []string
 	if err == nil {
-		cleared, err = c.purgeMarkers.ClearPurged(ctx, effective, discoveryStarted)
+		cleared, err = clearMarkers(ctx, effective)
 	}
 	if err != nil {
 		c.logger.WarnContext(ctx, "projection organization purge marker clear failed; organizations stay fenced", "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))

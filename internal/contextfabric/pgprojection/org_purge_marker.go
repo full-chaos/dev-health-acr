@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -50,50 +49,58 @@ func (s *OrgPurgeMarkerStore) IsPurged(ctx context.Context, orgID string) (bool,
 	return purged, nil
 }
 
-// DiscoveryClock reads the database clock. The purge stamps its marker with
-// the same clock, so comparing the two never depends on host clock skew.
-func (s *OrgPurgeMarkerStore) DiscoveryClock(ctx context.Context) (time.Time, error) {
+// BeginDiscovery pins the database's view of the markers as of now: it opens
+// a repeatable-read transaction and takes its snapshot. The returned clear
+// removes the markers of the given organizations that this snapshot can see,
+// so a marker committed after the discovery began is invisible to it and
+// survives. A purge that touches a marker after the snapshot makes the delete
+// fail with a serialization error, which leaves the marker in place. The
+// returned release must be called once, after the clear or on any failure.
+func (s *OrgPurgeMarkerStore) BeginDiscovery(ctx context.Context) (clear func(context.Context, []string) ([]string, error), release func(), err error) {
 	if s == nil || s.db == nil {
-		return time.Time{}, errors.New("pgprojection: org purge marker store is not configured")
+		return nil, nil, errors.New("pgprojection: org purge marker store is not configured")
 	}
-	var now time.Time
-	if err := s.db.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
-		return time.Time{}, fmt.Errorf("read discovery clock: %w", sanitizeError(err))
-	}
-	return now, nil
-}
-
-// ClearPurged removes the markers of the given organizations that were written
-// before discoveryStarted and returns the canonical ids whose marker was
-// removed. A marker written after the discovery began stays.
-func (s *OrgPurgeMarkerStore) ClearPurged(ctx context.Context, orgIDs []string, discoveryStarted time.Time) ([]string, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("pgprojection: org purge marker store is not configured")
-	}
-	canonical := make([]string, 0, len(orgIDs))
-	for _, orgID := range orgIDs {
-		if id, ok := canonicalOrg(orgID); ok {
-			canonical = append(canonical, id)
-		}
-	}
-	if len(canonical) == 0 {
-		return nil, nil
-	}
-	rows, err := s.db.QueryContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = ANY($1) AND purged_at < $2 RETURNING org_id`, canonical, discoveryStarted)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
-		return nil, fmt.Errorf("clear org purge markers: %w", sanitizeError(err))
+		return nil, nil, fmt.Errorf("begin org purge discovery snapshot: %w", sanitizeError(err))
 	}
-	defer rows.Close()
-	var cleared []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan cleared org purge marker: %w", sanitizeError(err))
+	var one int
+	if err := tx.QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+		_ = tx.Rollback()
+		return nil, nil, fmt.Errorf("take org purge discovery snapshot: %w", sanitizeError(err))
+	}
+	release = func() { _ = tx.Rollback() }
+	clear = func(ctx context.Context, orgIDs []string) ([]string, error) {
+		canonical := make([]string, 0, len(orgIDs))
+		for _, orgID := range orgIDs {
+			if id, ok := canonicalOrg(orgID); ok {
+				canonical = append(canonical, id)
+			}
 		}
-		cleared = append(cleared, id)
+		if len(canonical) == 0 {
+			return nil, nil
+		}
+		rows, err := tx.QueryContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = ANY($1) RETURNING org_id`, canonical)
+		if err != nil {
+			return nil, fmt.Errorf("clear org purge markers: %w", sanitizeError(err))
+		}
+		defer rows.Close()
+		var cleared []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return nil, fmt.Errorf("scan cleared org purge marker: %w", sanitizeError(err))
+			}
+			cleared = append(cleared, id)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("clear org purge markers: %w", sanitizeError(err))
+		}
+		rows.Close()
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit org purge marker clear: %w", sanitizeError(err))
+		}
+		return cleared, nil
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("clear org purge markers: %w", sanitizeError(err))
-	}
-	return cleared, nil
+	return clear, release, nil
 }

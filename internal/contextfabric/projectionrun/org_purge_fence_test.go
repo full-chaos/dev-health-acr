@@ -49,23 +49,23 @@ func (m *fakePurgeMarker) IsPurged(_ context.Context, org string) (bool, error) 
 	return ok, nil
 }
 
-func (m *fakePurgeMarker) DiscoveryClock(context.Context) (time.Time, error) {
+func (m *fakePurgeMarker) BeginDiscovery(context.Context) (func(context.Context, []string) ([]string, error), func(), error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.tick(), nil
-}
-
-func (m *fakePurgeMarker) ClearPurged(_ context.Context, orgs []string, discoveryStarted time.Time) ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var cleared []string
-	for _, org := range orgs {
-		if stamp, ok := m.purged[org]; ok && time.Unix(stamp, 0).Before(discoveryStarted) {
-			delete(m.purged, org)
-			cleared = append(cleared, org)
+	started := m.tick()
+	m.mu.Unlock()
+	clear := func(_ context.Context, orgs []string) ([]string, error) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		var cleared []string
+		for _, org := range orgs {
+			if stamp, ok := m.purged[org]; ok && time.Unix(stamp, 0).Before(started) {
+				delete(m.purged, org)
+				cleared = append(cleared, org)
+			}
 		}
+		return cleared, nil
 	}
-	return cleared, nil
+	return clear, func() {}, nil
 }
 
 // purgeDuringDiscovery models a purge that commits after a discovery began and
