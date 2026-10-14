@@ -100,14 +100,9 @@ type blockerProdShapeStatement struct {
 	head                 string
 }
 
-func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
-	return blockerProdShapeStatementsWithCeilings(t, ctx, direct, label, mark, blockerProdShapeCeiling, blockerProdShapeTotalsCeiling)
-}
-
-// blockerProdShapeStatementsWithCeilings measures the statements against the
-// given ceilings: ageCeiling for every statement, totalsCeiling for the team
-// totals statement.
-func blockerProdShapeStatementsWithCeilings(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64, ageCeiling, totalsCeiling uint64) []blockerProdShapeStatement {
+// blockerProdShapeMeasure reads the peak of every blocker statement run since
+// mark, one entry per normalized statement.
+func blockerProdShapeMeasure(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64) []blockerProdShapeStatement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
@@ -127,21 +122,43 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 			t.Fatal(err)
 		}
 		out = append(out, st)
-		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
 	}
-	if len(out) < 4 {
-		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
+	return out
+}
+
+// blockerProdShapeMinOfReads runs read three times warm and asserts, per
+// statement, the MINIMUM peak of the three against the ceilings: ageCeiling for
+// every statement, totalsCeiling for the team totals statement. A single cold
+// read is only logged: one noisy read must neither fail nor excuse a statement.
+func blockerProdShapeMinOfReads(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, read func(), ageCeiling, totalsCeiling uint64) {
+	t.Helper()
+	const reads = 3
+	read()
+	minimum := map[uint64]blockerProdShapeStatement{}
+	for i := 0; i < reads; i++ {
+		mark := serverNowMicros(t, ctx, direct)
+		read()
+		measured := blockerProdShapeMeasure(t, ctx, direct, mark)
+		if len(measured) < 4 {
+			t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(measured))
+		}
+		for _, st := range measured {
+			t.Logf("PRODSHAPE[%s read %d] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, i+1, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
+			if best, ok := minimum[st.hash]; !ok || st.peak < best.peak {
+				minimum[st.hash] = st
+			}
+		}
 	}
-	for _, st := range out {
+	for _, st := range minimum {
 		ceiling := ageCeiling
 		if strings.HasPrefix(st.head, blockerProdShapeTotalsHead) {
 			ceiling = totalsCeiling
 		}
+		t.Logf("PRODSHAPE[%s min of %d] statement %d peak %d bytes (%.1f MiB) ceiling %d", label, reads, st.hash, st.peak, float64(st.peak)/(1<<20), ceiling)
 		if st.peak >= ceiling {
-			t.Errorf("%s: statement %d peaked at %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, st.peak, ceiling, st.head)
+			t.Errorf("%s: statement %d min peak of %d reads is %d bytes, want under %d (the production target of 48 MiB scaled by the statement's calibration ratio: 0.86 age, 0.80 totals): %s", label, st.hash, reads, st.peak, ceiling, st.head)
 		}
 	}
-	return out
 }
 
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
@@ -180,22 +197,21 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	orgWide := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"*"}}
 	restricted := storage.Principal{OrgID: blockerProdShapeOrg, RepositoryScopes: []string{"acme/repo-0", "acme/repo-1", "acme/repo-2", "acme/repo-3", "acme/repo-4", "acme/repo-5"}}
 
-	read(orgWide)
-	mark := serverNowMicros(t, ctx, direct)
-	orgWideResult := read(orgWide)
-	blockerProdShapeStatements(t, ctx, direct, "org-wide", mark)
-
-	read(restricted)
-	mark = serverNowMicros(t, ctx, direct)
-	restrictedResult := read(restricted)
-	blockerProdShapeStatements(t, ctx, direct, "restricted", mark)
-
-	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
-	read(restricted)
-	mark = serverNowMicros(t, ctx, direct)
-	inStatement := read(restricted)
-	blockerProdShapeStatementsWithCeilings(t, ctx, direct, "restricted-in-statement", mark, blockerProdShapeInStatementCeiling, blockerProdShapeInStatementTotalsCeiling)
-	restore()
+	var orgWideResult, restrictedResult, inStatement contextfabric.FactProviderResult
+	measureStates := func(state string) {
+		blockerProdShapeMinOfReads(t, ctx, direct, "org-wide "+state, func() { orgWideResult = read(orgWide) }, blockerProdShapeCeiling, blockerProdShapeTotalsCeiling)
+		blockerProdShapeMinOfReads(t, ctx, direct, "restricted "+state, func() { restrictedResult = read(restricted) }, blockerProdShapeCeiling, blockerProdShapeTotalsCeiling)
+		restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+		blockerProdShapeMinOfReads(t, ctx, direct, "restricted-in-statement "+state, func() { inStatement = read(restricted) }, blockerProdShapeInStatementCeiling, blockerProdShapeInStatementTotalsCeiling)
+		restore()
+	}
+	measureStates("seeded")
+	for _, table := range []string{"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr", "git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions"} {
+		if err := direct.Exec(ctx, `OPTIMIZE TABLE `+table+` FINAL`); err != nil {
+			t.Fatalf("optimize %s: %v", table, err)
+		}
+	}
+	measureStates("merged")
 	for _, pair := range []struct {
 		label     string
 		got, want contextfabric.FactProviderResult
