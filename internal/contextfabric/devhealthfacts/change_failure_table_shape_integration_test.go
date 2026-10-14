@@ -92,7 +92,23 @@ func TestChangeFailureReadsBothTableShapesAgainstRealClickHouse(t *testing.T) {
 			} else {
 				insert(repoID, fmt.Sprintf("'%s', '%s', '%s', 4, 1, 0, 1, 0, '%s 09:00:00'", orgID, repoID, day, day))
 			}
-			for _, repo := range []string{repoID, oldRepo} {
+			const zeroKnownRepo = "77777777-7777-7777-7777-0000000000a3"
+			const mixedRepo = "77777777-7777-7777-7777-0000000000a4"
+			subjectsRead := []string{repoID, oldRepo}
+			if tc.newShape {
+				// An old writer pod during a roll: deployments, both status columns at 0.
+				insert(zeroKnownRepo, fmt.Sprintf("'%s', '%s', '%s', 4, 0, 0, 0, 0, '%s 09:00:00'", orgID, zeroKnownRepo, day, day))
+				// A window of two days: one written by an old pod (K = 0), one by the new writer (K = 2 of 2, one failed).
+				insert(mixedRepo, fmt.Sprintf("'%s', '%s', '%s', 4, 0, 0, 0, 0, '%s 09:00:00'", orgID, mixedRepo, day, day))
+				day2 := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
+				stmt := fmt.Sprintf("INSERT INTO %s.repo_change_failure_daily (%s, failed_deployments_status, deployments_status_known) VALUES ('%s', '%s', '%s', 2, 0, 0, 0, 0, '%s 09:00:00', 1, 2)",
+					tc.database, columns, orgID, mixedRepo, day2, day2)
+				if err := direct.Exec(ctx, stmt); err != nil {
+					t.Fatalf("seed mixed window: %v", err)
+				}
+				subjectsRead = append(subjectsRead, zeroKnownRepo, mixedRepo)
+			}
+			for _, repo := range subjectsRead {
 				stmt := fmt.Sprintf(`INSERT INTO %s.repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES ('%s', '%s', '%s', 1, 1, 1.0, 0.9, NULL, 1, 0.1, '%s 10:00:00')`,
 					tc.database, repo, orgID, day, day)
 				if err := direct.Exec(ctx, stmt); err != nil {
@@ -110,7 +126,7 @@ func TestChangeFailureReadsBothTableShapesAgainstRealClickHouse(t *testing.T) {
 			provider := findProvider(t, devhealthfacts.NewProviders(recorder), contextfabric.FactMetrics)
 			result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
 				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-				Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject(repoID), repoSubject(oldRepo)},
+				Kind: contextfabric.FactMetrics, Subjects: subjectRefs(subjectsRead),
 			})
 			if err != nil {
 				t.Fatalf("ReadFacts on the %s: %v", tc.name, err)
@@ -149,6 +165,26 @@ func TestChangeFailureReadsBothTableShapesAgainstRealClickHouse(t *testing.T) {
 				}
 			}
 			if tc.newShape {
+				zero := byRepo["repository:"+zeroKnownRepo]
+				if got := stringField(t, zero, "change_failure_rate_state"); got != "unknown_no_incident_evidence" {
+					t.Fatalf("K = 0 with deployments: state %q, want unknown", got)
+				}
+				if got := stringField(t, zero, "change_failure_unknown_reason"); got != "deployments_without_outcome" {
+					t.Fatalf("K = 0 with deployments: reason %q", got)
+				}
+				if _, has := zero.Fields["change_failure_rate"]; has {
+					t.Fatalf("K = 0 with deployments served a rate: %#v", zero.Fields["change_failure_rate"])
+				}
+				mixed := byRepo["repository:"+mixedRepo]
+				if got := stringField(t, mixed, "change_failure_evidence_basis"); got != "status" {
+					t.Fatalf("mixed window basis %q", got)
+				}
+				if v := mixed.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0.5 {
+					t.Fatalf("mixed window rate = %#v, want 1 failed over K = 2", v)
+				}
+				if v := mixed.Fields["change_failure_status_coverage"]; v.Number == nil || *v.Number < 0.333 || *v.Number > 0.334 {
+					t.Fatalf("mixed window coverage = %#v, want 2 of 6", v)
+				}
 				fact := byRepo["repository:"+repoID]
 				if v := fact.Fields["change_failure_status_failed_deployments_count"]; v.Integer == nil || *v.Integer != 2 {
 					t.Fatalf("status failed = %#v", v)
@@ -162,4 +198,12 @@ func TestChangeFailureReadsBothTableShapesAgainstRealClickHouse(t *testing.T) {
 			}
 		})
 	}
+}
+
+func subjectRefs(ids []string) []contextfabric.SubjectRef {
+	out := make([]contextfabric.SubjectRef, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, repoSubject(id))
+	}
+	return out
 }

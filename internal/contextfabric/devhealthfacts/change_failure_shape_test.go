@@ -119,3 +119,27 @@ func TestChangeFailureStatusAloneMeasuresWithoutAnIncident(t *testing.T) {
 	}
 	requireAbsent(t, fact, "change_failure_unknown_reason", "change_failure_link_tier")
 }
+
+func TestChangeFailureOldWriterRowWithNoKnownStatusIsUnknownNotAZero(t *testing.T) {
+	// Both status columns at their default on a row with deployments.
+	tables := append([]fakeTable{{match: "system.columns", rows: [][]any{{uint64(2)}}}},
+		repoFailureTables(statusFailureRow("repo-1", 1, 4, 0, 0, 0, 0, 0, 0))...)
+	fact, _ := readFailure(t, repoSubject("repo-1"), tables...)
+	requireString(t, fact, "change_failure_rate_state", "unknown_no_incident_evidence")
+	requireString(t, fact, "change_failure_unknown_reason", "deployments_without_outcome")
+	requireAbsent(t, fact, "change_failure_rate", "change_failure_evidence_basis")
+}
+
+func TestChangeFailureStatusOnlyWindowDividesByTheKnownDaysAndShowsCoverage(t *testing.T) {
+	// Day 1 by an old pod: D 4, K 0. Day 2: D 2, K 2, one failed. Summed: D 6, K 2.
+	tables := append([]fakeTable{{match: "system.columns", rows: [][]any{{uint64(2)}}}},
+		repoFailureTables(statusFailureRow("repo-1", 2, 6, 0, 0, 0, 0, 1, 2))...)
+	fact, _ := readFailure(t, repoSubject("repo-1"), tables...)
+	requireString(t, fact, "change_failure_evidence_basis", "status")
+	if v := fact.Fields["change_failure_rate"]; v.Number == nil || *v.Number != 0.5 {
+		t.Fatalf("rate = %#v, want 1 over K = 2", v)
+	}
+	if v := fact.Fields["change_failure_status_coverage"]; v.Number == nil || *v.Number < 0.333 || *v.Number > 0.334 {
+		t.Fatalf("coverage = %#v, want 2 of 6", v)
+	}
+}
