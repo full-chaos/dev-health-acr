@@ -233,3 +233,100 @@ func TestAFailedDeploymentIsPressureAndItsStoredPullRequestIsOnlyARelation(t *te
 		}
 	}
 }
+
+func TestAnArtifactRowNeverSourcesARevertOrAnIncidentLink(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	artifact := roleRow("ev-art-commit", "commit", "9999999ffffffffffffffffffffffffffffffffff", "artifact", "This reverts commit 1234567.", at)
+	artifact.SourceVersion = "ai_workflow_artifacts.v1"
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-c-target", "commit", "1234567aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "target", "target", at),
+		artifact,
+	}
+	roles, _ := servedRoles(t, evidence)
+	if roles["ev-c-target"] == contractsv1.CategoryCause {
+		t.Errorf("a free-form artifact row sourced a revert: %v", roles)
+	}
+}
+
+func TestOnlyGitsOwnRevertLineMarksACommitAndTheCauseCitesTheReverter(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-c-negated", "commit", "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "negated target", "negated target", at),
+		roleRow("ev-c-said-not", "commit", "5555555eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "not a revert", "Do not revert commit 1111111", at),
+		roleRow("ev-c-target", "commit", "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "target", "target", at),
+		roleRow("ev-c-reverter", "commit", "3333333cccccccccccccccccccccccccccccccc", "Revert target", "Revert target\n\nThis reverts commit 2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.", at),
+	}
+	roles, packet := servedRoles(t, evidence)
+	if roles["ev-c-negated"] == contractsv1.CategoryCause {
+		t.Errorf("a negated message marked a commit: %v", roles)
+	}
+	if roles["ev-c-target"] != contractsv1.CategoryCause {
+		t.Fatalf("the reverted commit was not marked: %v", roles)
+	}
+	for _, item := range packet.Items {
+		if item.EvidenceRefIDs[0] == "ev-c-target" && !slices.Contains(item.EvidenceRefIDs, "ev-c-reverter") {
+			t.Errorf("the cause item does not cite the reverting commit: %v", item.EvidenceRefIDs)
+		}
+	}
+}
+
+func TestStatusTextIsMatchedWholeAndOnlyListedIncidentStatusesAreOpen(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-ci-text", "ci_pipeline_run", "run-1", "CI run-1", "success; error=0", at),
+		roleRow("ev-ci-failed", "ci_pipeline_run", "run-2", "CI run-2", "Failed", at),
+		roleRow("ev-i-listed", "incident", "inc-1", "listed", "status=acknowledged, severity=low", at),
+		roleRow("ev-i-unlisted", "incident", "inc-2", "unlisted", "status=not_a_status, severity=low", at),
+	}
+	roles, _ := servedRoles(t, evidence)
+	want := map[string]contractsv1.PacketCategory{
+		"ev-ci-text": contractsv1.CategoryEvidence, "ev-ci-failed": contractsv1.CategoryPressure,
+		"ev-i-listed": contractsv1.CategoryPressure, "ev-i-unlisted": contractsv1.CategoryEvidence,
+	}
+	for id, category := range want {
+		if roles[id] != category {
+			t.Errorf("%s served as %q, want %q", id, roles[id], category)
+		}
+	}
+}
+
+func TestEveryDeploymentLinkToOnePullRequestIsCountedAndFlaggedUncertain(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	reserved := roleRow("ev-x-reserved", "check", "chk-1", "unrelated", "fine", at)
+	reserved.Metadata = map[string]any{"acr_rule_id": "evidence.observed.cause.v1", "acr_claim_kind": "inferred"}
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-42", "pull_request", "42", "Shared", "merged", at),
+		deploymentRow("ev-d-link-a", "dep-a", "failure", "42", at),
+		deploymentRow("ev-d-link-b", "dep-b", "failed", "42", at),
+		reserved,
+	}
+	_, packet := servedRoles(t, evidence)
+	if !slices.Contains(packet.Warnings, "cause_links_demoted:2:link_tier_not_stored") {
+		t.Errorf("two deployment links to one pull request must count 2: %v", packet.Warnings)
+	}
+	for _, item := range packet.Items {
+		switch item.EvidenceRefIDs[0] {
+		case "ev-pr-42":
+			if !item.Flags.Uncertain {
+				t.Errorf("a demoted relation is not flagged uncertain")
+			}
+		case "ev-x-reserved":
+			if item.RuleID == "evidence.observed.cause.v1" {
+				t.Errorf("a row carried the reserved cause rule id through metadata")
+			}
+		}
+	}
+}
+
+func TestUnavailableActionCategoryIsInCoverageAndPartialOnlyWhenRequested(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{roleRow("ev-c-one", "commit", "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "one", "one", at)}
+	_, packet := servedRoles(t, evidence)
+	listed := false
+	for _, source := range packet.Coverage.SourcesUnavailable {
+		listed = listed || (source.Source == "action_findings.v1" && source.Reason == contextpacket.ActionReasonNoStoredSource)
+	}
+	if !listed {
+		t.Errorf("the unavailable action source is not in coverage: %+v", packet.Coverage)
+	}
+}

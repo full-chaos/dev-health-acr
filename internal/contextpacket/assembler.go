@@ -111,6 +111,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(append(warnings(bundle), ActionItemsUnavailableWarning), roleWarnings(bundle.Evidence)...))
+	markActionSourceUnavailable(&packet, request, ActionReasonNoStoredSource)
 	applyEvidenceQuarantine(&packet, validation)
 	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
@@ -237,4 +238,17 @@ func sameScope(a, b contractsv1.ResolvedScope) bool {
 func packetID(p storage.Principal, r contractsv1.ContextPacketRequest) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{p.OrgID, r.RequestID, r.Repository.Slug, r.Scope.Branch, r.Scope.CommitSHA}, "\000")))
 	return "pkt_" + hex.EncodeToString(sum[:12])
+}
+
+// markActionSourceUnavailable records, in the packet's own coverage, that the
+// action category is not served because no stored source was read, so an
+// absent category is never read as zero or complete. The packet is partial
+// only when the request names the action category.
+func markActionSourceUnavailable(packet *contractsv1.ContextPacket, request contractsv1.ContextPacketRequest, reason string) {
+	packet.Coverage.SourcesUnavailable = append(packet.Coverage.SourcesUnavailable, contractsv1.UnavailableSource{Source: actionCoverageSource, Reason: reason})
+	for _, category := range request.Options.RequestedCategories {
+		if category == contractsv1.CategoryAction {
+			packet.Coverage.Partial = true
+		}
+	}
 }

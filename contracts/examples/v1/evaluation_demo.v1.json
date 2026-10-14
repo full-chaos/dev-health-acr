@@ -72,7 +72,7 @@
         "note": "One planning step plus one cited-packet-item inspection per task; not wall-clock latency."
       },
       "token_cost": {
-        "value": 316,
+        "value": 317,
         "unit": "estimated_context_tokens",
         "note": "Uses the real packet budget estimator."
       }

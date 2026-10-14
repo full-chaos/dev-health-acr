@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -204,8 +205,8 @@ func evidenceItemWithRoles(ref contractsv1.EvidenceRef, scope contractsv1.Resolv
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
 		WhyIncluded: whyIncluded(rule), RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
-		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence || (rule.why != "" && rule.claim == contractsv1.ClaimInferred), UntrustedContent: true},
-		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: []string{ref.EvidenceRefID}}
+		Flags:           contractsv1.ItemFlags{Stale: ref.Availability == contractsv1.EvidenceStale, Uncertain: ref.Confidence < minimumEvidenceConfidence || (rule.why != "" && rule.category != contractsv1.CategoryCause), UntrustedContent: true},
+		RelatedEntities: []contractsv1.RelatedEntity{{Type: ref.Source.EntityType, ID: ref.Source.EntityID, Label: ref.Source.DisplayLabel, URL: ref.Source.SafeURI}}, EvidenceRefIDs: itemEvidenceRefIDs(ref, rule)}
 }
 
 var bareTokenPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -235,4 +236,14 @@ func whyIncluded(r rule) string {
 		return r.why
 	}
 	return "Untrusted retrieved evidence matched the resolved scope."
+}
+
+func itemEvidenceRefIDs(ref contractsv1.EvidenceRef, r rule) []string {
+	ids := []string{ref.EvidenceRefID}
+	for _, cited := range r.cites {
+		if cited != ref.EvidenceRefID && !slices.Contains(ids, cited) && len(ids) < 4 {
+			ids = append(ids, cited)
+		}
+	}
+	return ids
 }
