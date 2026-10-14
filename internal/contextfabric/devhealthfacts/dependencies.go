@@ -449,7 +449,7 @@ func blockerStartJoinFor(variant string) string {
 		restriction = ` AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL
 	}
 	return ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
-    FROM work_item_dependency_first_seen AS fsr WHERE fsr.org_id = {org_id:String} AND ` + blockerPredicateSQL("fsr") + restriction + `
+    FROM work_item_dependency_first_seen AS fsr WHERE fsr.org_id = {org_id:String} AND lower(ifNull(fsr.relationship_type, '')) = 'blocks'` + restriction + `
     GROUP BY source_work_item_id, target_work_item_id, relationship_type) AS fs
     ON fs.source_work_item_id = d.source_work_item_id AND fs.target_work_item_id = d.target_work_item_id AND fs.relationship_type = d.relationship_type`
 }
