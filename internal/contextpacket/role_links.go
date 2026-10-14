@@ -179,6 +179,30 @@ func deploymentFailed(ref contractsv1.EvidenceRef) bool {
 	return failureTokens[strings.ToLower(strings.TrimSpace(status))]
 }
 
+var closedWorkItemStatuses = map[string]bool{"done": true, "canceled": true, "cancelled": true, "closed": true, "resolved": true}
+
+// activeBlockerRefs returns the dependency rows that state a BLOCKS relation
+// whose blocking work item has a stored, non-closed status. The decision rests
+// on the typed columns the source statement carries (relation key, blocker id,
+// blocker status); an unknown blocker (no stored status) is never pressure.
+func activeBlockerRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
+	active := map[string]bool{}
+	for _, ref := range evidence {
+		if ref.Source.EntityType != "work_item_dependency" {
+			continue
+		}
+		key, _ := ref.Metadata[metadataRelationKey].(string)
+		blocker, _ := ref.Metadata[metadataBlockerID].(string)
+		status, _ := ref.Metadata[metadataBlockerStatus].(string)
+		status = strings.ToLower(strings.TrimSpace(status))
+		if (key != "blocks:fwd" && key != "blocks:inv") || blocker == "" || status == "" || status == "unknown" || closedWorkItemStatuses[status] {
+			continue
+		}
+		active[ref.EvidenceRefID] = true
+	}
+	return active
+}
+
 var knownDeploymentStatuses = map[string]bool{
 	"success": true, "inactive": true, "in_progress": true, "queued": true, "pending": true, "created": true, "running": true,
 	"canceled": true, "cancelled": true, "skipped": true, "blocked": true, "waiting": true,
@@ -225,6 +249,9 @@ const (
 	metadataPullRequestNumber = "pull_request_number"
 	metadataDeploymentID      = "deployment_id"
 	metadataIncidentID        = "incident_id"
+	metadataRelationKey       = "relation_key"
+	metadataBlockerID         = "blocker_work_item_id"
+	metadataBlockerStatus     = "blocker_status"
 )
 
 func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
@@ -234,6 +261,9 @@ func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 		cause := causeRule()
 		cause.why, cause.claim, cause.cites = link.why, link.claim, link.cites
 		resolver[id] = cause
+	}
+	for id := range activeBlockerRefs(evidence) {
+		resolver[id] = pressureRule()
 	}
 	for id, why := range links.demoted {
 		relation := rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, why, nil}
