@@ -159,7 +159,7 @@ FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = `+blockedExpr("d")+`
 `+counterpartRepositoryJoinSQL(blockerExpr("d"))+`
 WHERE `+blockerRowsWhereSQL(authorized)+` AND concat(toString(t.repo_id), ':', `+blockedExpr("d")+`) IN {ids:Array(String)}
-ORDER BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")+`, `+blockerKeyExpr("d")+`, lower(ifNull(d.relationship_type, ''))
+ORDER BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")+`, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
 LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), settings)
 	rowCount := 0
 	seenBlockers := map[string]struct{}{}
@@ -815,33 +815,22 @@ var (
 	blockerInverseKey = dependencyrelation.Key("blocked_by")
 )
 
-// blockerKeyExpr is the canonical relation key of a stored dependency row, from
-// the one spelling map the graph projection reads (blocks:fwd, blocks:inv, ...).
-func blockerKeyExpr(alias string) string {
-	return dependencyrelation.KeySQL(alias + ".relationship_type")
-}
-
-// blockerKeyOperand is blockerKeyExpr in function-call syntax, for the JOIN ON
-// operands the portable ON grammar allows.
-func blockerKeyOperand(alias string) string {
-	return dependencyrelation.KeyOperandSQL(alias + ".relationship_type")
-}
-
 // blockerPredicateSQL holds for a stored row that states a blocker in either
-// direction: every spelling the graph projection maps onto a blocks edge.
+// direction: every spelling the graph projection maps onto a blocks edge. It is
+// generated from the same spelling map as the projection's key.
 func blockerPredicateSQL(alias string) string {
-	return blockerKeyExpr(alias) + " IN ('" + blockerForwardKey + "', '" + blockerInverseKey + "')"
+	return dependencyrelation.BlockerPredicateSQL(alias + ".relationship_type")
 }
 
 // blockedExpr and blockerExpr name the two ends of a stored blocker row
 // whatever its direction: an inverse spelling (blocked_by) states the blocked
-// item as the source.
+// item as the source. Function-call syntax only, so they can sit in a JOIN ON.
 func blockedExpr(alias string) string {
-	return "if(equals(" + blockerKeyOperand(alias) + ", '" + blockerInverseKey + "'), " + alias + ".source_work_item_id, " + alias + ".target_work_item_id)"
+	return "if(" + dependencyrelation.BlockerInverseSQL(alias+".relationship_type") + ", " + alias + ".source_work_item_id, " + alias + ".target_work_item_id)"
 }
 
 func blockerExpr(alias string) string {
-	return "if(equals(" + blockerKeyOperand(alias) + ", '" + blockerInverseKey + "'), " + alias + ".target_work_item_id, " + alias + ".source_work_item_id)"
+	return "if(" + dependencyrelation.BlockerInverseSQL(alias+".relationship_type") + ", " + alias + ".target_work_item_id, " + alias + ".source_work_item_id)"
 }
 
 // blockerRowsWhereSQL selects the blocker rows of the organization whose two

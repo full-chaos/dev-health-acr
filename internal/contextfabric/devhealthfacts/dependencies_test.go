@@ -514,7 +514,7 @@ func TestBlockerStatementsSelectEverySpellingAndNeverDoubleCount(t *testing.T) {
 		}
 	}
 	blockers, children := client.queries[0].statement, client.queries[1].statement
-	pred := dependencyrelation.KeySQL("d.relationship_type") + " IN ('" + dependencyrelation.Key("blocks") + "', '" + dependencyrelation.Key("blocked_by") + "')"
+	pred := dependencyrelation.BlockerPredicateSQL("d.relationship_type")
 	if !strings.Contains(blockers, pred) || strings.Contains(blockers, "lower(ifNull(d.relationship_type, '')) = 'blocks'") {
 		t.Fatalf("blockers statement does not select by the shared spelling map:\n%s", blockers)
 	}

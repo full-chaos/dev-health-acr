@@ -183,22 +183,54 @@ func KeySQL(column string) string {
 	return b.String()
 }
 
-// KeyOperandSQL renders the same canonical key as KeySQL in function-call
-// syntax only (no comparison operator), so it can sit inside a JOIN ON operand,
-// which the portable ON grammar allows as column | literal | func(operand...).
-func KeyOperandSQL(column string) string {
-	trimmed := fmt.Sprintf("upper(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', ''))", column)
-	keys := make([]string, 0, len(mapping))
-	for k := range mapping {
-		keys = append(keys, k)
+// blockerSpellings returns the lower-cased spellings that state a blocks edge,
+// from the one mapping: the vocabulary member itself (forward) and every alias
+// that maps onto it, with whether the alias swaps the endpoints (inverse).
+func blockerSpellings() (forward, inverse []string) {
+	blocks := strings.ToLower(string(contractsv1.ContextFabricRelationshipBlocks))
+	forward = []string{blocks}
+	for k, m := range mapping {
+		if m.mapped != contractsv1.ContextFabricRelationshipBlocks {
+			continue
+		}
+		if m.swapEndpoints {
+			inverse = append(inverse, strings.ToLower(k))
+		} else {
+			forward = append(forward, strings.ToLower(k))
+		}
 	}
-	sort.Strings(keys)
-	var b strings.Builder
-	b.WriteString("multiIf(")
-	for _, k := range keys {
-		m := mapping[k]
-		fmt.Fprintf(&b, "equals(%s, '%s'), '%s', ", trimmed, k, keyOf(strings.ToLower(string(m.mapped)), m.swapEndpoints))
+	sort.Strings(forward)
+	sort.Strings(inverse)
+	return forward, inverse
+}
+
+func lowerTrimSQL(column string) string {
+	return fmt.Sprintf("lower(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', ''))", column)
+}
+
+func anyEqualSQL(operand string, values []string) string {
+	terms := make([]string, 0, len(values))
+	for _, v := range values {
+		terms = append(terms, fmt.Sprintf("equals(%s, '%s')", operand, v))
 	}
-	fmt.Fprintf(&b, "concat(lower(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', '')), ':fwd'))", column)
-	return b.String()
+	if len(terms) == 1 {
+		return terms[0]
+	}
+	return "or(" + strings.Join(terms, ", ") + ")"
+}
+
+// BlockerPredicateSQL is true for a stored relationship_type that states a
+// blocks edge in either direction. It is KeySQL(column) IN (blocks:fwd,
+// blocks:inv) with the key table read once: one trim and one lower per row, in
+// function-call syntax. The ClickHouse parity test holds it equal to KeySQL.
+func BlockerPredicateSQL(column string) string {
+	forward, inverse := blockerSpellings()
+	return anyEqualSQL(lowerTrimSQL(column), append(append([]string{}, forward...), inverse...))
+}
+
+// BlockerInverseSQL is true when the stored spelling states the blocks edge
+// from the blocked side (the endpoints swap).
+func BlockerInverseSQL(column string) string {
+	_, inverse := blockerSpellings()
+	return anyEqualSQL(lowerTrimSQL(column), inverse)
 }
