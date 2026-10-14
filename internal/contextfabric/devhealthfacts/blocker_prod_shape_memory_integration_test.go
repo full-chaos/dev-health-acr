@@ -86,8 +86,8 @@ SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(100000 + numbe
 // the statement CI measures is therefore 48 MiB, the production target, scaled
 // by the 0.86 calibration ratio.
 const (
-	blockerProdShapeCeiling       = uint64(41 << 20)
-	blockerProdShapeTotalsCeiling = uint64(38 << 20)
+	blockerProdShapeCeiling       = uint64(1 << 20)
+	blockerProdShapeTotalsCeiling = uint64(1 << 20)
 	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
 )
 
