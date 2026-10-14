@@ -34,7 +34,7 @@ FROM (
 					SELECT work_unit_id,
 						argMaxIf(tuple(repo_id, from_ts, to_ts, effort_value, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest
 					FROM (
-						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, effort_value, theme_distribution_json,
+						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, toFloat64(1) AS effort_value, theme_distribution_json,
 							ifNull(subcategory_distribution_json['quality.bugfix'], 0.0) AS unit_bugfix_share,
 							arrayMap(r -> (substring(r, 1, 36), substring(r, 40)),
 								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))) AS direct_refs,
