@@ -677,3 +677,20 @@ func TestAWeakerTierNeverOutranksAnExactOneEvenWhenTheGoalNamesIt(t *testing.T) 
 		t.Errorf("cause order = %v", order)
 	}
 }
+
+func TestATableWithoutTheTierColumnIsNamedAndEveryLinkStaysARelation(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-absent", "pull_request", "9", "Absent", "merged", at),
+		tieredDeploymentRow("ev-d-absent", "d9", "failure", "9", "column_absent", at),
+	}
+	roles, packet := servedRoles(t, evidence)
+	if roles["ev-pr-absent"] != contractsv1.CategoryEvidence {
+		t.Errorf("a link from a table without the tier column served as %q, want evidence", roles["ev-pr-absent"])
+	}
+	for _, want := range []string{"deployments_pull_request_tier_column_absent", "cause_links_demoted:1:link_tier_not_stored"} {
+		if !slices.Contains(packet.Warnings, want) {
+			t.Errorf("missing %q in %v", want, packet.Warnings)
+		}
+	}
+}

@@ -31,6 +31,9 @@ func TestSourceStatementsAreByteIdenticalToTheGolden(t *testing.T) {
 	executor := NewClickHouseSourceExecutor(recorder)
 	for _, query := range SourceQueryCatalogV1 {
 		line("catalog/"+query.ID, query.Statement)
+		if older, ok := OlderStatement(query.ID); ok {
+			line("older-table/"+query.ID, older)
+		}
 		_, _ = executor.QueryEvidence(context.Background(), query, nil)
 		line("executed/"+query.ID, recorder.statements[len(recorder.statements)-1])
 	}

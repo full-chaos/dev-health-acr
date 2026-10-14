@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v3"
+	RankingVersionV1          = "ranker.v4"
 	minimumEvidenceConfidence = 0.5
 )
 

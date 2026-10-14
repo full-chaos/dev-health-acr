@@ -194,6 +194,12 @@ type linkedCause struct {
 func roleWarnings(evidence []contractsv1.EvidenceRef) []string {
 	links := linkedCauseRefs(evidence)
 	var out []string
+	for _, ref := range evidence {
+		if value, _ := ref.Metadata[metadataPullRequestTier].(string); ref.Source.EntityType == "deployment" && value == deploymentTierColumnAbsent {
+			out = append(out, "deployments_pull_request_tier_column_absent")
+			break
+		}
+	}
 	if n := unknownStatusCount(evidence, "incident"); n > 0 {
 		out = append(out, "status_unknown:incident:"+strconv.Itoa(n))
 	}
@@ -371,6 +377,8 @@ func linkTier(ref contractsv1.EvidenceRef) (tier, bucket string) {
 		return "", bucketTierNotStored
 	case tierExactMergeSHA, tierMergedPR, tierPushed:
 		return value, value
+	case deploymentTierColumnAbsent:
+		return "", bucketTierNotStored
 	case tierFirstListed:
 		return "", tierFirstListed
 	default:
