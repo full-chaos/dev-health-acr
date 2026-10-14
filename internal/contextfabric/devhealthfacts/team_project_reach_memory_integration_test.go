@@ -55,8 +55,8 @@ func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnR
 	t.Run("interleaved", func(t *testing.T) {
 		measureProjectReachedRead(t, ctx, query, direct, projectReachInterleavedMemoryOrg, true)
 	})
-	t.Run("empty project id", func(t *testing.T) {
-		assertEmptyProjectIDLinkRowsIdentical(t, ctx, query, direct)
+	t.Run("empty project id and ambiguous project key", func(t *testing.T) {
+		assertIdentityEdgeCaseLinkRowsIdentical(t, ctx, query, direct)
 	})
 }
 
@@ -215,11 +215,14 @@ func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, 
 	}
 }
 
-// A project whose id is the empty string is a real identity value: the
+// Two identity edge cases the narrowed statement must keep exactly as the
+// statement it replaced: a project key that resolves to two projects owns
+// nothing (key_resolution_count), while the ids of those same projects still
+// match; and a project whose id is the empty string is a real identity value: the
 // ownership arm matches it, the identity resolution gives it the join key "",
 // and an issue with no project id is then one of its issues. The narrowed
 // statement must return exactly the rows of the statement it replaced.
-func assertEmptyProjectIDLinkRowsIdentical(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
+func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
 	const org, teamID = "c1d2e3f4-5a6b-4c7d-8e9f-0a1b2c3d4e5f", "team-empty-id"
 	at := ts(2026, 9, 29, 0, 0, 0)
@@ -242,10 +245,32 @@ func assertEmptyProjectIDLinkRowsIdentical(t *testing.T, ctx context.Context, qu
 		repoUUID("repo-empty-id"), org, uint32(7), "pr", "open", at, at, "feature", "")
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		repoUUID("repo-empty-id"), "i-empty-id", uint32(7), float32(1), "native", "", at, org)
+	for _, id := range []string{"dup-a", "dup-b"} {
+		exec(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, org, "linear", "DUPKEY", id, uint8(1), "active", "", at)
+	}
+	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		org, "linear", teamID, "dup-a", "DUPKEY", "native", ts(2026, 1, 1, 0, 0, 0), nil, at)
+	for _, item := range []struct {
+		id, project string
+		number      uint32
+	}{{"i-dup-key", "DUPKEY", 8}, {"i-dup-id", "dup-a", 9}} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+			item.id, repoUUID("repo-empty-id"), org, "title", at, item.project)
+		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+			repoUUID("repo-empty-id"), org, item.number, "pr", "open", at, at, "feature", "")
+		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoUUID("repo-empty-id"), item.id, item.number, float32(1), "native", "", at, org)
+	}
 	beforeRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-before", devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest())
 	afterRows, _ := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-empty-after", devhealthfacts.TeamProjectLinkRowsSQLForTest())
-	if len(beforeRows) != 1 || !slices.Equal(beforeRows, afterRows) {
-		t.Fatalf("empty project id link rows differ: before %v, after %v, want the one row of the empty-id project in both", beforeRows, afterRows)
+	if len(beforeRows) != 2 || !slices.Equal(beforeRows, afterRows) {
+		t.Fatalf("identity edge case link rows differ: before %v, after %v, want the empty-id row and the dup-a id row, and no row for the ambiguous key, in both", beforeRows, afterRows)
+	}
+	for _, row := range afterRows {
+		if strings.Contains(row, "i-dup-key") {
+			t.Fatalf("a project key resolving to two projects reached an issue: %v", afterRows)
+		}
 	}
 }
 
