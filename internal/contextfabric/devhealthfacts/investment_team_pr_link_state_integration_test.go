@@ -166,8 +166,8 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 
 // The pull request link state is one bounded statement: its reads follow the
 // requested repositories, not the organization. The row reads at several
-// organization sizes, the smallest of five warm reads each, must not grow, and
-// the peak memory stays under the ceiling the package's other rows use.
+// organization sizes, the lowest of five warm reads each, must not grow, and
+// the highest peak of those reads stays under the ceiling the package other rows use.
 func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -181,7 +181,7 @@ func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
-	measure := func() (readRows, peak uint64) {
+	measure := func() (lowRows, lowPeak, highPeak uint64) {
 		t.Helper()
 		first := true
 		for run := 0; run < 5; run++ {
@@ -208,17 +208,20 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 			if rows == 0 {
 				t.Fatalf("measurement did not happen: no logged link state statement")
 			}
-			if first || rows < readRows {
-				readRows = rows
+			if first || rows < lowRows {
+				lowRows = rows
 			}
-			if first || memory < peak {
-				peak = memory
+			if first || memory < lowPeak {
+				lowPeak = memory
+			}
+			if memory > highPeak {
+				highPeak = memory
 			}
 			first = false
 		}
-		return readRows, peak
+		return lowRows, lowPeak, highPeak
 	}
-	baseRows, basePeak := measure()
+	baseRows, baseLowPeak, baseHighPeak := measure()
 	const ceiling = 64 << 20
 	for _, step := range []int{50_000, 150_000} {
 		s.exec(fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
@@ -227,13 +230,13 @@ SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400)
 SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), concat('other-', toString(number)), toUInt32(number + 100000), 1, 'native', '', now(), '%s' FROM numbers(%d)`, orgID, step))
 		s.exec(fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
 SELECT concat('other-', toString(number)), toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400), 12, '0'))), '%s', 'title', 'issue', 'open', '', now(), now(), '', 'linear', '', NULL, now() FROM numbers(%d)`, orgID, step))
-		rows, peak := measure()
-		t.Logf("unrelated rows added %d: read_rows=%d (base %d) peak=%d (base %d)", step, rows, baseRows, peak, basePeak)
+		rows, lowPeak, highPeak := measure()
+		t.Logf("unrelated rows added %d: read_rows lowest=%d (base %d, bound %d); peak lowest=%d highest=%d (base lowest %d highest %d, ceiling %d)", step, rows, baseRows, baseRows+baseRows/10+64, lowPeak, highPeak, baseLowPeak, baseHighPeak, ceiling)
 		if rows > baseRows+baseRows/10+64 {
 			t.Errorf("read_rows %d with %d unrelated pull requests and links, base %d: the read follows the organization", rows, step, baseRows)
 		}
-		if peak > ceiling {
-			t.Errorf("peak memory %d bytes with %d unrelated rows, over the %d-byte ceiling", peak, step, ceiling)
+		if highPeak > ceiling {
+			t.Errorf("highest peak memory %d bytes with %d unrelated rows, over the %d-byte ceiling", highPeak, step, ceiling)
 		}
 	}
 }
