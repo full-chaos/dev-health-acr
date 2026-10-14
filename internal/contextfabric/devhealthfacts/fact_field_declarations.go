@@ -449,6 +449,7 @@ func pullRequestFields() []fieldDecl {
 			// windowed. Served in place of one fact per pull request unless
 			// the question asks for the pull requests themselves.
 			fInt("pull_requests_by_state_omitted_count", "count"),
+			fStr("pull_requests_by_state_basis"),
 			fTable("pull_requests_by_state",
 				cRef(declRepositoryRef, cStr("repository_id")),
 				cNullable(cStr("repository_name")),

@@ -87,6 +87,12 @@ func TestDirectReadPullRequestsForSeveralTeamsServesCountsByStateNotOneFactPerPu
 			continue
 		}
 		teamsServed++
+		if basis, _ := fact.Fields["pull_requests_by_state_basis"].(string); !strings.Contains(basis, "find_subjects") {
+			t.Fatalf("the table does not say how to reach the pull requests: %+v", fact.Fields)
+		}
+		if len(fact.Provenance.NaturalKeys) == 0 {
+			t.Fatalf("the team fact cites no source entity a caller can open: %+v", fact.Provenance)
+		}
 		table := fact.Tables["pull_requests_by_state"]
 		column := map[string]int{}
 		for index, name := range table.Columns {

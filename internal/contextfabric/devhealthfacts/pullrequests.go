@@ -376,6 +376,7 @@ ORDER BY repo_id`
 		}
 		if table, omitted, ok := pullRequestsByStateFactValue(byState, grainExact); ok && tables {
 			fields["pull_requests_by_state"] = table
+			fields["pull_requests_by_state_basis"] = contextfabric.StringFactValue(pullRequestsByStateBasis)
 			if omitted > 0 {
 				outcome.truncated = true
 				fields["pull_requests_by_state_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))

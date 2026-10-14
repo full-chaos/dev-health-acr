@@ -17,6 +17,10 @@ const (
 	stateCountFieldSeparator = "\x1f"
 )
 
+// pullRequestsByStateBasis is served beside the table: what the counts are and
+// how to reach the pull requests themselves.
+const pullRequestsByStateBasis = "counts of the pull requests of the repositories this team reaches, by stored state, not windowed; the pull requests themselves are read by asking for the pull requests of the team (a list, or a state such as open), or by reading pull_request subjects returned by find_subjects"
+
 // pullRequestStateCounts is, for one repository, the number of pull requests
 // holding each stored state. A state with no pull request is absent, never a
 // zero row.
