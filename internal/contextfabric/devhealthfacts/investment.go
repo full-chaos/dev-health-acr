@@ -554,7 +554,7 @@ func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZer
 		for _, n := range noLinked {
 			prs += n.pullRequests
 		}
-		reason += fmt.Sprintf("; %s for %d: %d pull request(s) in the team's repositories in the requested window; %s", investmentTeamPRsWithoutLinkedWork, len(noLinked), prs, investmentTeamPRsWithoutLinkedWorkRule)
+		reason += fmt.Sprintf("; %s for %d: %d pull request(s) counted per team (one in a repository two of these teams share counts for each) in the teams' repositories in the requested window; %s", investmentTeamPRsWithoutLinkedWork, len(noLinked), prs, investmentTeamPRsWithoutLinkedWorkRule)
 	}
 	if noUnit := unavailable - noOwned - len(noEffort) - len(noLinked); noUnit > 0 {
 		reason += fmt.Sprintf("; %s for %d: no repository the team owns and no pull request linked to its owned projects has persisted work unit effort in the requested window", investmentTeamNoUnitInWindow, noUnit)

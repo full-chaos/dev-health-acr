@@ -191,10 +191,14 @@ func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
 	s.workItem("issue-1", "issue")
+	s.workItem("pr-typed", "pr")
 	s.team("team-cost", "repo-cost")
 	for n := uint32(1); n <= 20; n++ {
 		s.pullRequest("repo-cost", n, inWindow, nil)
 	}
+	// A link from a pull-request-typed item is not admitted, so the team keeps
+	// the reason while the work item lookup runs with a non-empty candidate set.
+	s.link("repo-cost", "pr-typed", 1, "native")
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
 	measure := func() (lowRows, lowPeak, highPeak uint64) {
