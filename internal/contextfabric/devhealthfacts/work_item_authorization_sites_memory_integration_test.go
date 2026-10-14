@@ -177,14 +177,26 @@ func TestWorkItemAuthorizationSitesPeakMemoryOnRealClickHouse(t *testing.T) {
 }
 
 func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed) {
+	if sitesRaceDetector {
+		t.Skip("measurement test: memory under the race detector is not the served figure")
+	}
 	ctx := context.Background()
+	var report []string
+	rep := func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		report = append(report, line)
+		t.Log(line)
+	}
+	// The measurement PR reports its table through a deliberate failure so
+	// the numbers reach the CI log; the test is not merged as is.
+	defer func() { t.Errorf("SITEMEM REPORT (measurement draft; red on purpose):\n%s", strings.Join(report, "\n")) }()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
 	seedAuthorizationSites(t, ctx, direct, seed)
 	parts := sitesPartCount(t, ctx, direct)
-	t.Logf("SITEMEM layout state=%s size=%s active parts (work_items, links, two ownership tables) = %d", state, size, parts)
+	rep("SITEMEM layout state=%s size=%s active parts (work_items, links, two ownership tables) = %d", state, size, parts)
 	if seed.multipart && parts < 40 {
 		t.Fatalf("multipart layout holds %d active parts, want at least 40: the layout is not pinned", parts)
 	}
@@ -234,7 +246,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		if statements == 0 {
 			t.Fatalf("SITEMEM %s: no statement was logged: the measurement did not happen (last error %v)", label, lastErr)
 		}
-		t.Logf("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB statements=%d err=%v", state, size, label, mib(best), statements, lastErr)
+		rep("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB statements=%d err=%v", state, size, label, mib(best), statements, lastErr)
 	}
 
 	orgWide := storage.Principal{OrgID: sitesOrg, RepositoryScopes: []string{"*"}}
@@ -276,7 +288,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		capture := &sitesLabelClient{inner: query, tag: nextTag()}
 		provider := findProvider(t, devhealthfacts.NewProviders(capture), contextfabric.FactBlockers)
 		if _, err := provider.ReadFacts(ctx, pr.p, contextfabric.FactQuery{Time: current, Kind: contextfabric.FactBlockers, Subjects: teams}); err != nil {
-			t.Logf("SITEMEM site3 capture read: %v", err)
+			rep("SITEMEM site3 capture read: %v", err)
 		}
 		for _, threads := range []string{"max_threads = 1", "max_threads = 2"} {
 			threads := threads
@@ -363,7 +375,7 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		if statements == 0 {
 			t.Fatalf("relation %s: no statement was logged", label)
 		}
-		t.Logf("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB authorized=%d", state, size, "relation "+label, mib(best), authorized)
+		rep("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB authorized=%d", state, size, "relation "+label, mib(best), authorized)
 	}
 	candidateSets := []struct{ name, sql string }{
 		{"whole organization", ""},
@@ -410,6 +422,6 @@ func measureAuthorizationSites(t *testing.T, state, size string, seed sitesSeed)
 		if statements == 0 {
 			t.Fatalf("site7 %s: no statement was logged", pr.name)
 		}
-		t.Logf("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB (mirror of the statement)", state, size, "site7 repo-less issue gate "+pr.name, mib(best))
+		rep("SITEMEM state=%s size=%s %-58s min-of-3 peak %6.2f MiB (mirror of the statement)", state, size, "site7 repo-less issue gate "+pr.name, mib(best))
 	}
 }
