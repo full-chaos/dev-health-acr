@@ -157,6 +157,12 @@ type linkedCause struct {
 func roleWarnings(evidence []contractsv1.EvidenceRef) []string {
 	links := linkedCauseRefs(evidence)
 	var out []string
+	if n := unknownStatusCount(evidence, "incident"); n > 0 {
+		out = append(out, "status_unknown:incident:"+strconv.Itoa(n))
+	}
+	if n := unknownStatusCount(evidence, "deployment"); n > 0 {
+		out = append(out, "status_unknown:deployment:"+strconv.Itoa(n))
+	}
 	if links.demotedLinks > 0 {
 		out = append(out, "cause_links_demoted:"+strconv.Itoa(links.demotedLinks)+":link_tier_not_stored")
 	}
@@ -195,6 +201,45 @@ func activeBlockerRefs(evidence []contractsv1.EvidenceRef) map[string]bool {
 		active[ref.EvidenceRefID] = true
 	}
 	return active
+}
+
+var knownDeploymentStatuses = map[string]bool{
+	"success": true, "inactive": true, "in_progress": true, "queued": true, "pending": true, "created": true, "running": true,
+	"canceled": true, "cancelled": true, "skipped": true, "blocked": true, "waiting": true,
+}
+
+var knownClosedIncidentStatuses = map[string]bool{"resolved": true, "closed": true, "done": true, "cancelled": true, "canceled": true, "mitigated": true, "completed": true}
+
+// unknownStatusCount counts the trusted rows of one entity type whose stored
+// status is present but neither a failure/open value nor a known resolved or
+// healthy one: such a row is "status unknown", never pressure and never
+// resolved or success.
+func unknownStatusCount(evidence []contractsv1.EvidenceRef, entityType string) int {
+	count := 0
+	for _, ref := range evidence {
+		if ref.Source.EntityType != entityType || ref.SourceVersion == aiArtifactSourceVersion {
+			continue
+		}
+		switch entityType {
+		case "incident":
+			rest, found := strings.CutPrefix(ref.Citation, "status=")
+			if !found {
+				continue
+			}
+			status, _, _ := strings.Cut(rest, ",")
+			status = strings.ToLower(strings.TrimSpace(status))
+			if status != "" && !openIncidentStatuses[status] && !knownClosedIncidentStatuses[status] {
+				count++
+			}
+		case "deployment":
+			status, _ := ref.Metadata[metadataDeploymentStatus].(string)
+			status = strings.ToLower(strings.TrimSpace(status))
+			if status != "" && !failureTokens[status] && !knownDeploymentStatuses[status] {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 type roleResolver map[string]rule
