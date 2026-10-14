@@ -1540,7 +1540,7 @@ func (e *ScopeExpander) teamWorkItems(ctx context.Context, principal storage.Pri
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	scope := workItemRepositoryAuthorization(principal, nil)
-	rendered := readers.WorkItemScopeSQL(scope)
+	rendered := teamWorkItemScopeSQL(scope)
 	statement := workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(a.team_id) AS origin_id, arraySort(groupUniqArray(a.team_id)) AS origin_ids, argMin(toString(a.source), `+teamAttributionSourceRankSQL+`) AS attribution_source,
 `+workItemScopeAuthorizationColumnsSQL(rendered)+`,
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,

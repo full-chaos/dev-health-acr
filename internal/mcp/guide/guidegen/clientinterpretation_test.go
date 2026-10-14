@@ -20,7 +20,7 @@ import (
 var backtickToken = regexp.MustCompile("`([^`]+)`")
 
 // plainWords are English or protocol words the guide quotes that no registry owns.
-var plainWords = []string{"user", "validation", "prompts/get", "role"}
+var plainWords = []string{"user", "validation", "prompts/get", "tools/list", "role"}
 
 func jsonNames(typ reflect.Type) []string {
 	var names []string
@@ -219,7 +219,7 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 	want = append(want, c.SynthesisInputFields...)
 	want = append(want, c.SynthesisContractFields...)
 	want = append(want, c.TextFields...)
-	want = append(want, "never `"+c.StatusComplete+"`", "either `"+c.ServerSideTool+"` or `"+c.InterpretTool+"`", "byte for byte")
+	want = append(want, "never `"+c.StatusComplete+"`", "either `"+c.ServerSideTool+"` (if listed) or `"+c.InterpretTool+"` (if listed)", "byte for byte")
 	for _, path := range synthesisprompt.ClientInputObservationPaths() {
 		want = append(want, "`"+path+"`")
 	}
