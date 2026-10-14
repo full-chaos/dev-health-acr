@@ -465,22 +465,25 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 	}
 
-	// Planted defect, absolute: the library authorization relation forced back
-	// inside every statement (the shape before the organization-wide fast path,
-	// the defect the ceilings exist for) must put some statement at or over its
-	// frozen ceiling in every one of three warm reads (by peak, or by the
-	// memory-limit exception, code 241 asserted, never any error). The same
-	// reading of the shipped shape must NOT reach a ceiling: that is what makes
-	// the control discriminate. If the planted reading did not reach one, the
-	// ceilings could not catch the defect they exist for.
-	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape", func() { read(orgWide) }) {
+	// Planted defect, absolute: the two shipped memory fixes undone together for
+	// the restricted caller, the authorization relation inside every statement
+	// (#1256) and the server's default block size (#1304). The totals statement
+	// must then sit at least 2 MiB over its frozen ceiling in every one of three
+	// warm reads (by peak, or by the memory-limit exception, code 241 asserted,
+	// never any error). The same reading of the shipped shape must NOT reach the
+	// ceiling: that is what makes the control discriminate. If the planted
+	// reading did not reach it, the ceilings could not catch the defect they
+	// exist for.
+	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape, restricted", func() { read(restricted) }) {
 		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
 	}
-	restoreLibrary = devhealthfacts.ForceLibraryAuthorizationForTest()
-	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: library authorization forced", func() { read(orgWide) })
-	restoreLibrary()
+	restoreBoundPlanted := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+	restoreBlockPlanted := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
+	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, default block size, restricted", func() { read(restricted) })
+	restoreBlockPlanted()
+	restoreBoundPlanted()
 	if !planted {
-		t.Error("with the library authorization forced back in, no statement reached its ceiling: the ceilings cannot catch the defect they exist for")
+		t.Error("with the authorization relation inside each statement and the default block size, the totals statement did not clear its ceiling by the margin: the ceilings cannot catch the defect they exist for")
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
