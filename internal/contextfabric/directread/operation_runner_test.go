@@ -417,6 +417,10 @@ func TestK14AInvestmentShapesAtTheEdge(t *testing.T) {
 			{"scope_ORG_no_ids", opMerge(breakdown("THEME"), "batch.filters.scope", map[string]any{"level": "ORG", "ids": []any{}}), ""},
 			{"what_repos", opMerge(breakdown("THEME"), "batch.filters.what.repos", []any{"acme/a"}), directread.RefusalBasisDependentShape},
 			{"use_investment_from_client", opMerge(breakdown("THEME"), "batch.useInvestment", false), directread.RefusalVariableNotAllowed},
+			{"measure_CHURN_LOC", map[string]any{"batch": map[string]any{"breakdowns": []any{map[string]any{
+				"dimension": "THEME", "measure": "CHURN_LOC", "topN": 5,
+				"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-28"},
+			}}}}, directread.RefusalVariableNotAllowed},
 		} {
 			t.Run(name+"/"+tc.label, func(t *testing.T) {
 				h.upstream.reset()
