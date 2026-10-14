@@ -43,6 +43,11 @@ const teamPRLinkChunk = 500
 // key can prune on; an array expression with a lambda is not.
 const teamPRLinkRepositorySet = `(SELECT toUUIDOrZero(arrayJoin({ids:Array(String)})))`
 
+// The work item type is read only for work items stored in the requested
+// repositories (the table is sorted by org_id, repo_id, work_item_id, so an id
+// lookup alone reads the organization). A linked work item stored in another
+// repository has no row here and counts as admitted, the same as a missing row
+// does in the shared link rule.
 // teamPRLinkStatement counts, per requested repository, the pull requests in
 // the window and how many of them have an admitted link. Both tables are read
 // by their primary key prefix (org_id, repo_id), so the read grows with the
@@ -54,7 +59,7 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 		FROM work_graph_issue_pr AS l FINAL
 		LEFT JOIN (
 			SELECT work_item_id, type FROM work_items FINAL
-			WHERE org_id = {org_id:String} AND work_item_id IN (
+			WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+` AND work_item_id IN (
 				SELECT work_item_id FROM work_graph_issue_pr
 				WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`
 			)

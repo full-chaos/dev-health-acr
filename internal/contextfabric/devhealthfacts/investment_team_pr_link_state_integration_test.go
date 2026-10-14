@@ -69,9 +69,9 @@ func (s prLinkSeed) pullRequest(repo string, number uint32, created time.Time, m
 		repoUUID(repo), s.org, number, "pr", "open", s.at, created, merged, "feature", "")
 }
 
-func (s prLinkSeed) workItem(id, typ string) {
+func (s prLinkSeed) workItem(id, typ, repo string) {
 	s.exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, '', 'linear', '', NULL, ?)`,
-		id, repoUUID("repo-any"), s.org, "title "+id, typ, "open", s.at, s.at, s.at)
+		id, repoUUID(repo), s.org, "title "+id, typ, "open", s.at, s.at, s.at)
 }
 
 func (s prLinkSeed) link(repo, workItem string, number uint32, provenance string) {
@@ -88,8 +88,8 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
 	beforeWindow := ts(2026, 7, 1, 0, 0, 0)
 
-	s.workItem("issue-1", "issue")
-	s.workItem("pr-typed", "pr")
+	s.workItem("issue-1", "issue", "repo-any")
+	s.workItem("pr-typed", "pr", "repo-prtyped")
 
 	s.team("team-nolink", "repo-nolink")
 	for n := uint32(1); n <= 3; n++ {
@@ -205,8 +205,8 @@ func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *
 	const orgID = "org-pr-link-cost"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
-	s.workItem("issue-1", "issue")
-	s.workItem("pr-typed", "pr")
+	s.workItem("issue-1", "issue", "repo-any")
+	s.workItem("pr-typed", "pr", "repo-cost")
 	s.team("team-cost", "repo-cost")
 	for n := uint32(1); n <= 20; n++ {
 		s.pullRequest("repo-cost", n, inWindow, nil)
