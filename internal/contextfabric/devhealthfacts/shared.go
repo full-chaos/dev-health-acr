@@ -1152,7 +1152,6 @@ import (
 // (blocked_by, is_blocked_by), with the blocker and the blocked item taken from
 // the direction the row states. An answer saved under v225 omits those pairs.
 const QueryVersion = "devhealthfacts.clickhouse.v226"
-const QueryVersion = "devhealthfacts.clickhouse.v225"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
