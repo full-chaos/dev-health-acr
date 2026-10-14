@@ -122,7 +122,14 @@ const SourceName = "dev_health_clickhouse"
 // the retired "<repo>:<review_id>", which named one ref for a review id on two
 // pull requests of one repository. Already-projected reviews carry the retired
 // ref; the rebuild (acr-projector rebuild --org) re-projects them.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v10"
+//
+// (v11, blocks links the provider removed: work_item_dependencies keeps the row
+// of a removed link, and the producer now ends the row, by the shared
+// relation-current rule, at the time the link ended: it retracts the edge
+// instead of asserting it. Already-projected organizations hold edges for
+// links removed before this; the rebuild (acr-projector rebuild --org) drops
+// them.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v11"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -187,6 +194,9 @@ type ClickHouseProjectionSource struct {
 	// its statements from it (pullRequestWideReadRows). Zero means the
 	// dev-health-go client default.
 	readByteLimit uint64
+
+	// endedLinksBound overrides relationcurrent.MaxEndedLinks when positive (tests).
+	endedLinksBound int
 
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
@@ -444,6 +454,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		recordConsumed:       s.recordConsumed(fromCursor),
 		dropConsumed:         s.forgetConsumed,
 		readByteLimit:        s.readByteLimit,
+		endedLinksBound:      s.endedLinksBound,
 	}
 }
 
