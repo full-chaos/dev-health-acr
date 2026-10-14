@@ -89,6 +89,15 @@ const (
 	blockerProdShapeCeiling       = uint64(41 << 20)
 	blockerProdShapeTotalsCeiling = uint64(38 << 20)
 	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
+
+	// The planted defect must clear its ceiling by this much on the totals
+	// statement, so the control does not flip on allocator noise.
+	blockerProdShapeControlMargin = uint64(2 << 20)
+
+	// The in-statement authorization fallback: main's peaks on this shape
+	// (52.3 MiB age, 46.8 MiB totals) plus 2 MiB, under the 64 MiB cap.
+	blockerProdShapeInStatementCeiling       = uint64(54 << 20)
+	blockerProdShapeInStatementTotalsCeiling = uint64(48 << 20)
 )
 
 type blockerProdShapeStatement struct {
@@ -165,6 +174,75 @@ func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickh
 	return out
 }
 
+// blockerProdShapePlantedReading runs read once warm and then three times,
+// and reports whether some statement reached its frozen ceiling in EVERY one
+// of the three reads: by its peak memory at completion, or by the server's
+// memory-limit exception (code 241) in all three. Any other exception (a
+// missing table, a timeout) fails the test: it must not satisfy the control.
+func blockerProdShapePlantedReading(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, read func()) bool {
+	t.Helper()
+	const memoryLimitExceeded = 241
+	read()
+	type seen struct {
+		head         string
+		low          uint64
+		memoryLimits int
+		rounds       int
+	}
+	byHash := map[uint64]*seen{}
+	for round := 0; round < 3; round++ {
+		mark := serverNowMicros(t, ctx, direct)
+		read()
+		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+			t.Fatalf("flush logs: %v", err)
+		}
+		rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(exception_code), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+GROUP BY normalized_query_hash`, mark)
+		if err != nil {
+			t.Fatalf("read query_log: %v", err)
+		}
+		for rows.Next() {
+			var hash, peak uint64
+			var code int32
+			var head string
+			if err := rows.Scan(&hash, &peak, &code, &head); err != nil {
+				t.Fatal(err)
+			}
+			if code != 0 && code != memoryLimitExceeded {
+				t.Fatalf("%s: statement %q failed with exception code %d, not the memory limit: the control is not measuring what it claims", label, head, code)
+			}
+			entry := byHash[hash]
+			if entry == nil {
+				entry = &seen{head: head, low: peak}
+				byHash[hash] = entry
+			}
+			entry.rounds++
+			if peak < entry.low {
+				entry.low = peak
+			}
+			if code == memoryLimitExceeded {
+				entry.memoryLimits++
+			}
+		}
+		rows.Close()
+	}
+	exceeded := false
+	for hash, entry := range byHash {
+		ceiling := blockerProdShapeCeilingFor(entry.head)
+		// Only the totals statement counts, and only by a clear margin: a
+		// control that clears a ceiling by a hair flips on allocator noise.
+		totals := strings.HasPrefix(entry.head, blockerProdShapeTotalsHead)
+		hit := totals && (entry.memoryLimits == entry.rounds || entry.low >= ceiling+blockerProdShapeControlMargin)
+		if hit {
+			exceeded = true
+		}
+		t.Logf("PRODSHAPE planted-control reading [%s] statement %d lowest %.1f MiB, memory-limit exceptions %d of %d reads, ceiling %.1f MiB, reached %v: %s", label, hash, float64(entry.low)/(1<<20), entry.memoryLimits, entry.rounds, float64(ceiling)/(1<<20), hit, entry.head)
+	}
+	return exceeded
+}
+
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
@@ -235,7 +313,16 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 
 	restore := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
 	inStatement := read(restricted)
+	inStatementProjects := readProjects(restricted)
 	restore()
+	if len(inStatementProjects.Facts) != len(restrictedProjectsResult.Facts) {
+		t.Fatalf("restricted projects, authorization read once vs inside each statement: %d facts vs %d", len(restrictedProjectsResult.Facts), len(inStatementProjects.Facts))
+	}
+	for index := range inStatementProjects.Facts {
+		if !reflect.DeepEqual(inStatementProjects.Facts[index].Fields, restrictedProjectsResult.Facts[index].Fields) {
+			t.Errorf("restricted projects, authorization read once vs inside each statement: fact %d differs: %+v vs %+v", index, restrictedProjectsResult.Facts[index].Fields, inStatementProjects.Facts[index].Fields)
+		}
+	}
 	for _, pair := range []struct {
 		label     string
 		got, want contextfabric.FactProviderResult
@@ -343,54 +430,60 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 				}
 			}
 		}
-		// First-seen narrowing: the shipped form must serve every value the
-		// legacy form (endpoint-set narrowing) serves, for both callers, in this
-		// part state; the legacy memory is logged beside it.
-		for _, variant := range []string{"legacy"} {
-			restoreVariant := devhealthfacts.SetBlockerStartVariantForTest(variant)
-			for _, caller := range []struct {
-				label string
-				read  func() contextfabric.FactProviderResult
-				want  contextfabric.FactProviderResult
-			}{
-				{"org-wide", func() contextfabric.FactProviderResult { return read(orgWide) }, orgWideResult},
-				{"restricted", func() contextfabric.FactProviderResult { return read(restricted) }, restrictedResult},
-				{"projects, org-wide", func() contextfabric.FactProviderResult { return readProjects(orgWide) }, orgWideProjectsResult},
-				{"projects, restricted", func() contextfabric.FactProviderResult { return readProjects(restricted) }, restrictedProjectsResult},
-			} {
-				got := caller.read()
-				if len(got.Facts) != len(caller.want.Facts) {
-					t.Fatalf("first-seen form %s, %s: %d facts, want %d", variant, caller.label, len(got.Facts), len(caller.want.Facts))
-				}
-				for index := range got.Facts {
-					if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
-						t.Errorf("first-seen form %s, %s: fact %d differs from the shipped form: %+v vs %+v", variant, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
-					}
-				}
-				low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { caller.read() })
-				for key := range low {
-					t.Logf("PRODSHAPE age variant %s [%s, %s] min %.1f max %.1f MiB: %s", variant, caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
-				}
+		// The in-statement authorization variant is the fallback for an
+		// authorized endpoint set over the bound. It never met the ceilings
+		// above (main peaked at 52.3 MiB age and 46.8 MiB totals on this
+		// shape, under the 64 MiB statement cap), so it keeps its own frozen
+		// ceilings: main's figures plus 2 MiB. The same highest-of-three rule.
+		restoreBound := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+		fallbackLow, fallbackHigh := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(restricted) })
+		restoreBound()
+		for key := range fallbackLow {
+			ceiling := blockerProdShapeInStatementCeiling
+			if strings.HasPrefix(key, blockerProdShapeTotalsHead) {
+				ceiling = blockerProdShapeInStatementTotalsCeiling
 			}
-			restoreVariant()
+			t.Logf("PRODSHAPE spread [restricted in-statement, %s] min %.1f max %.1f MiB: %s", state, float64(fallbackLow[key])/(1<<20), float64(fallbackHigh[key])/(1<<20), key)
+			if fallbackHigh[key] >= ceiling {
+				t.Errorf("restricted in-statement, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (main's in-statement peak plus 2 MiB)", state, key, fallbackHigh[key], ceiling)
+			}
 		}
 	}
 
-	// Negative control: with the library authorization forced back in (the shape
-	// before the organization-wide fast path) even the LOWEST of three warm reads
-	// must exceed a ceiling, the harder side of the same assertion.
+	// Value equality: the library authorization forced back in (the shape before
+	// the organization-wide fast path) serves the same values as the shipped
+	// shape; only its memory differs.
 	restoreLibrary := devhealthfacts.ForceLibraryAuthorizationForTest()
-	lowForced, _ := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(orgWide) })
+	forced := read(orgWide)
 	restoreLibrary()
-	exceeded := false
-	for key, peak := range lowForced {
-		if peak >= blockerProdShapeCeilingFor(key) {
-			exceeded = true
-		}
-		t.Logf("PRODSHAPE negative control [org-wide, library authorization forced] min %.1f MiB: %s", float64(peak)/(1<<20), key)
+	if len(forced.Facts) != len(orgWideResult.Facts) {
+		t.Fatalf("library authorization forced: %d facts, want %d", len(forced.Facts), len(orgWideResult.Facts))
 	}
-	if !exceeded {
-		t.Error("with the library authorization forced back in, no statement exceeded its ceiling: the ceilings cannot catch the defect they exist for")
+	for index := range forced.Facts {
+		if !reflect.DeepEqual(forced.Facts[index].Fields, orgWideResult.Facts[index].Fields) {
+			t.Errorf("library authorization forced: fact %d differs from the shipped shape: %+v vs %+v", index, forced.Facts[index].Fields, orgWideResult.Facts[index].Fields)
+		}
+	}
+
+	// Planted defect, absolute: the two shipped memory fixes undone together for
+	// the restricted caller, the authorization relation inside every statement
+	// (#1256) and the server's default block size (#1304). The totals statement
+	// must then sit at least 2 MiB over its frozen ceiling in every one of three
+	// warm reads (by peak, or by the memory-limit exception, code 241 asserted,
+	// never any error). The same reading of the shipped shape must NOT reach the
+	// ceiling: that is what makes the control discriminate. If the planted
+	// reading did not reach it, the ceilings could not catch the defect they
+	// exist for.
+	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape, restricted", func() { read(restricted) }) {
+		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
+	}
+	restoreBoundPlanted := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+	restoreBlockPlanted := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
+	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, default block size, restricted", func() { read(restricted) })
+	restoreBlockPlanted()
+	restoreBoundPlanted()
+	if !planted {
+		t.Error("with the authorization relation inside each statement and the default block size, the totals statement did not clear its ceiling by the margin: the ceilings cannot catch the defect they exist for")
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
