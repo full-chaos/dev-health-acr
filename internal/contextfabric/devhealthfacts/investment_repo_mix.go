@@ -19,7 +19,7 @@ import (
 // primitive of investment attribution and a team's mix follows from what
 // the team OWNS.
 //
-//   - A work unit's persisted effort_value * theme_share is split across the
+//   - A work unit (weight one) * theme_share is split across the
 //     repositories of its PR refs by PR-ref share (a partition: the parts sum
 //     to the unit's own weighted effort, never double counted). A ref that
 //     resolves to no repository is null-carrying: its share attaches to no
@@ -167,7 +167,7 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 							argMax(from_ts, computed_at) AS from_ts,
 							argMax(to_ts, computed_at) AS to_ts,
-							argMax(effort_value, computed_at) AS effort_value,
+							toFloat64(1) AS effort_value,
 							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json

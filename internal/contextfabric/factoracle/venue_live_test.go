@@ -50,6 +50,7 @@ func venueConfig(t *testing.T) VenueConfig {
 		// The roots the venue is known not to serve on a path. A root that is
 		// unavailable and not named here fails the run.
 		ListenerDark: rootList("ACR_O4_LISTENER_DARK"), OperationDark: rootList("ACR_O4_OPERATION_DARK"),
+		Logf: t.Logf,
 	}
 }
 
@@ -73,7 +74,7 @@ func logRun(t *testing.T, run *LiveRun) {
 // that did not serve a root and is not declared dark, an answer with no leaf,
 // a value root that compared nothing) and when a temporary allowance expired.
 func TestVenueLive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	run, err := RunLive(ctx, venueConfig(t))
 	if err != nil {
@@ -87,7 +88,7 @@ func TestVenueLive(t *testing.T) {
 
 // TestVenueCapture records the extract and the replies into testdata/venue.
 func TestVenueCapture(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	run, err := Capture(ctx, venueConfig(t), "testdata/venue")
 	if run != nil {

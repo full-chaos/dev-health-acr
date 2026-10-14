@@ -189,7 +189,7 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("native_units_with_no_effort_leave_the_rollup_and_never_a_zero_mix", func(t *testing.T) {
+	t.Run("native_units_with_zero_persisted_effort_are_kept_and_weigh_one", func(t *testing.T) {
 		const org = "org-zero-native"
 		seedProject("proj-z", org)
 		seedOwnedRepo(org, "proj-z", "team-z", "repo-z")
@@ -198,16 +198,18 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedIssueUnit(org, "wu-z-native", 0, map[string]float64{"operational": 1.0}, "linear:Z-1")
 
 		fact := read(org, "proj-z")["proj-z"]
-		if got := factString(t, fact, "investment_mix_source"); got != "owning_team_rollup" {
-			t.Fatalf("investment_mix_source = %q, want owning_team_rollup (zero effort is not a mix)", got)
+		if got := factString(t, fact, "investment_mix_source"); got != "project_native" {
+			t.Fatalf("investment_mix_source = %q, want project_native (a unit with zero persisted effort is kept and weighs 1)", got)
 		}
-		if got := factNumber(t, fact, "theme_risk"); got != 1.0 {
-			t.Errorf("theme_risk = %v, want the roll-up's 1.0", got)
+		if got := factNumber(t, fact, "theme_operational"); got != 1.0 {
+			t.Errorf("theme_operational = %v, want the native unit's 1.0", got)
 		}
-		absent(t, fact, "effort_unit_count")
+		if got := factInt(t, fact, "effort_unit_count"); got != 1 {
+			t.Errorf("effort_unit_count = %d, want 1", got)
+		}
 	})
 
-	t.Run("a_zero_effort_rollup_still_discloses_its_population_beside_the_native_mix", func(t *testing.T) {
+	t.Run("a_zero_persisted_effort_rollup_still_discloses_its_population_beside_the_native_mix", func(t *testing.T) {
 		const org = "org-zero-rollup"
 		seedProject("proj-zr", org)
 		seedOwnedRepo(org, "proj-zr", "team-zr", "repo-zr")
@@ -220,7 +222,7 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("investment_mix_source = %q, want project_native", got)
 		}
 		if got := factInt(t, fact, "owning_team_rollup_work_unit_count"); got != 1 {
-			t.Errorf("owning_team_rollup_work_unit_count = %d, want the displaced zero-effort roll-up's 1 unit", got)
+			t.Errorf("owning_team_rollup_work_unit_count = %d, want the displaced roll-up's 1 unit", got)
 		}
 		if got := factInt(t, fact, "work_unit_count"); got != 1 {
 			t.Errorf("work_unit_count = %d, want the native population 1", got)
@@ -276,8 +278,8 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		if got := factInt(t, s1, "work_unit_count"); got != 2 {
 			t.Errorf("proj-s1 work_unit_count = %d, want 2", got)
 		}
-		if got := factNumber(t, s1, "theme_feature_delivery"); got != 0.25 {
-			t.Errorf("proj-s1 theme_feature_delivery = %v, want 0.25 (10 of 40)", got)
+		if got := factNumber(t, s1, "theme_feature_delivery"); got != 0.5 {
+			t.Errorf("proj-s1 theme_feature_delivery = %v, want 0.5 (1 of 2 units)", got)
 		}
 		if got := factInt(t, s1, "spanning_unit_count"); got != 1 {
 			t.Errorf("proj-s1 spanning_unit_count = %d, want 1", got)
@@ -345,8 +347,8 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 			units, multi int64
 			risk         float64
 		}{
-			"proj-amb-a": {2, 2, 0.25},
-			"proj-amb-b": {2, 2, 0.25},
+			"proj-amb-a": {2, 2, 0.5},
+			"proj-amb-b": {2, 2, 0.5},
 			"proj-amb-c": {1, 1, 0},
 		}
 		for project, w := range want {

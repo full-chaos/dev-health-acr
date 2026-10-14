@@ -45,12 +45,12 @@ func TestProjectMixPhasesReadOneSnapshotAgainstRealClickHouse(t *testing.T) {
 		land func(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, snapshot time.Time)
 	}{
 		{"a version one millisecond newer (same second) than a unit the scope saw", func(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, snapshot time.Time) {
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-1", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, snapshot.Add(time.Millisecond))
-			insertNativeVersion(t, ctx, direct, orgID, "nu-1", snapshot.Add(time.Millisecond))
+			insertVersionAtMilli(t, ctx, direct, orgID, "wu-1", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "feature_delivery", snapshot.Add(time.Millisecond))
+			insertNativeVersion(t, ctx, direct, orgID, "nu-1", "feature_delivery", snapshot.Add(time.Millisecond))
 		}},
 		{"a unit the scope did not see, dated before the snapshot", func(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, snapshot time.Time) {
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-late", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, snapshot.Add(-time.Hour))
-			insertNativeVersion(t, ctx, direct, orgID, "nu-late", snapshot.Add(-time.Hour))
+			insertVersionAtMilli(t, ctx, direct, orgID, "wu-late", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "feature_delivery", snapshot.Add(-time.Hour))
+			insertNativeVersion(t, ctx, direct, orgID, "nu-late", "feature_delivery", snapshot.Add(-time.Hour))
 			// In the current membership run, so a read AFTER this write does see
 			// both units (the control); only the phases' unit set keeps them out.
 			for _, id := range []string{"wu-late", "nu-late"} {
@@ -170,7 +170,7 @@ func nativeRowsOf(rows []readers.ProjectThemeMixRow) []nativeRow {
 	var out []nativeRow
 	for _, r := range rows {
 		out = append(out, nativeRow{Key: r.ProjectSubjectKey, Themes: [5]float64{r.FeatureDelivery, r.Operational, r.Maintenance, r.Quality, r.Risk},
-			Bugfix: r.BugfixWeighted, WorkUnits: r.WorkUnits, EffortUnits: r.EffortUnits, Spanning: r.SpanningUnits, MultiPlaced: r.MultiPlacedUnits})
+			Bugfix: r.BugfixWeighted, WorkUnits: r.WorkUnits, EffortUnits: r.WorkUnits, Spanning: r.SpanningUnits, MultiPlaced: r.MultiPlacedUnits})
 	}
 	return out
 }
@@ -178,22 +178,21 @@ func nativeRowsOf(rows []readers.ProjectThemeMixRow) []nativeRow {
 // insertVersionAtMilli writes one version of a unit with a computed_at bound at
 // the column's own precision (whole milliseconds, fromUnixTimestamp64Milli): a
 // time.Time through the driver's positional `?` is rendered in whole seconds
-// and would land the version a fraction of a second early. effort 1e6 and
-// feature_delivery 1.0 make a version that reached a phase move the mix (effort
-// is a parameter so a pinned unit can start small).
-func insertVersionAtMilli(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id, repoID, evidence string, effort float64, computedAt time.Time) {
+// and would land the version a fraction of a second early. theme is the unit's single theme at 1.0 (weight is one per unit, so a
+// pinned unit's later version moves the mix by changing its theme).
+func insertVersionAtMilli(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id, repoID, evidence, theme string, computedAt time.Time) {
 	t.Helper()
 	from := computedAt.Add(-72 * time.Hour).Truncate(time.Second)
 	if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
-SELECT ?, ?, ?, toUUIDOrNull(?), ?, map('feature_delivery', 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?`,
-		id, from, from, repoID, effort, evidence, computedAt.UnixMilli(), orgID); err != nil {
+SELECT ?, ?, ?, toUUIDOrNull(?), 0, map(?, 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?`,
+		id, from, from, repoID, theme, evidence, computedAt.UnixMilli(), orgID); err != nil {
 		t.Fatalf("insert version of %s: %v", id, err)
 	}
 }
 
-func insertNativeVersion(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id string, computedAt time.Time) {
+func insertNativeVersion(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id, theme string, computedAt time.Time) {
 	t.Helper()
-	insertVersionAtMilli(t, ctx, direct, orgID, id, "", `{"issues":["linear:A-1"],"prs":[]}`, 1_000_000, computedAt)
+	insertVersionAtMilli(t, ctx, direct, orgID, id, "", `{"issues":["linear:A-1"],"prs":[]}`, theme, computedAt)
 }
 
 // newestVersion is the largest computed_at in the table: the snapshot the
@@ -229,12 +228,12 @@ func TestProjectMixPhasesReadTheSelectedVersionNotABackdatedOneAgainstRealClickH
 		createCHAOS7257Tables(t, ctx, direct)
 		const orgID = "org-7271-backdated-rollup"
 		at := seedCHAOS7257Parity(t, ctx, direct, orgID)
-		insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "feature_delivery", at.Add(-time.Hour))
 		insertMembership(t, ctx, direct, orgID, "wu-pin", at)
 		ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
 		baseline := runRollupPhased(t, ctx, query, orgID, ids, window)
 		hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, at.Add(-30*time.Minute))
+			insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "risk", at.Add(-30*time.Minute))
 		}), query, orgID, ids, window)
 		if err != nil {
 			t.Fatal(err)
@@ -253,12 +252,12 @@ func TestProjectMixPhasesReadTheSelectedVersionNotABackdatedOneAgainstRealClickH
 		createCHAOS7257Tables(t, ctx, direct)
 		const orgID = "org-7271-backdated-native"
 		at := seedCHAOS7257Native(t, ctx, direct, orgID)
-		insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, "feature_delivery", at.Add(-time.Hour))
 		insertMembership(t, ctx, direct, orgID, "nu-pin", at)
 		ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
 		baseline := runNativePhased(t, ctx, query, orgID, ids, window, 201)
 		hooked, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
-			insertNativeVersion(t, ctx, direct, orgID, "nu-pin", at.Add(-30*time.Minute))
+			insertNativeVersion(t, ctx, direct, orgID, "nu-pin", "risk", at.Add(-30*time.Minute))
 		}), query, orgID, ids, window, 201)
 		if err != nil {
 			t.Fatal(err)
@@ -310,14 +309,14 @@ func TestProjectMixPhasesNeverBlendTwoInputStatesAgainstRealClickHouse(t *testin
 		createCHAOS7257Tables(t, ctx, direct)
 		const orgID = "org-7271-blend-rollup"
 		at := seedCHAOS7257Parity(t, ctx, direct, orgID)
-		insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "feature_delivery", at.Add(-time.Hour))
 		insertMembership(t, ctx, direct, orgID, "wu-pin", at)
 		ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
 		before := runRollupStatement(t, ctx, query, "SingleRollupBefore", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
 		var once sync.Once
 		hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
 			once.Do(func() {
-				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, at.Add(-30*time.Minute))
+				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "risk", at.Add(-30*time.Minute))
 				if err := direct.Exec(ctx, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at)
 SELECT org_id, repo_id, work_item_id, 'team-2', 'team-2', source, is_primary, confidence, now64(3) FROM work_item_team_attributions WHERE org_id = ?`, orgID); err != nil {
 					t.Fatalf("move attributions: %v", err)
@@ -343,14 +342,14 @@ SELECT org_id, repo_id, work_item_id, 'team-2', 'team-2', source, is_primary, co
 		createCHAOS7257Tables(t, ctx, direct)
 		const orgID = "org-7271-blend-native"
 		at := seedCHAOS7257Native(t, ctx, direct, orgID)
-		insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, "feature_delivery", at.Add(-time.Hour))
 		insertMembership(t, ctx, direct, orgID, "nu-pin", at)
 		ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
 		before := runNativeStatement(t, ctx, query, "SingleNativeBefore", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
 		var once sync.Once
 		hooked, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
 			once.Do(func() {
-				insertNativeVersion(t, ctx, direct, orgID, "nu-pin", at.Add(-30*time.Minute))
+				insertNativeVersion(t, ctx, direct, orgID, "nu-pin", "risk", at.Add(-30*time.Minute))
 				// linear:A-1 moves from n-p1 to n-p2 (a newer work_items version).
 				if err := direct.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 					"00000000-0000-0000-0000-000000000000", "linear:A-1", "linear", "title", "issue", "open", "", "n-p2", "", "", at, at, nil, "", "", at.Add(time.Hour), orgID); err != nil {
@@ -498,7 +497,7 @@ const (
 // ownership row.
 func rollupInputWrites(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, at time.Time, kind string) {
 	t.Helper()
-	insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, at.Add(-30*time.Minute))
+	insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "risk", at.Add(-30*time.Minute))
 	if kind == mixWriteAfterScope {
 		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			orgID, "linear", "team-2", "proj-1", nil, "native", at.Add(-100*24*time.Hour), nil, at); err != nil {
@@ -516,7 +515,7 @@ func rollupInputWrites(t *testing.T, ctx context.Context, direct clickhousedrive
 // linear:A-1 to n-p2, dated (last_synced) BELOW the table's maximum.
 func nativeInputWrites(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, at time.Time, kind string) {
 	t.Helper()
-	insertNativeVersion(t, ctx, direct, orgID, "nu-pin", at.Add(-30*time.Minute))
+	insertNativeVersion(t, ctx, direct, orgID, "nu-pin", "risk", at.Add(-30*time.Minute))
 	if kind == mixWriteInPlace {
 		// The same row, the same version stamp, a different project: no row is
 		// added, so a count cannot see it; the digest's sum over the row's columns
@@ -557,12 +556,12 @@ func TestProjectMixInputWritesNeverBlendAgainstRealClickHouse(t *testing.T) {
 				createCHAOS7257Tables(t, ctx, direct)
 				orgID := "org-mix-digest-rollup-" + strings.ReplaceAll(kind, "_", "-")
 				at := seedCHAOS7257Parity(t, ctx, direct, orgID)
-				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
+				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "feature_delivery", at.Add(-time.Hour))
 				insertMembership(t, ctx, direct, orgID, "wu-pin", at)
 				// A unit without a repository whose only evidence is a pull request no
 				// attribution exists for: the attribution written below is the only
 				// thing that gives it a team.
-				insertVersionAtMilli(t, ctx, direct, orgID, "wu-bk", "", fmt.Sprintf(`{"issues":[],"prs":[%q]}`, repoUUID("r1a")+"#pr9999"), 3, at.Add(-time.Hour))
+				insertVersionAtMilli(t, ctx, direct, orgID, "wu-bk", "", fmt.Sprintf(`{"issues":[],"prs":[%q]}`, repoUUID("r1a")+"#pr9999"), "feature_delivery", at.Add(-time.Hour))
 				insertMembership(t, ctx, direct, orgID, "wu-bk", at)
 				ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
 				before := runRollupStatement(t, ctx, query, "SingleRollupBefore", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
@@ -593,7 +592,7 @@ func TestProjectMixInputWritesNeverBlendAgainstRealClickHouse(t *testing.T) {
 			createCHAOS7257Tables(t, ctx, direct)
 			orgID := "org-mix-digest-native-" + strings.ReplaceAll(kind, "_", "-")
 			at := seedCHAOS7257Native(t, ctx, direct, orgID)
-			insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, 7, at.Add(-time.Hour))
+			insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, "feature_delivery", at.Add(-time.Hour))
 			insertMembership(t, ctx, direct, orgID, "nu-pin", at)
 			ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
 			before := runNativeStatement(t, ctx, query, "SingleNativeBefore", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)

@@ -254,7 +254,7 @@ FROM (
 		SELECT work_unit_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 			argMax(from_ts, computed_at) AS from_ts,
-			argMax(effort_value, computed_at) AS effort_value,
+			toFloat64(1) AS effort_value,
 			argMax(theme_distribution_json, computed_at) AS theme_distribution_json
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
@@ -286,7 +286,7 @@ FROM (
 	FROM (
 		SELECT work_unit_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-			argMax(effort_value, computed_at) AS effort_value,
+			toFloat64(1) AS effort_value,
 			argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
@@ -507,7 +507,7 @@ FROM (
     FROM (
         SELECT work_unit_id,
             argMax(from_ts, computed_at) AS from_ts,
-            argMax(effort_value, computed_at) AS effort_value,
+            toFloat64(1) AS effort_value,
             argMax(theme_distribution_json, computed_at) AS theme_distribution_json
         FROM work_unit_investments
         WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
@@ -630,15 +630,12 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 				firstFrom[key] = v.from
 			}
 		}
-		if v.effort > 0 {
-			r.FeatureDelivery += v.feature * v.effort
-			r.Operational += v.operational * v.effort
-			r.Maintenance += v.maintenance * v.effort
-			r.Quality += v.quality * v.effort
-			r.Risk += v.risk * v.effort
-			r.BugfixWeighted += v.bugfix * v.effort
-			r.EffortUnits++
-		}
+		r.FeatureDelivery += v.feature * v.effort
+		r.Operational += v.operational * v.effort
+		r.Maintenance += v.maintenance * v.effort
+		r.Quality += v.quality * v.effort
+		r.Risk += v.risk * v.effort
+		r.BugfixWeighted += v.bugfix * v.effort
 		if projectCount[unit] > 1 {
 			r.SpanningUnits++
 		}

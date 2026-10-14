@@ -85,6 +85,15 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.credentials.runtime.existingSecret | quote }}
                   key: {{ .Values.credentials.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" | quote }}
+            {{- if .Values.credentials.purge.existingSecret }}
+            # Read-only, like the runtime DSN above: only its user name is used,
+            # to give the org purge's own role its privileges. Never dialed.
+            - name: ACR_POSTGRES_PURGE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.purge.existingSecret | quote }}
+                  key: {{ .Values.credentials.purge.postgresDsnKey | default "ACR_POSTGRES_PURGE_DSN" | quote }}
+            {{- end }}
             # Which optional runtime features hold their table privileges: the
             # same settings the workloads read (templates/configmap.yaml).
             - name: ACR_ENABLE_EPISODE_WRITEBACK

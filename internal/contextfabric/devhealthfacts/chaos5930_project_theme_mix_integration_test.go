@@ -76,7 +76,7 @@ func readInvestmentFact(t *testing.T, providers []contextfabric.FactProvider, or
 
 // TestProjectThemeMixAgainstRealClickHouse proves the whole domain sweep
 // (§ ownership fan-out, coverage vs. weight, null repo_id, merge-not-shadow,
-// zero-effort honesty, and the served-output cap) against one real server.
+// zero-persisted-effort units kept, and the served-output cap) against one real server.
 func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -196,23 +196,23 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedRepo("repo-a2", orgID)
 		seedRepoOwnership(orgID, "team-a1", "repo-a1")
 		seedRepoOwnership(orgID, "team-a2", "repo-a2")
-		// repo-a1's work: all feature_delivery (effort 10).
+		// repo-a1's work: all feature_delivery (one unit, weight 1).
 		seedWorkUnit("wu-a1", orgID, "repo-a1", 10, map[string]float64{"feature_delivery": 1.0})
-		// repo-a2's work: all operational (effort 30) -- a bigger team should
-		// pull the project-level share toward ITS theme, proving this is a
-		// combined weighted total, not a per-team average.
+		// repo-a2's work: all operational (one unit, weight 1 whatever its
+		// seeded effort_value) -- proving this is a combined count-weighted
+		// total, not a per-team average.
 		seedWorkUnit("wu-a2", orgID, "repo-a2", 30, map[string]float64{"operational": 1.0})
 
 		fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-a"))
 		if fact == nil {
 			t.Fatal("facts = none, want a served theme-mix roll-up")
 		}
-		// feature_delivery share = 10 / (10+30) = 0.25; operational = 30/40 = 0.75.
-		if got := factNumber(t, *fact, "theme_feature_delivery"); got != 0.25 {
-			t.Errorf("theme_feature_delivery = %v, want 0.25 (10 of 40 total effort)", got)
+		// feature_delivery share = 1 / 2 = 0.5; operational = 1 / 2 = 0.5.
+		if got := factNumber(t, *fact, "theme_feature_delivery"); got != 0.5 {
+			t.Errorf("theme_feature_delivery = %v, want 0.5 (1 of 2 units)", got)
 		}
-		if got := factNumber(t, *fact, "theme_operational"); got != 0.75 {
-			t.Errorf("theme_operational = %v, want 0.75 (30 of 40 total effort)", got)
+		if got := factNumber(t, *fact, "theme_operational"); got != 0.5 {
+			t.Errorf("theme_operational = %v, want 0.5 (1 of 2 units)", got)
 		}
 		if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_via_owned_repos_work_unit_investments" {
 			t.Errorf("rollup_basis = %#v", fact.Fields["rollup_basis"])
@@ -397,7 +397,7 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("zero_effort_omits_theme_fields_never_fabricates_zero", func(t *testing.T) {
+	t.Run("zero_persisted_effort_unit_is_kept_and_weighs_one", func(t *testing.T) {
 		const orgID = "org-zero-effort"
 		seedProject("proj-z", orgID)
 		seedTeam("team-z", orgID, "Team Z")
@@ -407,8 +407,14 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedWorkUnit("wu-z", orgID, "repo-z", 0, map[string]float64{"feature_delivery": 1.0})
 
 		fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-z"))
-		if fact != nil {
-			t.Fatalf("facts = %#v, want none -- zero total effort must never fabricate a 0.0/degenerate share", fact)
+		if fact == nil {
+			t.Fatal("facts = none, want the zero-persisted-effort unit kept with weight 1")
+		}
+		if got := factNumber(t, *fact, "theme_feature_delivery"); got != 1.0 {
+			t.Errorf("theme_feature_delivery = %v, want 1.0 (the unit weighs 1)", got)
+		}
+		if got := factInt(t, *fact, "work_unit_count"); got != 1 {
+			t.Errorf("work_unit_count = %d, want 1", got)
 		}
 	})
 

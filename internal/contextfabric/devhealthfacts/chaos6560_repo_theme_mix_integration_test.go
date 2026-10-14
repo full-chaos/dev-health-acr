@@ -87,15 +87,15 @@ func TestRepositoryThemeMixAgainstRealClickHouse(t *testing.T) {
 	}
 	factA, factB := read("repo-a"), read("repo-b")
 	wa, wb := weighted(factA), weighted(factB)
-	// A: wu1 5 feature + wu2 (10*1/2=5 -> 2.5 feature, 2.5 risk).
-	near(wa["feature_delivery"], 7.5, "A feature")
-	near(wa["risk"], 2.5, "A risk")
-	// B: wu1 5 feature + wu3 4 maintenance.
-	near(wb["feature_delivery"], 5, "B feature")
-	near(wb["maintenance"], 4, "B maintenance")
+	// Each unit weighs 1. A: wu1 0.5 feature + wu2 (1/2 -> 0.25 feature, 0.25 risk).
+	near(wa["feature_delivery"], 0.75, "A feature")
+	near(wa["risk"], 0.25, "A risk")
+	// B: wu1 0.5 feature + wu3 1 maintenance.
+	near(wb["feature_delivery"], 0.5, "B feature")
+	near(wb["maintenance"], 1, "B maintenance")
 	// Partition: attributed effort never exceeds the units' own total, and
 	// wu2's unresolvable half plus wu4 are NOT redistributed.
-	near(wa["feature_delivery"]+wa["risk"]+wb["feature_delivery"]+wb["maintenance"], 19, "attributed total (of 124 persisted)")
+	near(wa["feature_delivery"]+wa["risk"]+wb["feature_delivery"]+wb["maintenance"], 2.5, "attributed total (of 4 units)")
 	if err := factA.Fields["theme_breakdown"].Table.Validate(); err != nil {
 		t.Fatalf("table invalid: %v", err)
 	}
@@ -155,9 +155,9 @@ func TestRepositoryThemeMixGitLabRangeAndChunkingAgainstRealClickHouse(t *testin
 	for _, row := range result.Facts[0].Fields["theme_breakdown"].Table.Rows {
 		got += *row.Fields["weighted_effort"].Number
 	}
-	// in (6, via the gitlab ref) + ends-at-start (100, to_ts inclusive); after and before excluded.
-	if got != 106 {
-		t.Fatalf("range weighted effort = %v, want 106 (gitlab ref resolved, to_ts inclusive, out-of-window excluded)", got)
+	// in (1, via the gitlab ref) + ends-at-start (1, to_ts inclusive); after and before excluded.
+	if got != 2 {
+		t.Fatalf("range weighted effort = %v, want 2 (gitlab ref resolved, to_ts inclusive, out-of-window excluded)", got)
 	}
 
 	// (3) 41 repositories, one unit each, 5 positive themes: 246 rows > 200.

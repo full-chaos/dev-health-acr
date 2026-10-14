@@ -69,8 +69,9 @@ func seedProjectLinkedOrg(t *testing.T, ctx context.Context, direct clickhousedr
 			id, at, at, effort, themes, map[string]float64{}, fmt.Sprintf(`{"issues":[],"prs":[%s]}`, strings.Join(prs, ",")), at, orgID)
 	}
 	a, r := repoUUID("repo-a"), repoUUID("repo-r")
-	// wu1 splits over repo-a#1 and repo-r#2 (5 each); wu2 over repo-r#3 (linked)
-	// and repo-r#20 (not linked): 4 each; wu3 is repo-r#4 alone, linked to no
+	// Every unit weighs 1 whatever its seeded effort. wu1 splits over repo-a#1
+	// and repo-r#2 (0.5 each); wu2 over repo-r#3 (linked) and repo-r#20 (not
+	// linked): 0.5 each; wu3 is repo-r#4 alone, linked to no
 	// issue of an owned project; wu4 is repo-a#10 alone (owned whole).
 	seed("wu1", map[string]float64{"feature_delivery": 1.0}, 10, a+"#pr1", r+"#pr2")
 	seed("wu2", map[string]float64{"risk": 1.0}, 8, r+"#pr3", r+"#pr20")
@@ -124,7 +125,7 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 
 	t.Run("owner-only team keeps its owned mix and gains no project fields", func(t *testing.T) {
 		fact := factFor(t, read("team-owner"), teamSubject("team-owner"))
-		want(t, weighted(fact), map[string]float64{"feature_delivery": 5, "operational": 20, "risk": 0, "maintenance": 0})
+		want(t, weighted(fact), map[string]float64{"feature_delivery": 0.5, "operational": 1, "risk": 0, "maintenance": 0})
 		if _, ok := fact.Fields["project_reached_repository_count"]; ok {
 			t.Fatalf("a team that owns no project carries project_reached_repository_count")
 		}
@@ -132,9 +133,9 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 
 	t.Run("owned repository whole plus unowned repository by linked pull request", func(t *testing.T) {
 		fact := factFor(t, read("team-both"), teamSubject("team-both"))
-		// repo-a whole (5 feature + 20 operational) plus repo-r's linked #2 (5
-		// feature) and #3 (4 risk); not #20 (4 risk) and not #4 (6 maintenance).
-		want(t, weighted(fact), map[string]float64{"feature_delivery": 10, "operational": 20, "risk": 4, "maintenance": 0})
+		// repo-a whole (0.5 feature + 1 operational) plus repo-r's linked #2 (0.5
+		// feature) and #3 (0.5 risk); not #20 (0.5 risk) and not #4 (1 maintenance).
+		want(t, weighted(fact), map[string]float64{"feature_delivery": 1, "operational": 1, "risk": 0.5, "maintenance": 0})
 		wantInt(t, fact.Fields, "owned_repository_count", 1)
 		wantInt(t, fact.Fields, "project_reached_repository_count", 1)
 		if got := stringField(t, fact, "repository_link_basis"); got != "heuristic" {
@@ -148,8 +149,8 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 	t.Run("project-only team is served from linked pull requests alone", func(t *testing.T) {
 		result := read("team-project-only")
 		fact := factFor(t, result, teamSubject("team-project-only"))
-		// linked: repo-a#1 (5 feature), repo-r#2 (5 feature), repo-r#3 (4 risk).
-		want(t, weighted(fact), map[string]float64{"feature_delivery": 10, "risk": 4, "operational": 0})
+		// linked: repo-a#1 (0.5 feature), repo-r#2 (0.5 feature), repo-r#3 (0.5 risk).
+		want(t, weighted(fact), map[string]float64{"feature_delivery": 1, "risk": 0.5, "operational": 0})
 		wantInt(t, fact.Fields, "owned_repository_count", 0)
 		wantInt(t, fact.Fields, "project_reached_repository_count", 2)
 		if strings.Contains(result.Reason, "owns no repository") {
@@ -167,7 +168,7 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 			t.Fatalf("ReadFacts: %v", err)
 		}
 		fact := factFor(t, result, teamSubject("team-project-only"))
-		want(t, weighted(fact), map[string]float64{"feature_delivery": 10, "risk": 4})
+		want(t, weighted(fact), map[string]float64{"feature_delivery": 1, "risk": 0.5})
 		if !strings.Contains(result.Reason, "link rows carry no validity window") {
 			t.Fatalf("reason = %q, want the unwindowed-links limitation", result.Reason)
 		}

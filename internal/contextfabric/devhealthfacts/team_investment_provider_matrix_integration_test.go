@@ -127,10 +127,9 @@ func TestTeamInvestmentServesEveryProviderAgainstRealClickHouse(t *testing.T) {
 		{"mix-lin", "team-linear", `{"issues":["linear:CHK-1"],"prs":[]}`},
 	}
 	scenarios = append(scenarios, scenario{
-		name: "in-scope zero-effort unit plus a dropped positive-effort unit names the unattributed cause", org: "org-matrix-zero-and-dropped", units: mixed,
-		runs:  [][]string{ids(mixed, nil)},
-		want:  map[string]float64{"team-gitlab": 0, "team-github": 1, "team-jira": 1, "team-linear": 1},
-		token: map[string]string{"team-gitlab": "investment_team_units_unattributed"},
+		name: "in-scope unit with no persisted effort is kept at weight one beside a dropped unresolved unit", org: "org-matrix-zero-and-dropped", units: mixed,
+		runs: [][]string{ids(mixed, nil)},
+		want: map[string]float64{"team-gitlab": 1, "team-github": 1, "team-jira": 1, "team-linear": 1},
 	})
 	scenarios = append(scenarios, scenario{
 		name: "all-zero-effort units outside the run name the run, not the effort", org: "org-matrix-zero-out", units: zeroOut,

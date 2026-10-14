@@ -20,6 +20,7 @@ import (
 type runtimeRoleDatabase struct {
 	Owner   *sql.DB // the migration role: owns every table and may grant
 	Runtime *sql.DB // connected as the runtime role
+	Purge   *sql.DB // connected as the purge role, when the options name one
 	Role    string
 	DSN     string // the owner DSN
 }
@@ -32,6 +33,9 @@ type runtimeRoleOptions struct {
 	BeforeGrant func(t *testing.T, owner *sql.DB)
 	// SkipGrant leaves the role without grant-runtime-acl.
 	SkipGrant bool
+	// PurgeRole names a second login role for the org purge. When set, its DSN
+	// reaches grant-runtime-acl, which gives it the purge privileges.
+	PurgeRole string
 }
 
 func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRoleOptions) *runtimeRoleDatabase {
@@ -58,6 +62,16 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 	require.NoError(t, owner.QueryRowContext(ctx, `SELECT count(*) FROM pg_default_acl`).Scan(&defaultPrivileges))
 	require.Zero(t, defaultPrivileges, "no default privileges: a missing grant must show up as permission denied")
 
+	if options.PurgeRole != "" {
+		for _, statement := range []string{
+			`CREATE ROLE ` + dbacl.QuoteIdent(options.PurgeRole) + ` LOGIN PASSWORD 'purge-test-password'`,
+			`GRANT CONNECT ON DATABASE acr TO ` + dbacl.QuoteIdent(options.PurgeRole),
+			`GRANT USAGE ON SCHEMA acr TO ` + dbacl.QuoteIdent(options.PurgeRole),
+		} {
+			_, err = owner.ExecContext(ctx, statement)
+			require.NoError(t, err)
+		}
+	}
 	if options.BeforeGrant != nil {
 		options.BeforeGrant(t, owner)
 	}
@@ -66,6 +80,9 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 			migrationDSNEnvironment: migrationDSN,
 			// Parsed for its user name only; never dialed.
 			runtimeDSNEnvironment: "postgres://" + options.Role + ":unused@runtime-dsn-is-never-dialed.invalid:5432/acr",
+		}
+		if options.PurgeRole != "" {
+			env[purgeDSNEnvironment] = "postgres://" + options.PurgeRole + ":unused@purge-dsn-is-never-dialed.invalid:5432/acr"
 		}
 		if options.Features[dbacl.EpisodeWriteback] {
 			env["ACR_ENABLE_EPISODE_WRITEBACK"] = "true"
@@ -82,7 +99,15 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 	runtimeConfig.User, runtimeConfig.Password = options.Role, "runtime-test-password"
 	runtime := stdlib.OpenDB(*runtimeConfig)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
-	return &runtimeRoleDatabase{Owner: owner, Runtime: runtime, Role: options.Role, DSN: migrationDSN}
+	database := &runtimeRoleDatabase{Owner: owner, Runtime: runtime, Role: options.Role, DSN: migrationDSN}
+	if options.PurgeRole != "" {
+		purgeConfig, err := pgx.ParseConfig(migrationDSN)
+		require.NoError(t, err)
+		purgeConfig.User, purgeConfig.Password = options.PurgeRole, "purge-test-password"
+		database.Purge = stdlib.OpenDB(*purgeConfig)
+		t.Cleanup(func() { require.NoError(t, database.Purge.Close()) })
+	}
+	return database
 }
 
 // NewRole creates one more login role on the same database, applies the given

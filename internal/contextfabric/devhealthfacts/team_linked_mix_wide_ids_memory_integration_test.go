@@ -307,8 +307,8 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	if len(want) < 2 {
 		t.Errorf("value equality did not happen: the rev 88 form returned %d team rows", len(want))
 	}
-	if share := got[linkedShapeRepeatedTeam].Theme["feature_delivery"]; share < linkedShapeRepeatedEffort/2 || share > linkedShapeRepeatedEffort/2+1e6 {
-		t.Errorf("production: team %s feature_delivery effort %v, want half of the repeated-key unit", linkedShapeRepeatedTeam, share)
+	if share := got[linkedShapeRepeatedTeam].Theme[linkedShapeRepeatedTheme]; !closeEnough(share, 0.5) {
+		t.Errorf("production: team %s repeated-key theme %v, want half of the repeated-key unit", linkedShapeRepeatedTeam, share)
 	}
 
 	// A team whose owned projects link no pull request: the production read
