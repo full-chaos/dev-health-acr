@@ -431,10 +431,26 @@ func blockerWorkItemsSQL(alias string) string {
 // blockerStartJoinSQL is the left join that gives a blocker edge its first
 // sync time. The subselect reads the first-seen rows of the blocker edge
 // endpoints only, so its cost follows the blocker edges.
-const blockerStartJoinSQL = ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
-    FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `' AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL + `
+// blockerStartJoinFor is blockerStartJoinSQL with the first-seen rows narrowed
+// by variant: "" is the shipped shape (both ends in the blocker endpoint set).
+// The other variants exist for the memory measurement only.
+func blockerStartJoinFor(variant string) string {
+	restriction := ` AND source_work_item_id IN ` + blockerEndpointIDsSQL + ` AND target_work_item_id IN ` + blockerEndpointIDsSQL
+	switch variant {
+	case "one_scan":
+		restriction = ` AND (source_work_item_id, target_work_item_id, relationship_type) IN (SELECT source_work_item_id, target_work_item_id, relationship_type FROM work_item_dependencies FINAL WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `')`
+	case "unrestricted":
+		restriction = ""
+	}
+	return ` LEFT JOIN (SELECT source_work_item_id, target_work_item_id, relationship_type, min(first_seen_at) AS first_seen, 1 AS seen
+    FROM work_item_dependency_first_seen WHERE org_id = {org_id:String} AND lower(ifNull(relationship_type, '')) = '` + blockerRelationshipType + `'` + restriction + `
     GROUP BY source_work_item_id, target_work_item_id, relationship_type) AS fs
     ON fs.source_work_item_id = d.source_work_item_id AND fs.target_work_item_id = d.target_work_item_id AND fs.relationship_type = d.relationship_type`
+}
+
+// blockerStartVariant selects an experimental first-seen narrowing; "" is the
+// shipped one.
+var blockerStartVariant = ""
 
 // blockerStartOutputSQL are the per-edge start columns carried through the
 // edge grouping: start_unix is the provider time of the link when the synced
@@ -485,7 +501,7 @@ func blockerStartParts(withStart bool) (output, join string) {
 	if !withStart {
 		return "", ""
 	}
-	return blockerStartOutputSQL, blockerStartJoinSQL
+	return blockerStartOutputSQL, blockerStartJoinFor(blockerStartVariant)
 }
 
 // blockerLinkTierName names a link rank; a rank outside 1..3 is never emitted.

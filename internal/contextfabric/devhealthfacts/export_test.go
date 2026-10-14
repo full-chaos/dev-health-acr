@@ -142,3 +142,11 @@ func SetBlockerMaxBlockSizeForTest(rows int) (restore func()) {
 func BlockerStatementForTest(statement string, settings readers.Settings) string {
 	return blockerStatement(statement, settings)
 }
+
+// SetBlockerStartVariantForTest selects an experimental first-seen narrowing
+// of the age statements, for a measurement.
+func SetBlockerStartVariantForTest(variant string) (restore func()) {
+	previous := blockerStartVariant
+	blockerStartVariant = variant
+	return func() { blockerStartVariant = previous }
+}

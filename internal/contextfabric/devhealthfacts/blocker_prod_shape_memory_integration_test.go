@@ -313,6 +313,22 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 	}
 
+	// Age-statement variants (logged, merged parts): where the first-seen read
+	// narrows the rows to the blocker edges.
+	for _, variant := range []string{"one_scan", "unrestricted"} {
+		restoreVariant := devhealthfacts.SetBlockerStartVariantForTest(variant)
+		for _, caller := range []struct {
+			label     string
+			principal storage.Principal
+		}{{"org-wide", orgWide}, {"restricted", restricted}} {
+			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, func() { read(caller.principal) })
+			for key := range low {
+				t.Logf("PRODSHAPE age variant %s [%s, merged] min %.1f max %.1f MiB: %s", variant, caller.label, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+			}
+		}
+		restoreVariant()
+	}
+
 	// Negative control: with the library authorization forced back in (the shape
 	// before the organization-wide fast path) even the LOWEST of three warm reads
 	// must exceed a ceiling, the harder side of the same assertion.
