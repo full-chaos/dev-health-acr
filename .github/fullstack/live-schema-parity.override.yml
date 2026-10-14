@@ -1,0 +1,10 @@
+# CHAOS-9655: the live-schema-parity job runs ClickHouse with the same default/ch
+# credentials scripts/e2e/compose.sh renders for the acceptance stack, so the
+# base file's healthcheck and the migrate service's default CLICKHOUSE_URI agree.
+services:
+  clickhouse:
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ch
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"

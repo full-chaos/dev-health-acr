@@ -376,6 +376,66 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # CHAOS-9655: the devhealthsource schema freshness test compares the declared
+  # ClickHouse schema (columns, order, engine, sorting key, projections) with a
+  # server migrated by the ops checkout. It needs only ClickHouse and the ops
+  # ClickHouse migrations, so this job starts that one service and runs that one
+  # test with REQUIRED=1: a missing DSN or a skip fails the job.
+  live-schema-parity:
+    name: live schema parity (ops-migrated ClickHouse)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: dev-health-acr
+          persist-credentials: false
+      # actions/checkout v7.0.0 — public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-ops
+          path: dev-health/ops
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+          cache-dependency-path: dev-health-acr/go.sum
+      - name: Migrate a fresh ClickHouse with the ops checkout
+        env:
+          COMPOSE_PROJECT_NAME: acr-lsp-${{ github.run_id }}
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: ch
+          CLICKHOUSE_DB: default
+        run: |
+          set -euo pipefail
+          echo "ops ref: $(git -C dev-health/ops rev-parse HEAD)"
+          cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
+          cp dev-health-acr/.github/fullstack/live-schema-parity.override.yml dev-health/compose.override.yml
+          cd dev-health
+          docker compose up -d --wait clickhouse
+          docker compose run --rm --no-deps --build migrate migrate clickhouse upgrade
+          ch_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q clickhouse)")"
+          test -n "$ch_ip"
+          echo "ACR_CLICKHOUSE_INTEGRATION_DSN=clickhouse://default:ch@${ch_ip}:9000/default" >> "$GITHUB_ENV"
+      - name: Run the live schema parity test
+        working-directory: dev-health-acr
+        env:
+          ACR_CLICKHOUSE_INTEGRATION_REQUIRED: '1'
+        run: |
+          set -euo pipefail
+          go test -count=1 -v -run '^TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse$' ./internal/contextfabric/devhealthsource | tee "$RUNNER_TEMP/parity.log"
+          grep -q -- '--- PASS: TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse' "$RUNNER_TEMP/parity.log"
+          if grep -q -- '--- SKIP' "$RUNNER_TEMP/parity.log"; then echo '::error::live schema parity test skipped'; exit 1; fi
+      - name: Tear down
+        if: always()
+        working-directory: dev-health
+        env:
+          COMPOSE_PROJECT_NAME: acr-lsp-${{ github.run_id }}
+        run: docker compose down -v --remove-orphans
+
   web-contract-changed:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
