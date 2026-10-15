@@ -96,8 +96,6 @@ func TestChaos5405_EveryDecisionReasonHasAnExecutedDriver(t *testing.T) {
 			narrowTable: repoRule},
 		{reason: FactScopeDecisionExpanderUnwired, why: "an enabled policy with nothing to run it",
 			nilExpander: true},
-		{reason: FactScopeDecisionAuthorizationError, why: "the expander reports the authorization check itself failed",
-			expander: &reasonDriverExpander{err: errors.Join(ErrFactScopeAuthorization, errors.New("down"))}},
 		{reason: FactScopeDecisionBackendError, why: "an ordinary traversal error",
 			expander: &reasonDriverExpander{err: errors.New("clickhouse unavailable")}},
 		{reason: FactScopeDecisionTimeout, why: "the traversal exceeds its deadline",

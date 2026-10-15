@@ -204,6 +204,10 @@ func goVarName(e Event) string {
 		return "WorkItemTupleAdmission"
 	case FrameValidation.ID:
 		return "FrameValidation"
+	case PlanCarry.ID:
+		return "PlanCarry"
+	case PlanCarryOutcome.ID:
+		return "PlanCarryOutcome"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
