@@ -303,7 +303,7 @@ func (a *App) requireEntitlement(entitlement string, next http.Handler) http.Han
 		}
 		enabled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, entitlement)
 		if err != nil {
-			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)
+			a.writeEntitlementLookupError(w, r, err)
 			return
 		}
 		if !enabled {
