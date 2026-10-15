@@ -205,8 +205,10 @@ func rowCases() []rowCase {
 		{hierarchy, []string{grantedID, "jira:U", "V:jira:W"}, true, true, "child=jira:U, parent=V:jira:W", ""},
 		// A parent in two repositories: the child's own repository's row.
 		{hierarchy, []string{grantedID, "jira:K", "jira:PARENT2"}, true, true, "child=jira:K", ""},
-		// A parent only in other-org/secret: a bare parent id resolves in the
-		// child's own repository only, so no producer mints a ref for jira:S1.
+		// A parent only in other-org/secret (CHAOS-7252 asserted a ref minted
+		// here, refused to a granted-only caller). CHAOS-9795 ruling (MCP): a
+		// bare parent id resolves in the child's own repository only, so jira:S1
+		// has no PART_OF edge and no producer mints a ref: asserted below.
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
 		// The resolver here has no subject gate, so a restricted caller is
@@ -280,6 +282,10 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		case !minted[ref]:
 			t.Errorf("no producer minted %s %q (%q)", row.kind, row.values, ref)
 		}
+	}
+	foreignParent, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, grantedID, "jira:S1", "jira:SP")
+	if minted[foreignParent] {
+		t.Errorf("a bare parent id held only in another repository minted a hierarchy ref %q; it must name no parent (CHAOS-9795)", foreignParent)
 	}
 	if groups["edge-1"] != 1 {
 		t.Errorf("the two rows under edge-1 minted %d refs, want exactly the one edge the projector keeps", groups["edge-1"])
