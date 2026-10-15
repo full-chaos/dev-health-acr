@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v8"
+	RankingVersionV1          = "ranker.v10"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -143,8 +144,51 @@ func goalWords(goal string) []string {
 // say what a row is about; a field name never fits a goal word.
 var citationKeyPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*=`)
 
+var (
+	citationExpressionPattern = regexp.MustCompile(`(?s)confidence, (.*?) citation[ ,]`)
+	sqlLiteralPattern         = regexp.MustCompile(`'([^']*)'`)
+)
+
+// citationFieldNames holds, per catalog source, the field names its statement
+// writes into the citation as name= literals (derived from the statements, so
+// no list to keep in step). Goal words never fit those names; every other word
+// of a citation, including a name= the source did not write (a commit message,
+// evidence text), keeps fitting.
+var citationFieldNames = deriveCitationFieldNames(SourceQueryCatalogV1)
+
+func deriveCitationFieldNames(catalog []SourceQuery) map[string]*regexp.Regexp {
+	patterns := map[string]*regexp.Regexp{}
+	for _, query := range catalog {
+		_, inner, found := strings.Cut(query.Statement, "FROM (")
+		if !found {
+			continue
+		}
+		match := citationExpressionPattern.FindStringSubmatch(inner)
+		if match == nil {
+			continue
+		}
+		names := map[string]bool{}
+		for _, literal := range sqlLiteralPattern.FindAllStringSubmatch(match[1], -1) {
+			for _, name := range citationKeyPattern.FindAllString(literal[1], -1) {
+				names[regexp.QuoteMeta(strings.TrimSuffix(name, "="))] = true
+			}
+		}
+		if len(names) > 0 {
+			patterns[query.ID] = regexp.MustCompile(`\b(` + strings.Join(slices.Sorted(maps.Keys(names)), "|") + `)=`)
+		}
+	}
+	return patterns
+}
+
+func goalCitation(ref contractsv1.EvidenceRef) string {
+	if pattern, ok := citationFieldNames[ref.SourceVersion]; ok {
+		return pattern.ReplaceAllString(ref.Citation, " ")
+	}
+	return ref.Citation
+}
+
 func goalScore(ref contractsv1.EvidenceRef, goal string) int {
-	haystack := strings.FieldsFunc(strings.ToLower(citationKeyPattern.ReplaceAllString(ref.Citation, " ")+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	haystack := strings.FieldsFunc(strings.ToLower(goalCitation(ref)+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	score := 0
 	for _, word := range goalWords(goal) {
 		for _, token := range haystack {

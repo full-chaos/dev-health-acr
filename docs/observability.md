@@ -24,7 +24,7 @@ generated request ID for correlation and these bounded dimensions:
 - store source: one fixed versioned catalog source ID or `unknown`
 - store phase: `query`, `scan`, `iteration`, `close`, or `unknown`
 - `source_fallback`: `none`, `catalog`, `unavailable`, or `unknown`
-- query/ranking versions: canonical `context-query.v1`, `ranker.v8`, or `unknown`
+- query/ranking versions: canonical `context-query.v1`, `ranker.v10`, or `unknown`
 - denial class: `authentication`, `organization_scope`, `repository_scope`,
   `license`, `rate_limit`, `none`, or `unknown`
 
@@ -154,7 +154,7 @@ requires an atomic shared backend before these controls can be considered global
 
 Packet health reports `complete`, `partial`, `degraded`, or `empty`, together with
 item, stale-source, unavailable-source, compatibility, and version-mismatch
-dimensions. `context-query.v1` and `ranker.v8` are aliases of the canonical
+dimensions. `context-query.v1` and `ranker.v10` are aliases of the canonical
 context-packet constants, not copyable telemetry literals. Query timeout and store
 backend dimensions expose database/query behavior without statement text or IDs.
 
