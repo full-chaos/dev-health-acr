@@ -179,6 +179,7 @@ func partOfParentResolution(t *testing.T, adapter *falkorgraph.Adapter) {
 	w.item(repoC, "jira:QONCE", "jira:SOLO-1", synced)
 	w.item(repoC, "jira:QMANY", "jira:SHARED-1", synced)
 	w.item(repoC, "jira:QEMPTY", "jira:", synced)
+	w.item(repoA, "jira:QEMPTY2", "jira:", synced)
 	w.item(repoC, "jira:QNONE", "jira:MISSING-1", synced)
 	// Per-container numbers: 7 is held in B only, 8 in A and B.
 	w.item(repoB, "7", "", synced)
@@ -206,6 +207,7 @@ func partOfParentResolution(t *testing.T, adapter *falkorgraph.Adapter) {
 		{"a qualified key held once, in another repository, is the parent", repoC, "jira:QONCE", edgeTo(repoC, "jira:QONCE", repoB, "jira:SOLO-1")},
 		{"a qualified key held under two repositories names no parent", repoC, "jira:QMANY", nil},
 		{"a qualified prefix with an empty key names no parent", repoC, "jira:QEMPTY", nil},
+		{"a second child with the same empty key names no parent either", repoA, "jira:QEMPTY2", nil},
 		{"a qualified key held nowhere names no parent", repoC, "jira:QNONE", nil},
 		{"a number held under two repositories, one the child's own, is the own one", repoA, "NOWN", edgeTo(repoA, "NOWN", repoA, "8")},
 		{"a number held only in another repository names no parent", repoC, "NFOREIGN", nil},
