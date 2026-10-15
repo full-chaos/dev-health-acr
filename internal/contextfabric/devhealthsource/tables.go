@@ -1254,11 +1254,11 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 	})
 	for reason, count := range notResolved {
 		startLogger(ctx).WarnContext(ctx, "devhealthsource part_of parent not resolved",
-			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", reason, "children", count)
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", contextfabric.SanitizeLogAttr(reason), "children", count)
 	}
 	for prefix, count := range unmapped {
 		startLogger(ctx).WarnContext(ctx, "devhealthsource part_of parent id prefix is not mapped",
-			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "prefix", prefix, "children", count,
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "prefix", contextfabric.SanitizeLogAttr(prefix), "children", count,
 			"reason", "the id resolves in the child's own repository only until the prefix is added to qualifiedParentPrefixes")
 	}
 	return items, truncated, err

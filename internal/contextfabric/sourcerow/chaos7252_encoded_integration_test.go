@@ -212,6 +212,9 @@ func rowCases() []rowCase {
 		// its parent org-wide, so the ref is minted and the gate refuses a
 		// granted-only caller (parent in the secret repository).
 		{hierarchy, []string{grantedID, "jira:S1", "jira:SP"}, false, true, "child=jira:S1", ""},
+		// Child and parent both in the secret repository: refused to a
+		// granted-only caller, served org-wide.
+		{hierarchy, []string{secretID, "jira:S2", "jira:SP2"}, false, true, "child=jira:S2", ""},
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
 		// The resolver here has no subject gate, so a restricted caller is
