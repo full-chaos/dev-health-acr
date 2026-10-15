@@ -172,7 +172,7 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
 						FROM work_unit_investments
-						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
+						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + `
 						GROUP BY work_unit_id
 					)
 				)
