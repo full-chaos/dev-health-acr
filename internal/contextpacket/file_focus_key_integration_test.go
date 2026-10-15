@@ -17,6 +17,9 @@ func TestFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
 	for _, statement := range devhealthschema.DDL() {
 		scopeExec(t, ctx, direct, statement)
 	}
+	// devhealthschema does not declare the commit tables: the ops definition with
+	// the org_id column and sorting key of ops migration 027.
+	scopeExec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
 	now := "'2026-09-01 12:00:00.000'"
 	day := "'2026-09-01'"
 	for _, statement := range []string{
