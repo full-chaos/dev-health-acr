@@ -216,7 +216,7 @@ func TestServedAnswerToATeamAggregatePullRequestQuestionCitesTheTeamEvidenceRef(
 	ctx := context.Background()
 	result, model, _ := serveTeamPullRequestQuestion(t, ctx, nil,
 		&contextfabric.QuestionFrame{
-			Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState, contextfabric.GoalCountOrAggregate},
+			Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
 			SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"Platform"}}},
 			Temporal:          contextfabric.TemporalIntentCurrent,
 		},
