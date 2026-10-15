@@ -19,7 +19,7 @@ import (
 )
 
 // scopeLiteralBound is the frozen bound of one scope-literal reader at
-// prod-width unit ids: the highest warm peak may not pass memoryMiB, and the
+// prod-width unit ids: the highest peak of the cold and warm reads may not pass memoryMiB, and the
 // rows read (stable for a fixed seed) may not pass readRows. A bound moves
 // only by a new measurement over at least three hosted CI runs, never to fit
 // a failing run.
@@ -144,7 +144,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 // unit ids as wide as prod's: the scope literal is then about a megabyte, the
 // dimension CHAOS-9664 showed sets the peak. Each reader runs once cold and
 // linkedShapeRuns times warm under the API's cap and readonly=2; the highest
-// warm peak must stay under the reader's frozen bound, and the rows read
+// peak of the cold and warm reads must stay under the reader's frozen bound, and the rows read
 // under theirs. Every reader must return rows, or the row measured nothing.
 func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 	ctx := context.Background()
@@ -209,10 +209,7 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 			if r.readRows < uint64(len(scopeIDs)/2) {
 				t.Errorf("%s run %d (0 is the cold run): read %d rows of work_unit_investments, under half of the %d scope units: the literal was not applied", c.Name, i, r.readRows, len(scopeIDs))
 			}
-			if !isWarm {
-				continue
-			}
-			if lowest < 0 || r.mib < lowest {
+			if isWarm && (lowest < 0 || r.mib < lowest) {
 				lowest = r.mib
 			}
 			if r.mib > highest {
@@ -222,10 +219,10 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 				highestRows = r.readRows
 			}
 		}
-		fmt.Fprintf(&report, "  %-30s peak lowest %7.2f MiB, highest %7.2f MiB, bound %6.1f MiB; rows read highest %d, bound %d\n",
-			c.Name, lowest, highest, bound.memoryMiB, highestRows, bound.readRows)
+		fmt.Fprintf(&report, "  %-30s cold %7.2f MiB, warm lowest %7.2f MiB, highest of all reads %7.2f MiB, bound %6.1f MiB; rows read highest %d, bound %d\n",
+			c.Name, cold.mib, lowest, highest, bound.memoryMiB, highestRows, bound.readRows)
 		if highest > bound.memoryMiB {
-			t.Errorf("%s: highest warm peak %.2f MiB is over the frozen bound %.1f MiB", c.Name, highest, bound.memoryMiB)
+			t.Errorf("%s: highest peak of the cold and warm reads %.2f MiB is over the frozen bound %.1f MiB", c.Name, highest, bound.memoryMiB)
 		}
 		if highestRows > bound.readRows {
 			t.Errorf("%s: rows read %d is over the frozen bound %d", c.Name, highestRows, bound.readRows)
