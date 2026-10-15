@@ -264,36 +264,35 @@ func itemEvidenceRefIDs(ref contractsv1.EvidenceRef, r rule) []string {
 	return ids
 }
 
-// effectiveGoalScores is the goal score every item ranks by. A cause is ranked
-// at least as high as every cause of a weaker match tier: its score is the
-// largest goal score among the causes of its own tier and weaker ones. The
-// score is a per-item scalar, so the comparator built on it stays a strict
-// weak order; a weaker tier can therefore never outrank, or survive an item
-// budget ahead of, a stronger one, while a goal-less exact cause still ranks
-// below ordinary evidence that names the goal when no weaker cause does.
+// effectiveGoalScores is the goal rank every item sorts by, encoded as
+// 2*score plus one when the score is the item's own. A cause is ranked at least
+// as high as every cause of a weaker match tier: its score is the largest goal
+// score among the causes of its own tier and weaker ones. The rank is a
+// per-item scalar, so the comparator built on it stays a strict weak order. An
+// inherited score loses to an equal own score, so an unrelated exact cause
+// never outranks an item that names the goal itself; among causes with no own
+// match the tier order holds.
 func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles roleResolver) map[string]int {
-	scores := make(map[string]int, len(refs))
+	own := make(map[string]int, len(refs))
 	bestAtOrBelow := map[int]int{}
 	for _, ref := range refs {
-		own := goalScore(ref, goal)
-		if own > scores[ref.EvidenceRefID] {
-			scores[ref.EvidenceRefID] = own
-		}
+		score := goalScore(ref, goal)
+		own[ref.EvidenceRefID] = max(own[ref.EvidenceRefID], score)
 		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
-			if own > bestAtOrBelow[rule.subRank] {
-				bestAtOrBelow[rule.subRank] = own
-			}
+			bestAtOrBelow[rule.subRank] = max(bestAtOrBelow[rule.subRank], score)
 		}
 	}
+	scores := make(map[string]int, len(refs))
 	for _, ref := range refs {
-		rule := roles.rule(ref)
-		if rule.category != contractsv1.CategoryCause || rule.subRank == 0 {
-			continue
-		}
-		for tier := 1; tier <= rule.subRank; tier++ {
-			if score := bestAtOrBelow[tier]; score > scores[ref.EvidenceRefID] {
-				scores[ref.EvidenceRefID] = score
+		effective, mine := own[ref.EvidenceRefID], own[ref.EvidenceRefID]
+		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
+			for tier := 1; tier <= rule.subRank; tier++ {
+				effective = max(effective, bestAtOrBelow[tier])
 			}
+		}
+		scores[ref.EvidenceRefID] = effective * 2
+		if effective > 0 && effective == mine {
+			scores[ref.EvidenceRefID]++
 		}
 	}
 	return scores
