@@ -205,6 +205,7 @@ type Freshness struct {
 type SourceWatermark struct {
 	Source         string     `json:"source"`
 	LastIngestedAt *time.Time `json:"last_ingested_at,omitempty"`
+	LastEventAt    *time.Time `json:"last_event_at,omitempty"`
 	Status         string     `json:"status"`
 }
 
