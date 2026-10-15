@@ -381,7 +381,9 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		// compounding_risk_daily is ReplacingMergeTree(computed_at) as in
 		// production: a merge folds two rows with the same key and the same
 		// computed_at into one, so the tie this test exercises exists only
-		// while both rows are unmerged.
+		// while both rows are unmerged. Production serves that same unmerged
+		// state until a merge runs, so this tests the state the reader sees
+		// before the merge.
 		if err := direct.Exec(ctx, `SYSTEM STOP MERGES compounding_risk_daily`); err != nil {
 			t.Fatalf("stop merges on compounding_risk_daily: %v", err)
 		}
