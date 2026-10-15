@@ -117,3 +117,55 @@ func TestWorkItemTeamEdgeIsRetractedWhenTheAttributionNoLongerQualifies(t *testi
 		}
 	})
 }
+
+// The cursor of this source pages on a row's INGEST stamp, because a team's
+// updated_at can be provider-stamped and older than the cursor
+// (queryTeams, CHAOS-7263). A team change must therefore reach the work item
+// -> team edges through the cursor even when its updated_at is old, and a
+// team that comes back must bring its edges back.
+func TestWorkItemTeamEdgeFollowsTheTeamsLifecycleThroughTheCursor(t *testing.T) {
+	deactivate := func(f *ingestColumnsFixture, updated, synced time.Time) {
+		mustExec(t, f.ctx, f.h.direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES ('T-A', 'team T-A', '', ?, ?, ?, 'linear', 'T-A', [], 0)`,
+			updated, synced, f.h.orgID)
+	}
+	reactivate := func(f *ingestColumnsFixture, updated, synced time.Time) {
+		mustExec(t, f.ctx, f.h.direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES ('T-A', 'team T-A', '', ?, ?, ?, 'linear', 'T-A', [], 1)`,
+			updated, synced, f.h.orgID)
+	}
+	seed := func(orgID string) (*ingestColumnsFixture, drained, contractsv1.ContextFabricRelationshipProjection) {
+		f := newIngestColumnsFixture(t, orgID, nil, nil)
+		f.anchor()
+		f.team("T-A", f.old, f.old)
+		f.workItem("linear:LC-1", "", f.old, f.old)
+		f.attribution("linear:LC-1", "T-A", "native_team", 1, f.old)
+		d := f.h.drain("")
+		edge, ok := workItemTeamEdge(t, d, "linear:LC-1", "T-A")
+		if !ok {
+			t.Fatal("the qualifying attribution did not project its edge")
+		}
+		return f, d, edge
+	}
+
+	t.Run("deactivated with an updated_at older than the cursor", func(t *testing.T) {
+		f, d, edge := seed("97940000-0000-4000-8000-000000000011")
+		deactivate(f, f.old.Add(time.Hour), time.Now().UTC())
+		next := f.h.drain(d.cursor)
+		if _, ok := relationshipTombstone(next, edge.RelationshipID); !ok {
+			t.Fatal("the deactivation was not seen through the cursor: the edge of an inactive team stays open")
+		}
+	})
+
+	t.Run("deactivated then reactivated", func(t *testing.T) {
+		f, d, edge := seed("97940000-0000-4000-8000-000000000012")
+		deactivate(f, time.Now().UTC(), time.Now().UTC())
+		mid := f.h.drain(d.cursor)
+		if _, ok := relationshipTombstone(mid, edge.RelationshipID); !ok {
+			t.Fatal("precondition: the deactivation with a fresh stamp must retract the edge")
+		}
+		reactivate(f, time.Now().UTC().Add(time.Second), time.Now().UTC().Add(time.Second))
+		back := f.h.drain(mid.cursor)
+		if _, ok := workItemTeamEdge(t, back, "linear:LC-1", "T-A"); !ok {
+			t.Fatal("the team is active again but its retracted edge was never reasserted")
+		}
+	})
+}
