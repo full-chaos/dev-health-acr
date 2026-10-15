@@ -32,7 +32,7 @@ func factsOnlyDeclinedReason(declined RetryDeclinedReason) bool {
 }
 
 func (e *Engine) factsOnlyEligible(ctx context.Context, params synthesisAssemblyParams, first InvestigationResult) bool {
-	if ctx.Err() != nil || params.Draft != nil || params.Degrade != nil || clientSynthesisRequested(params.Request) {
+	if ctx.Err() != nil || params.Recompose != nil || clientSynthesisRequested(params.Request) {
 		return false
 	}
 	if _, ok := e.synthesizer.(DegradedSynthesizer); !ok {
@@ -51,7 +51,7 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 	allocation := AllocateItems(*plan, groupCountOf(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort))
 	factsParams := params.forRetry(params.Graph, params.Facts, allocation)
 	factsParams.Plan = *plan
-	factsParams.Degrade = factsOnlyFailure(declined)
+	factsParams.Recompose = factsOnlyFailure(declined)
 	composed, consumed, pending, cardinality, err := e.synthesizeAndAssemble(ctx, principal, factsParams)
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, false
