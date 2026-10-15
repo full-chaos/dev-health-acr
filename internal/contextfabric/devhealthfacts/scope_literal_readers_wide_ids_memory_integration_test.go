@@ -192,4 +192,5 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 		}
 	}
 	t.Log(report.String())
+	t.Fail() // throwaway: print the passing report in CI
 }
