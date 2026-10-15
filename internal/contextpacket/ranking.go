@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v5"
+	RankingVersionV1          = "ranker.v6"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -172,6 +172,9 @@ func canonicalEvidenceKeys(ref contractsv1.EvidenceRef) []string {
 	keys := []string{"id:" + ref.EvidenceRefID, "entity:" + strings.Join([]string{ref.Source.System, ref.Source.EntityType, ref.Source.EntityID}, "\000")}
 	if ref.ContentDigest != "" {
 		keys = append(keys, "content:"+ref.ContentDigest)
+	}
+	if subject, _ := ref.Metadata[metadataSubjectKey].(string); subject != "" {
+		keys = append(keys, "subject:"+subject)
 	}
 	return keys
 }

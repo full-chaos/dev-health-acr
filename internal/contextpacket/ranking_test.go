@@ -128,3 +128,44 @@ func TestAssembler_bounds_derived_item_title_and_identifier(t *testing.T) {
 		t.Fatalf("packet item id length = %d", got)
 	}
 }
+
+func TestAssembler_dedupes_one_pull_request_served_as_pull_request_and_work_item(t *testing.T) {
+	observed := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	build := func(id, entityType, entityID, subject string) contractsv1.EvidenceRef {
+		ref := testEvidence(id, "dev_health", observed)
+		ref.Source.EntityType, ref.Source.EntityID = entityType, entityID
+		ref.Metadata = map[string]any{"subject_key": subject}
+		return ref
+	}
+	cases := []struct {
+		name     string
+		second   string
+		wantKept int
+	}{
+		{name: "same PR under two entity types is one item", second: "pull_request:repo:2", wantKept: 1},
+		{name: "the same number in another repository stays distinct", second: "pull_request:other-repo:2", wantKept: 2},
+		{name: "an empty subject key never matches", second: "", wantKept: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := fixtureRequest("req-pr-subject", "main", "")
+			pr := build("ev2_prod1_pr_a", "pull_request", "2", "pull_request:repo:2")
+			workItem := build("ev2_prod1_work_b", "work_item", "ghpr:chaos-fixtures/checkout-api#2", tc.second)
+			store := testStore{bundle: storage.EvidenceBundle{
+				ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+				Evidence:      []contractsv1.EvidenceRef{workItem, pr},
+				QueryVersion:  contextpacket.QueryVersionV1,
+			}}
+			packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+			if err != nil {
+				t.Fatalf("assemble: %v", err)
+			}
+			if len(packet.Items) != tc.wantKept {
+				t.Fatalf("items = %d, want %d: %#v", len(packet.Items), tc.wantKept, packet.Items)
+			}
+			if tc.wantKept == 1 && packet.Items[0].EvidenceRefIDs[0] != "ev2_prod1_pr_a" {
+				t.Fatalf("kept %v, want the pull_request row", packet.Items[0].EvidenceRefIDs)
+			}
+		})
+	}
+}
