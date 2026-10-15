@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV13ForTheIncidentRepositoryEdgeRebuild pins the constant,
+// TestClickHouseSourceVersionIsV14ForThePartOfEdgeRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -385,11 +385,15 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // already-projected incident keeps its BELONGS_TO_REPOSITORY edge through a
 // mapping deactivated in its latest revision; the rebuild drops it.
 //
-// v13 (incident edges per repository) is the latest: an incident's
+// v13 (incident edges per repository) is the next: an incident's
 // BELONGS_TO_REPOSITORY edge id names its repository, and the producer follows
 // service mapping changes; every already-projected incident edge carries the
 // old id, and edges of mappings that ended before the roll are behind every
 // checkpoint, so the rebuild re-projects them.
+//
+// v14 (one PART_OF edge per work item) is the latest: a re-parent, a cleared
+// parent and a parent id that stops naming one parent left the old edge open;
+// the rebuild re-asserts each child and removes the stale edges.
 //
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
@@ -401,11 +405,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV13ForTheIncidentRepositoryEdgeRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV14ForThePartOfEdgeRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v13" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v14" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v13")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v14")
 	}
 }
 

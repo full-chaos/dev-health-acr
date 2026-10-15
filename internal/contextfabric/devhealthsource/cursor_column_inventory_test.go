@@ -25,7 +25,7 @@ import (
 var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"repos":                                {"last_synced", "internal/providersync/stored_version.go:365 repos upsert; streamhandlers/external_clickhouse.go:185 (unchanged)"},
 	"work_items":                           {"w.last_synced", "migrations/clickhouse/009_raw_work_items.sql:26; providersync/linear_work_items_route.go:883, gitlab_work_items_rows.go:232"},
-	"work_items_hierarchy":                 {"c.last_synced", "same column as work_items"},
+	"work_items_hierarchy":                 {hierarchyCursorExpr, "the child's own work_items.last_synced (same column as work_items) or the newest last_synced of any row carrying its parent id"},
 	"git_pull_requests":                    {"p.last_synced", "providersync/github_prs_route.go:394 (unchanged)"},
 	"deployments":                          {"d.last_synced", "providersync/github_deployments_route.go:303"},
 	"operational_incidents":                {incidentCursorExpr, "i.last_synced: providersync/pagerduty_incidents_route.go:1009, gitlab_incidents_route.go:402; the service's mappings' last_synced: providersync/pagerduty_services_effects_clickhouse.go pagerDutyServiceMappingTombstone (an ended mapping is stamped at its write time)"},

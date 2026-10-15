@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -1245,6 +1246,13 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 	})
 }
 
+// hierarchyCursorExpr is queryWorkItemHierarchy's keyset position: the later of
+// the child's own ingest stamp and the newest stamp of any work item row that
+// carries its parent id. A child's edge depends on the rows that name its
+// parent (a second holder of a qualified key turns it ambiguous; the parent's
+// own window bounds the edge), so those rows bring the child back.
+const hierarchyCursorExpr = "greatest(c.last_synced, pa.latest_synced)"
+
 // queryWorkItemHierarchy (CHAOS-3779, §19.5.3 PART_OF) projects
 // work_items.parent_id -- a distinct column from work_item_dependencies,
 // carrying real hierarchy data (verified live: 2082 of 3282 work_items
@@ -1290,12 +1298,12 @@ func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouse
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
        if(` + qualified + `, pa.created_at, p.created_at), ` + nullableTimestamp("if("+qualified+", pa.ended_at, coalesce(p.completed_at, p.closed_at))") + `,
        if(` + qualified + `, pa.repo, toString(p.repo_id)),
-       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), toUInt8(` + qualified + `), toUInt8(` + emptyKeyParentSQL("c.parent_id") + `), c.last_synced
+       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), toUInt8(` + qualified + `), toUInt8(` + emptyKeyParentSQL("c.parent_id") + `), ` + hierarchyCursorExpr + `
 FROM work_items AS c FINAL
 LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id AND p.repo_id = c.repo_id
-LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
+LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, max(last_synced) AS latest_synced, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, hierarchyCursorExpr, rowKey) + orderBy(hierarchyCursorExpr, rowKey)
 	notResolved := map[string]int{}
 	unmapped := map[string]int{}
 	items, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
@@ -1326,14 +1334,14 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 			retract = "part_of_parent_cleared"
 		case emptyKey != 0:
 			retract = "part_of_parent_empty_key"
-			notResolved[retract]++
 		case candidates == 0:
 			retract = "part_of_parent_unresolved"
 		case qualifiedKey != 0 && candidates > 1:
 			retract = "part_of_parent_key_not_unique"
-			notResolved[retract]++
 		case qualifiedKey == 0 && ownRepoCandidate == 0:
 			retract = "part_of_parent_not_in_own_repository"
+		}
+		if retract != "" {
 			notResolved[retract]++
 		}
 		if prefix, ok := unmappedParentPrefix(parentID); ok {
@@ -1379,7 +1387,14 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 	for reason, count := range notResolved {
-		startLogger(ctx).WarnContext(ctx, "devhealthsource part_of parent not resolved",
+		level := slog.LevelWarn
+		switch reason {
+		case "part_of_parent_cleared":
+			level = slog.LevelDebug
+		case "part_of_parent_unresolved":
+			level = slog.LevelInfo
+		}
+		startLogger(ctx).Log(ctx, level, "devhealthsource part_of parent not resolved",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", contextfabric.SanitizeLogAttr(reason), "children", count)
 	}
 	for prefix, count := range unmapped {
