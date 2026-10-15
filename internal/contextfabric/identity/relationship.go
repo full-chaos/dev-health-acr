@@ -85,6 +85,11 @@ const (
 	// pull_request LINKS_PULL_REQUEST edge, read from work_graph_issue_pr.
 	// Born on this digest scheme: work item ids routinely carry ':' and '#'.
 	RelationshipFamilyIssuePullRequestLink RelationshipFamily = "issue_pull_request_link"
+	// RelationshipFamilyIncidentRepository is devhealthsource's incident ->
+	// repository BELONGS_TO_REPOSITORY edge: one per repository an active
+	// service mapping names, so an edge whose mapping ended is retracted by
+	// its own id while the incident's other edges stay.
+	RelationshipFamilyIncidentRepository RelationshipFamily = "incident_repository"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:

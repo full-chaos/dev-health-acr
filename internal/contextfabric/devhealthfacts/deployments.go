@@ -171,6 +171,7 @@ func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID
 			"day":                      contextfabric.StringFactValue(r.Day),
 			"deployments_count":        contextfabric.IntegerFactValue(r.DeploymentsCount),
 			"failed_deployments_count": contextfabric.IntegerFactValue(r.FailedDeploymentsCount),
+			"failed_deployments_basis": contextfabric.StringFactValue(failedDeploymentsBasisStatus),
 		}
 		if r.HasDeployTime {
 			fields["deploy_time_p50_hours"] = contextfabric.NumberFactValue(r.DeployTime)
@@ -185,6 +186,11 @@ func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID
 	}
 	return len(rows), rejected, nil
 }
+
+// failedDeploymentsBasisStatus names what deploy_metrics_daily counts as a
+// failed deployment: its own status is failed, whether or not an incident is
+// linked to it. The change failure counts of the metrics fact use other bases.
+const failedDeploymentsBasisStatus = "deployment_status"
 
 // deploymentRollupRepo is one owned repository's deploy_metrics_daily rows
 // inside the rollup window: totals over the window's days, plus the latest
@@ -319,6 +325,7 @@ ORDER BY repo_id`
 		if withData > 0 {
 			fields["deployments_count_window"] = contextfabric.IntegerFactValue(total)
 			fields["failed_deployments_count_window"] = contextfabric.IntegerFactValue(failed)
+			fields["failed_deployments_basis"] = contextfabric.StringFactValue(failedDeploymentsBasisStatus)
 			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, grainDaily,
 				[]string{"deployments_count_window", "failed_deployments_count_window", "days_with_data_window", "deploy_time_p50_hours_latest_day", "lead_time_p50_hours_latest_day"},
 				[]string{"repository_name", "latest_day"}); ok && tables {
