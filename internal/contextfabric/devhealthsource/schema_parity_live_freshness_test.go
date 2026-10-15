@@ -107,11 +107,12 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 			if !devhealthschema.AcceptsColumnType(table, column.Name, actual) && actual != base {
 				t.Errorf("live %s.%s is %q but devhealthschema still says %q (also accepting %v) -- regenerate the snapshot, then check every Scan() destination for %s.%s against the new type", table, column.Name, actual, base, column.AlsoAccepts, table, column.Name)
 			}
-			// A MATERIALIZED column is part of the production contract
-			// (the version a FINAL read picks); a DEFAULT in the
-			// declaration is TEST DDL that deliberately differs from
-			// production's insert-time default, so only MATERIALIZED
-			// is compared.
+			// acr DDL DEFAULTs are test-seed only; acr never inserts in
+			// prod, so a DEFAULT is not compared (devhealthschema.Column
+			// comments name each as TEST DDL). A MATERIALIZED column is
+			// part of the production contract (the version a FINAL read
+			// picks), so it is compared. Type, order, engine and Enum
+			// values stay hard failures.
 			if kind == "MATERIALIZED" {
 				got := liveDefaults[table][column.Name]
 				if got[0] != kind || strings.ReplaceAll(got[1], " ", "") != strings.ReplaceAll(expression, " ", "") {
