@@ -456,17 +456,16 @@ func (r *OperationRunner) Run(ctx context.Context, principal storage.Principal, 
 		if errors.Is(err, ErrOperationAuthorizationUnavailable) {
 			x.read.Decision = OperationDecisionAuthorizationUnavailable
 		}
+		x.read.SchemaDigest = r.catalogue.StampedSchemaDigest()
 		r.recorder.RecordOperationRead(ctx, principal, x.read)
 		return OperationResponse{}, err
 	}
-	if resp.Call == CallRefused {
-		// A refusal is decided against the pinned policy, whether before the
-		// query service was called or after its answer was checked, so it
-		// reports the digest of the policy that refused, not a cached served
-		// digest that may be older than the last watch.
-		resp.Source.SchemaDigest = r.catalogue.SchemaDigest()
-		x.read.SchemaDigest = resp.Source.SchemaDigest
-	}
+	// One source for every reply, served or refused: the stamped digest when the
+	// reply is built (the served digest while the last registry fetch succeeded,
+	// else the pinned one), so a refresh that landed during the dispatch shows
+	// and a served and a refused reply never disagree at one moment.
+	resp.Source.SchemaDigest = r.catalogue.StampedSchemaDigest()
+	x.read.SchemaDigest = resp.Source.SchemaDigest
 	x.read.Completeness = resp.Completeness
 	x.read.Result = resp.Result
 	r.recorder.RecordOperationRead(ctx, principal, x.read)

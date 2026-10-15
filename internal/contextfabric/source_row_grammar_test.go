@@ -189,7 +189,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "concat/2", repoAnchored: true, rowQuery: "deployments.v1", keyColumns: []string{"repo_id", "deployment_id"}, columns: []string{"repo_id", "deployment_id"}, sites: sites(facts+"deployments.go|readDeploymentStatus", source+"tables.go|queryDeployments")},
 		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "sql/1", rowQuery: "deployments.v1", keyColumns: []string{"deployment_id"}, columns: []string{"deployment_id"}, keyExceptions: readRepository, sites: sites(catalog)},
 		// incident: the id alone, keyed (org_id, id).
-		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
+		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|incidentRowCandidates")},
 		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(catalog)},
 
 		// team, project: organization rows authorized by ownership through
