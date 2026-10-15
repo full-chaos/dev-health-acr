@@ -94,3 +94,29 @@ func TestScoreLookupNamesTheDriversTableAWithheldScoreNeeded(t *testing.T) {
 		t.Fatal("a fact kind with no declaration has no score")
 	}
 }
+
+// A score field can declare a different drivers table per subject kind (a team's and a project's health): the trace names
+// each withheld field with its subject kind and the table that subject needed, not only the first one.
+func TestTheWithheldScoreTraceNamesTheDriversTableOfEachSubjectKind(t *testing.T) {
+	capabilities := []FactCapability{{
+		Kind: FactHealth, SupportedSubjectKinds: []SubjectKind{SubjectTeam, SubjectProject},
+		Fields: []FactFieldDeclaration{
+			{Name: "compounding_risk", Type: FactFieldNumber, Score: true, DriversTable: "risk_rules", SubjectKinds: []SubjectKind{SubjectTeam}},
+			{Name: "compounding_risk", Type: FactFieldNumber, Score: true, DriversTable: "risk_breakdown", SubjectKinds: []SubjectKind{SubjectProject}},
+			{Name: "risk_rules", Type: FactFieldTable, SubjectKinds: []SubjectKind{SubjectTeam}},
+			{Name: "risk_breakdown", Type: FactFieldTable, SubjectKinds: []SubjectKind{SubjectProject}},
+		},
+	}}
+	risk := 0.5
+	team := CanonicalFact{Kind: FactHealth, Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "A"}, Fields: map[string]FactValue{"compounding_risk": {Number: &risk}}}
+	project := CanonicalFact{Kind: FactHealth, Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "P"}, Fields: map[string]FactValue{"compounding_risk": {Number: &risk}}}
+
+	claims, _, _, withheld := mintDegradedFactClaimsWithholding([]CanonicalFact{team, project}, 100, scoreLookup(capabilities))
+
+	if len(claims) != 0 || len(withheld) != 2 || withheld[0].DriversTable != "risk_rules" || withheld[1].DriversTable != "risk_breakdown" || withheld[1].SubjectKind != SubjectProject {
+		t.Fatalf("claims %d withheld %+v, want no claims and one withheld score per subject kind with its own drivers table", len(claims), withheld)
+	}
+	if kinds := withheldKinds(withheld); len(kinds) != 1 || kinds[0] != FactHealth {
+		t.Fatalf("withheld kinds %v, want health once", kinds)
+	}
+}

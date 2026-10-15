@@ -301,7 +301,7 @@ func (r RuntimeAnswerSynthesizer) recordWithheldScores(ctx context.Context, prin
 		if index >= 8 {
 			break
 		}
-		attrs = append(attrs, "field_"+strconv.Itoa(index), SanitizeLogAttr(string(item.Kind)+"."+item.Field), "drivers_table_"+strconv.Itoa(index), SanitizeLogAttr(item.DriversTable))
+		attrs = append(attrs, "field_"+strconv.Itoa(index), SanitizeLogAttr(string(item.Kind)+"."+item.Field+"@"+string(item.SubjectKind)), "drivers_table_"+strconv.Itoa(index), SanitizeLogAttr(item.DriversTable))
 	}
 	slog.Default().InfoContext(ctx, "context fabric degraded answer withheld scores without their drivers", attrs...)
 }

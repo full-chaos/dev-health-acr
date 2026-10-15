@@ -28,7 +28,9 @@ func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []Cla
 // withheldScore is a declared score field the degraded answer did not claim, and the drivers table whose absence
 // withheld it.
 type withheldScore struct {
-	Kind         FactKind
+	Kind FactKind
+	// SubjectKind is the subject kind of the fact: a field can declare a different drivers table per subject kind.
+	SubjectKind  SubjectKind
 	Field        string
 	DriversTable string
 }
@@ -55,10 +57,10 @@ func mintDegradedFactClaimsWithholding(facts []CanonicalFact, claimLimit int, sc
 			}
 			if scoreOf != nil {
 				if table, isScore := scoreOf(fact, field); isScore {
-					key := string(fact.Kind) + "/" + field
+					key := string(fact.Kind) + "/" + string(fact.Subject.Kind) + "/" + field
 					if _, seen := seenWithheld[key]; !seen {
 						seenWithheld[key] = struct{}{}
-						withheld = append(withheld, withheldScore{Kind: fact.Kind, Field: field, DriversTable: table})
+						withheld = append(withheld, withheldScore{Kind: fact.Kind, SubjectKind: fact.Subject.Kind, Field: field, DriversTable: table})
 					}
 					continue
 				}
