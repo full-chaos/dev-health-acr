@@ -338,3 +338,16 @@ func TestCoverageValidateAppliesDetailChecksOnWriteOnly(t *testing.T) {
 		t.Fatalf("stored read rejected an immutable legacy row: %v", err)
 	}
 }
+
+func TestTheFactsOnlyClassesCarryTheirRetryHints(t *testing.T) {
+	t.Parallel()
+	for class, want := range map[ContextFabricSynthesisFailureClass]ContextFabricRetryHint{
+		ContextFabricSynthesisFailureDeadline:      ContextFabricRetryMaySucceed,
+		ContextFabricSynthesisFailureNotNarrowable: ContextFabricRetryUnlikelyToHelp,
+	} {
+		got, err := ContextFabricRetryHintFor(class)
+		if err != nil || got != want {
+			t.Fatalf("retry hint for %s = %q (err %v), want %q", class, got, err, want)
+		}
+	}
+}

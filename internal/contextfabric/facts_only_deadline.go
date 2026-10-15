@@ -32,7 +32,7 @@ func factsOnlyDeclinedReason(declined RetryDeclinedReason) bool {
 }
 
 func (e *Engine) factsOnlyEligible(ctx context.Context, params synthesisAssemblyParams, first InvestigationResult) bool {
-	if ctx.Err() != nil || params.WorkItemCensus != nil || params.Draft != nil || params.Degrade != nil || clientSynthesisRequested(params.Request) {
+	if ctx.Err() != nil || params.Draft != nil || params.Degrade != nil || clientSynthesisRequested(params.Request) {
 		return false
 	}
 	if _, ok := e.synthesizer.(DegradedSynthesizer); !ok {
@@ -56,8 +56,17 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, false
 	}
+	if params.WorkItemCensus != nil {
+		composed = ServeWorkItemTupleCensus(composed, params.WorkItemCensus)
+		applyCoverageDisplayLabels(&composed)
+		composed = restrictWorkItemTupleEvidence(composed)
+	}
 	composed = e.finalizeResult(ctx, principal, composed, *plan, params.Frame, factsParams.Facts, &pending, answerPassSecond, cardinality)
-	measured, err := e.measureAssembledAttempt(ctx, principal, "facts_only_result", consumed, composed, budget)
+	measurementInput := composed
+	if params.WorkItemCensus != nil {
+		measurementInput = ApplyServerCompletenessAuthority(ApplyServedStatusFloors(composed), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(composed)))
+	}
+	measured, err := e.measureAssembledAttempt(ctx, principal, "facts_only_result", consumed, measurementInput, budget)
 	if err != nil || measured.Overrun != contractsv1.ContextFabricBudgetFits {
 		return InvestigationResult{}, assemblyTelemetry{}, false
 	}

@@ -2,12 +2,15 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -18,6 +21,9 @@ type factsOnlySynth struct {
 	modelCalls *int
 	degraded   *int
 	claims     int
+	// ownSubject writes the claims about the cohort member itself, as a work-item
+	// tuple requires.
+	ownSubject bool
 }
 
 func (s factsOnlySynth) Synthesize(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
@@ -28,7 +34,7 @@ func (s factsOnlySynth) Synthesize(ctx context.Context, principal storage.Princi
 			for claim := 0; claim < s.claims; claim++ {
 				claims = append(claims, ClaimedFact{
 					ClaimID: "claim_" + member.Subject.CanonicalID + "_" + string(rune('0'+claim)),
-					Kind:    FactStatus, Subject: retryFixtureClaimSubject(member.Subject), Field: "status",
+					Kind:    FactStatus, Subject: s.claimSubject(member.Subject), Field: "status",
 					Value: ScalarValue{String: ptrString("green")},
 				})
 			}
@@ -43,6 +49,13 @@ func (s factsOnlySynth) Synthesize(ctx context.Context, principal storage.Princi
 		DeterministicAnswer: "Model prose.", Warnings: []string{},
 		Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
 	}, nil
+}
+
+func (s factsOnlySynth) claimSubject(member SubjectRef) SubjectRef {
+	if s.ownSubject {
+		return member
+	}
+	return retryFixtureClaimSubject(member)
 }
 
 func (s factsOnlySynth) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
@@ -136,8 +149,8 @@ func TestAModelAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T
 			if !slices.Equal(classes, []SynthesisFailureClass{tc.class}) {
 				t.Fatalf("coverage failure classes = %q, want [%s]", classes, tc.class)
 			}
-			if result.DirectJudgment == "Model prose." || result.DeterministicAnswer == "Model prose." {
-				t.Fatalf("served model prose: %q / %q", result.DirectJudgment, result.DeterministicAnswer)
+			if encoded, marshalErr := json.Marshal(result); marshalErr != nil || strings.Contains(string(encoded), "Model prose.") {
+				t.Fatalf("the served document carries the model's prose anywhere (marshal err %v)", marshalErr)
 			}
 			var served *PlanNarrowingEvent
 			for index := range telemetry.planNarrowings {
@@ -251,5 +264,62 @@ func TestAFactsOnlyAnswerWithNoScalarFactNeverSaysAModelCallFailed(t *testing.T)
 		if len(result.ClaimedFacts) != 0 || !slices.Contains(result.Warnings, synthesisFailureWarning(class)) {
 			t.Fatalf("class %s: claims = %d warnings = %q, want no claims and the class warning", class, len(result.ClaimedFacts), result.Warnings)
 		}
+	}
+}
+
+func TestAWorkItemTupleAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	payload := workItemTuplePayloadFixture(t)
+	members := []WorkItemMembershipMember{}
+	for i := 0; i < 6; i++ {
+		raw := fmt.Sprintf("work-%d", i)
+		id, _, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", raw}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		members = append(members, WorkItemMembershipMember{CanonicalID: id, WorkItemID: raw})
+	}
+	var modelCalls, degraded int
+	telemetry := &recordingTelemetry{}
+	options := budgetStageOptions(250, 20*time.Second)
+	options.MaxSerializedBytes = 9000
+	engine := factsOnlyEngine(t, budgetStageCohort(6), options, &modelCalls, &degraded, 10, telemetry)
+	frame := ValidateFrame(prospectiveTupleFrame(GoalCountOrAggregate), nil, "").Frame
+	question := InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}
+	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), question.TimeContext), WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"}}
+	engine.synthesizer = factsOnlySynth{modelCalls: &modelCalls, degraded: &degraded, claims: 10, ownSubject: true}
+	engine.interpreter = familyInterpreter{interpreted: question, outcome: outcome}
+	engine.graph = &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+		return true, ""
+	}
+	gate, _ := NewWorkItemMembershipGate(1, 0)
+	engine.workItemMembership = tupleMembershipFunc(func(ctx context.Context, _ storage.Principal, _ WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+		lease, err := gate.Acquire(ctx)
+		return lease, WorkItemMembershipResult{Census: WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: len(members)}, Members: members}, err
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only tuple answer served", err)
+	}
+	if modelCalls != 1 || degraded < 1 || result.Status != InvestigationDegraded || !slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisDeadlineLimitation) {
+		t.Fatalf("model calls = %d compositions = %d status = %q limitations = %q, want one model pass, a composition, degraded, with the deadline limitation", modelCalls, degraded, result.Status, result.Limitations)
+	}
+	var served bool
+	for _, event := range telemetry.planNarrowings {
+		served = served || event.FactsOnlyServed
+	}
+	if !served {
+		t.Fatal("no facts_only_served event: the tuple answer was served by another lever")
+	}
+	if cohortMemberCount(result.Cohort) != len(members) {
+		t.Fatalf("cohort has %d members, want all %d", cohortMemberCount(result.Cohort), len(members))
+	}
+	if gate.Stats().InFlight != 0 {
+		t.Error("facts-only tuple answer leaked a membership lease")
 	}
 }
