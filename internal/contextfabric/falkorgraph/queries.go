@@ -1132,21 +1132,24 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 	return graphrank.SortEdgesByRelevance(edges)
 }
 
-// gateEdgesFirst moves the edges the answer gate can use for the walk's origin
-// (a driver-making type with the origin at its From end, graphrank.MakesDriver)
-// ahead of the rest, keeping the ranked order inside both groups.
-func gateEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string) []graphrank.CandidateEdge {
-	out := make([]graphrank.CandidateEdge, 0, len(ranked))
-	for _, edge := range ranked {
-		if edge.SourceNodeUUID == originUUID && graphrank.MakesDriver(edge.Name) {
-			out = append(out, edge)
+// questionEdgesFirst orders a walk's ranked edges for collection: first the
+// origin's own edges whose type the question names (graphrank.NamedByQuestion),
+// then the edges the answer gate can use for the origin (a driver-making type
+// with the origin at its From end, graphrank.MakesDriver), then the rest,
+// keeping the ranked order inside each group.
+func questionEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string, requirements []contextfabric.FactRequirement) []graphrank.CandidateEdge {
+	group := func(edge graphrank.CandidateEdge) int {
+		switch {
+		case (edge.SourceNodeUUID == originUUID || edge.TargetNodeUUID == originUUID) && graphrank.NamedByQuestion(edge.Name, requirements):
+			return 0
+		case edge.SourceNodeUUID == originUUID && graphrank.MakesDriver(edge.Name):
+			return 1
+		default:
+			return 2
 		}
 	}
-	for _, edge := range ranked {
-		if edge.SourceNodeUUID != originUUID || !graphrank.MakesDriver(edge.Name) {
-			out = append(out, edge)
-		}
-	}
+	out := append([]graphrank.CandidateEdge(nil), ranked...)
+	sort.SliceStable(out, func(i, j int) bool { return group(out[i]) < group(out[j]) })
 	return out
 }
 
@@ -1180,7 +1183,8 @@ func gateEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string) []graph
 // committed subjects first, then full-text matches -- and a subject that runs
 // out gives its turns to the others (graphrank.RankEdgesByOrigin,
 // GraphWalkVersion). Here, and within a committed subject at admission, the
-// edges the answer gate can use for the origin come first (gateEdgesFirst). This
+// origin's own edges the question names come first, then the edges the answer
+// gate can use for the origin (questionEdgesFirst). This
 // function collects an ENTIRE
 // hop's candidate edges from every frontier node before making ANY
 // truncation decision, ranks that full set with the exact same tie-break,
@@ -1204,7 +1208,7 @@ func gateEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string) []graph
 // Reported rather than acted on here: this function stays a retrieval
 // primitive, and the caller is the layer that knows whether an exhaustive
 // census also ran and covered the loss.
-func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, error) {
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter, requirements []contextfabric.FactRequirement) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
@@ -1234,7 +1238,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			continue
 		}
 		var next []string
-		for _, ce := range gateEdgesFirst(rankCandidateEdges(hopCandidates), originUUID) {
+		for _, ce := range questionEdgesFirst(rankCandidateEdges(hopCandidates), originUUID, requirements) {
 			if collectLimit > 0 && len(edges) >= collectLimit {
 				// Candidate edges remain and the budget is spent: this walk
 				// is returning less than it found, and the endpoints of

@@ -91,15 +91,16 @@ type AdmitEdgesResult struct {
 // The order (RankEdgesByOrigin, GraphWalkVersion): the committed subjects take
 // turns in resolution order, then the full-text matches take turns in match
 // order (a tier's unused budget goes to the next); a subject with no edges left
-// gives its turns to the others. Within a committed subject: first the edges
-// whose driver would be about it (DriverSubject, the predicate the drivers
-// built here and the commit gate reading them share), then its other own
-// edges, then its second-hop edges; within each group, and within a full-text
-// match, descending relevance then ascending edge id. Each edge belongs
-// to the subject that reaches it in the fewest hops: an edge with a subject at
-// one end is that subject's own; an edge touching two subjects, or reached by
-// several only at a second hop, goes to the earliest of them. An edge's id
-// spelling therefore orders it only among one subject's edges.
+// gives its turns to the others; turns run within each run of equal
+// confidence. Within a committed subject: first its own edges whose type the
+// question names (NamedByQuestion), then the edges whose driver would be about
+// it (DriverSubject, the predicate the drivers built here and the commit gate
+// reading them share), then its other own edges, then the edges it reaches
+// further out; within each group, and within a full-text match, descending
+// relevance then ascending edge id. Each edge belongs to the subject that
+// reaches it in the fewest hops over the resolved edges: an edge with a subject
+// at one end is that subject's own; a tie goes to the earliest subject. An
+// edge's id spelling therefore orders it only among one subject's edges.
 //
 // Self-loop and internal-bookkeeping-endpoint exclusion happen here (pure,
 // no I/O) rather than trusting the caller to have filtered them, since both
@@ -248,17 +249,24 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 	return sorted
 }
 
-// RankEdgesByOrigin ranks edges for a budget several origin subjects share. By
-// confidence first (SortEdgesByRelevance); within each run of equal confidence,
-// Tier by tier (tiers[0]'s origins before tiers[1]'s), the origins of one tier
-// take turns (InterleaveByOrigin). Within one origin, edges go by class
-// (class[id], lower first; an edge with no class is class 0), then by
-// relevance, then by ascending id. An edge's id spelling therefore orders it
-// only among one origin's edges of one class. Edges of origins in no tier
-// follow, in the same order.
+// RankEdgesByOrigin ranks edges for a budget several origin subjects share.
+// Tier by tier (tiers[0]'s origins before tiers[1]'s); within a tier, by
+// confidence first (higher first), and within each run of equal confidence the
+// origins of the tier take turns (InterleaveByOrigin), so one origin's turn never
+// puts its lower-confidence edge ahead of another origin's higher one. Within one
+// origin and run, edges go by class (class[id], lower first; an edge with no
+// class is class 0), then by ascending id. An edge's id spelling therefore
+// orders it only among one origin's edges of one class and confidence. Edges of
+// origins in no tier follow, by confidence, then class, then id.
 func RankEdgesByOrigin(edges []CandidateEdge, originOf map[string]string, class map[string]int, tiers ...[]string) []CandidateEdge {
 	ranked := SortEdgesByRelevance(edges)
-	sort.SliceStable(ranked, func(i, j int) bool { return class[ranked[i].UUID] < class[ranked[j].UUID] })
+	sort.SliceStable(ranked, func(i, j int) bool {
+		ci, cj := ResultConfidence(ranked[i].Relevance, ranked[i].Score), ResultConfidence(ranked[j].Relevance, ranked[j].Score)
+		if ci != cj {
+			return ci > cj
+		}
+		return class[ranked[i].UUID] < class[ranked[j].UUID]
+	})
 	tierOf := make(map[string]int)
 	for index, tier := range tiers {
 		for _, origin := range tier {
@@ -278,7 +286,16 @@ func RankEdgesByOrigin(edges []CandidateEdge, originOf map[string]string, class 
 	}
 	out := make([]CandidateEdge, 0, len(ranked))
 	for index, tier := range tiers {
-		out = append(out, InterleaveByOrigin(byTier[index], originOf, tier)...)
+		run := byTier[index]
+		for len(run) > 0 {
+			end := 1
+			level := ResultConfidence(run[0].Relevance, run[0].Score)
+			for end < len(run) && ResultConfidence(run[end].Relevance, run[end].Score) == level {
+				end++
+			}
+			out = append(out, InterleaveByOrigin(run[:end], originOf, tier)...)
+			run = run[end:]
+		}
 	}
 	return append(out, untiered...)
 }
@@ -583,12 +600,21 @@ func edgeFact(edge ResolvedEdge) string {
 // graph-associated path relationship without a DriverJudgment -- exactly
 // like BELONGS_TO_REPOSITORY, CORRELATED_WITH_INCIDENT, RELATED_TO,
 // RELATES_TO, and DUPLICATES.
+//
+// factKind is also the fact kind a question names when it asks about this
+// relationship (NamedByQuestion). drives says whether the relationship makes a
+// driver at all: OWNED_BY_TEAM answers the identity a question asks for (the
+// owning team is part of a subject's identity, as the repository identity fact's
+// owning_teams table is) but is never a driver, so it changes neither drivers
+// nor the commit gate.
 var relationMeaningTable = map[string]struct {
 	standing contextfabric.DriverStanding
 	category string
 	factKind contextfabric.FactKind
+	drives   bool
 }{
-	"BLOCKS": {contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers},
+	"BLOCKS":        {contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers, true},
+	"OWNED_BY_TEAM": {factKind: contextfabric.FactIdentity},
 }
 
 // RecognizedRelationshipTypes returns relationMeaningTable's keys -- see
@@ -605,10 +631,26 @@ func RecognizedRelationshipTypes() []string {
 
 func relationMeaning(name string) (contextfabric.DriverStanding, string, contextfabric.FactKind, bool) {
 	entry, ok := relationMeaningTable[NormalizeRelation(name)]
-	if !ok {
+	if !ok || !entry.drives {
 		return contextfabric.DriverContext, "relationship", contextfabric.FactEvidence, false
 	}
 	return entry.standing, entry.category, entry.factKind, true
+}
+
+// NamedByQuestion reports whether a question that requires these fact kinds
+// asks about an edge of this relationship type: its relationMeaningTable fact
+// kind is one of them.
+func NamedByQuestion(relationship string, requirements []contextfabric.FactRequirement) bool {
+	entry, ok := relationMeaningTable[NormalizeRelation(relationship)]
+	if !ok {
+		return false
+	}
+	for _, requirement := range requirements {
+		if requirement.Kind == entry.factKind {
+			return true
+		}
+	}
+	return false
 }
 
 func relationTitle(name, target string) string {
