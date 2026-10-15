@@ -6571,6 +6571,17 @@
         "presence": "required"
       },
       {
+        "key": "facts_only_declined",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "compose_failed",
+          "measure_failed",
+          "over_budget"
+        ]
+      },
+      {
         "key": "deadline_reserved",
         "type": "bool",
         "presence": "required"

@@ -870,7 +870,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 			// The retry ran, its document still overran, and the budget-trim
 			// lever served the RETRIED document. The event measures it.
 			name:          "budget-trim lever served the re-synthesized result",
-			discriminator: "retry_attempted=true retry_fit=false retry_failed=false refusal_planned=false facts_only_attempted=false facts_only_served=false deadline_reserved=true",
+			discriminator: "retry_attempted=true retry_fit=false retry_failed=false refusal_planned=false facts_only_attempted=false facts_only_served=false facts_only_declined=\"\" deadline_reserved=true",
 			spec:          attributionFixtureSpec{members: 4, globalFindings: 7, groupDrivers: 4, multiGroupDrivers: 2, memberDrivers: 1, memberClaims: 3},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(17, time.Second), cohortSizes)

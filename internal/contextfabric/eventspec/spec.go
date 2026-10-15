@@ -1232,6 +1232,15 @@ var RememberedWindowAxis = Event{
 	},
 }
 
+func factsOnlyDeclinedTokens() []string {
+	vocab := contextfabric.FactsOnlyDeclinedVocabulary()
+	tokens := make([]string, 0, len(vocab))
+	for _, token := range vocab {
+		tokens = append(tokens, string(token))
+	}
+	return tokens
+}
+
 func planCarryFamilyTokens() []string {
 	vocab := contextfabric.QuestionFamilyVocabulary()
 	tokens := make([]string, 0, len(vocab))
@@ -2387,6 +2396,7 @@ var SynthesisRetrySelection = Event{
 		{Key: "refusal_planned", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "facts_only_attempted", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "facts_only_served", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "facts_only_declined", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: factsOnlyDeclinedTokens()},
 		{Key: "deadline_reserved", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "retry_declined", Type: FieldString, Presence: PresenceRequired},
 		{Key: "narrower_continuation_axis", Type: FieldString, Presence: PresenceRequired},

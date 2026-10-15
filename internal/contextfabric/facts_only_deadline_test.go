@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -506,5 +508,116 @@ func TestASuppliedSynthesisIsNeverReplacedByTheFactsOnlyAnswer(t *testing.T) {
 	request := validInvestigationRequestWithConfirmedWindow()
 	if factsOnlyDeclinedReason(RetryDeclinedSuppliedSynthesis) || engine.factsOnlyEligible(context.Background(), synthesisAssemblyParams{Request: func() InvestigationRequest { r := request; r.SynthesisMode = SynthesisModeClient; return r }()}, InvestigationResult{}) {
 		t.Fatal("a supplied synthesis is eligible for the facts-only answer")
+	}
+}
+
+// faultySynthesizer wraps the fixture's model synthesizer; its degraded composition fails or returns what the test
+// plants, so the facts-only answer's own fault paths can be driven.
+type faultySynthesizer struct {
+	AnswerSynthesizer
+	compose func(InvestigationResult) (InvestigationResult, error)
+}
+
+func (f faultySynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
+	result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(ctx, principal, input, failure)
+	if err != nil {
+		return result, err
+	}
+	return f.compose(result)
+}
+
+func factsOnlyDeclinedEvent(telemetry *recordingTelemetry) *PlanNarrowingEvent {
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].RefusalPlanned {
+			return &telemetry.planNarrowings[index]
+		}
+	}
+	return nil
+}
+
+func driveFaultyFactsOnly(t *testing.T, compose func(InvestigationResult) (InvestigationResult, error)) (*recordingTelemetry, string, error) {
+	t.Helper()
+	var logs strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	var modelCalls, degraded int
+	telemetry := &recordingTelemetry{}
+	engine := factsOnlyEngine(t, budgetStageCohort(6), budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, telemetry)
+	engine.synthesizer = faultySynthesizer{AnswerSynthesizer: engine.synthesizer, compose: compose}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	return telemetry, logs.String(), err
+}
+
+// A fault while assembling the facts-only answer is named on the refusal event and its class is logged at Warn.
+func TestAFactsOnlyAnswerThatCannotBeComposedSaysSoOnTheRefusalEvent(t *testing.T) {
+	telemetry, logs, err := driveFaultyFactsOnly(t, func(InvestigationResult) (InvestigationResult, error) {
+		return InvestigationResult{}, errors.New("composer fault")
+	})
+
+	if !errors.Is(err, ErrAnswerExceedsBudget) {
+		t.Fatalf("err = %v, want the budget refusal to stand", err)
+	}
+	event := factsOnlyDeclinedEvent(telemetry)
+	if event == nil || !event.FactsOnlyAttempted || event.FactsOnlyDeclined != FactsOnlyComposeFailed {
+		t.Fatalf("refusal event %+v, want facts_only_attempted with facts_only_declined=compose_failed", event)
+	}
+	if !strings.Contains(logs, "facts_only_declined=compose_failed") || !strings.Contains(logs, "error_class=internal") || strings.Contains(logs, "composer fault") {
+		t.Fatalf("log %q, want the token and the error class and not the error text", logs)
+	}
+}
+
+// A fault while measuring the assembled facts-only answer (here an answer that cannot be encoded) says measure_failed.
+func TestAFactsOnlyAnswerThatCannotBeMeasuredSaysSoOnTheRefusalEvent(t *testing.T) {
+	telemetry, logs, err := driveFaultyFactsOnly(t, func(result InvestigationResult) (InvestigationResult, error) {
+		result.Drivers = append(result.Drivers, DriverJudgment{DriverID: "d1", Standing: DriverPrincipal, Category: "relationship", Title: "t", Summary: "s",
+			AffectedSubjects: []SubjectRef{}, EvidenceRefIDs: []string{}, Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved,
+			Confidence: math.Inf(1), Current: true})
+		return result, nil
+	})
+
+	event := factsOnlyDeclinedEvent(telemetry)
+	if !errors.Is(err, ErrAnswerExceedsBudget) || event == nil || event.FactsOnlyDeclined != FactsOnlyMeasureFailed {
+		t.Fatalf("err %v event %+v, want the refusal and facts_only_declined=measure_failed", err, event)
+	}
+	if !strings.Contains(logs, "facts_only_declined=measure_failed") {
+		t.Fatalf("log %q, want the measure_failed token", logs)
+	}
+}
+
+// A facts-only answer that does not fit says over_budget, not a fault.
+func TestAFactsOnlyAnswerOverBudgetSaysSoOnTheRefusalEvent(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	options := budgetStageOptions(12, 20*time.Second)
+	options.MaxSerializedBytes = 3000
+	var modelCalls, degraded int
+	engine := factsOnlyEngine(t, budgetStageCohort(6), options, &modelCalls, &degraded, 2, telemetry)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+	event := factsOnlyDeclinedEvent(telemetry)
+	if !errors.Is(err, ErrAnswerExceedsBudget) || event == nil || event.FactsOnlyDeclined != FactsOnlyOverBudget {
+		t.Fatalf("err %v event %+v, want the refusal and facts_only_declined=over_budget", err, event)
+	}
+}
+
+// An answer that served, or was never tried, carries no declined token.
+func TestAServedFactsOnlyAnswerCarriesNoDeclinedToken(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	var modelCalls, degraded int
+	engine := factsOnlyEngine(t, budgetStageCohort(6), budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, telemetry)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range telemetry.planNarrowings {
+		if event.FactsOnlyDeclined != FactsOnlyServedOrUntried {
+			t.Fatalf("event %+v carries a declined token on a served answer", event)
+		}
 	}
 }

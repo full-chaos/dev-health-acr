@@ -167,6 +167,8 @@ type PlanNarrowingEvent struct {
 	// in place of the refusal. FactsOnlyServed: it fit and was served.
 	FactsOnlyAttempted bool
 	FactsOnlyServed    bool
+	// FactsOnlyDeclined says why a facts-only answer that was tried did not serve (closed vocabulary).
+	FactsOnlyDeclined FactsOnlyDeclined
 	// DeadlineReserved reports whether a synthesis deadline was reserved.
 	// D5 calls the reservation non-negotiable, so an event saying it was
 	// absent is the signal that a deployment is one slow synthesis away
