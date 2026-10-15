@@ -2421,6 +2421,9 @@ type RuntimeAnswerSynthesizer struct {
 	// ClientSynthesis lets a turn that asks to write its own answer be served.
 	// Nil refuses such a turn with ErrClientSynthesisUnavailable.
 	ClientSynthesis *ClientSynthesisAssembly
+	// FactCapabilities are the field declarations the degraded composition reads to keep decision K7: a declared score is
+	// never claimed beside no drivers table. Empty claims every scalar.
+	FactCapabilities []FactCapability
 }
 
 // StaticResultVersions implements ResultVersionProvider (CHAOS-3810), so a
@@ -2676,6 +2679,9 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 			return InvestigationResult{}, err
 		}
 		serverDetails = append(serverDetails, detail)
+		for _, kind := range failure.withheldScoreKinds {
+			serverDetails = append(serverDetails, newFactScoreWithheldDetail(kind))
+		}
 	}
 	if !appendServerCoverageDetails(&result, serverDetails, principal.OrgID) && failure != nil {
 		slog.Default().Error("context_fabric: model failure coverage detail not filed, the answer is recognised by its warning",

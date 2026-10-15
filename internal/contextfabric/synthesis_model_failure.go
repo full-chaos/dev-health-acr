@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -228,6 +229,9 @@ type SynthesisFailure struct {
 	// retryRan is set on a facts-only answer served after a narrower retry ran and did not fit: its facts are the first
 	// pass's, and the answer says a retry ran.
 	retryRan bool
+	// withheldScoreKinds are the fact kinds whose declared scores the degraded composition did not claim; the composition
+	// files one fact_score_withheld detail for each.
+	withheldScoreKinds []FactKind
 }
 
 func (f *SynthesisFailure) Error() string { return f.cause.Error() }
@@ -247,7 +251,9 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage, ReserveFired: failure.ReserveFired, CallDeadline: failure.CallDeadline})
 	}
 	draft := degradedSynthesisDraft(failure.Class)
-	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts, degradedClaimLimit(input))
+	claims, evidence, truncated, withheld := mintDegradedFactClaimsWithholding(input.Facts.Facts, degradedClaimLimit(input), scoreLookup(r.FactCapabilities))
+	r.recordWithheldScores(ctx, principal, failure.Class, withheld)
+	failure.withheldScoreKinds = withheldKinds(withheld)
 	if limitation, factsOnlyClass := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(failure.Class); factsOnlyClass {
 		draft.ClaimedFacts, draft.EvidenceRefIDs = claims, evidence
 		if len(claims) == 0 {
@@ -305,4 +311,41 @@ func (r RuntimeAnswerSynthesizer) recordSynthesisModelFailure(ctx context.Contex
 		return
 	}
 	NewSlogEngineTelemetry(slog.Default()).RecordSynthesisModelFailure(ctx, principal, event)
+}
+
+// recordWithheldScores logs the score fields a degraded answer did not claim and the drivers table each one needed, at
+// Info: the response names the fact kinds (a coverage detail), the trace names the fields and tables.
+func (r RuntimeAnswerSynthesizer) recordWithheldScores(ctx context.Context, principal storage.Principal, class SynthesisFailureClass, withheld []withheldScore) {
+	if len(withheld) == 0 {
+		return
+	}
+	attrs := []any{"org_id", SanitizeLogAttr(principal.OrgID), "class", SanitizeLogAttr(string(class)), "withheld", len(withheld), "reason", "drivers_not_served"}
+	for index, item := range withheld {
+		if index >= 8 {
+			break
+		}
+		attrs = append(attrs, "field_"+strconv.Itoa(index), SanitizeLogAttr(string(item.Kind)+"."+item.Field+"@"+string(item.SubjectKind)), "drivers_table_"+strconv.Itoa(index), SanitizeLogAttr(item.DriversTable))
+	}
+	slog.Default().InfoContext(ctx, "context fabric degraded answer withheld scores without their drivers", attrs...)
+}
+
+func withheldKinds(withheld []withheldScore) []FactKind {
+	kinds := []FactKind{}
+	for _, item := range withheld {
+		if !slices.Contains(kinds, item.Kind) {
+			kinds = append(kinds, item.Kind)
+		}
+	}
+	return kinds
+}
+
+// newFactScoreWithheldDetail is the coverage detail of a fact kind whose declared scores a degraded answer did not
+// claim. A disclosure: the answer's status already says degraded.
+func newFactScoreWithheldDetail(kind FactKind) CoverageDetail {
+	detail := CoverageDetail{
+		Source: synthesisModelFailureSource, Code: contractsv1.ContextFabricCoverageDetailFactScoreWithheld, FactKind: kind,
+		Raw: string(contractsv1.ContextFabricCoverageDetailFactScoreWithheld) + ":" + string(kind),
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	return detail
 }

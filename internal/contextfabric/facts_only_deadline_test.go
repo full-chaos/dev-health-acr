@@ -62,7 +62,7 @@ func (s factsOnlySynth) claimSubject(member SubjectRef) SubjectRef {
 
 func (s factsOnlySynth) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
 	*s.degraded++
-	return RuntimeAnswerSynthesizer{}.ComposeDegraded(ctx, principal, input, failure)
+	return RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}.ComposeDegraded(ctx, principal, input, failure)
 }
 
 func factsOnlyEngine(t *testing.T, cohort *Cohort, options EngineOptions, modelCalls, degraded *int, claims int, telemetry EngineTelemetry) *Engine {
@@ -339,7 +339,7 @@ func TestAWorkItemTupleAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *t
 type memberCutDegradeCapable struct{ AnswerSynthesizer }
 
 func (m memberCutDegradeCapable) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
-	return RuntimeAnswerSynthesizer{}.ComposeDegraded(ctx, principal, input, failure)
+	return RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}.ComposeDegraded(ctx, principal, input, failure)
 }
 
 func factsOnlyServedEvent(telemetry *recordingTelemetry) *PlanNarrowingEvent {
@@ -532,7 +532,7 @@ type faultySynthesizer struct {
 }
 
 func (f faultySynthesizer) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
-	result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(ctx, principal, input, failure)
+	result, err := RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}.ComposeDegraded(ctx, principal, input, failure)
 	if err != nil {
 		return result, err
 	}
@@ -633,4 +633,120 @@ func TestAServedFactsOnlyAnswerCarriesNoDeclinedToken(t *testing.T) {
 			t.Fatalf("event %+v carries a declined token on a served answer", event)
 		}
 	}
+}
+
+// scoredFacts adds to an engine's fact read a health fact carrying a declared score (compounding_risk, drivers table
+// compounding_risk_drivers) about the subject, beside whatever the engine read.
+func scoredFacts(engine *Engine, subject SubjectRef) {
+	read := engine.facts
+	engine.facts = factReaderFunc(func(ctx context.Context, principal storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+		bundle, err := read.ReadFacts(ctx, principal, request)
+		if err != nil {
+			return bundle, err
+		}
+		risk, severity := 0.99, "high"
+		bundle.Facts = append(bundle.Facts, CanonicalFact{Kind: FactHealth, Subject: subject, Fields: map[string]FactValue{"compounding_risk": {Number: &risk}, "severity": {String: &severity}},
+			EvidenceRefIDs: []string{"ref_score"}, Source: "devhealthfacts.health", SourceVersion: "v1"})
+		return bundle, nil
+	})
+}
+
+// assertScoreWithheld is decision K7 on a served facts-only answer: no claim for the declared score, the plain scalar
+// beside it claimed, and one fact_score_withheld detail for the fact kind.
+func assertScoreWithheld(t *testing.T, result InvestigationResult, plainClaimed ...bool) {
+	t.Helper()
+	score, plain, details := 0, 0, 0
+	for _, claim := range result.ClaimedFacts {
+		if claim.Kind == FactHealth && claim.Field == "compounding_risk" {
+			score++
+		}
+		if claim.Kind == FactHealth && claim.Field == "severity" {
+			plain++
+		}
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailFactScoreWithheld && detail.FactKind == FactHealth {
+			details++
+		}
+	}
+	wantPlain := 1
+	if len(plainClaimed) > 0 && !plainClaimed[0] {
+		wantPlain = plain // an item ceiling with no room for any claim: only the score's absence and the disclosure are asserted
+	}
+	if score != 0 || plain != wantPlain || details != 1 {
+		t.Fatalf("score claims %d, severity claims %d, fact_score_withheld details %d, want 0, 1, 1: a facts-only answer never serves a bare score", score, plain, details)
+	}
+}
+
+// K7 at every facts-only point (decision K7: never a bare score): the answer served instead of each refusal claims the
+// plain scalar of a health fact, never its declared score, and discloses the withheld score once.
+func TestEveryFactsOnlyPointWithholdsADeclaredScore(t *testing.T) {
+	member := budgetStageCohort(1).Members[0].Subject
+	invest := func(t *testing.T, engine *Engine, timeout time.Duration) InvestigationResult {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+		if err != nil {
+			t.Fatalf("error = %v, want the facts-only answer", err)
+		}
+		if result.Status != InvestigationDegraded {
+			t.Fatalf("status %q, want degraded", result.Status)
+		}
+		return result
+	}
+	t.Run("insufficient deadline", func(t *testing.T) {
+		var modelCalls, degraded int
+		engine := factsOnlyEngine(t, budgetStageCohort(6), budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, &recordingTelemetry{})
+		scoredFacts(engine, member)
+		assertScoreWithheld(t, invest(t, engine, 10*time.Second))
+	})
+	t.Run("nothing to narrow", func(t *testing.T) {
+		var modelCalls, degraded int
+		engine := factsOnlyEngine(t, budgetStageCohort(1), budgetStageOptions(4, time.Second), &modelCalls, &degraded, 20, &recordingTelemetry{})
+		scoredFacts(engine, member)
+		assertScoreWithheld(t, invest(t, engine, time.Minute))
+	})
+	t.Run("no reserve, member cut declined", func(t *testing.T) {
+		engine := memberCutEngine(t, memberCutGaps, nil, 0, &recordingTelemetry{})
+		engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+		scoredFacts(engine, SubjectRef{Kind: SubjectProject, CanonicalID: "project_000", Label: "project_000"})
+		request := validInvestigationRequestWithConfirmedWindow()
+		request.Options.MaxCohortMembers = memberCutCallerCap
+		result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_listing"}, request)
+		if err != nil {
+			t.Fatalf("error = %v, want the facts-only answer", err)
+		}
+		assertScoreWithheld(t, result)
+	})
+	t.Run("bytes overrun, the cut does not apply", func(t *testing.T) {
+		engine := memberCutEngineAtCeiling(t, 10, nil, 0, 29600, memberCutPopulation, &recordingTelemetry{})
+		engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+		scoredFacts(engine, SubjectRef{Kind: SubjectProject, CanonicalID: "project_000", Label: "project_000"})
+		request := validInvestigationRequestWithConfirmedWindow()
+		request.Options.MaxCohortMembers = memberCutCallerCap
+		result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_listing"}, request)
+		if err != nil {
+			t.Fatalf("error = %v, want the facts-only answer", err)
+		}
+		assertScoreWithheld(t, result)
+	})
+	t.Run("rows alone overran", func(t *testing.T) {
+		var calls int
+		engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, chaos6558Shape{rowPadding: 2000, maxBytes: 40000})
+		engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+		scoredFacts(engine, chaos6558Cohort().Members[0].Subject)
+		result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
+		if err != nil {
+			t.Fatalf("error = %v, want the facts-only answer", err)
+		}
+		assertScoreWithheld(t, result)
+	})
+	t.Run("retry ran and still overran", func(t *testing.T) {
+		calls := 0
+		engine := budgetStageEngine(t, budgetStageCohort(4), 20, budgetStageOptions(4, time.Second), &calls, &recordingTelemetry{})
+		engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+		scoredFacts(engine, member)
+		assertScoreWithheld(t, invest(t, engine, time.Minute), false)
+	})
 }

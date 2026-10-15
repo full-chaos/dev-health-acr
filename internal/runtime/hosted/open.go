@@ -985,7 +985,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ObservationKeys: factRegistry,
 		Graph:           graphReader,
 		Facts:           factRegistry,
-		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis},
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis, FactCapabilities: factRegistry.Capabilities()},
 		Results:         investigationStore,
 		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
@@ -1170,6 +1170,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// reasoning as its eight siblings; see
 			// ReuseKey.OwnershipRoutingVersion for the full reasoning.
 			OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion,
+			// The graph walk's edge-budget rules; see ReuseKey.GraphWalkVersion.
+			GraphWalkVersion: contextfabric.GraphWalkVersion,
 		},
 	})
 	if err != nil {

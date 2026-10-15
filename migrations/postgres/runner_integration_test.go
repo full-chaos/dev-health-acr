@@ -93,8 +93,8 @@ import (
 // acr.oauth_authorization_requests tables (internal/storage/oauth.go's
 // package doc comment has the full flow). 0042 (CHAOS-6233) is the RFC 8628
 // device-code grant's client/resource/scope binding table,
-// acr.oauth_device_grants, FK'd to acr.device_authorizations. 0043 (CHAOS-6231) binds an OAuth authorization request to the first signed-in web user who opens it (bound_org_id, bound_subject). 0045 (CHAOS-7249) indexes acr.oauth_clients.created_at for the OAuth purge's idle-client predicate. 0046 (CHAOS-7229) indexes acr.device_authorizations.expires_at for every state, for the OAuth purge's device authorization predicate. 0047 widens acr.context_fabric_graph_epoch_retirements.reason with 'build_aborted', the retirement an aborted build's target epoch gets.  0048 adds acr.context_fabric_projection_checkpoints.rebuild_owed, the durable flag for a version-refused source. 0049 adds acr.web_assertion_replays, the used web-assertion ids every acr-api pod shares. 0050 adds acr.device_authorizations.ack_required and credential_acked_at, the state a device-poll credential's client acknowledgement lives in. 0051 adds acr.context_fabric_org_purge_markers, the durable per-organization purge fence. 0052 adds the write-fence trigger on every organization-keyed table the purge deletes.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52}
+// acr.oauth_device_grants, FK'd to acr.device_authorizations. 0043 (CHAOS-6231) binds an OAuth authorization request to the first signed-in web user who opens it (bound_org_id, bound_subject). 0045 (CHAOS-7249) indexes acr.oauth_clients.created_at for the OAuth purge's idle-client predicate. 0046 (CHAOS-7229) indexes acr.device_authorizations.expires_at for every state, for the OAuth purge's device authorization predicate. 0047 widens acr.context_fabric_graph_epoch_retirements.reason with 'build_aborted', the retirement an aborted build's target epoch gets.  0048 adds acr.context_fabric_projection_checkpoints.rebuild_owed, the durable flag for a version-refused source. 0049 adds acr.web_assertion_replays, the used web-assertion ids every acr-api pod shares. 0050 adds acr.device_authorizations.ack_required and credential_acked_at, the state a device-poll credential's client acknowledgement lives in. 0051 adds acr.context_fabric_org_purge_markers, the durable per-organization purge fence. 0052 adds the write-fence trigger on every organization-keyed table the purge deletes. 0053 adds context_fabric_investigation_results.graph_walk_version, one more reuse-key dimension, and replaces reuse-key index v11 with v12.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -502,7 +502,8 @@ func TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn(t *testing.T)
 	// TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn and
 	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the dedicated
 	// boundary proofs this same replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v12")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
@@ -575,7 +576,8 @@ func TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn(t *testing.T) {
 	// see TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn
 	// and TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
 	// dedicated boundary proofs this same replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v12")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
@@ -645,7 +647,8 @@ func TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn(t *testing.T) {
 	// no longer the CURRENT one; see
 	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
 	// dedicated 0022->0031-boundary proof.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v12")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
@@ -723,7 +726,8 @@ func TestRunner_upgradeTo35AddsRankingFormulaReuseKeyColumn(t *testing.T) {
 	// replaces v9 with v10 (question_family_version) -- see
 	// TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn for the
 	// dedicated 0035->0036-boundary proof.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v12")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
@@ -796,7 +800,8 @@ func TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn(t *testing.T) {
 
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "question_family_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_question_family_version_length")
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v12")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 }
