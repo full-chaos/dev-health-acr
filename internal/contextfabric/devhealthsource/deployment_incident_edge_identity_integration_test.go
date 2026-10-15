@@ -12,7 +12,9 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // applyFrom pages the real producer from cursor and applies every page to the
@@ -140,10 +142,10 @@ func TestSharedDeploymentIDAcrossReposDoesNotWedgeTheProjection(t *testing.T) {
 	}
 }
 
-// The native row (CHAOS-5110) and the heuristic row for the same deployment and
-// incident are two rows in ClickHouse (source is in the key) and two distinct
-// facts, but ops gives them one edge_id. The producer must project both.
-func TestNativeAndHeuristicDeploymentIncidentRowsBothProject(t *testing.T) {
+// The native row (CHAOS-5110) and the heuristic row for one deployment and incident are one row in the source table
+// (ops keys it by repository, deployment and incident, no source) and the higher tier wins whatever the time: the
+// producer projects one relationship for the pair, from the native row.
+func TestNativeAndHeuristicDeploymentIncidentRowsAreOneRelationship(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
 
@@ -154,16 +156,16 @@ func TestNativeAndHeuristicDeploymentIncidentRowsBothProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	insertDeploymentIncidentEdge(ctx, t, direct, f, f.repoA, "heuristic", now.Add(-2*time.Hour))
 	insertDeploymentIncidentEdge(ctx, t, direct, f, f.repoA, "native", now.Add(-2*time.Hour))
+	insertDeploymentIncidentEdge(ctx, t, direct, f, f.repoA, "heuristic", now.Add(-time.Hour))
 
 	h := &ingestHarness{t: t, ctx: ctx, direct: direct, src: source, source: devhealthsource.SourceName, orgID: orgID, repo: f.repoA}
 	edges := h.drain("").relationships["CORRELATED_WITH_INCIDENT"]
-	ids := map[string]bool{}
-	for _, e := range edges {
-		ids[e.RelationshipID] = true
+	if len(edges) != 1 {
+		t.Fatalf("%d CORRELATED_WITH_INCIDENT relationships, want 1 (one row for the pair)", len(edges))
 	}
-	if len(edges) != 2 || len(ids) != 2 {
-		t.Errorf("%d CORRELATED_WITH_INCIDENT relationships with %d distinct ids, want 2 and 2 (the native and the heuristic row)", len(edges), len(ids))
+	wantRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, f.repoA, "deploy-shared-1", f.incidentID, "native")
+	if len(edges[0].EvidenceRefIDs) != 1 || edges[0].EvidenceRefIDs[0] != wantRef {
+		t.Errorf("evidence refs %v, want the native row's %s (the higher tier wins although the heuristic row is newer)", edges[0].EvidenceRefIDs, wantRef)
 	}
 }
