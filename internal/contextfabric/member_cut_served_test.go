@@ -20,6 +20,8 @@ type failingModel struct {
 	inner      AnswerSynthesizer
 	modelCalls *int
 	composed   *[]SynthesisInput
+	// after, when set, rewrites each composed answer (index from zero).
+	after func(index int, composed []SynthesisInput, result *InvestigationResult)
 }
 
 func (s failingModel) Synthesize(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
@@ -31,6 +33,9 @@ func (s failingModel) ComposeDegraded(ctx context.Context, principal storage.Pri
 	*s.composed = append(*s.composed, input)
 	result, err := s.inner.Synthesize(ctx, principal, input)
 	result.Status = InvestigationDegraded
+	if s.after != nil {
+		s.after(len(*s.composed)-1, *s.composed, &result)
+	}
 	return result, err
 }
 
@@ -279,4 +284,40 @@ func cohortSize(cohort *Cohort) int {
 		return 0
 	}
 	return len(cohort.Members)
+}
+
+// A second composition that names a member the cut removed is not served: it
+// would describe a list the answer no longer has. The cut is refused and the
+// event says why.
+func TestAServedCutThatNamesACutMemberIsRefused(t *testing.T) {
+	memberCutWrapSynthesizer = func(inner AnswerSynthesizer) AnswerSynthesizer {
+		var modelCalls int
+		var composed []SynthesisInput
+		return failingModel{inner: inner, modelCalls: &modelCalls, composed: &composed,
+			after: func(index int, composed []SynthesisInput, result *InvestigationResult) {
+				if index != 1 {
+					return
+				}
+				kept := map[string]bool{}
+				for _, member := range composed[1].Graph.Cohort.Members {
+					kept[member.Subject.CanonicalID] = true
+				}
+				for _, member := range composed[0].Graph.Cohort.Members {
+					if !kept[member.Subject.CanonicalID] {
+						result.CurrentState = "The review queue on " + member.Subject.CanonicalID + " is the one to watch."
+						return
+					}
+				}
+			}}
+	}
+	t.Cleanup(func() { memberCutWrapSynthesizer = nil })
+	telemetry := &recordingTelemetry{}
+	_, err := investigateMemberCut(t, memberCutEngineAtCeiling(t, memberCutGaps, nil, 0, 0, memberCutCallerCap, telemetry))
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v, want the budget refusal", err)
+	}
+	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Declined != MemberCutNamesCutMember || telemetry.memberCuts[0].Served {
+		t.Fatalf("member-cut events = %+v, want one declined names_cut_member", telemetry.memberCuts)
+	}
 }

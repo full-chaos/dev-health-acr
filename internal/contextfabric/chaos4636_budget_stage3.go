@@ -408,6 +408,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// composed the same way) and the order the cut was taken in.
 	var recompose *SynthesisFailure
 	var cutBasis contractsv1.ContextFabricNarrowingBasis
+	var cutRefusal func() error
+	var cutRemoved []SubjectRef
+	cutNamed := false
 	// CHAOS-6558 (a): never run a retry that cannot reduce the overrunning
 	// axis. When the rows alone overran (removing them would have fit) and
 	// the narrowed input keeps every fact, the retry re-synthesizes over the
@@ -549,9 +552,15 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
 		}
 		cutMeasured := measured
+		cutRefusal = func() error {
+			return e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		}
+		cutRemoved = cut.Cut
 		defer func() {
 			var refusal AnswerBudgetRefusal
 			switch {
+			case cutNamed:
+				cut.Declined = MemberCutNamesCutMember
 			case outErr == nil:
 			case errors.As(outErr, &refusal):
 				cut.Declined = MemberCutStillOver
@@ -720,6 +729,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// Measure the same display labels the final response will carry.
 		applyCoverageDisplayLabels(&retried)
 		retried = restrictWorkItemTupleEvidence(retried)
+	}
+	if len(cutRemoved) > 0 && answerNamesAny(retried, cutRemoved) {
+		cutNamed = true
+		return InvestigationResult{}, firstPass, cutRefusal()
 	}
 	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, retryCardinality)
 	// The outcome-derivation completeness authority is applied exactly ONCE,

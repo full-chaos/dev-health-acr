@@ -51,6 +51,10 @@ const (
 	// MemberCutStillOver: the answer synthesized over the cut cohort still
 	// overran after every lever, and was refused.
 	MemberCutStillOver MemberCutDeclined = "still_over"
+	// MemberCutNamesCutMember: the answer synthesized over the cut cohort
+	// names (in prose or by a finding) a member the cut removed, so it is not
+	// served: it would describe a list it no longer has.
+	MemberCutNamesCutMember MemberCutDeclined = "names_cut_member"
 	// MemberCutSynthesisFailed: the synthesis over the cut cohort failed.
 	MemberCutSynthesisFailed MemberCutDeclined = "synthesis_failed"
 )
@@ -72,10 +76,12 @@ type memberCutAttempt struct {
 	Declined MemberCutDeclined
 	Need     int
 	KeepBy   MemberCutKeepBasis
-	Listed   int
-	Uncited  int
-	Kept     int
-	Basis    contractsv1.ContextFabricNarrowingBasis
+	// Cut is the members the cut removed.
+	Cut     []SubjectRef
+	Listed  int
+	Uncited int
+	Kept    int
+	Basis   contractsv1.ContextFabricNarrowingBasis
 	// Input is the cut cohort's synthesis input, set when the cut runs.
 	Input narrowedInput
 	// Recompose is the first pass's model failure when its answer was the
@@ -325,9 +331,11 @@ func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyPara
 	}
 	kept := make([]CohortMember, 0, keep)
 	for index, member := range cohort.Members {
-		if !cut[index] {
-			kept = append(kept, member)
+		if cut[index] {
+			attempt.Cut = append(attempt.Cut, member.Subject)
+			continue
 		}
+		kept = append(kept, member)
 	}
 	attempt.Input = narrowedInputOver(params, params.Graph, params.Facts, cohort, kept, listed, basis)
 	return attempt
@@ -355,4 +363,17 @@ func (e *Engine) recordMemberCut(ctx context.Context, principal storage.Principa
 		Served:      attempt.Declined == MemberCutNotApplicable,
 		Declined:    attempt.Declined,
 	})
+}
+
+// answerNamesAny reports whether the answer names one of the subjects, in its
+// prose or in a finding, driver or claim that cites it.
+func answerNamesAny(answer InvestigationResult, subjects []SubjectRef) bool {
+	cited := walkListSubjectCited(answer)
+	prose := answerProse(answer)
+	for _, subject := range subjects {
+		if cited[subject.CanonicalID] || namedInProse(subject, prose) {
+			return true
+		}
+	}
+	return false
 }
