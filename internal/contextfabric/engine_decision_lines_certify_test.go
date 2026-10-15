@@ -15,7 +15,7 @@ import (
 var (
 	renderShapeSummaryLegacyKeys = []string{
 		"time", "level", "msg", "org_id", "question_shape", "render_shapes_selected", "render_shape_rules_skipped",
-		"render_shape_members_truncated", "render_shape_trends_omitted", "render_shape_accounting", "request_id",
+		"render_shape_members_truncated", "render_shape_trends_omitted", "render_shape_accounting", "selected_shapes", "request_id",
 	}
 	renderShapeSkippedLegacyKeys = []string{
 		"time", "level", "msg", "org_id", "question_shape", "render_shape_rule", "render_shape_skip_reason", "request_id",
@@ -197,4 +197,79 @@ func TestRenderShapeAndStatusLinesCertifyEveryProducerValueAndRefuseAnyOther(t *
 	certifyRefused(t, shadow("future_status", "complete", contextfabric.ServerStatusBasisServed), eventspec.ServerStatusShadowLine, "an unknown model status")
 	certifyRefused(t, shadow("complete", "future_status", contextfabric.ServerStatusBasisServed), eventspec.ServerStatusShadowLine, "an unknown server status")
 	certifyRefused(t, shadow("complete", "complete", contextfabric.ServerStatusBasis("future_basis")), eventspec.ServerStatusShadowLine, "an unknown basis")
+}
+
+func selectedShapesRecord(selections []contextfabric.RenderShapeSelection) []byte {
+	var buf bytes.Buffer
+	telemetry, ctx := cohortTelemetry(&buf)
+	telemetry.RecordRenderShapeSelection(ctx, storage.Principal{OrgID: "org_1"}, contextfabric.RenderShapeSelectionEvent{
+		Shape: contractsv1.ContextFabricShapeOpen, Selected: selections,
+	})
+	return buf.Bytes()
+}
+
+// TestRenderShapeSelectionIsOneRecordWithTheSelectedShapesAsABoundedList pins
+// the one-record decision: the shapes ride on the summary line as a list whose
+// values are asserted (not merely present), every kind, presentation and rule
+// the producers define certifies, the list is bounded by the producer's own
+// shape budget, and a value outside any vocabulary is refused.
+func TestRenderShapeSelectionIsOneRecordWithTheSelectedShapesAsABoundedList(t *testing.T) {
+	t.Parallel()
+	rules := contextfabric.RenderShapeRuleLineVocabulary()
+	asWant := func(selections []contextfabric.RenderShapeSelection) []any {
+		out := make([]any, 0, len(selections))
+		for _, s := range selections {
+			out = append(out, map[string]any{
+				"render_shape_kind": string(s.Kind), "render_shape_presentation": string(s.Presentation), "render_shape_rule": string(s.Rule),
+				"render_shape_series": s.SeriesCount, "render_shape_points": s.PointCount,
+			})
+		}
+		return out
+	}
+	// Every kind crossed with every presentation, spread over the rules, in chunks within the budget.
+	var all []contextfabric.RenderShapeSelection
+	for i, kind := range contractsv1.ContextFabricRenderKindVocabulary() {
+		for j, presentation := range contractsv1.ContextFabricRenderPresentationVocabulary() {
+			all = append(all, contextfabric.RenderShapeSelection{
+				Kind: kind, Presentation: presentation, Rule: contractsv1.ContextFabricRenderShapeRule(rules[(i+j)%len(rules)]),
+				SeriesCount: 1 + i, PointCount: 10 + j,
+			})
+		}
+	}
+	for start := 0; start < len(all); start += contractsv1.ContextFabricRenderShapesMaxCount {
+		end := start + contractsv1.ContextFabricRenderShapesMaxCount
+		if end > len(all) {
+			end = len(all)
+		}
+		chunk := all[start:end]
+		raw := selectedShapesRecord(chunk)
+		if lines := bytes.Count(raw, []byte("\n")); lines != 1 {
+			t.Fatalf("the selector's decision wrote %d lines, want exactly one record: %s", lines, raw)
+		}
+		certifyRequestLine(t, raw, eventspec.RenderShapeSelectionSummary, map[string]any{
+			"org_id": "org_1", "render_shapes_selected": len(chunk), "render_shape_rules_skipped": 0, "selected_shapes": asWant(chunk),
+		})
+	}
+	// The measured zero is an empty list, never null and never absent.
+	empty := selectedShapesRecord(nil)
+	line := certifyRequestLine(t, empty, eventspec.RenderShapeSelectionSummary, map[string]any{"render_shapes_selected": 0, "selected_shapes": []any{}})
+	if list, ok := line["selected_shapes"].([]any); !ok || len(list) != 0 {
+		t.Fatalf("an empty selection must write selected_shapes as an empty list, got %#v", line["selected_shapes"])
+	}
+	// Over the producer's own budget is refused.
+	over := make([]contextfabric.RenderShapeSelection, contractsv1.ContextFabricRenderShapesMaxCount+1)
+	for i := range over {
+		over[i] = all[0]
+	}
+	certifyRefused(t, selectedShapesRecord(over), eventspec.RenderShapeSelectionSummary, "a list longer than the shape budget")
+	// A value outside a vocabulary is refused.
+	bad := all[0]
+	bad.Kind = contractsv1.ContextFabricRenderKind("future_kind")
+	certifyRefused(t, selectedShapesRecord([]contextfabric.RenderShapeSelection{bad}), eventspec.RenderShapeSelectionSummary, "an unknown render kind")
+	bad = all[0]
+	bad.Presentation = contractsv1.ContextFabricRenderPresentation("future_presentation")
+	certifyRefused(t, selectedShapesRecord([]contextfabric.RenderShapeSelection{bad}), eventspec.RenderShapeSelectionSummary, "an unknown presentation")
+	bad = all[0]
+	bad.Rule = contractsv1.ContextFabricRenderShapeRule("future_rule")
+	certifyRefused(t, selectedShapesRecord([]contextfabric.RenderShapeSelection{bad}), eventspec.RenderShapeSelectionSummary, "an unknown rule")
 }

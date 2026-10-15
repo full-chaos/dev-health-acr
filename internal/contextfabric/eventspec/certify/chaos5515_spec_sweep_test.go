@@ -509,7 +509,33 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, mutate(badValue), Assertion{Event: ev, Want: wantFor(badValue)})
 		row.gotAccept = err == nil
 	case "boundary":
-		return row // N/A for every field today: eventspec.Field declares no Min/Max/MaxItems.
+		// A slice field that declares MaxItems accepts exactly that many
+		// elements and refuses one more.
+		if f.MaxItems <= 0 || (f.Type != eventspec.FieldStringSlice && f.Type != eventspec.FieldObjectSlice) {
+			return row
+		}
+		canonical, _ := canonicalValueFor(f).([]any)
+		if f.Type == eventspec.FieldStringSlice {
+			strs, _ := canonicalValueFor(f).([]string)
+			for _, v := range strs {
+				canonical = append(canonical, v)
+			}
+		}
+		if len(canonical) == 0 {
+			return row
+		}
+		repeat := func(n int) []any {
+			out := make([]any, 0, n)
+			for i := 0; i < n; i++ {
+				out = append(out, canonical[0])
+			}
+			return out
+		}
+		row.applicable, row.wantAccept = true, true
+		_, atBound := certifyRecovered(t, mutate(repeat(f.MaxItems)), Assertion{Event: ev, Want: wantFor(repeat(f.MaxItems))})
+		_, overBound := certifyRecovered(t, mutate(repeat(f.MaxItems+1)), Assertion{Event: ev, Want: wantFor(repeat(f.MaxItems + 1))})
+		row.gotAccept = atBound == nil && overBound != nil
+		return row
 	case "canonical":
 		row.applicable, row.wantAccept = true, true
 		_, err := certifyRecovered(t, mutate(canonicalValueFor(f)), Assertion{Event: ev, Want: wantFor(canonicalValueFor(f))})

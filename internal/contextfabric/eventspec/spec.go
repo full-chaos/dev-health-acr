@@ -218,6 +218,9 @@ type Field struct {
 	// object field's own MEMBER shape (one level, never recursive). Empty for
 	// every other Type.
 	Fields []Field
+	// MaxItems, when positive, bounds a slice field: the certifier refuses a
+	// line whose string_slice or object_slice carries more elements.
+	MaxItems int
 	// Nullable (FieldCountMap only) says the field may carry JSON null: the
 	// producer leaves the map nil when nothing was counted.
 	Nullable bool
@@ -1665,6 +1668,24 @@ func investigationShapeLineTokens() []string {
 	return out
 }
 
+func renderKindLineTokens() []string {
+	vocab := contractsv1.ContextFabricRenderKindVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
+func renderPresentationLineTokens() []string {
+	vocab := contractsv1.ContextFabricRenderPresentationVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
 func investigationStatusLineTokens() []string {
 	return []string{
 		string(contractsv1.ContextFabricInvestigationComplete), string(contractsv1.ContextFabricInvestigationPartial),
@@ -1682,7 +1703,7 @@ func serverStatusBasisLineTokens() []string {
 	return out
 }
 
-// RenderShapeSelectionSummary is the Info summary line of the render shape selector (CHAOS-4415): counts and an accounting verdict. The selected-shape line shares the selector but is not declared here: one rule may select several shapes and the line carries no index or total, so its multiplicity needs a ruling.
+// RenderShapeSelectionSummary is the Info summary line of the render shape selector (CHAOS-4415): counts and an accounting verdict. The shapes the selector chose ride on this one record as a bounded list.
 var RenderShapeSelectionSummary = Event{
 	ID:                 "contextfabric.render_shape_selection_summary",
 	Msg:                "context fabric render shape selection",
@@ -1698,6 +1719,13 @@ var RenderShapeSelectionSummary = Event{
 		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_trends_omitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
+		{Key: "selected_shapes", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contractsv1.ContextFabricRenderShapesMaxCount, Fields: []Field{
+			{Key: "render_shape_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: renderKindLineTokens()},
+			{Key: "render_shape_presentation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: renderPresentationLineTokens()},
+			{Key: "render_shape_rule", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RenderShapeRuleLineVocabulary()},
+			{Key: "render_shape_series", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "render_shape_points", Type: FieldInt, Presence: PresenceRequired},
+		}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

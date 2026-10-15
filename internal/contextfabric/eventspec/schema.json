@@ -5443,6 +5443,58 @@
         ]
       },
       {
+        "key": "selected_shapes",
+        "type": "object_slice",
+        "presence": "required",
+        "fields": [
+          {
+            "key": "render_shape_kind",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "series",
+              "table",
+              "quadrant",
+              "treemap",
+              "sunburst",
+              "sankey",
+              "burndown",
+              "forecast"
+            ]
+          },
+          {
+            "key": "render_shape_presentation",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "bars",
+              "stacked_bars",
+              "line"
+            ]
+          },
+          {
+            "key": "render_shape_rule",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "cohort_attention_score",
+              "cohort_driver_contribution",
+              "dated_fact_trend"
+            ]
+          },
+          {
+            "key": "render_shape_series",
+            "type": "int",
+            "presence": "required"
+          },
+          {
+            "key": "render_shape_points",
+            "type": "int",
+            "presence": "required"
+          }
+        ]
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
