@@ -861,6 +861,90 @@
     ]
   },
   {
+    "id": "contextfabric.cohort_driver_narration",
+    "msg": "context fabric cohort driver narration",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call that narrates cohort drivers.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "emitted",
+          "budget_exhausted",
+          "no_drivers"
+        ]
+      },
+      {
+        "key": "judgments_emitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_minted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "members_narrated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "members_skipped_no_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "drivers_skipped",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_citation",
+          "unknown_signal"
+        ],
+        "nullable": true
+      },
+      {
+        "key": "answer_narrative_recomposed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "narration_allocator",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "plan_budget",
+          "static_caps",
+          "not_applicable",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "narration_allocated_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.cohort_kind_fulltext",
     "msg": "context_fabric: cohort kind fulltext",
     "level": "info",
@@ -936,6 +1020,107 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when decision=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.cohort_ranked",
+    "msg": "context fabric cohort ranked",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call that ranks a cohort.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cohort_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "formula_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "score_meaning",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "judgment_mismatch",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "requested_judgment_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "degraded_member_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "signals_available",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "investment_mix",
+          "health.compounding_risk",
+          "operational_deficiencies.severity",
+          "readiness.coverage_gap",
+          "workload.forecast_pressure"
+        ]
+      },
+      {
+        "key": "outcome_counts",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "qualified",
+          "provisional",
+          "insufficient_evidence",
+          "not_applicable"
+        ]
+      },
+      {
+        "key": "investment_mix_source_counts",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "project_native",
+          "owning_team_rollup",
+          "unlabeled"
+        ]
+      },
+      {
+        "key": "read_attribution_carried",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "deficiency_zero_withheld",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",

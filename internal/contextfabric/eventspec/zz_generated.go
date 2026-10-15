@@ -23,7 +23,9 @@ var ByID = map[string]Event{
 	"contextfabric.anchor_binding_transition":        AnchorBindingTransition,
 	"contextfabric.answer_display":                   AnswerDisplay,
 	"contextfabric.client_synthesis_decision":        ClientSynthesisDecision,
+	"contextfabric.cohort_driver_narration":          CohortDriverNarration,
 	"contextfabric.cohort_kind_fulltext":             CohortKindFulltext,
+	"contextfabric.cohort_ranked":                    CohortRanked,
 	"contextfabric.completeness_authority":           CompletenessAuthority,
 	"contextfabric.confirmed_need_ledger":            ConfirmedNeedLedger,
 	"contextfabric.count_population_scope":           CountPopulationScope,
@@ -593,6 +595,77 @@ func (f ClientSynthesisDecisionFields) SlogArgs() []any {
 	}
 }
 
+// CohortDriverNarrationFields is contextfabric.cohort_driver_narration's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CohortDriverNarration.Fields declares in spec.go.
+type CohortDriverNarrationFields struct {
+	OrgID                     string
+	Outcome                   string
+	JudgmentsEmitted          int
+	FactsMinted               int
+	MembersNarrated           int
+	MembersSkippedNoEvidence  int
+	DriversSkipped            map[string]int
+	AnswerNarrativeRecomposed bool
+	NarrationAllocator        string
+	NarrationAllocatedItems   int
+	RequestID                 string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CohortDriverNarrationFields uniformly, set ONLY by NewCohortDriverNarrationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCohortDriverNarrationFields is the generated constructor for CohortDriverNarrationFields -- every
+// field CohortDriverNarration.Fields declares is a required parameter.
+func NewCohortDriverNarrationFields(orgID string, outcome string, judgmentsEmitted int, factsMinted int, membersNarrated int, membersSkippedNoEvidence int, driversSkipped map[string]int, answerNarrativeRecomposed bool, narrationAllocator string, narrationAllocatedItems int, requestID string) CohortDriverNarrationFields {
+	return CohortDriverNarrationFields{
+		OrgID:                     orgID,
+		Outcome:                   outcome,
+		JudgmentsEmitted:          judgmentsEmitted,
+		FactsMinted:               factsMinted,
+		MembersNarrated:           membersNarrated,
+		MembersSkippedNoEvidence:  membersSkippedNoEvidence,
+		DriversSkipped:            driversSkipped,
+		AnswerNarrativeRecomposed: answerNarrativeRecomposed,
+		NarrationAllocator:        narrationAllocator,
+		NarrationAllocatedItems:   narrationAllocatedItems,
+		RequestID:                 requestID,
+		constructed:               true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCohortDriverNarrationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CohortDriverNarrationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CohortDriverNarration's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CohortDriverNarrationFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"judgments_emitted", f.JudgmentsEmitted,
+		"facts_minted", f.FactsMinted,
+		"members_narrated", f.MembersNarrated,
+		"members_skipped_no_evidence", f.MembersSkippedNoEvidence,
+		"drivers_skipped", f.DriversSkipped,
+		"answer_narrative_recomposed", f.AnswerNarrativeRecomposed,
+		"narration_allocator", contextfabric.SanitizeLogAttr(f.NarrationAllocator),
+		"narration_allocated_items", f.NarrationAllocatedItems,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // CohortKindFulltextFields is contextfabric.cohort_kind_fulltext's generated typed construction interface
 // (CHAOS-5516): one Go field per Field CohortKindFulltext.Fields declares in spec.go.
 type CohortKindFulltextFields struct {
@@ -654,6 +727,86 @@ func (f CohortKindFulltextFields) SlogArgs() []any {
 		"added_by_kind_arm", f.AddedByKindArm,
 		"duplicates_with_general", f.DuplicatesWithGeneral,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// CohortRankedFields is contextfabric.cohort_ranked's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CohortRanked.Fields declares in spec.go.
+type CohortRankedFields struct {
+	OrgID                     string
+	CohortKind                string
+	MemberCount               int
+	FormulaVersion            string
+	ScoreMeaning              string
+	JudgmentMismatch          bool
+	RequestedJudgmentKind     string
+	DegradedMemberCount       int
+	SignalsAvailable          map[string]int
+	OutcomeCounts             map[string]int
+	InvestmentMixSourceCounts map[string]int
+	ReadAttributionCarried    bool
+	DeficiencyZeroWithheld    int
+	RequestID                 string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CohortRankedFields uniformly, set ONLY by NewCohortRankedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCohortRankedFields is the generated constructor for CohortRankedFields -- every
+// field CohortRanked.Fields declares is a required parameter.
+func NewCohortRankedFields(orgID string, cohortKind string, memberCount int, formulaVersion string, scoreMeaning string, judgmentMismatch bool, requestedJudgmentKind string, degradedMemberCount int, signalsAvailable map[string]int, outcomeCounts map[string]int, investmentMixSourceCounts map[string]int, readAttributionCarried bool, deficiencyZeroWithheld int, requestID string) CohortRankedFields {
+	return CohortRankedFields{
+		OrgID:                     orgID,
+		CohortKind:                cohortKind,
+		MemberCount:               memberCount,
+		FormulaVersion:            formulaVersion,
+		ScoreMeaning:              scoreMeaning,
+		JudgmentMismatch:          judgmentMismatch,
+		RequestedJudgmentKind:     requestedJudgmentKind,
+		DegradedMemberCount:       degradedMemberCount,
+		SignalsAvailable:          signalsAvailable,
+		OutcomeCounts:             outcomeCounts,
+		InvestmentMixSourceCounts: investmentMixSourceCounts,
+		ReadAttributionCarried:    readAttributionCarried,
+		DeficiencyZeroWithheld:    deficiencyZeroWithheld,
+		RequestID:                 requestID,
+		constructed:               true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCohortRankedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CohortRankedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CohortRanked's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CohortRankedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cohort_kind", contextfabric.SanitizeLogAttr(f.CohortKind),
+		"member_count", f.MemberCount,
+		"formula_version", contextfabric.SanitizeLogAttr(f.FormulaVersion),
+		"score_meaning", contextfabric.SanitizeLogAttr(f.ScoreMeaning),
+		"judgment_mismatch", f.JudgmentMismatch,
+		"requested_judgment_kind", contextfabric.SanitizeLogAttr(f.RequestedJudgmentKind),
+		"degraded_member_count", f.DegradedMemberCount,
+		"signals_available", f.SignalsAvailable,
+		"outcome_counts", f.OutcomeCounts,
+		"investment_mix_source_counts", f.InvestmentMixSourceCounts,
+		"read_attribution_carried", f.ReadAttributionCarried,
+		"deficiency_zero_withheld", f.DeficiencyZeroWithheld,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
