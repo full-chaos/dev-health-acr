@@ -225,3 +225,23 @@ func TestADerivedClaimOfAScoreIsStrippedEvenWhereTheTableIsServed(t *testing.T) 
 		t.Fatalf("claims %v withheld %v, want the derived score claim removed and disclosed", got.ClaimedFacts, got.scoresWithheld)
 	}
 }
+
+// A driver of a category that must cite a claimed fact, whose only citation was a score withheld for want of its drivers
+// table, is left out of the answer; the rest of the answer is still served.
+func TestADriverWhoseOnlyClaimWasAWithheldScoreIsLeftOutAndTheAnswerIsServed(t *testing.T) {
+	input, team := k7Input(false)
+	draft := k7Draft(input, team, "compounding_risk")
+	draft.Drivers[0].Category = "health"
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_risk_1"}
+	runtime := &recordingModelRuntime{fakeModelRuntime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)}}
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: runtime, FactCapabilities: k7Capabilities()}
+
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v, want the answer served without the driver", err)
+	}
+	if len(result.Drivers) != 0 || len(scoreWithheldDetails(result)) != 1 {
+		t.Fatalf("drivers %d details %d, want the driver left out and the score disclosed", len(result.Drivers), len(scoreWithheldDetails(result)))
+	}
+}
