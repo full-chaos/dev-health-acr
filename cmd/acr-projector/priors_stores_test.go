@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -108,5 +109,27 @@ func TestOpenPriorsDB_projectionEnabledWithoutOrgIDsDoesNotRefuse(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "open postgres") {
 		t.Fatalf("openPriorsDB() error = %v, want an \"open postgres\" failure (past configuration)", err)
+	}
+}
+
+// A pool of one connection is refused before any connection is opened: the
+// organization lock and the write each need a connection.
+func TestOpenPriorsDB_refusesAPoolOfOneConnection(t *testing.T) {
+	t.Setenv("ACR_ENVIRONMENT", "development")
+	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
+	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")
+	t.Setenv("ACR_POSTGRES_MAX_OPEN_CONNS", "1")
+	t.Setenv("ACR_POSTGRES_MAX_IDLE_CONNS", "")
+	_, err := openPriorsDB(context.Background())
+	if !errors.Is(err, errPriorsPoolTooSmall) {
+		t.Fatalf("openPriorsDB() error = %v, want errPriorsPoolTooSmall", err)
+	}
+	for _, conns := range []string{"", "2"} {
+		t.Setenv("ACR_POSTGRES_MAX_OPEN_CONNS", conns)
+		_, err := openPriorsDB(context.Background())
+		if errors.Is(err, errPriorsPoolTooSmall) || err == nil || !strings.Contains(err.Error(), "open postgres") {
+			t.Fatalf("ACR_POSTGRES_MAX_OPEN_CONNS=%q: openPriorsDB() error = %v, want an \"open postgres\" failure", conns, err)
+		}
 	}
 }
