@@ -234,8 +234,20 @@ func TestServedAnswerToATeamAggregatePullRequestQuestionCitesTheTeamEvidenceRef(
 		}
 		if fact.Kind == contextfabric.FactPullRequests && fact.Subject.Kind == contextfabric.SubjectTeam {
 			teamFacts++
-			if fact.Fields["pull_requests_by_state"].Rows == nil {
+			table := fact.Fields["pull_requests_by_state"].Rows
+			if table == nil {
 				t.Fatalf("the team fact carries no pull_requests_by_state table: %+v", fact.Fields)
+			}
+			byState := map[string]int64{}
+			for _, row := range table {
+				state, count := row.Fields["state"].String, row.Fields["pull_request_count"].Integer
+				if state == nil || count == nil {
+					t.Fatalf("by-state row without a state or a count: %+v", row)
+				}
+				byState[*state] += *count
+			}
+			if byState["open"] != servedPROpenCount || byState["merged"] != servedPRMerged || len(byState) != 2 {
+				t.Fatalf("pull requests by state = %v, want open %d and merged %d", byState, servedPROpenCount, servedPRMerged)
 			}
 			if !slices.Contains(fact.EvidenceRefIDs, teamRef) {
 				t.Fatalf("the team fact cites %v, want %s", fact.EvidenceRefIDs, teamRef)
