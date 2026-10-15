@@ -566,6 +566,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// items outside the hop radius.
 	var resolvedNodes []graphrank.CandidateNode
 	var resolvedEdges []graphrank.ResolvedEdge
+	// The subject each resolved edge was read for, and those subjects in
+	// order (committed subjects in resolution order, then the full-text
+	// arm's matches in match order): admission takes turns across them.
+	resolvedEdgeOrigin := make(map[string]string)
+	var edgeOrigins []string
 	seenEdge := make(map[string]bool)
 	seenNode := make(map[string]bool)
 	// failedLookups counts edges dropped because a genuine backend lookup
@@ -839,8 +844,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if !seenEdge[e.UUID] {
 				seenEdge[e.UUID] = true
 				resolvedEdges = append(resolvedEdges, e)
+				resolvedEdgeOrigin[e.UUID] = subject.CanonicalID
 			}
 		}
+		edgeOrigins = append(edgeOrigins, subject.CanonicalID)
 	}
 
 	if teamWalkTally.ran && a.config.Telemetry != nil {
@@ -1048,7 +1055,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		textOrigins = append(textOrigins, subject.CanonicalID)
 	}
 	textAdmitted := 0
-	for _, ce := range graphrank.InterleaveByOrigin(rankCandidateEdges(textCandidates), textCandidateOrigin, textOrigins) {
+	for _, ce := range graphrank.RankEdgesByOrigin(textCandidates, textCandidateOrigin, textOrigins) {
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
@@ -1074,8 +1081,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			continue
 		}
 		resolvedEdges = append(resolvedEdges, resolved)
+		resolvedEdgeOrigin[resolved.UUID] = textCandidateOrigin[ce.UUID]
 		textAdmitted++
 	}
+	edgeOrigins = append(edgeOrigins, textOrigins...)
 
 	// cohortFulltextTruncated is the signal cohortPoolTruncation
 	// actually needs -- "did the lexical arm drop a member OF THE COHORT'S
@@ -1228,7 +1237,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			UUID: r.UUID, Name: r.Name, Fact: r.Fact, Relevance: r.Relevance, Score: r.Score,
 		})
 	}
-	order := graphrank.SortEdgesByRelevance(candidateEdges)
+	attributeEdgesByFewestHops(resolvedEdges, resolvedEdgeOrigin, edgeOrigins)
+	order := graphrank.RankEdgesByOrigin(candidateEdges, resolvedEdgeOrigin, edgeOrigins)
 	orderedResolved := make([]graphrank.ResolvedEdge, 0, len(resolvedEdges))
 	byUUID := make(map[string]graphrank.ResolvedEdge, len(resolvedEdges))
 	for _, r := range resolvedEdges {
@@ -1239,6 +1249,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
+	logSharedEdgeBudget(ctx, principal.OrgID, orderedResolved, resolvedEdgeOrigin, edgeOrigins, admission.Paths, len(textCandidates), textAdmitted)
 	// CHAOS-4395: DiscoveredCohort's ONLY node source used to be
 	// textNodes/resolvedNodes above -- fulltextSearchNodes over the raw
 	// question TEXT. A cohort question that names no member by label/alias
@@ -2092,4 +2103,50 @@ func exactHintCandidate(ctx context.Context, rows []row) (graphrank.CandidateNod
 		return graphrank.CandidateNode{}, false
 	}
 	return toCandidateNode(n), true
+}
+
+// attributeEdgesByFewestHops gives each resolved edge to the origin that
+// reaches it in the fewest hops. An edge with an origin's subject at one end is
+// that subject's own (one hop), whichever walk read it first; an edge touching
+// two origins goes to the earlier one in origins' order. Any other edge keeps
+// the origin that first reached it at its second hop.
+func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[string]string, origins []string) {
+	for _, e := range edges {
+		for _, candidate := range origins {
+			if e.From.CanonicalID == candidate || e.To.CanonicalID == candidate {
+				origin[e.UUID] = candidate
+				break
+			}
+		}
+	}
+}
+
+// logSharedEdgeBudget records how the shared edge budgets split across the
+// subjects the edges were read for (GraphWalkVersion), counts only: the
+// subjects, how many of them got at least one admitted path, and the
+// full-text arm's candidates against what it kept. One origin needs no
+// split, so it logs nothing.
+func logSharedEdgeBudget(ctx context.Context, orgID string, ordered []graphrank.ResolvedEdge, origin map[string]string, origins []string, paths []contextfabric.RelationshipPath, textCandidates, textAdmitted int) {
+	if len(origins) < 2 {
+		return
+	}
+	originOfPath := make(map[string]string, len(ordered))
+	for _, e := range ordered {
+		originOfPath[graphrank.DeterministicUUID("context-fabric-path", orgID, e.UUID)] = origin[e.UUID]
+	}
+	served := make(map[string]struct{}, len(origins))
+	for _, path := range paths {
+		if o := originOfPath[path.PathID]; o != "" {
+			served[o] = struct{}{}
+		}
+	}
+	slog.Default().InfoContext(ctx, "context_fabric: shared edge budget",
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"graph_walk_version", contextfabric.GraphWalkVersion,
+		"origins", len(origins),
+		"origins_with_admitted_paths", len(served),
+		"paths_admitted", len(paths),
+		"edges_ranked", len(ordered),
+		"text_arm_candidates", textCandidates,
+		"text_arm_kept", textAdmitted)
 }

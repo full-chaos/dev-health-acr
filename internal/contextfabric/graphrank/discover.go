@@ -237,6 +237,25 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 	return sorted
 }
 
+// RankEdgesByOrigin ranks edges for a budget several origin subjects share:
+// by confidence first (SortEdgesByRelevance), and within each run of equal
+// confidence round-robin by origin (InterleaveByOrigin), so an edge's id
+// spelling orders it only among the same origin's edges.
+func RankEdgesByOrigin(edges []CandidateEdge, originOf map[string]string, origins []string) []CandidateEdge {
+	ranked := SortEdgesByRelevance(edges)
+	out := make([]CandidateEdge, 0, len(ranked))
+	for start := 0; start < len(ranked); {
+		confidence := ResultConfidence(ranked[start].Relevance, ranked[start].Score)
+		end := start + 1
+		for end < len(ranked) && ResultConfidence(ranked[end].Relevance, ranked[end].Score) == confidence {
+			end++
+		}
+		out = append(out, InterleaveByOrigin(ranked[start:end], originOf, origins)...)
+		start = end
+	}
+	return out
+}
+
 // InterleaveByOrigin orders ranked edges for one budget that several origin
 // subjects share: each origin in turn gives its next edge, origins in the
 // given order, each origin's own edges in their ranked order. An origin with
