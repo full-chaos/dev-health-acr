@@ -2801,6 +2801,8 @@ func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal stor
 		"listed", event.Listed,
 		"uncited", event.Uncited,
 		"kept", event.Kept,
+		"need", event.Need,
+		"keep_by", string(event.KeepBy),
 		"basis", string(event.Basis),
 		"recomposed", event.Recomposed,
 		"served", event.Served,

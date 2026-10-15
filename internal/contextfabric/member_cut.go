@@ -34,11 +34,15 @@ const (
 	// MemberCutClientSynthesis: the client wrote the synthesis, so the
 	// service has no synthesizer path to run again.
 	MemberCutClientSynthesis MemberCutDeclined = "client_synthesis"
+	// MemberCutCohortKind: the cohort is not a list of teams, repositories or
+	// projects. The cut orders by attention or by id; it is never applied to
+	// any other kind of list (no ranking of people exists).
+	MemberCutCohortKind MemberCutDeclined = "cohort_kind"
 	// MemberCutNoStatedOrder: the list carries no order the plan can state
 	// (neither attention rank nor canonical id order).
 	MemberCutNoStatedOrder MemberCutDeclined = "no_stated_order"
-	// MemberCutNothingCuttable: every member the half target would remove is
-	// named by the answer.
+	// MemberCutNothingCuttable: every member the cut would remove is named by
+	// the answer, or is the top-ranked member.
 	MemberCutNothingCuttable MemberCutDeclined = "nothing_cuttable"
 	// MemberCutNoSynthesisTime: the model wrote the first answer and the
 	// retry gate (deadline reserve, remaining deadline) admits no second
@@ -51,8 +55,23 @@ const (
 	MemberCutSynthesisFailed MemberCutDeclined = "synthesis_failed"
 )
 
+// MemberCutKeepBasis is the CLOSED vocabulary of how the number of kept
+// members was computed.
+type MemberCutKeepBasis string
+
+const (
+	// MemberCutKeepMeasured: from the first pass's measured items per member
+	// and its overrun, plus a safety margin.
+	MemberCutKeepMeasured MemberCutKeepBasis = "measured"
+	// MemberCutKeepHalf: items per member could not be measured, so the
+	// retry's own half target.
+	MemberCutKeepHalf MemberCutKeepBasis = "half"
+)
+
 type memberCutAttempt struct {
 	Declined MemberCutDeclined
+	Need     int
+	KeepBy   MemberCutKeepBasis
 	Listed   int
 	Uncited  int
 	Kept     int
@@ -76,6 +95,8 @@ type MemberCutEvent struct {
 	Listed      int
 	Uncited     int
 	Kept        int
+	Need        int
+	KeepBy      MemberCutKeepBasis
 	Basis       contractsv1.ContextFabricNarrowingBasis
 	Recomposed  bool
 	Served      bool
@@ -110,9 +131,13 @@ func memberCutBasis(cohort *Cohort) (contractsv1.ContextFabricNarrowingBasis, bo
 func memberCutOrder(cohort *Cohort, basis contractsv1.ContextFabricNarrowingBasis, answer InvestigationResult) []int {
 	cited := walkListSubjectCited(answer)
 	prose := answerProse(answer)
+	top := -1
+	if basis == contractsv1.ContextFabricNarrowingBasisAttentionRank {
+		top = topAttentionIndex(cohort)
+	}
 	order := make([]int, 0, len(cohort.Members))
 	for index, member := range cohort.Members {
-		if !cited[member.Subject.CanonicalID] && !namedInProse(member.Subject, prose) {
+		if index != top && !cited[member.Subject.CanonicalID] && !namedInProse(member.Subject, prose) {
 			order = append(order, index)
 		}
 	}
@@ -130,6 +155,22 @@ func memberCutOrder(cohort *Cohort, basis contractsv1.ContextFabricNarrowingBasi
 		return order[a] > order[b]
 	})
 	return order
+}
+
+// topAttentionIndex is the member ranking put first (lowest AttentionRank among
+// those it ran for), or -1. The cut keeps the highest-attention members, so
+// this one is never cut.
+func topAttentionIndex(cohort *Cohort) int {
+	top := -1
+	for index, member := range cohort.Members {
+		if !member.RankingComputed {
+			continue
+		}
+		if top < 0 || member.AttentionRank < cohort.Members[top].AttentionRank {
+			top = index
+		}
+	}
+	return top
 }
 
 // answerProse is every sentence of the answer in one lowercased string: the
@@ -200,24 +241,50 @@ func isWordByte(b byte) bool {
 	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || b >= 0x80
 }
 
-// memberCutKeep is how many members the cut keeps: the retry's own half
-// target (at least one), raised to every member the answer names. A fixed
-// allocation, not a search: the cut is synthesized once.
-func memberCutKeep(listed, protected int) int {
-	keep := listed / 2
+// memberCutKeep is how many members the cut keeps and how that was decided.
+// From the first pass's measurement: items per member is its items over its
+// members, the overrun divided by that is the fewest members whose removal
+// fits MaxItems, and a margin of a tenth of the list (at least one) covers the
+// per-member share being an average. When items per member cannot be measured
+// the retry's own half target applies. Never fewer than one member or than
+// every member the answer names. A fixed allocation, not a search: the cut is
+// synthesized once.
+func memberCutKeep(listed, protected, items, maxItems int) (keep, need int, by MemberCutKeepBasis) {
+	if items > maxItems && maxItems > 0 && listed > 0 {
+		need = ((items-maxItems)*listed + items - 1) / items
+		margin := listed / 10
+		if margin < 1 {
+			margin = 1
+		}
+		need += margin
+		keep, by = listed-need, MemberCutKeepMeasured
+	} else {
+		keep, by = listed/2, MemberCutKeepHalf
+		need = listed - keep
+	}
 	if keep < 1 {
 		keep = 1
 	}
 	if protected > keep {
 		keep = protected
 	}
-	return keep
+	return keep, need, by
+}
+
+// memberCutKind reports whether the cut applies to a cohort of kind: teams,
+// repositories and projects only.
+func memberCutKind(kind SubjectKind) bool {
+	switch kind {
+	case SubjectTeam, SubjectRepository, SubjectProject:
+		return true
+	}
+	return false
 }
 
 // planMemberCut decides whether the member cut runs and builds its input.
 // answer is the first pass's assembled answer, the one that overran: what it
 // cites and names is kept.
-func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyParams, firstPass assemblyTelemetry, answer InvestigationResult) memberCutAttempt {
+func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyParams, firstPass assemblyTelemetry, answer InvestigationResult, items, maxItems int) memberCutAttempt {
 	var attempt memberCutAttempt
 	graphCohort := params.Graph.Cohort
 	if params.WorkItemCensus != nil || graphCohort == nil || len(graphCohort.Groups) > 0 || len(graphCohort.Members) < 2 {
@@ -228,6 +295,10 @@ func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyPara
 		attempt.Declined = MemberCutClientSynthesis
 		return attempt
 	}
+	if !memberCutKind(graphCohort.Kind) {
+		attempt.Declined = MemberCutCohortKind
+		return attempt
+	}
 	basis, ok := memberCutBasis(graphCohort)
 	if !ok {
 		attempt.Declined = MemberCutNoStatedOrder
@@ -236,8 +307,8 @@ func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyPara
 	cohort := copyCohortForRetry(graphCohort)
 	order := memberCutOrder(cohort, basis, answer)
 	listed := len(cohort.Members)
-	keep := memberCutKeep(listed, listed-len(order))
-	attempt.Listed, attempt.Uncited, attempt.Basis, attempt.Kept = listed, len(order), basis, keep
+	keep, need, by := memberCutKeep(listed, listed-len(order), items, maxItems)
+	attempt.Listed, attempt.Uncited, attempt.Basis, attempt.Kept, attempt.Need, attempt.KeepBy = listed, len(order), basis, keep, need, by
 	if keep >= listed {
 		attempt.Declined = MemberCutNothingCuttable
 		return attempt
@@ -277,6 +348,8 @@ func (e *Engine) recordMemberCut(ctx context.Context, principal storage.Principa
 		Listed:      attempt.Listed,
 		Uncited:     attempt.Uncited,
 		Kept:        attempt.Kept,
+		Need:        attempt.Need,
+		KeepBy:      attempt.KeepBy,
 		Basis:       attempt.Basis,
 		Recomposed:  attempt.Recompose != nil,
 		Served:      attempt.Declined == MemberCutNotApplicable,

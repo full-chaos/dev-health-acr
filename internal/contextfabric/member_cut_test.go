@@ -42,6 +42,9 @@ const (
 	memberCutPopulation = 60
 	memberCutCallerCap  = 50
 	memberCutGaps       = 21
+	// memberCutKept is the fixture's measured keep: 71 items against 66 over 50
+	// members needs 4 cut, and the margin adds 5.
+	memberCutKept = 41
 )
 
 // memberCutEngine is the flat owned-projects listing with a synthesizer that
@@ -221,9 +224,9 @@ func TestAModelWrittenItemsOverrunWithNoSynthesisTimeIsRefused(t *testing.T) {
 		t.Fatalf("member-cut events = %d, want 1: %+v", len(telemetry.memberCuts), telemetry.memberCuts)
 	}
 	event := telemetry.memberCuts[0]
-	if event.Declined != MemberCutNoSynthesisTime || event.Served || event.Recomposed || event.Listed != memberCutCallerCap || event.Uncited != memberCutCallerCap ||
-		event.Kept != memberCutCallerCap/2 || event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank || event.ItemsBefore <= event.MaxItems {
-		t.Fatalf("member-cut event = %+v, want no_synthesis_time, listed %d, uncited %d, kept %d, attention_rank, over the item budget", event, memberCutCallerCap, memberCutCallerCap, memberCutCallerCap/2)
+	if event.Declined != MemberCutNoSynthesisTime || event.Served || event.Recomposed || event.Listed != memberCutCallerCap || event.Uncited != memberCutCallerCap-1 ||
+		event.Kept != memberCutKept || event.Need != memberCutCallerCap-memberCutKept || event.KeepBy != MemberCutKeepMeasured || event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank || event.ItemsBefore <= event.MaxItems {
+		t.Fatalf("member-cut event = %+v, want no_synthesis_time, listed %d, uncited %d (the top-ranked member is never cut), kept %d measured, attention_rank, over the item budget", event, memberCutCallerCap, memberCutCallerCap-1, memberCutKept)
 	}
 }
 
@@ -238,8 +241,8 @@ func TestAMemberNamedOnlyInTheDraftProseIsNotCountedAsCuttable(t *testing.T) {
 	if _, err := investigateMemberCut(t, engine); err == nil {
 		t.Fatal("want the items refusal")
 	}
-	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Uncited != memberCutCallerCap-1 {
-		t.Fatalf("uncited = %+v, want %d: the member the prose names is not cuttable", telemetry.memberCuts, memberCutCallerCap-1)
+	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Uncited != memberCutCallerCap-2 {
+		t.Fatalf("uncited = %+v, want %d: the member the prose names is not cuttable", telemetry.memberCuts, memberCutCallerCap-2)
 	}
 }
 
@@ -251,8 +254,8 @@ func TestAMemberAFindingNamesIsNotCountedAsCuttable(t *testing.T) {
 	if _, err := investigateMemberCut(t, engine); err == nil {
 		t.Fatal("want the items refusal")
 	}
-	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Uncited != memberCutCallerCap-2 {
-		t.Fatalf("uncited = %+v, want %d", telemetry.memberCuts, memberCutCallerCap-2)
+	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Uncited != memberCutCallerCap-3 {
+		t.Fatalf("uncited = %+v, want %d", telemetry.memberCuts, memberCutCallerCap-3)
 	}
 }
 
@@ -286,4 +289,66 @@ func memberCutWrapped(synthesizer AnswerSynthesizer) AnswerSynthesizer {
 		return memberCutWrapSynthesizer(synthesizer)
 	}
 	return synthesizer
+}
+
+// The number kept comes from the measured overrun, not from half the list; the
+// half target applies only when items per member cannot be measured.
+func TestTheMemberCutKeepComesFromTheMeasuredOverrun(t *testing.T) {
+	for _, row := range []struct {
+		name               string
+		listed, protected  int
+		items, maxItems    int
+		wantKeep, wantNeed int
+		wantBy             MemberCutKeepBasis
+	}{
+		{"measured_with_margin", 50, 0, 71, 66, 41, 9, MemberCutKeepMeasured},
+		{"large_overrun", 50, 0, 132, 66, 20, 30, MemberCutKeepMeasured},
+		{"named_members_raise_keep", 50, 45, 71, 66, 45, 9, MemberCutKeepMeasured},
+		{"keeps_one", 4, 0, 400, 66, 1, 5, MemberCutKeepMeasured},
+		{"no_ceiling_falls_back_to_half", 50, 0, 71, 0, 25, 25, MemberCutKeepHalf},
+		{"no_overrun_falls_back_to_half", 50, 0, 60, 66, 25, 25, MemberCutKeepHalf},
+	} {
+		keep, need, by := memberCutKeep(row.listed, row.protected, row.items, row.maxItems)
+		if keep != row.wantKeep || need != row.wantNeed || by != row.wantBy {
+			t.Errorf("%s: keep=%d need=%d by=%s, want keep=%d need=%d by=%s", row.name, keep, need, by, row.wantKeep, row.wantNeed, row.wantBy)
+		}
+	}
+}
+
+// The member ranking put first is never in the cut order, however many are
+// cut: the cut keeps the highest-attention members.
+func TestTheTopAttentionMemberSurvivesEveryCut(t *testing.T) {
+	members := make([]CohortMember, 0, 8)
+	for index, rank := range []int{4, 2, 8, 1, 6, 3, 7, 5} {
+		id := fmt.Sprintf("project_%03d", index)
+		members = append(members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id}, Rank: index + 1,
+			InclusionReasons: []string{"owned"}, RankingComputed: true, AttentionRank: rank,
+		})
+	}
+	cohort := &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention}
+	order := memberCutOrder(cohort, contractsv1.ContextFabricNarrowingBasisAttentionRank, InvestigationResult{Cohort: cohort})
+	if len(order) != len(members)-1 {
+		t.Fatalf("order = %v, want every member but the top-ranked", order)
+	}
+	for _, index := range order {
+		if members[index].AttentionRank == 1 {
+			t.Fatalf("the top-attention member %s is in the cut order %v", members[index].Subject.CanonicalID, order)
+		}
+	}
+}
+
+// A list that is not teams, repositories or projects is never cut, and the
+// event says why.
+func TestACohortOfAnotherKindIsNotCut(t *testing.T) {
+	for _, kind := range []SubjectKind{SubjectKind("person"), SubjectPullRequest, SubjectWorkItem} {
+		cohort := &Cohort{Kind: kind, Members: []CohortMember{
+			{Subject: SubjectRef{Kind: kind, CanonicalID: "a_001", Label: "a"}, RankingComputed: true, AttentionRank: 1},
+			{Subject: SubjectRef{Kind: kind, CanonicalID: "a_002", Label: "b"}, RankingComputed: true, AttentionRank: 2},
+		}, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention}
+		attempt := (&Engine{}).planMemberCut(context.Background(), synthesisAssemblyParams{Graph: GraphContext{Cohort: cohort}}, assemblyTelemetry{}, InvestigationResult{Cohort: cohort}, 71, 66)
+		if attempt.Declined != MemberCutCohortKind {
+			t.Errorf("kind %q: declined = %q, want %q", kind, attempt.Declined, MemberCutCohortKind)
+		}
+	}
 }

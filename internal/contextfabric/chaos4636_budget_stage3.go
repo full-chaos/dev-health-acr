@@ -543,7 +543,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		if overrun != contractsv1.ContextFabricBudgetOverrunItems || budget.MaxItems <= 0 || trim.Reduced.Status != "" {
 			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
 		}
-		cut := e.planMemberCut(ctx, params, firstPass, result)
+		cut := e.planMemberCut(ctx, params, firstPass, result, measured.Measurement.Items.Budgeted(), budget.MaxItems)
 		if cut.Declined != MemberCutNotApplicable {
 			e.recordMemberCut(ctx, principal, plan, measured, cut, budget)
 			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))

@@ -64,7 +64,7 @@ func TestADegradedItemsOverrunIsServedAsAnAnswerOverTheCutCohort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v, want the cut answer served", err)
 	}
-	kept := memberCutCallerCap / 2
+	kept := memberCutKept
 	if modelCalls != 1 || len(composed) != 2 {
 		t.Fatalf("model calls = %d, degraded compositions = %d, want the one failed call and a composition for each of the two passes", modelCalls, len(composed))
 	}
@@ -79,8 +79,14 @@ func TestADegradedItemsOverrunIsServedAsAnAnswerOverTheCutCohort(t *testing.T) {
 	}
 	event := telemetry.memberCuts[0]
 	if !event.Served || !event.Recomposed || event.Declined != MemberCutNotApplicable || event.Listed != memberCutCallerCap || event.Kept != kept ||
-		event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
+		event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank ||
+		event.KeepBy != MemberCutKeepMeasured || event.Need != memberCutCallerCap-kept {
 		t.Fatalf("member-cut event = %+v, want served, recomposed, listed %d, kept %d, attention_rank", event, memberCutCallerCap, kept)
+	}
+	if top := topAttentionIndex(composed[0].Graph.Cohort); top < 0 || !slices.ContainsFunc(result.Cohort.Members, func(m CohortMember) bool {
+		return m.Subject.CanonicalID == composed[0].Graph.Cohort.Members[top].Subject.CanonicalID
+	}) {
+		t.Fatalf("the top-attention member (index %d of the first pass) is not in the served cohort", top)
 	}
 	var step *contractsv1.ContextFabricPlanNarrowing
 	for index := range result.AnswerPlan.Narrowing {
