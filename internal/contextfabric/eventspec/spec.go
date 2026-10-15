@@ -1300,11 +1300,16 @@ var PlanCarryOutcome = Event{
 
 const modelDecisionMsg = "context fabric model decision"
 
+// modelDecisionIdentityFields: operation is empty on a call that returned
+// before a receipt was built (an unauthenticated principal, an invalid request
+// or an oversized payload); the line still fires, because an observable that
+// only fires on the paths that got far enough cannot tell "not reached" from
+// "reached and fine".
 func modelDecisionIdentityFields(operation string) []Field {
 	return []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
-		{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{operation}},
+		{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{operation, ""}},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
 		{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
 	}

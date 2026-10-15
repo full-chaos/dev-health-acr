@@ -7417,7 +7417,8 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "interpret"
+          "interpret",
+          ""
         ]
       },
       {
@@ -7645,7 +7646,8 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "synthesize"
+          "synthesize",
+          ""
         ]
       },
       {

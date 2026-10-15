@@ -190,6 +190,19 @@ func TestInterpretDecisionLineCertifiesAcrossTheModelShapes(t *testing.T) {
 		requireAbsent(t, line, "rejection_reason", "rejected_fact_kind")
 	})
 
+	t.Run("returned before a receipt exists still writes a certifiable line", func(t *testing.T) {
+		t.Parallel()
+		runtime, buf := certifyRuntime(t, &generatorStub{interpretation: validInterpretationOutput()}, Config{})
+		if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{}, validRequest()); err == nil {
+			t.Fatal("InterpretQuestion() error = nil, want the unauthenticated refusal")
+		}
+		line := certifyDecision(t, buf, eventspec.ModelInterpretDecision, map[string]any{"request_id": "request_12345678", "operation": ""})
+		requireAbsent(t, line, "rejection_reason", "rejected_fact_kind")
+		if got := decisionKeyOrder(t, buf, ""); !reflect.DeepEqual(got, interpretDecisionKeys) {
+			t.Fatalf("pre-receipt interpret key sequence = %v, want %v", got, interpretDecisionKeys)
+		}
+	})
+
 	t.Run("rejection names its rule, and a rejected fact kind rides with it", func(t *testing.T) {
 		t.Parallel()
 		runtime, buf := certifyRuntime(t, &generatorStub{interpretation: func() interpretationOutput {
@@ -274,6 +287,19 @@ func TestSynthesizeDecisionLineCertifiesAcrossTheModelShapes(t *testing.T) {
 		line := certifyDecision(t, buf, eventspec.ModelSynthesizeDecision, want(map[string]any{"outcome": "unavailable", "fallback_used": false}))
 		requireAbsent(t, line, "draws_total", "draws_retried", "draw_outcomes", "draw_output_digests", "draw_rejected_clauses",
 			"draw_rejected_reasons", "resynthesis_deadline_remaining_ms", "rejection_reason", "fact_group_size", "grounded_beyond_first")
+	})
+
+	t.Run("returned before a receipt exists still writes a certifiable line", func(t *testing.T) {
+		t.Parallel()
+		runtime, buf := certifyRuntime(t, &generatorStub{synthesis: validSynthesisOutput()}, Config{})
+		if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{}, validSynthesisInput()); err == nil {
+			t.Fatal("SynthesizeAnswer() error = nil, want the unauthenticated refusal")
+		}
+		line := certifyDecision(t, buf, eventspec.ModelSynthesizeDecision, want(map[string]any{"operation": ""}))
+		requireAbsent(t, line, "draws_total", "rejection_reason", "fact_group_size")
+		if got := decisionKeyOrder(t, buf, ""); !reflect.DeepEqual(got, synthesizeDecisionKeys) {
+			t.Fatalf("pre-receipt synthesize key sequence = %v, want %v", got, synthesizeDecisionKeys)
+		}
 	})
 
 	t.Run("rejection names its rule", func(t *testing.T) {
