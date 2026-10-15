@@ -84,12 +84,22 @@ type AdmitEdgesResult struct {
 // AdmitEdges applies the evidence-budget-bounded admission decision to an
 // already-endpoint-resolved candidate edge list, building
 // RelationshipPaths and DriverJudgments. edges must already be in the
-// backend's intended admission order (typically descending relevance,
-// stable-tie-broken by edge UUID -- see ResultConfidence) since admission
-// order determines which edges win a scarce evidence budget (Codex N2);
-// AdmitEdges does not re-sort, so a backend that skips sorting gets
-// backend-order-dependent admission, exactly as it would have before this
-// extraction.
+// backend's intended admission order, since admission order determines which
+// edges win the scarce path and evidence budgets (Codex N2); AdmitEdges does
+// not re-sort.
+//
+// The order (RankEdgesByOrigin, GraphWalkVersion): the committed subjects take
+// turns in resolution order, then the full-text matches take turns in match
+// order (a tier's unused budget goes to the next); a subject with no edges left
+// gives its turns to the others. Within a committed subject: first the edges
+// whose driver would be about it (DriverSubject, the predicate the drivers
+// built here and the commit gate reading them share), then its other own
+// edges, then its second-hop edges; within each group, and within a full-text
+// match, descending relevance then ascending edge id. Each edge belongs
+// to the subject that reaches it in the fewest hops: an edge with a subject at
+// one end is that subject's own; an edge touching two subjects, or reached by
+// several only at a second hop, goes to the earliest of them. An edge's id
+// spelling therefore orders it only among one subject's edges.
 //
 // Self-loop and internal-bookkeeping-endpoint exclusion happen here (pure,
 // no I/O) rather than trusting the caller to have filtered them, since both
@@ -174,10 +184,11 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 			evidenceSet[id] = struct{}{}
 		}
 		paths = append(paths, path)
-		if standing, category, factKind, relevant := relationMeaning(edge.Name); relevant {
+		if about, drives := DriverSubject(edge); drives {
+			standing, category, factKind, _ := relationMeaning(edge.Name)
 			driver := contextfabric.DriverJudgment{
 				DriverID: DeterministicUUID("context-fabric-driver", orgID, edge.UUID), Standing: standing, Category: category,
-				Title: relationTitle(edge.Name, edge.To.Label), Summary: edgeFact(edge), AffectedSubjects: []contextfabric.SubjectRef{edge.From},
+				Title: relationTitle(edge.Name, edge.To.Label), Summary: edgeFact(edge), AffectedSubjects: []contextfabric.SubjectRef{about},
 				PathIDs: []string{pathID}, EvidenceRefIDs: evidence, Derivation: contextfabric.DerivationGraphAssociated,
 				EpistemicStatus: contextfabric.EpistemicInferred, Confidence: ResultConfidence(edge.Relevance, edge.Score), Current: edge.InvalidAt == nil && edge.ExpiredAt == nil,
 			}
@@ -235,6 +246,100 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 		return sorted[i].UUID < sorted[j].UUID
 	})
 	return sorted
+}
+
+// RankEdgesByOrigin ranks edges for a budget several origin subjects share. By
+// confidence first (SortEdgesByRelevance); within each run of equal confidence,
+// Tier by tier (tiers[0]'s origins before tiers[1]'s), the origins of one tier
+// take turns (InterleaveByOrigin). Within one origin, edges go by class
+// (class[id], lower first; an edge with no class is class 0), then by
+// relevance, then by ascending id. An edge's id spelling therefore orders it
+// only among one origin's edges of one class. Edges of origins in no tier
+// follow, in the same order.
+func RankEdgesByOrigin(edges []CandidateEdge, originOf map[string]string, class map[string]int, tiers ...[]string) []CandidateEdge {
+	ranked := SortEdgesByRelevance(edges)
+	sort.SliceStable(ranked, func(i, j int) bool { return class[ranked[i].UUID] < class[ranked[j].UUID] })
+	tierOf := make(map[string]int)
+	for index, tier := range tiers {
+		for _, origin := range tier {
+			if _, seen := tierOf[origin]; !seen {
+				tierOf[origin] = index
+			}
+		}
+	}
+	byTier := make([][]CandidateEdge, len(tiers))
+	var untiered []CandidateEdge
+	for _, edge := range ranked {
+		if index, ok := tierOf[originOf[edge.UUID]]; ok {
+			byTier[index] = append(byTier[index], edge)
+		} else {
+			untiered = append(untiered, edge)
+		}
+	}
+	out := make([]CandidateEdge, 0, len(ranked))
+	for index, tier := range tiers {
+		out = append(out, InterleaveByOrigin(byTier[index], originOf, tier)...)
+	}
+	return append(out, untiered...)
+}
+
+// DriverSubject reports the subject an edge's driver is about, when the edge
+// makes a driver at all (a relationship type that carries one, its From end).
+// AdmitEdges builds drivers with it, and the post-synthesis commit gate reads
+// those drivers, so a ranker that asks it can never disagree with them.
+func DriverSubject(edge ResolvedEdge) (contextfabric.SubjectRef, bool) {
+	if !MakesDriver(edge.Name) {
+		return contextfabric.SubjectRef{}, false
+	}
+	return edge.From, true
+}
+
+// MakesDriver reports whether an edge of this relationship type makes a
+// driver, about its From end (DriverSubject).
+func MakesDriver(relationship string) bool {
+	_, _, _, relevant := relationMeaning(relationship)
+	return relevant
+}
+
+// InterleaveByOrigin orders ranked edges for one budget that several origin
+// subjects share: each origin in turn gives its next edge, origins in the
+// given order, each origin's own edges in their ranked order. An origin with
+// no edges left gives its turns to the others, so the total budget is
+// unchanged. Edges whose origin is not listed follow, in ranked order.
+//
+// The id tie-break of SortEdgesByRelevance orders edges WITHIN one origin;
+// across origins it would let the spelling of one origin's relationship ids
+// decide whether another origin's edges fit the budget at all.
+func InterleaveByOrigin(ranked []CandidateEdge, originOf map[string]string, origins []string) []CandidateEdge {
+	queues := make(map[string][]CandidateEdge, len(origins))
+	listed := make(map[string]bool, len(origins))
+	order := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		if !listed[origin] {
+			listed[origin] = true
+			order = append(order, origin)
+		}
+	}
+	var unlisted []CandidateEdge
+	for _, edge := range ranked {
+		origin := originOf[edge.UUID]
+		if !listed[origin] {
+			unlisted = append(unlisted, edge)
+			continue
+		}
+		queues[origin] = append(queues[origin], edge)
+	}
+	out := make([]CandidateEdge, 0, len(ranked))
+	for remaining := len(ranked) - len(unlisted); remaining > 0; {
+		for _, origin := range order {
+			if queue := queues[origin]; len(queue) > 0 {
+				out = append(out, queue[0])
+				queues[origin] = queue[1:]
+				remaining--
+			}
+		}
+	}
+	return append(out, unlisted...)
 }
 
 // DiscoveredCohort discovers a subjectless team/project cohort from a

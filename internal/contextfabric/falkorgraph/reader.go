@@ -566,6 +566,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// items outside the hop radius.
 	var resolvedNodes []graphrank.CandidateNode
 	var resolvedEdges []graphrank.ResolvedEdge
+	// The subject each resolved edge was read for, and those subjects in
+	// order (committed subjects in resolution order, then the full-text
+	// arm's matches in match order): admission takes turns across them.
+	resolvedEdgeOrigin := make(map[string]string)
+	var edgeOrigins, committedOrigins []string
 	seenEdge := make(map[string]bool)
 	seenNode := make(map[string]bool)
 	// failedLookups counts edges dropped because a genuine backend lookup
@@ -839,8 +844,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if !seenEdge[e.UUID] {
 				seenEdge[e.UUID] = true
 				resolvedEdges = append(resolvedEdges, e)
+				resolvedEdgeOrigin[e.UUID] = graphrank.SubjectKey(subject)
 			}
 		}
+		edgeOrigins = append(edgeOrigins, graphrank.SubjectKey(subject))
+		committedOrigins = append(committedOrigins, graphrank.SubjectKey(subject))
 	}
 
 	if teamWalkTally.ran && a.config.Telemetry != nil {
@@ -996,6 +1004,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// across all three emit sites, which is what makes the site value the only
 	// thing a reader has to compare.
 	textCandidateOrigin := make(map[string]string, len(textNodes))
+	// The same edge-to-subject record, keyed by kind and id, for the budget
+	// split; textCandidateOrigin keeps the canonical id the failure log reports.
+	textCandidateOriginKey := make(map[string]string, len(textNodes))
+	// The matched subjects in match order (the full-text query's own
+	// deterministic order): the order their edges take turns in the budget.
+	var textOrigins []string
 	for _, n := range textNodes {
 		subject, ok := graphrank.NodeSubject(n)
 		if !ok {
@@ -1040,11 +1054,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 			seenEdge[ce.UUID] = true
 			textCandidateOrigin[ce.UUID] = subject.CanonicalID
+			textCandidateOriginKey[ce.UUID] = graphrank.SubjectKey(subject)
 			textCandidates = append(textCandidates, ce)
 		}
+		textOrigins = append(textOrigins, graphrank.SubjectKey(subject))
 	}
 	textAdmitted := 0
-	for _, ce := range rankCandidateEdges(textCandidates) {
+	for _, ce := range graphrank.RankEdgesByOrigin(textCandidates, textCandidateOriginKey, nil, textOrigins) {
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
@@ -1070,8 +1086,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			continue
 		}
 		resolvedEdges = append(resolvedEdges, resolved)
+		resolvedEdgeOrigin[resolved.UUID] = textCandidateOriginKey[ce.UUID]
 		textAdmitted++
 	}
+	edgeOrigins = append(edgeOrigins, textOrigins...)
 
 	// cohortFulltextTruncated is the signal cohortPoolTruncation
 	// actually needs -- "did the lexical arm drop a member OF THE COHORT'S
@@ -1224,7 +1242,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			UUID: r.UUID, Name: r.Name, Fact: r.Fact, Relevance: r.Relevance, Score: r.Score,
 		})
 	}
-	order := graphrank.SortEdgesByRelevance(candidateEdges)
+	ownEdge := attributeEdgesByFewestHops(resolvedEdges, resolvedEdgeOrigin, edgeOrigins)
+	// The question's committed subjects take their turns before the subjects
+	// the full-text arm matched; a matched subject that is also committed takes
+	// its turns with the committed ones. Within a committed subject: the edges
+	// the answer gate can use for it first, then its other own edges, then its
+	// second-hop edges. A full-text match keeps the ranked order.
+	order := graphrank.RankEdgesByOrigin(candidateEdges, resolvedEdgeOrigin,
+		committedEdgeClasses(resolvedEdges, resolvedEdgeOrigin, ownEdge, committedOrigins),
+		committedOrigins, edgeOrigins[len(committedOrigins):])
 	orderedResolved := make([]graphrank.ResolvedEdge, 0, len(resolvedEdges))
 	byUUID := make(map[string]graphrank.ResolvedEdge, len(resolvedEdges))
 	for _, r := range resolvedEdges {
@@ -1235,6 +1261,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
+	logSharedEdgeBudget(ctx, principal.OrgID, orderedResolved, resolvedEdgeOrigin, edgeOrigins, admission.Paths, len(textCandidates), textAdmitted)
 	// CHAOS-4395: DiscoveredCohort's ONLY node source used to be
 	// textNodes/resolvedNodes above -- fulltextSearchNodes over the raw
 	// question TEXT. A cohort question that names no member by label/alias
@@ -2088,4 +2115,85 @@ func exactHintCandidate(ctx context.Context, rows []row) (graphrank.CandidateNod
 		return graphrank.CandidateNode{}, false
 	}
 	return toCandidateNode(n), true
+}
+
+// attributeEdgesByFewestHops gives each resolved edge to the origin that
+// reaches it in the fewest hops; origins are keyed by subject kind and id. It
+// returns which edges are their origin's own (one hop). An edge with an origin's subject at one end is
+// that subject's own (one hop), whichever walk read it first; an edge touching
+// two origins goes to the earlier one in origins' order. Any other edge keeps
+// the origin that first reached it at its second hop.
+func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[string]string, origins []string) map[string]bool {
+	own := make(map[string]bool, len(edges))
+	for _, e := range edges {
+		for _, candidate := range origins {
+			if graphrank.SubjectKey(e.From) == candidate || graphrank.SubjectKey(e.To) == candidate {
+				origin[e.UUID] = candidate
+				own[e.UUID] = true
+				break
+			}
+		}
+	}
+	return own
+}
+
+// logSharedEdgeBudget records how the shared edge budgets split across the
+// subjects the edges were read for (GraphWalkVersion), counts only: the
+// subjects, how many of them got at least one admitted path, and the
+// full-text arm's candidates against what it kept. One origin needs no
+// split, so it logs nothing; a subject in both arms is one origin.
+func logSharedEdgeBudget(ctx context.Context, orgID string, ordered []graphrank.ResolvedEdge, origin map[string]string, origins []string, paths []contextfabric.RelationshipPath, textCandidates, textAdmitted int) {
+	distinct := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		distinct[o] = struct{}{}
+	}
+	if len(distinct) < 2 {
+		return
+	}
+	originOfPath := make(map[string]string, len(ordered))
+	for _, e := range ordered {
+		originOfPath[graphrank.DeterministicUUID("context-fabric-path", orgID, e.UUID)] = origin[e.UUID]
+	}
+	served := make(map[string]struct{}, len(origins))
+	for _, path := range paths {
+		if o := originOfPath[path.PathID]; o != "" {
+			served[o] = struct{}{}
+		}
+	}
+	slog.Default().InfoContext(ctx, "context_fabric: shared edge budget",
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"graph_walk_version", contextfabric.GraphWalkVersion,
+		"origins", len(distinct),
+		"origins_with_admitted_paths", len(served),
+		"paths_admitted", len(paths),
+		"edges_ranked", len(ordered),
+		"text_arm_candidates", textCandidates,
+		"text_arm_kept", textAdmitted)
+}
+
+// committedEdgeClasses orders the edges of a committed subject: class 0 for an
+// edge whose driver would be about that subject (graphrank.DriverSubject, the
+// predicate the answer gate's drivers come from), 1 for its other own edges, 2
+// for its second-hop edges. Edges of other origins get no class.
+func committedEdgeClasses(edges []graphrank.ResolvedEdge, origin map[string]string, own map[string]bool, committed []string) map[string]int {
+	isCommitted := make(map[string]bool, len(committed))
+	for _, key := range committed {
+		isCommitted[key] = true
+	}
+	class := make(map[string]int, len(edges))
+	for _, e := range edges {
+		key := origin[e.UUID]
+		if !isCommitted[key] {
+			continue
+		}
+		switch about, drives := graphrank.DriverSubject(e); {
+		case drives && graphrank.SubjectKey(about) == key:
+			class[e.UUID] = 0
+		case own[e.UUID]:
+			class[e.UUID] = 1
+		default:
+			class[e.UUID] = 2
+		}
+	}
+	return class
 }

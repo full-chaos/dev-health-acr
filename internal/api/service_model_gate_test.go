@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 )
@@ -213,6 +214,15 @@ func TestServiceModelDecisionThatCannotBeMadeFailsClosedBeforeAnyModelCall(t *te
 				t.Fatalf("error = %+v, want retryable %s", body.Error, tc.code)
 			}
 		})
+	}
+}
+
+func TestServiceModelDecisionForAnUnknownOrganizationIs401BeforeAnyModelCall(t *testing.T) {
+	rig := gatedClientRouteRig(t, &serviceModelGrants{err: entitlements.ErrOrganizationUnknown}, ownModelConfigs{found: true})
+	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
+	assertNoModelCallAndNoResult(t, rig)
+	if body := decodeServiceModelRefusal(t, recorder, http.StatusUnauthorized); body.Error.Code != "invalid_token" || body.Error.Retryable {
+		t.Fatalf("error = %+v, want non-retryable invalid_token", body.Error)
 	}
 }
 

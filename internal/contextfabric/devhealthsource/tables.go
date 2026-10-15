@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -726,8 +727,8 @@ func queryIncidents(ctx context.Context, client contextpacket.ClickHouseQueryCli
        ` + timestampExpr + `, i.is_deleted,
        ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `,
        '' AS description_read_later, i.last_synced
-FROM operational_incidents AS i FINAL
-INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
+FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i
+INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "i.last_synced", "i.id") + orderBy("i.last_synced", "i.id")
 	page, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
@@ -826,7 +827,7 @@ func readIncidentDescriptions(ctx context.Context, client contextpacket.ClickHou
 				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("k%d", i), Value: v.id},
 				contextpacket.ClickHouseBinding{Name: fmt.Sprintf("v%d", i), Value: v.at.Format("2006-01-02 15:04:05.000000")})
 		}
-		statement := `SELECT i.id AS description_incident_id, argMax(ifNull(i.description, ''), i.source_version_at)
+		statement := `SELECT i.id AS description_incident_id, argMax(ifNull(i.description, ''), ` + devhealthschema.OperationalRowVersion("i") + `)
 FROM operational_incidents AS i
 PREWHERE i.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)
 GROUP BY i.id`
@@ -1245,7 +1246,7 @@ func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.Clic
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
 LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id AND d.repo_id = e.repo_id
-LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
+LEFT JOIN ` + devhealthschema.CurrentOperationalIncidents + ` AS i ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
 WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.computed_at", "e.edge_id") + orderBy("e.computed_at", "e.edge_id")
 	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var edgeID, deploymentID, incidentID, repoSlug, repoID, source string

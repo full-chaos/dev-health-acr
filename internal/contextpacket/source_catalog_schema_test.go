@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -26,8 +27,8 @@ func TestSourceCatalog_readsCanonicalOperationalIncidents(t *testing.T) {
 
 	// Then
 	for _, projection := range []string{
-		"FROM operational_incidents AS i FINAL",
-		"INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id",
+		"FROM " + devhealthschema.CurrentOperationalIncidents + " AS i",
+		"INNER JOIN " + devhealthschema.CurrentServiceRepositoryMappings + " AS m ON i.org_id = m.org_id AND i.service_id = m.service_id",
 		"i.org_id = {org_id:String}",
 		"m.org_id = {org_id:String}",
 		"m.repo_id = {repo_id:UUID}",
