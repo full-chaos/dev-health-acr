@@ -799,3 +799,52 @@ func TestEveryFactsOnlyPointWithholdsADeclaredScore(t *testing.T) {
 		assertScoreWithheld(t, invest(t, engine, time.Minute), false)
 	})
 }
+
+func factsOnlyOneStatusFactReader(cohort *Cohort) factReaderFunc {
+	return func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		member := cohort.Members[0].Subject
+		facts := []CanonicalFact{{Kind: FactStatus, Subject: member, Fields: map[string]FactValue{"status": StringFactValue("green")},
+			EvidenceRefIDs: []string{"ref_" + member.CanonicalID}, Source: "devhealthfacts.status", SourceVersion: "v1"}}
+		return CanonicalFactBundle{Facts: facts, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
+	}
+}
+
+// A facts-only answer that carries none of the facts that were read (the cohort rows spend the whole item ceiling) must
+// not be served saying the canonical values are shown: the budget refusal stands.
+func TestAFactsOnlyAnswerThatCarriesNoReadFactLeavesTheRefusal(t *testing.T) {
+	t.Run("no room for a second synthesis", func(t *testing.T) {
+		var modelCalls, degraded int
+		telemetry := &recordingTelemetry{}
+		cohort := budgetStageCohort(6)
+		engine := factsOnlyEngine(t, cohort, budgetStageOptions(7, 20*time.Second), &modelCalls, &degraded, 2, telemetry)
+		engine.facts = factsOnlyOneStatusFactReader(cohort)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+		assertRefusedNotFactsOnly(t, result, err, telemetry)
+	})
+	t.Run("retry ran", func(t *testing.T) {
+		calls := 0
+		telemetry := &recordingTelemetry{}
+		cohort := budgetStageCohort(4)
+		engine := budgetStageEngine(t, cohort, 20, budgetStageOptions(4, time.Second), &calls, telemetry)
+		engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+		engine.facts = factsOnlyOneStatusFactReader(cohort)
+
+		result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+		assertRefusedNotFactsOnly(t, result, err, telemetry)
+	})
+}
+
+func assertRefusedNotFactsOnly(t *testing.T, result InvestigationResult, err error, telemetry *recordingTelemetry) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("served status %q claims %d limitations %q, want the budget refusal", result.Status, len(result.ClaimedFacts), result.Limitations)
+	}
+	if served := factsOnlyServedEvent(telemetry); served != nil {
+		t.Fatalf("facts_only_served event %+v for a refused answer", served)
+	}
+}

@@ -132,6 +132,9 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 		composed = restrictWorkItemTupleEvidence(composed)
 	}
 	composed = e.finalizeResult(ctx, principal, composed, *plan, params.Frame, factsParams.Facts, &pending, answerPassSecond, cardinality)
+	if factsOnlyShowsNoReadFact(composed, factsParams.Facts) {
+		return InvestigationResult{}, assemblyTelemetry{}, FactsOnlyOverBudget
+	}
 	measurementInput := composed
 	if params.WorkItemCensus != nil {
 		measurementInput = ApplyServerCompletenessAuthority(ApplyServedStatusFloors(composed), e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(ApplyServedStatusFloors(composed)))
@@ -154,4 +157,19 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 	event.OutcomeCompletenessState = composed.Completeness.State
 	e.recordPlanNarrowing(ctx, principal, event)
 	return composed, pending, FactsOnlyServedOrUntried
+}
+
+// factsOnlyShowsNoReadFact: facts were read, none were withheld as scores, yet the answer carries no claim (the item
+// ceiling is spent by the cohort rows). Such an answer would say the canonical values are shown while showing none, so
+// the refusal stands.
+func factsOnlyShowsNoReadFact(composed InvestigationResult, bundle CanonicalFactBundle) bool {
+	if len(bundle.Facts) == 0 || len(composed.ClaimedFacts) > 0 {
+		return false
+	}
+	for _, detail := range composed.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailFactScoreWithheld {
+			return false
+		}
+	}
+	return true
 }
