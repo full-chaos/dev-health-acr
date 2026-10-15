@@ -58,6 +58,9 @@ var ByID = map[string]Event{
 	"contextfabric.work_item_reuse":                  WorkItemReuse,
 	"contextfabric.work_item_stored_serving":         WorkItemStoredServing,
 	"contextfabric.work_item_tuple_admission":        WorkItemTupleAdmission,
+	"genkitruntime.model_interpret_decision":         ModelInterpretDecision,
+	"genkitruntime.model_phrase_decision":            ModelPhraseDecision,
+	"genkitruntime.model_synthesize_decision":        ModelSynthesizeDecision,
 	"graphrank.alias_lookup":                         AliasLookup,
 	"graphrank.anchor_kind_withheld":                 AnchorKindWithheld,
 	"graphrank.anchor_kind_withheld_summary":         AnchorKindWithheldSummary,
@@ -4077,6 +4080,336 @@ func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
 		"member_filter", contextfabric.SanitizeLogAttr(f.MemberFilter),
 		"member_time_role", contextfabric.SanitizeLogAttr(f.MemberTimeRole),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// ModelInterpretDecisionFields is genkitruntime.model_interpret_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelInterpretDecision.Fields declares in spec.go.
+type ModelInterpretDecisionFields struct {
+	RequestID                    string
+	OrgIDHash                    string
+	Operation                    string
+	Outcome                      string
+	Attempts                     int
+	FallbackUsed                 bool
+	PrimaryFailureClassification string
+	AxisSource                   string
+	DecodingSeed                 int
+	Sample                       int
+	InitialSample                int
+	Redraws                      int
+	ModelID                      string
+	ModelVersion                 string
+	PromptVersion                string
+	InterpretationSource         string
+	AttemptsTotal                int
+	AttemptsRetried              int
+	AttemptOutcomes              string
+	AttemptElapsedMs             string
+	FallbackAttemptsTotal        int
+	PrimaryProvider              string
+	PrimaryModelID               string
+	PrimaryModelVersion          string
+	RejectionReason              string
+	RejectedFactKind             string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelInterpretDecisionFields uniformly, set ONLY by NewModelInterpretDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelInterpretDecisionFields is the generated constructor for ModelInterpretDecisionFields -- every
+// field ModelInterpretDecision.Fields declares is a required parameter.
+func NewModelInterpretDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, axisSource string, decodingSeed int, sample int, initialSample int, redraws int, modelID string, modelVersion string, promptVersion string, interpretationSource string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string, rejectionReason string, rejectedFactKind string) ModelInterpretDecisionFields {
+	return ModelInterpretDecisionFields{
+		RequestID:                    requestID,
+		OrgIDHash:                    orgIDHash,
+		Operation:                    operation,
+		Outcome:                      outcome,
+		Attempts:                     attempts,
+		FallbackUsed:                 fallbackUsed,
+		PrimaryFailureClassification: primaryFailureClassification,
+		AxisSource:                   axisSource,
+		DecodingSeed:                 decodingSeed,
+		Sample:                       sample,
+		InitialSample:                initialSample,
+		Redraws:                      redraws,
+		ModelID:                      modelID,
+		ModelVersion:                 modelVersion,
+		PromptVersion:                promptVersion,
+		InterpretationSource:         interpretationSource,
+		AttemptsTotal:                attemptsTotal,
+		AttemptsRetried:              attemptsRetried,
+		AttemptOutcomes:              attemptOutcomes,
+		AttemptElapsedMs:             attemptElapsedMs,
+		FallbackAttemptsTotal:        fallbackAttemptsTotal,
+		PrimaryProvider:              primaryProvider,
+		PrimaryModelID:               primaryModelID,
+		PrimaryModelVersion:          primaryModelVersion,
+		RejectionReason:              rejectionReason,
+		RejectedFactKind:             rejectedFactKind,
+		constructed:                  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelInterpretDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelInterpretDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelInterpretDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelInterpretDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"fallback_used", f.FallbackUsed,
+		"primary_failure_classification", contextfabric.SanitizeLogAttr(f.PrimaryFailureClassification),
+		"axis_source", contextfabric.SanitizeLogAttr(f.AxisSource),
+		"decoding_seed", f.DecodingSeed,
+		"sample", f.Sample,
+		"initial_sample", f.InitialSample,
+		"redraws", f.Redraws,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"interpretation_source", contextfabric.SanitizeLogAttr(f.InterpretationSource),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+		"fallback_attempts_total", f.FallbackAttemptsTotal,
+		"primary_provider", contextfabric.SanitizeLogAttr(f.PrimaryProvider),
+		"primary_model_id", contextfabric.SanitizeLogAttr(f.PrimaryModelID),
+		"primary_model_version", contextfabric.SanitizeLogAttr(f.PrimaryModelVersion),
+		"rejection_reason", contextfabric.SanitizeLogAttr(f.RejectionReason),
+		"rejected_fact_kind", contextfabric.SanitizeLogAttr(f.RejectedFactKind),
+	}
+}
+
+// ModelPhraseDecisionFields is genkitruntime.model_phrase_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelPhraseDecision.Fields declares in spec.go.
+type ModelPhraseDecisionFields struct {
+	RequestID        string
+	OrgIDHash        string
+	Operation        string
+	Outcome          string
+	Attempts         int
+	ModelID          string
+	ModelVersion     string
+	PromptVersion    string
+	AttemptsTotal    int
+	AttemptsRetried  int
+	AttemptOutcomes  string
+	AttemptElapsedMs string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelPhraseDecisionFields uniformly, set ONLY by NewModelPhraseDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelPhraseDecisionFields is the generated constructor for ModelPhraseDecisionFields -- every
+// field ModelPhraseDecision.Fields declares is a required parameter.
+func NewModelPhraseDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string) ModelPhraseDecisionFields {
+	return ModelPhraseDecisionFields{
+		RequestID:        requestID,
+		OrgIDHash:        orgIDHash,
+		Operation:        operation,
+		Outcome:          outcome,
+		Attempts:         attempts,
+		ModelID:          modelID,
+		ModelVersion:     modelVersion,
+		PromptVersion:    promptVersion,
+		AttemptsTotal:    attemptsTotal,
+		AttemptsRetried:  attemptsRetried,
+		AttemptOutcomes:  attemptOutcomes,
+		AttemptElapsedMs: attemptElapsedMs,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelPhraseDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelPhraseDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelPhraseDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelPhraseDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+	}
+}
+
+// ModelSynthesizeDecisionFields is genkitruntime.model_synthesize_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelSynthesizeDecision.Fields declares in spec.go.
+type ModelSynthesizeDecisionFields struct {
+	RequestID                      string
+	OrgIDHash                      string
+	Operation                      string
+	Outcome                        string
+	Attempts                       int
+	FallbackUsed                   bool
+	PrimaryFailureClassification   string
+	Drivers                        int
+	Findings                       int
+	Claims                         int
+	EvidenceRefs                   int
+	ModelID                        string
+	ModelVersion                   string
+	PromptVersion                  string
+	AttemptsTotal                  int
+	AttemptsRetried                int
+	AttemptOutcomes                string
+	AttemptElapsedMs               string
+	FallbackAttemptsTotal          int
+	PrimaryProvider                string
+	PrimaryModelID                 string
+	PrimaryModelVersion            string
+	DrawsTotal                     int
+	DrawsRetried                   int
+	DrawOutcomes                   string
+	DrawOutputDigests              string
+	DrawRejectedClauses            string
+	DrawRejectedReasons            string
+	ResynthesisDeadlineRemainingMs int
+	ResynthesisDeadlineReservedMs  int
+	ResynthesisStoppedForDeadline  bool
+	RejectionReason                string
+	FactGroupSize                  int
+	GroundedBeyondFirst            int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelSynthesizeDecisionFields uniformly, set ONLY by NewModelSynthesizeDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelSynthesizeDecisionFields is the generated constructor for ModelSynthesizeDecisionFields -- every
+// field ModelSynthesizeDecision.Fields declares is a required parameter.
+func NewModelSynthesizeDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, drivers int, findings int, claims int, evidenceRefs int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string, drawsTotal int, drawsRetried int, drawOutcomes string, drawOutputDigests string, drawRejectedClauses string, drawRejectedReasons string, resynthesisDeadlineRemainingMs int, resynthesisDeadlineReservedMs int, resynthesisStoppedForDeadline bool, rejectionReason string, factGroupSize int, groundedBeyondFirst int) ModelSynthesizeDecisionFields {
+	return ModelSynthesizeDecisionFields{
+		RequestID:                      requestID,
+		OrgIDHash:                      orgIDHash,
+		Operation:                      operation,
+		Outcome:                        outcome,
+		Attempts:                       attempts,
+		FallbackUsed:                   fallbackUsed,
+		PrimaryFailureClassification:   primaryFailureClassification,
+		Drivers:                        drivers,
+		Findings:                       findings,
+		Claims:                         claims,
+		EvidenceRefs:                   evidenceRefs,
+		ModelID:                        modelID,
+		ModelVersion:                   modelVersion,
+		PromptVersion:                  promptVersion,
+		AttemptsTotal:                  attemptsTotal,
+		AttemptsRetried:                attemptsRetried,
+		AttemptOutcomes:                attemptOutcomes,
+		AttemptElapsedMs:               attemptElapsedMs,
+		FallbackAttemptsTotal:          fallbackAttemptsTotal,
+		PrimaryProvider:                primaryProvider,
+		PrimaryModelID:                 primaryModelID,
+		PrimaryModelVersion:            primaryModelVersion,
+		DrawsTotal:                     drawsTotal,
+		DrawsRetried:                   drawsRetried,
+		DrawOutcomes:                   drawOutcomes,
+		DrawOutputDigests:              drawOutputDigests,
+		DrawRejectedClauses:            drawRejectedClauses,
+		DrawRejectedReasons:            drawRejectedReasons,
+		ResynthesisDeadlineRemainingMs: resynthesisDeadlineRemainingMs,
+		ResynthesisDeadlineReservedMs:  resynthesisDeadlineReservedMs,
+		ResynthesisStoppedForDeadline:  resynthesisStoppedForDeadline,
+		RejectionReason:                rejectionReason,
+		FactGroupSize:                  factGroupSize,
+		GroundedBeyondFirst:            groundedBeyondFirst,
+		constructed:                    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelSynthesizeDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelSynthesizeDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelSynthesizeDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelSynthesizeDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"fallback_used", f.FallbackUsed,
+		"primary_failure_classification", contextfabric.SanitizeLogAttr(f.PrimaryFailureClassification),
+		"drivers", f.Drivers,
+		"findings", f.Findings,
+		"claims", f.Claims,
+		"evidence_refs", f.EvidenceRefs,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+		"fallback_attempts_total", f.FallbackAttemptsTotal,
+		"primary_provider", contextfabric.SanitizeLogAttr(f.PrimaryProvider),
+		"primary_model_id", contextfabric.SanitizeLogAttr(f.PrimaryModelID),
+		"primary_model_version", contextfabric.SanitizeLogAttr(f.PrimaryModelVersion),
+		"draws_total", f.DrawsTotal,
+		"draws_retried", f.DrawsRetried,
+		"draw_outcomes", contextfabric.SanitizeLogAttr(f.DrawOutcomes),
+		"draw_output_digests", contextfabric.SanitizeLogAttr(f.DrawOutputDigests),
+		"draw_rejected_clauses", contextfabric.SanitizeLogAttr(f.DrawRejectedClauses),
+		"draw_rejected_reasons", contextfabric.SanitizeLogAttr(f.DrawRejectedReasons),
+		"resynthesis_deadline_remaining_ms", f.ResynthesisDeadlineRemainingMs,
+		"resynthesis_deadline_reserved_ms", f.ResynthesisDeadlineReservedMs,
+		"resynthesis_stopped_for_deadline", f.ResynthesisStoppedForDeadline,
+		"rejection_reason", contextfabric.SanitizeLogAttr(f.RejectionReason),
+		"fact_group_size", f.FactGroupSize,
+		"grounded_beyond_first", f.GroundedBeyondFirst,
 	}
 }
 

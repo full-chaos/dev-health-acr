@@ -208,6 +208,12 @@ func goVarName(e Event) string {
 		return "PlanCarry"
 	case PlanCarryOutcome.ID:
 		return "PlanCarryOutcome"
+	case ModelInterpretDecision.ID:
+		return "ModelInterpretDecision"
+	case ModelSynthesizeDecision.ID:
+		return "ModelSynthesizeDecision"
+	case ModelPhraseDecision.ID:
+		return "ModelPhraseDecision"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:

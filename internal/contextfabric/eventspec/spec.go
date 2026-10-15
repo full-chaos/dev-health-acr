@@ -1282,6 +1282,154 @@ var PlanCarryOutcome = Event{
 	},
 }
 
+// The three model decision variants (genkitruntime Runtime.logInterpretDecision,
+// logSynthesizeDecision, logPhraseDecision) share ONE msg and are told apart by
+// their `operation` field, which is why `operation` is part of Attribution: a
+// certificate scoped to one variant never counts or validates another's line.
+//
+// ANSWER IDENTITY AND ATTEMPT IDENTITY ARE SEPARATE FIELDS: model_id,
+// model_version and the receipt provider are the identity of whichever leg
+// produced the served answer (the fallback's, after a fallback success), and
+// primary_provider, primary_model_id and primary_model_version are the primary
+// leg's own identity, which attempt_outcomes and attempt_elapsed_ms describe.
+
+const modelDecisionMsg = "context fabric model decision"
+
+func modelDecisionIdentityFields(operation string) []Field {
+	return []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{operation}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+		{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
+	}
+}
+
+func modelDecisionAttemptFields() []Field {
+	return []Field{
+		{Key: "attempts_total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attempts_retried", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attempt_outcomes", Type: FieldString, Presence: PresenceRequired},
+		{Key: "attempt_elapsed_ms", Type: FieldString, Presence: PresenceRequired},
+	}
+}
+
+func modelDecisionPrimaryFields() []Field {
+	return []Field{
+		{Key: "fallback_attempts_total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "primary_provider", Type: FieldString, Presence: PresenceRequired},
+		{Key: "primary_model_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "primary_model_version", Type: FieldString, Presence: PresenceRequired},
+	}
+}
+
+func concatFields(groups ...[]Field) []Field {
+	var out []Field
+	for _, group := range groups {
+		out = append(out, group...)
+	}
+	return out
+}
+
+// ModelInterpretDecision is the Info line Runtime.logInterpretDecision writes
+// once per InterpretQuestion call, whatever its outcome.
+var ModelInterpretDecision = Event{
+	ID:                 "genkitruntime.model_interpret_decision",
+	Msg:                modelDecisionMsg,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id", "operation"},
+	BoundedAggregation: "exactly one line per InterpretQuestion call, written from the call's deferred exit so a failure at any step still reports.",
+	Fields: concatFields(
+		modelDecisionIdentityFields("interpret"),
+		[]Field{
+			{Key: "fallback_used", Type: FieldBool, Presence: PresenceRequired},
+			{Key: "primary_failure_classification", Type: FieldString, Presence: PresenceRequired},
+			{Key: "axis_source", Type: FieldString, Presence: PresenceRequired},
+			{Key: "decoding_seed", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "sample", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "initial_sample", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "redraws", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "interpretation_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"server"}},
+		},
+		modelDecisionAttemptFields(),
+		modelDecisionPrimaryFields(),
+		[]Field{
+			{Key: "rejection_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ended in a rejection of the model's interpretation"},
+			{Key: "rejected_fact_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written alongside rejection_reason when the rejecting rule was fact_requirement_kind_invalid; the one model-authored value on the line, sanitised and bounded"},
+		},
+	),
+}
+
+// ModelSynthesizeDecision is the Info line Runtime.logSynthesizeDecision
+// writes once per SynthesizeAnswer call.
+var ModelSynthesizeDecision = Event{
+	ID:                 "genkitruntime.model_synthesize_decision",
+	Msg:                modelDecisionMsg,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id", "operation"},
+	BoundedAggregation: "exactly one line per SynthesizeAnswer call, written from the call's deferred exit so a failure at any step still reports.",
+	Fields: concatFields(
+		modelDecisionIdentityFields("synthesize"),
+		[]Field{
+			{Key: "fallback_used", Type: FieldBool, Presence: PresenceRequired},
+			{Key: "primary_failure_classification", Type: FieldString, Presence: PresenceRequired},
+			{Key: "drivers", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "findings", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "claims", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		},
+		modelDecisionAttemptFields(),
+		modelDecisionPrimaryFields(),
+		[]Field{
+			{Key: "draws_total", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the draw loop judged at least one draft; a pure transport failure carries no draw fields"},
+			{Key: "draws_retried", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_outcomes", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_output_digests", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_rejected_clauses", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_rejected_reasons", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "resynthesis_deadline_remaining_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the loop consulted the caller's remaining request deadline"},
+			{Key: "resynthesis_deadline_reserved_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with resynthesis_deadline_remaining_ms"},
+			{Key: "resynthesis_stopped_for_deadline", Type: FieldBool, Presence: PresenceConditional, Applicability: "written with resynthesis_deadline_remaining_ms"},
+			{Key: "rejection_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ended in a rejection of the model's draft"},
+			{Key: "fact_group_size", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the accepted or rejected draft carried a fact group"},
+			{Key: "grounded_beyond_first", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with fact_group_size, including a measured zero"},
+		},
+	),
+}
+
+// ModelPhraseDecision is the Info line Runtime.logPhraseDecision writes once
+// per PhraseOffers call. Its operation is empty when the call returned before a
+// receipt was built, which is why the empty value is declared.
+var ModelPhraseDecision = Event{
+	ID:                 "genkitruntime.model_phrase_decision",
+	Msg:                modelDecisionMsg,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id", "operation"},
+	BoundedAggregation: "exactly one line per PhraseOffers call, including a call that returned before the model was reached.",
+	Fields: concatFields(
+		[]Field{
+			{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+			{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"phrase_offers", ""}},
+			{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+			{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		},
+		modelDecisionAttemptFields(),
+	),
+}
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -3229,6 +3377,9 @@ var All = []Event{
 	FrameValidation,
 	PlanCarry,
 	PlanCarryOutcome,
+	ModelInterpretDecision,
+	ModelSynthesizeDecision,
+	ModelPhraseDecision,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
