@@ -22,13 +22,13 @@ const (
 	blockerStatusFillerItems = 150000
 )
 
-func blockerStatusPeakMin(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) uint64 {
+func blockerStatusPeaks(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) []uint64 {
 	t.Helper()
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
 	if _, err := executor.QueryEvidence(ctx, statement, plan.Bindings()); err != nil {
 		t.Fatalf("warm-up: %v", err)
 	}
-	best := uint64(0)
+	peaks := make([]uint64, 0, runs)
 	for run := 0; run < runs; run++ {
 		mark := serverNowMicros(t, ctx, direct)
 		rows, err := executor.QueryEvidence(ctx, statement, plan.Bindings())
@@ -46,11 +46,10 @@ func blockerStatusPeakMin(t *testing.T, ctx context.Context, query *runtimeclick
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'blocker_status') > 0`, mark).Scan(&peak); err != nil || peak == 0 {
 			t.Fatalf("run %d: statement not found in query_log (measurement did not happen): %v", run, err)
 		}
-		if best == 0 || peak < best {
-			best = peak
-		}
+		peaks = append(peaks, peak)
 	}
-	return best
+	slices.Sort(peaks)
+	return peaks
 }
 
 func blockerStatusSlopeViolated(small, large uint64) bool {
@@ -108,8 +107,9 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 	orgWide.Statement = orgWideStatement
 	plan := contextpacket.ReadPlan{OrgID: blockerProdShapeOrg, RepoID: "00000000-0000-4000-8000-000000000000", RepoSlug: "acme/repo-0"}
 
-	smallScoped := blockerStatusPeakMin(t, ctx, query, direct, catalog, plan, 3)
-	smallOrgWide := blockerStatusPeakMin(t, ctx, query, direct, orgWide, plan, 3)
+	smallScopedReads := blockerStatusPeaks(t, ctx, query, direct, catalog, plan, 3)
+	smallOrgWideReads := blockerStatusPeaks(t, ctx, query, direct, orgWide, plan, 3)
+	smallScoped, smallOrgWide := smallScopedReads[0], smallOrgWideReads[0]
 
 	for part := 0; part < 3; part++ {
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
@@ -117,8 +117,10 @@ SELECT concat('unrelated-%d-', lpad(toString(number), 12, '0')), toUUID('0000000
 			t.Fatalf("seed unrelated rows: %v", err)
 		}
 	}
-	largeScoped := blockerStatusPeakMin(t, ctx, query, direct, catalog, plan, 3)
-	largeOrgWide := blockerStatusPeakMin(t, ctx, query, direct, orgWide, plan, 3)
+	largeScopedReads := blockerStatusPeaks(t, ctx, query, direct, catalog, plan, 3)
+	largeOrgWideReads := blockerStatusPeaks(t, ctx, query, direct, orgWide, plan, 3)
+	largeScoped, largeOrgWide := largeScopedReads[0], largeOrgWideReads[0]
+	t.Logf("BLOCKERSTATUS reads (bytes, sorted) scoped small %v large %v; organization-wide small %v large %v", smallScopedReads, largeScopedReads, smallOrgWideReads, largeOrgWideReads)
 
 	t.Logf("BLOCKERSTATUS scoped: %d bytes (%.1f MiB) at 17k items, %d bytes (%.1f MiB) at +%d unrelated; organization-wide form: %d (%.1f MiB) and %d (%.1f MiB)",
 		smallScoped, float64(smallScoped)/(1<<20), largeScoped, float64(largeScoped)/(1<<20), blockerStatusFillerItems,

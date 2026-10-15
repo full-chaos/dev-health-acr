@@ -483,6 +483,23 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Error("with the authorization relation inside each statement and the default block size, the totals statement did not reach its ceiling: the ceilings cannot catch the defect they exist for")
 	}
 
+	for _, block := range []int{131072, 524288, 2097152} {
+		r1 := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+		r2 := devhealthfacts.SetBlockerMaxBlockSizeForTest(block)
+		blockerProdShapePlantedReading(t, ctx, direct, fmt.Sprintf("candidate E: in-statement authorization, block size %d", block), func() { read(restricted) })
+		r2()
+		r1()
+	}
+	{
+		r1 := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
+		r2 := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
+		r3 := devhealthfacts.SetBlockerStartVariantForTest("legacy")
+		blockerProdShapePlantedReading(t, ctx, direct, "candidate F: planted plus legacy start variant", func() { read(restricted) })
+		r3()
+		r2()
+		r1()
+	}
+
 	fragmentMark := serverNowMicros(t, ctx, direct)
 	repoKeys := make([]string, 0, 11)
 	for repo := 0; repo < 11; repo++ {
