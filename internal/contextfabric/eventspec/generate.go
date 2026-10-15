@@ -501,6 +501,7 @@ type jsonField struct {
 	ClosedVocabulary []string    `json:"closed_vocabulary,omitempty"`
 	Applicability    string      `json:"applicability,omitempty"`
 	Nullable         bool        `json:"nullable,omitempty"`
+	MaxItems         int         `json:"max_items,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -524,6 +525,7 @@ func toJSONFields(fs []Field) []jsonField {
 			ClosedVocabulary: f.ClosedVocabulary,
 			Applicability:    f.Applicability,
 			Nullable:         f.Nullable,
+			MaxItems:         f.MaxItems,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

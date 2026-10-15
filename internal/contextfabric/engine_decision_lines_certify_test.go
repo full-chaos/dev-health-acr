@@ -273,3 +273,20 @@ func TestRenderShapeSelectionIsOneRecordWithTheSelectedShapesAsABoundedList(t *t
 	bad.Rule = contractsv1.ContextFabricRenderShapeRule("future_rule")
 	certifyRefused(t, selectedShapesRecord([]contextfabric.RenderShapeSelection{bad}), eventspec.RenderShapeSelectionSummary, "an unknown rule")
 }
+
+// TestAnUndeclaredMemberInASelectedShapeRowIsRefused pins the object_slice
+// row guard: a key the declaration does not list inside a list row fails, the
+// same as an undeclared member of a single object.
+func TestAnUndeclaredMemberInASelectedShapeRowIsRefused(t *testing.T) {
+	t.Parallel()
+	raw := selectedShapesRecord([]contextfabric.RenderShapeSelection{{
+		Kind: contractsv1.ContextFabricRenderKindSeries, Presentation: contractsv1.ContextFabricRenderPresentationBars,
+		Rule: contractsv1.ContextFabricRenderRuleCohortAttentionScore, SeriesCount: 1, PointCount: 2,
+	}})
+	certifyRequestLine(t, raw, eventspec.RenderShapeSelectionSummary, nil)
+	mutated := bytes.Replace(raw, []byte(`"render_shape_points":2`), []byte(`"render_shape_points":2,"surprise_member":"x"`), 1)
+	if bytes.Equal(raw, mutated) {
+		t.Fatalf("the fixture did not contain the member to extend: %s", raw)
+	}
+	certifyRefused(t, mutated, eventspec.RenderShapeSelectionSummary, "a list row carrying an undeclared member")
+}

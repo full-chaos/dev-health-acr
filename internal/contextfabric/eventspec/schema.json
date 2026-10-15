@@ -5446,6 +5446,7 @@
         "key": "selected_shapes",
         "type": "object_slice",
         "presence": "required",
+        "max_items": 8,
         "fields": [
           {
             "key": "render_shape_kind",

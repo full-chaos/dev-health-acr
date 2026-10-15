@@ -53,12 +53,12 @@ import (
 //	out_of_vocabulary     a value outside a declared ClosedVocabulary
 //	                      (refused; N/A for a field with no closed
 //	                      vocabulary)
-//	boundary              a value at a declared numeric bound, and bound+/-1
-//	                      (N/A for every field today: eventspec.Field has no
-//	                      Min/Max/MaxItems -- no field in spec.go declares a
-//	                      bound. Marked N/A rather than silently omitted, so
-//	                      the day a bound IS declared this table's own
-//	                      "unhandled N/A" census catches it, not a 4th round)
+//	boundary              a slice field that declares MaxItems carries exactly
+//	                      that many elements (accepted) and one more
+//	                      (refused); N/A for every field that declares no
+//	                      MaxItems -- a bound on a numeric value is not yet
+//	                      declarable, so those stay marked N/A rather than
+//	                      silently omitted
 //	canonical             the field's own valid canonical value, re-asserted
 //	                      individually (accepted -- the positive control for
 //	                      every field, not just the whole line once)
