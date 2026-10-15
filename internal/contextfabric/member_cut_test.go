@@ -24,6 +24,10 @@ var memberCutGraphDetails []CoverageDetail
 
 // memberCutWrapSynthesizer, when set, wraps the fixture's synthesizer for a
 // row that needs the model call to fail.
+// memberCutGraphPaths is the relationship paths the fixture's graph reader
+// mints, and its synthesizer carries into the answer.
+var memberCutGraphPaths []RelationshipPath
+
 var memberCutWrapSynthesizer func(AnswerSynthesizer) AnswerSynthesizer
 
 // memberCutDegradedReasons pairs each degrading detail with its reason, as the
@@ -82,7 +86,7 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 		},
 		Graph: ownedProjectsGraph{&capturingGraphReader{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
-			context: GraphContext{Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			context: GraphContext{Paths: append([]RelationshipPath{}, memberCutGraphPaths...), DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: memberCutDegradedReasons(), Details: slices.Clone(memberCutGraphDetails)}},
 		}, population},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
@@ -118,7 +122,7 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: currentStateFor(currentState, input.Graph.Cohort),
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
-				ReadinessGaps: findings, Paths: []RelationshipPath{}, Conflicts: []Finding{},
+				ReadinessGaps: findings, Paths: append([]RelationshipPath{}, input.Graph.Paths...), Conflicts: []Finding{},
 				Limitations: []string{}, EvidenceRefIDs: refs, ClaimedFacts: claims,
 				Coverage: func() Coverage {
 					merged := input.Facts.Coverage
