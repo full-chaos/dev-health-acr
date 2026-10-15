@@ -397,9 +397,9 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // away and force a full rebuild of every organization.
 func TestClickHouseSourceVersionIsV12ForTheCurrentRevisionRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v12" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v13" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v12")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v13")
 	}
 }
 

@@ -135,7 +135,7 @@ const SourceName = "dev_health_clickhouse"
 // incident revision changes no row the cursor reads, so an already-projected
 // incident keeps its BELONGS_TO_REPOSITORY edge through it; the rebuild
 // (acr-projector rebuild --org) drops it.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v12"
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v13"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
