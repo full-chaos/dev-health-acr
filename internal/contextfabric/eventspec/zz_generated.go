@@ -4110,8 +4110,6 @@ type ModelInterpretDecisionFields struct {
 	PrimaryProvider              string
 	PrimaryModelID               string
 	PrimaryModelVersion          string
-	RejectionReason              string
-	RejectedFactKind             string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every ModelInterpretDecisionFields uniformly, set ONLY by NewModelInterpretDecisionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -4125,7 +4123,7 @@ type ModelInterpretDecisionFields struct {
 
 // NewModelInterpretDecisionFields is the generated constructor for ModelInterpretDecisionFields -- every
 // field ModelInterpretDecision.Fields declares is a required parameter.
-func NewModelInterpretDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, axisSource string, decodingSeed int, sample int, initialSample int, redraws int, modelID string, modelVersion string, promptVersion string, interpretationSource string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string, rejectionReason string, rejectedFactKind string) ModelInterpretDecisionFields {
+func NewModelInterpretDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, axisSource string, decodingSeed int, sample int, initialSample int, redraws int, modelID string, modelVersion string, promptVersion string, interpretationSource string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string) ModelInterpretDecisionFields {
 	return ModelInterpretDecisionFields{
 		RequestID:                    requestID,
 		OrgIDHash:                    orgIDHash,
@@ -4151,8 +4149,6 @@ func NewModelInterpretDecisionFields(requestID string, orgIDHash string, operati
 		PrimaryProvider:              primaryProvider,
 		PrimaryModelID:               primaryModelID,
 		PrimaryModelVersion:          primaryModelVersion,
-		RejectionReason:              rejectionReason,
-		RejectedFactKind:             rejectedFactKind,
 		constructed:                  true,
 	}
 }
@@ -4194,8 +4190,6 @@ func (f ModelInterpretDecisionFields) SlogArgs() []any {
 		"primary_provider", contextfabric.SanitizeLogAttr(f.PrimaryProvider),
 		"primary_model_id", contextfabric.SanitizeLogAttr(f.PrimaryModelID),
 		"primary_model_version", contextfabric.SanitizeLogAttr(f.PrimaryModelVersion),
-		"rejection_reason", contextfabric.SanitizeLogAttr(f.RejectionReason),
-		"rejected_fact_kind", contextfabric.SanitizeLogAttr(f.RejectedFactKind),
 	}
 }
 
@@ -4276,40 +4270,28 @@ func (f ModelPhraseDecisionFields) SlogArgs() []any {
 // ModelSynthesizeDecisionFields is genkitruntime.model_synthesize_decision's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ModelSynthesizeDecision.Fields declares in spec.go.
 type ModelSynthesizeDecisionFields struct {
-	RequestID                      string
-	OrgIDHash                      string
-	Operation                      string
-	Outcome                        string
-	Attempts                       int
-	FallbackUsed                   bool
-	PrimaryFailureClassification   string
-	Drivers                        int
-	Findings                       int
-	Claims                         int
-	EvidenceRefs                   int
-	ModelID                        string
-	ModelVersion                   string
-	PromptVersion                  string
-	AttemptsTotal                  int
-	AttemptsRetried                int
-	AttemptOutcomes                string
-	AttemptElapsedMs               string
-	FallbackAttemptsTotal          int
-	PrimaryProvider                string
-	PrimaryModelID                 string
-	PrimaryModelVersion            string
-	DrawsTotal                     int
-	DrawsRetried                   int
-	DrawOutcomes                   string
-	DrawOutputDigests              string
-	DrawRejectedClauses            string
-	DrawRejectedReasons            string
-	ResynthesisDeadlineRemainingMs int
-	ResynthesisDeadlineReservedMs  int
-	ResynthesisStoppedForDeadline  bool
-	RejectionReason                string
-	FactGroupSize                  int
-	GroundedBeyondFirst            int
+	RequestID                    string
+	OrgIDHash                    string
+	Operation                    string
+	Outcome                      string
+	Attempts                     int
+	FallbackUsed                 bool
+	PrimaryFailureClassification string
+	Drivers                      int
+	Findings                     int
+	Claims                       int
+	EvidenceRefs                 int
+	ModelID                      string
+	ModelVersion                 string
+	PromptVersion                string
+	AttemptsTotal                int
+	AttemptsRetried              int
+	AttemptOutcomes              string
+	AttemptElapsedMs             string
+	FallbackAttemptsTotal        int
+	PrimaryProvider              string
+	PrimaryModelID               string
+	PrimaryModelVersion          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every ModelSynthesizeDecisionFields uniformly, set ONLY by NewModelSynthesizeDecisionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -4323,43 +4305,31 @@ type ModelSynthesizeDecisionFields struct {
 
 // NewModelSynthesizeDecisionFields is the generated constructor for ModelSynthesizeDecisionFields -- every
 // field ModelSynthesizeDecision.Fields declares is a required parameter.
-func NewModelSynthesizeDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, drivers int, findings int, claims int, evidenceRefs int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string, drawsTotal int, drawsRetried int, drawOutcomes string, drawOutputDigests string, drawRejectedClauses string, drawRejectedReasons string, resynthesisDeadlineRemainingMs int, resynthesisDeadlineReservedMs int, resynthesisStoppedForDeadline bool, rejectionReason string, factGroupSize int, groundedBeyondFirst int) ModelSynthesizeDecisionFields {
+func NewModelSynthesizeDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, drivers int, findings int, claims int, evidenceRefs int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string) ModelSynthesizeDecisionFields {
 	return ModelSynthesizeDecisionFields{
-		RequestID:                      requestID,
-		OrgIDHash:                      orgIDHash,
-		Operation:                      operation,
-		Outcome:                        outcome,
-		Attempts:                       attempts,
-		FallbackUsed:                   fallbackUsed,
-		PrimaryFailureClassification:   primaryFailureClassification,
-		Drivers:                        drivers,
-		Findings:                       findings,
-		Claims:                         claims,
-		EvidenceRefs:                   evidenceRefs,
-		ModelID:                        modelID,
-		ModelVersion:                   modelVersion,
-		PromptVersion:                  promptVersion,
-		AttemptsTotal:                  attemptsTotal,
-		AttemptsRetried:                attemptsRetried,
-		AttemptOutcomes:                attemptOutcomes,
-		AttemptElapsedMs:               attemptElapsedMs,
-		FallbackAttemptsTotal:          fallbackAttemptsTotal,
-		PrimaryProvider:                primaryProvider,
-		PrimaryModelID:                 primaryModelID,
-		PrimaryModelVersion:            primaryModelVersion,
-		DrawsTotal:                     drawsTotal,
-		DrawsRetried:                   drawsRetried,
-		DrawOutcomes:                   drawOutcomes,
-		DrawOutputDigests:              drawOutputDigests,
-		DrawRejectedClauses:            drawRejectedClauses,
-		DrawRejectedReasons:            drawRejectedReasons,
-		ResynthesisDeadlineRemainingMs: resynthesisDeadlineRemainingMs,
-		ResynthesisDeadlineReservedMs:  resynthesisDeadlineReservedMs,
-		ResynthesisStoppedForDeadline:  resynthesisStoppedForDeadline,
-		RejectionReason:                rejectionReason,
-		FactGroupSize:                  factGroupSize,
-		GroundedBeyondFirst:            groundedBeyondFirst,
-		constructed:                    true,
+		RequestID:                    requestID,
+		OrgIDHash:                    orgIDHash,
+		Operation:                    operation,
+		Outcome:                      outcome,
+		Attempts:                     attempts,
+		FallbackUsed:                 fallbackUsed,
+		PrimaryFailureClassification: primaryFailureClassification,
+		Drivers:                      drivers,
+		Findings:                     findings,
+		Claims:                       claims,
+		EvidenceRefs:                 evidenceRefs,
+		ModelID:                      modelID,
+		ModelVersion:                 modelVersion,
+		PromptVersion:                promptVersion,
+		AttemptsTotal:                attemptsTotal,
+		AttemptsRetried:              attemptsRetried,
+		AttemptOutcomes:              attemptOutcomes,
+		AttemptElapsedMs:             attemptElapsedMs,
+		FallbackAttemptsTotal:        fallbackAttemptsTotal,
+		PrimaryProvider:              primaryProvider,
+		PrimaryModelID:               primaryModelID,
+		PrimaryModelVersion:          primaryModelVersion,
+		constructed:                  true,
 	}
 }
 
@@ -4398,18 +4368,6 @@ func (f ModelSynthesizeDecisionFields) SlogArgs() []any {
 		"primary_provider", contextfabric.SanitizeLogAttr(f.PrimaryProvider),
 		"primary_model_id", contextfabric.SanitizeLogAttr(f.PrimaryModelID),
 		"primary_model_version", contextfabric.SanitizeLogAttr(f.PrimaryModelVersion),
-		"draws_total", f.DrawsTotal,
-		"draws_retried", f.DrawsRetried,
-		"draw_outcomes", contextfabric.SanitizeLogAttr(f.DrawOutcomes),
-		"draw_output_digests", contextfabric.SanitizeLogAttr(f.DrawOutputDigests),
-		"draw_rejected_clauses", contextfabric.SanitizeLogAttr(f.DrawRejectedClauses),
-		"draw_rejected_reasons", contextfabric.SanitizeLogAttr(f.DrawRejectedReasons),
-		"resynthesis_deadline_remaining_ms", f.ResynthesisDeadlineRemainingMs,
-		"resynthesis_deadline_reserved_ms", f.ResynthesisDeadlineReservedMs,
-		"resynthesis_stopped_for_deadline", f.ResynthesisStoppedForDeadline,
-		"rejection_reason", contextfabric.SanitizeLogAttr(f.RejectionReason),
-		"fact_group_size", f.FactGroupSize,
-		"grounded_beyond_first", f.GroundedBeyondFirst,
 	}
 }
 

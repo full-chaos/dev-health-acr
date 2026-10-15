@@ -171,6 +171,7 @@ func TestInterpretDecisionLineCertifiesAcrossTheModelShapes(t *testing.T) {
 			"model_id": "deterministic", "model_version": "v1",
 			"primary_provider": "test-provider", "primary_model_id": "test/model", "primary_model_version": "test-model-v1",
 			"primary_failure_classification": "unavailable", "attempts_total": 1, "attempt_outcomes": "1:unavailable",
+			"fallback_attempts_total": 1,
 		}))
 		requireAbsent(t, line, "rejection_reason", "rejected_fact_kind")
 		requireElapsedAdvanced(t, line)
@@ -255,6 +256,7 @@ func TestSynthesizeDecisionLineCertifiesAcrossTheModelShapes(t *testing.T) {
 			"model_id": "deterministic", "model_version": "v1",
 			"primary_provider": "test-provider", "primary_model_id": "test/model", "primary_model_version": "test-model-v1",
 			"primary_failure_classification": "unavailable", "attempt_outcomes": "1:unavailable",
+			"fallback_attempts_total": 1,
 		}))
 		requireAbsent(t, line, "draws_total", "draw_outcomes", "rejection_reason")
 		requireElapsedAdvanced(t, line)

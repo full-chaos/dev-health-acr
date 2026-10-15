@@ -277,6 +277,11 @@ type Event struct {
 	// per pass", etc.) -- the aggregation clause 1 requires this
 	// specification to own.
 	BoundedAggregation string
+	// RequiredOnlyConstruction makes the generated New<Name>Fields and SlogArgs
+	// cover this event's required fields only; the producer appends each
+	// conditional field itself, when its Applicability holds. Left false, the
+	// constructor takes every declared field.
+	RequiredOnlyConstruction bool
 }
 
 // DeclaredKindRescue* are the FIVE values chaos5388_declared_kind_rescue.go's
@@ -1334,12 +1339,13 @@ func concatFields(groups ...[]Field) []Field {
 // ModelInterpretDecision is the Info line Runtime.logInterpretDecision writes
 // once per InterpretQuestion call, whatever its outcome.
 var ModelInterpretDecision = Event{
-	ID:                 "genkitruntime.model_interpret_decision",
-	Msg:                modelDecisionMsg,
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityExactlyOnePerRequest,
-	Attribution:        []string{"request_id", "operation"},
-	BoundedAggregation: "exactly one line per InterpretQuestion call, written from the call's deferred exit so a failure at any step still reports.",
+	RequiredOnlyConstruction: true,
+	ID:                       "genkitruntime.model_interpret_decision",
+	Msg:                      modelDecisionMsg,
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityExactlyOnePerRequest,
+	Attribution:              []string{"request_id", "operation"},
+	BoundedAggregation:       "exactly one line per InterpretQuestion call, written from the call's deferred exit so a failure at any step still reports.",
 	Fields: concatFields(
 		modelDecisionIdentityFields("interpret"),
 		[]Field{
@@ -1367,12 +1373,13 @@ var ModelInterpretDecision = Event{
 // ModelSynthesizeDecision is the Info line Runtime.logSynthesizeDecision
 // writes once per SynthesizeAnswer call.
 var ModelSynthesizeDecision = Event{
-	ID:                 "genkitruntime.model_synthesize_decision",
-	Msg:                modelDecisionMsg,
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityExactlyOnePerRequest,
-	Attribution:        []string{"request_id", "operation"},
-	BoundedAggregation: "exactly one line per SynthesizeAnswer call, written from the call's deferred exit so a failure at any step still reports.",
+	RequiredOnlyConstruction: true,
+	ID:                       "genkitruntime.model_synthesize_decision",
+	Msg:                      modelDecisionMsg,
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityExactlyOnePerRequest,
+	Attribution:              []string{"request_id", "operation"},
+	BoundedAggregation:       "exactly one line per SynthesizeAnswer call, written from the call's deferred exit so a failure at any step still reports.",
 	Fields: concatFields(
 		modelDecisionIdentityFields("synthesize"),
 		[]Field{
