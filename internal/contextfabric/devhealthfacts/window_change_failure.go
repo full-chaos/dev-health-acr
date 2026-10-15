@@ -45,6 +45,14 @@ const (
 	changeFailureStatusFailedField = "change_failure_status_failed_deployments_count"
 	changeFailureStatusKnownField  = "change_failure_status_known_deployments_count"
 	changeFailureStatusCoverage    = "change_failure_status_coverage"
+	changeFailureLinkedFailedField = "change_failure_incident_linked_failed_deployments_count"
+	changeFailureStatusFailedBasis = "change_failure_status_failed_deployments_basis"
+
+	// changeFailureStatusBasisUnlinked names what the status failed count
+	// holds: failed by their own status and named by no incident link. A
+	// failed deployment an incident link names is in the incident-linked
+	// count instead, so failed = incident-linked + status.
+	changeFailureStatusBasisUnlinked = "status_failed_not_incident_linked"
 
 	changeFailureStateMeasured      = "measured"
 	changeFailureStateNotApplicable = "not_applicable_no_deployments"
@@ -195,8 +203,10 @@ func setChangeFailure(fields map[string]contextfabric.FactValue, counts *changeF
 	fields[changeFailureStateField] = contextfabric.StringFactValue(outcome.state)
 	fields[changeFailureDeploymentsField] = contextfabric.IntegerFactValue(counts.deployments)
 	fields[changeFailureFailedField] = contextfabric.IntegerFactValue(counts.failedNative + counts.failedHeuristic + counts.failedStatus)
+	fields[changeFailureLinkedFailedField] = contextfabric.IntegerFactValue(counts.failedNative + counts.failedHeuristic)
 	if counts.statusColumns {
 		fields[changeFailureStatusFailedField] = contextfabric.IntegerFactValue(counts.failedStatus)
+		fields[changeFailureStatusFailedBasis] = contextfabric.StringFactValue(changeFailureStatusBasisUnlinked)
 		fields[changeFailureStatusKnownField] = contextfabric.IntegerFactValue(counts.statusKnown)
 		if outcome.coverage != nil {
 			fields[changeFailureStatusCoverage] = contextfabric.NumberFactValue(*outcome.coverage)
