@@ -66,8 +66,8 @@ func TestIncidentRowCandidatesProjectWhatAFromZeroReadProjects(t *testing.T) {
 	unmapped := base
 	unmapped.projected = false
 	out, stats = run(unmapped)
-	if len(out) != 1 || out[0].tombstone == nil || out[0].tombstone.Kind != "incident" || out[0].tombstone.CanonicalID != "incident:"+incidentID {
-		t.Fatalf("no active mapping names a known repository: %+v, want the incident retracted", out)
+	if len(out) != 1 || out[0].tombstone == nil || out[0].tombstone.Kind != "incident" || out[0].tombstone.CanonicalID != "incident:"+incidentID || out[0].tombstone.Reason != "unmapped" {
+		t.Fatalf("no active mapping names a known repository: %+v, want the incident retracted as unmapped", out)
 	}
 	if stats.unmapped != 1 {
 		t.Fatalf("unmapped = %d, want 1", stats.unmapped)

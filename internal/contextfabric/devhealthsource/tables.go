@@ -155,6 +155,12 @@ func orderBy(timestampExpr, rowKeyExpr string) string {
 	return fmt.Sprintf(" ORDER BY %s ASC, toString(%s) ASC LIMIT {row_limit:UInt32}", timestampExpr, rowKeyExpr)
 }
 
+// orderByThen is orderBy for a query with several rows at one keyset place:
+// tieExpr fixes their order, so two reads of the same rows write in one order.
+func orderByThen(timestampExpr, rowKeyExpr, tieExpr string) string {
+	return fmt.Sprintf(" ORDER BY %s ASC, toString(%s) ASC, %s ASC LIMIT {row_limit:UInt32}", timestampExpr, rowKeyExpr, tieExpr)
+}
+
 // havingSincePredicate is sincePredicate for a query whose pagination
 // timestamp is an AGGREGATE (CHAOS-4542): the identical keyset condition,
 // emitted as HAVING because a WHERE cannot reference an aggregate.
@@ -744,7 +750,7 @@ FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i
 INNER JOIN ` + incidentServiceMappings + ` AS s ON s.service_id = i.service_id
 INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id
 LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
-WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, incidentCursorExpr, "i.id") + orderBy(incidentCursorExpr, "i.id")
+WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, incidentCursorExpr, "i.id") + orderByThen(incidentCursorExpr, "i.id", "ifNull(toString(m.repo_id), '')")
 	versions := map[string]time.Time{}
 	seenTombstones := map[string]struct{}{}
 	var stats incidentPageStats
@@ -809,6 +815,10 @@ const incidentCursorExpr = "greatest(i.last_synced, s.changed_at)"
 // it was last written.
 const incidentServiceMappings = `(SELECT service_id, max(last_synced) AS changed_at FROM ` + devhealthschema.CurrentServiceRepositoryMappings + ` GROUP BY service_id)`
 
+// incidentUnmappedReason is the tombstone reason of an incident whose service
+// has no active mapping to a known repository; source_deleted is a deleted one.
+const incidentUnmappedReason = "unmapped"
+
 type incidentPageStats struct {
 	mappingRereads, edgesRetracted, unmapped int
 }
@@ -828,8 +838,13 @@ func incidentRowCandidates(row incidentRow, tombstone func(kind, id, reason stri
 	case row.deleted:
 		return tombstone("incident", canonicalID, "source_deleted", row.observedAt, row.observedAt, row.id), nil
 	case !row.projected:
+		// The one place an unmapped incident is decided. A from-zero read
+		// does not project it, and its authorization is its repositories: an
+		// incident no active mapping ties to a known repository is visible to
+		// no repository (fail closed). So it is retracted, with its own reason,
+		// told apart from a deleted one.
 		stats.unmapped++
-		return tombstone("incident", canonicalID, "no active service mapping names a known repository", row.cursorAt, row.observedAt, row.id), nil
+		return tombstone("incident", canonicalID, incidentUnmappedReason, row.cursorAt, row.observedAt, row.id), nil
 	case !row.active:
 		if row.repoID == "" || row.repoActive {
 			return []candidate{progressCandidate(row.observedAt, row.id)}, nil
