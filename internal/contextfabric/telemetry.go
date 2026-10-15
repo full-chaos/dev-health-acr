@@ -1653,6 +1653,9 @@ func planNarrowingLogAttrs(ctx context.Context, principal storage.Principal, eve
 		"retry_fit", event.RetryFit,
 		"retry_failed", event.RetryFailed,
 		"refusal_planned", event.RefusalPlanned,
+		"facts_only_attempted", event.FactsOnlyAttempted,
+		"facts_only_served", event.FactsOnlyServed,
+		"facts_only_declined", string(event.FactsOnlyDeclined),
 		"deadline_reserved", event.DeadlineReserved,
 		"retry_declined", SanitizeLogAttr(string(event.RetryDeclined)),
 		// CHAOS-4735 criterion 6: the continuation the refusal offered, as a

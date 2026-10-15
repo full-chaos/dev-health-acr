@@ -32,7 +32,10 @@ const (
 	// drawn from, so an answer reused under v21 is never served without it.
 	//
 	// v23 -> v24: the quoted closed fact-kind set names commitment.
-	PromptVersion = "context-fabric-synthesis.v25"
+	//
+	// v25 -> v26: the input no longer carries a declared score whose drivers table is not served (decision K7), so an
+	// answer reused under v25 is never served with a bare score.
+	PromptVersion = "context-fabric-synthesis.v26"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

@@ -159,6 +159,27 @@ func composeFailedSynthesisCurrentState(claims []ClaimedFact) string {
 	return truncateAtSentenceBoundary("Canonical values read: "+strings.Join(sentences, "; ")+".", currentStateMaxLength)
 }
 
+// composeFailureCurrentState is composeFailedSynthesisCurrentState for a class:
+// a facts-only class with no value to carry says why no current state is
+// written, and never says a model call failed.
+func composeFailureCurrentState(claims []ClaimedFact, class SynthesisFailureClass) string {
+	state := composeFailedSynthesisCurrentState(claims)
+	if state != synthesisFailureCurrentState {
+		return state
+	}
+	switch class {
+	case contractsv1.ContextFabricSynthesisFailureDeadline:
+		return "No second synthesis was started because the time budget was spent, so no current state is written here; the sources that were read are listed in coverage."
+	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
+		return "The written answer was over the response budget and the cohort could not be narrowed further, so no current state is written here; the sources that were read are listed in coverage."
+	case contractsv1.ContextFabricSynthesisFailureRowsOverBudget:
+		return "The written answer was over the response budget because of the rows it carried, so no current state is written here; the sources that were read are listed in coverage."
+	case contractsv1.ContextFabricSynthesisFailureRetryOverBudget:
+		return "A narrower retry also ran and did not fit the response budget, so no current state is written here; the sources that were read are listed in coverage."
+	}
+	return state
+}
+
 // scoreLookup is the K7 lookup of a synthesizer given the fact capabilities: whether a field of a fact is a declared
 // score, and the drivers table it needs. Nil when it was given none, so a hand-built synthesizer claims every scalar.
 func scoreLookup(capabilities []FactCapability) func(CanonicalFact, string) (string, bool) {

@@ -82,6 +82,9 @@ var decisionEventFunctions = []string{
 	// names the step in ceiling_fit; its prediction is the plan's own member
 	// count. One document, so it cannot describe two.
 	"recordCeilingFit",
+	// Emits the one event of a facts-only answer served in place of a refusal:
+	// the measurement is the composed document's own, the only one it holds.
+	"serveFactsOnly",
 }
 
 // TestEveryRefusalSitePairsOneDocument pins the enumeration.
