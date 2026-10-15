@@ -1,9 +1,12 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,6 +164,8 @@ func partOfReparentLeavesOneOpenEdge(t *testing.T, adapter *falkorgraph.Adapter)
 func partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T, adapter *falkorgraph.Adapter) {
 	const org = "97950000-0000-4000-8000-000000000002"
 	w := newEdgeWorld(t, adapter, org)
+	var logs bytes.Buffer
+	w.source.(*devhealthsource.ClickHouseProjectionSource).WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	const repoA, repoB, repoC = "97950000-0000-4000-8000-0000000000b1", "97950000-0000-4000-8000-0000000000b2", "97950000-0000-4000-8000-0000000000b3"
 	w.repo(repoA, "acme/a")
 	w.repo(repoB, "acme/b")
@@ -187,6 +192,15 @@ func partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T, adapte
 	}
 	if got := edges(repoC, "jira:LOST"); len(got) != 0 {
 		t.Fatalf("a parent id held under two repositories, neither the child's own: %d PART_OF edges, want none: %v", len(got), got)
+	}
+	line := logs.String()
+	if !strings.Contains(line, "part_of parent ambiguous") || !strings.Contains(line, "children=2") {
+		t.Fatalf("the children left without a parent were not counted in the log: %q", line)
+	}
+	for _, secret := range []string{repoA, repoB, "acme/a", "acme/b", "SOLO-1", "SHARED-1"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("the log names %q, which belongs to a repository the child cannot read: %q", secret, line)
+		}
 	}
 }
 
