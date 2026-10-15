@@ -627,9 +627,12 @@ Rewriting that shape is a larger change than this fix warrants.
 2. `hopWalk` collects an **entire hop's** candidate edges, from every
    frontier node, before making any truncation decision — never truncating
    mid-node or mid-hop on arrival order.
-3. That full hop-level set is ranked (`graphrank.SortEdgesByRelevance`) and
-   only then resolved/admitted **by walking the complete ranked list, in
-   order**, until the admission budget fills or the list is exhausted. A
+3. That full hop-level set is ranked (`graphrank.SortEdgesByRelevance`),
+   then ordered for the walk's origin (`questionEdgesFirst`: the origin's own
+   edges the question names, then the edges the answer gate can use for it,
+   then the rest; see the architecture diagrams, section 15), and only then
+   resolved/admitted **by walking the complete ordered list, in order**, until
+   the admission budget fills or the list is exhausted. A
    candidate that turns out unauthorized or unresolvable does not consume
    budget, so a lower-ranked-but-admissible edge is never starved by a
    higher-ranked one that turned out unusable.

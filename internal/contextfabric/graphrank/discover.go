@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -602,19 +603,23 @@ func edgeFact(edge ResolvedEdge) string {
 // RELATES_TO, and DUPLICATES.
 //
 // factKind is also the fact kind a question names when it asks about this
-// relationship (NamedByQuestion). drives says whether the relationship makes a
-// driver at all: OWNED_BY_TEAM answers the identity a question asks for (the
-// owning team is part of a subject's identity, as the repository identity fact's
-// owning_teams table is) but is never a driver, so it changes neither drivers
-// nor the commit gate.
+// relationship (NamedByQuestion), for an edge whose From end is of a namedFrom
+// kind (any kind when namedFrom is empty). drives says whether the relationship
+// makes a driver at all. OWNED_BY_TEAM answers the identity a question asks for
+// only as ownership, from a project or a repository (the owning team is part of
+// their identity, as the repository identity fact's owning_teams table is); a
+// work item's OWNED_BY_TEAM edge is a team attribution, not ownership
+// (directread OwnedByKinds). It is never a driver, so it changes neither
+// drivers nor the commit gate.
 var relationMeaningTable = map[string]struct {
-	standing contextfabric.DriverStanding
-	category string
-	factKind contextfabric.FactKind
-	drives   bool
+	standing  contextfabric.DriverStanding
+	category  string
+	factKind  contextfabric.FactKind
+	drives    bool
+	namedFrom []contextfabric.SubjectKind
 }{
-	"BLOCKS":        {contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers, true},
-	"OWNED_BY_TEAM": {factKind: contextfabric.FactIdentity},
+	"BLOCKS":        {contextfabric.DriverPrincipal, "relationship", contextfabric.FactBlockers, true, nil},
+	"OWNED_BY_TEAM": {factKind: contextfabric.FactIdentity, namedFrom: []contextfabric.SubjectKind{contextfabric.SubjectProject, contextfabric.SubjectRepository}},
 }
 
 // RecognizedRelationshipTypes returns relationMeaningTable's keys -- see
@@ -638,11 +643,12 @@ func relationMeaning(name string) (contextfabric.DriverStanding, string, context
 }
 
 // NamedByQuestion reports whether a question that requires these fact kinds
-// asks about an edge of this relationship type: its relationMeaningTable fact
-// kind is one of them.
-func NamedByQuestion(relationship string, requirements []contextfabric.FactRequirement) bool {
+// asks about an edge of this relationship type whose From end is of kind from:
+// its relationMeaningTable fact kind is one of them and from is a kind the entry
+// names.
+func NamedByQuestion(relationship string, from contextfabric.SubjectKind, requirements []contextfabric.FactRequirement) bool {
 	entry, ok := relationMeaningTable[NormalizeRelation(relationship)]
-	if !ok {
+	if !ok || (len(entry.namedFrom) > 0 && !slices.Contains(entry.namedFrom, from)) {
 		return false
 	}
 	for _, requirement := range requirements {

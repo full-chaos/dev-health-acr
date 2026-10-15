@@ -2180,14 +2180,14 @@ func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[strin
 // subjects the edges were read for (GraphWalkVersion), counts only: the
 // subjects, how many of them got at least one admitted path, and the
 // full-text arm's candidates against what it kept, and how many committed
-// subjects' own edges the question named. One origin needs no split, so it logs
-// nothing; a subject in both arms is one origin.
+// subjects' own edges the question named. One origin with no named edge needs no
+// split and no class, so it logs nothing; a subject in both arms is one origin.
 func logSharedEdgeBudget(ctx context.Context, orgID string, ordered []graphrank.ResolvedEdge, origin map[string]string, origins []string, paths []contextfabric.RelationshipPath, textCandidates, textAdmitted, questionNamed int) {
 	distinct := make(map[string]struct{}, len(origins))
 	for _, o := range origins {
 		distinct[o] = struct{}{}
 	}
-	if len(distinct) < 2 {
+	if len(distinct) < 2 && questionNamed == 0 {
 		return
 	}
 	originOfPath := make(map[string]string, len(ordered))
@@ -2229,7 +2229,7 @@ func committedEdgeClasses(edges []graphrank.ResolvedEdge, origin map[string]stri
 			continue
 		}
 		switch about, drives := graphrank.DriverSubject(e); {
-		case own[e.UUID] && graphrank.NamedByQuestion(e.Name, requirements):
+		case own[e.UUID] && graphrank.NamedByQuestion(e.Name, e.From.Kind, requirements):
 			class[e.UUID] = 0
 		case drives && graphrank.SubjectKey(about) == key:
 			class[e.UUID] = 1

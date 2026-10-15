@@ -1137,10 +1137,15 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // then the edges the answer gate can use for the origin (a driver-making type
 // with the origin at its From end, graphrank.MakesDriver), then the rest,
 // keeping the ranked order inside each group.
+func sourceKind(edge graphrank.CandidateEdge) contextfabric.SubjectKind {
+	kind, _ := splitSubjectUUID(edge.SourceNodeUUID)
+	return contextfabric.SubjectKind(kind)
+}
+
 func questionEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string, requirements []contextfabric.FactRequirement) []graphrank.CandidateEdge {
 	group := func(edge graphrank.CandidateEdge) int {
 		switch {
-		case (edge.SourceNodeUUID == originUUID || edge.TargetNodeUUID == originUUID) && graphrank.NamedByQuestion(edge.Name, requirements):
+		case (edge.SourceNodeUUID == originUUID || edge.TargetNodeUUID == originUUID) && graphrank.NamedByQuestion(edge.Name, sourceKind(edge), requirements):
 			return 0
 		case edge.SourceNodeUUID == originUUID && graphrank.MakesDriver(edge.Name):
 			return 1

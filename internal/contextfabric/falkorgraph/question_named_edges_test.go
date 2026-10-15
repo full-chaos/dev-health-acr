@@ -1,7 +1,10 @@
 package falkorgraph
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -78,5 +81,79 @@ func TestEdgeGoesToTheOriginThatReachesItInTheFewestHops(t *testing.T) {
 	}
 	if !own["a-x"] || !own["b-z"] || own["x-y"] || own["y-z"] {
 		t.Fatalf("own %v, want only a-x and b-z", own)
+	}
+}
+
+// A work item's OWNED_BY_TEAM edge is a team attribution, not ownership
+// (directread OwnedByKinds: projects and repositories): an identity question
+// about a work item does not name it, so the BLOCKS edge the answer gate can
+// use keeps the one path the budget has.
+func TestWorkItemTeamAttributionIsNotNamedByAnIdentityQuestion(t *testing.T) {
+	workItem := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:checkout-1", Label: "checkout 1"}
+	one := func(rid, kind, dstKind, dstID string) row {
+		return row{
+			"r":       &edge{Properties: map[string]interface{}{propRelationType: kind, propRelationshipID: rid, propEvidenceRefs: []string{"evidence_" + rid}}},
+			"srcKind": "work_item", "srcId": "work_item:checkout-1", "dstKind": dstKind, "dstId": dstID,
+		}
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if id, _ := params["id"].(string); id == "work_item:checkout-1" {
+				return []row{
+					one("relationship.v2:0:attribution", "OWNED_BY_TEAM", "team", "team:core"),
+					one("relationship.v2:z:blocks", "BLOCKS", "work_item", "work_item:checkout-2"),
+				}, nil
+			}
+			return nil, nil
+		default:
+			kind, _ := params["kind"].(string)
+			id, _ := params["id"].(string)
+			if kind == "" || id == "" {
+				return nil, nil
+			}
+			return []row{fakeSubjectNodeRow(kind, id, id)}, nil
+		}
+	}}
+	request := committedRequest(1, workItem)
+	request.Interpretation.FactRequirements = []contextfabric.FactRequirement{{Kind: contextfabric.FactIdentity}}
+	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if got := admittedRelationships(t, result); len(got) != 1 || got[0] != "relationship.v2:z:blocks" {
+		t.Fatalf("admitted %v, want only the BLOCKS edge", got)
+	}
+}
+
+// One committed subject whose owner edge the question names logs the budget
+// line: the class decision has telemetry even without a split.
+func TestSingleOriginNamedEdgeDecisionIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(previous)
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:checkout", Label: "checkout"}
+	fake := committedWalkFake(map[string][][3]string{"project:checkout": {{"relationship.v2:a:00", "work_item", "work_item:0"}}})
+	inner := fake.queryFunc
+	fake.queryFunc = func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		rows, err := inner(ctx, graphKey, cypher, params, readOnly)
+		if strings.Contains(cypher, "UNION") && params["id"] == "project:checkout" {
+			rows = append(rows, row{
+				"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: "relationship.v2:z:owner", propEvidenceRefs: []string{"evidence_relationship.v2:z:owner"}}},
+				"srcKind": "project", "srcId": "project:checkout", "dstKind": "team", "dstId": "team:core",
+			})
+		}
+		return rows, err
+	}
+	request := committedRequest(5, project)
+	request.Interpretation.FactRequirements = []contextfabric.FactRequirement{{Kind: contextfabric.FactIdentity}}
+	if _, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"msg":"context_fabric: shared edge budget"`) || !strings.Contains(buf.String(), `"question_named_edges":1`) {
+		t.Fatalf("no budget line with question_named_edges=1:\n%s", buf.String())
 	}
 }

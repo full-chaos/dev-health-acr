@@ -75,10 +75,15 @@ func TestRankEdgesByOriginTakesTurnsWithinEachConfidenceRun(t *testing.T) {
 func TestOwnedByTeamIsNamedByAnIdentityQuestionAndMakesNoDriver(t *testing.T) {
 	identity := []contextfabric.FactRequirement{{Kind: contextfabric.FactIdentity}}
 	blockers := []contextfabric.FactRequirement{{Kind: contextfabric.FactBlockers}}
-	if !NamedByQuestion("OWNED_BY_TEAM", identity) || NamedByQuestion("OWNED_BY_TEAM", blockers) || NamedByQuestion("OWNED_BY_TEAM", nil) {
-		t.Fatal("OWNED_BY_TEAM must be named by an identity question only")
+	project, repository, workItem := contextfabric.SubjectProject, contextfabric.SubjectRepository, contextfabric.SubjectWorkItem
+	if !NamedByQuestion("OWNED_BY_TEAM", project, identity) || !NamedByQuestion("OWNED_BY_TEAM", repository, identity) ||
+		NamedByQuestion("OWNED_BY_TEAM", project, blockers) || NamedByQuestion("OWNED_BY_TEAM", project, nil) {
+		t.Fatal("a project's or repository's OWNED_BY_TEAM must be named by an identity question only")
 	}
-	if !NamedByQuestion("BLOCKS", blockers) || NamedByQuestion("BLOCKS", identity) || NamedByQuestion("BELONGS_TO_PROJECT", identity) {
+	if NamedByQuestion("OWNED_BY_TEAM", workItem, identity) {
+		t.Fatal("a work item's OWNED_BY_TEAM is a team attribution, not ownership: never named")
+	}
+	if !NamedByQuestion("BLOCKS", workItem, blockers) || NamedByQuestion("BLOCKS", workItem, identity) || NamedByQuestion("BELONGS_TO_PROJECT", workItem, identity) {
 		t.Fatal("BLOCKS is named by a blockers question; an unlisted type by none")
 	}
 	if MakesDriver("OWNED_BY_TEAM") || !MakesDriver("BLOCKS") {

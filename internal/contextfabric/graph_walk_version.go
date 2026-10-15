@@ -19,7 +19,8 @@ package contextfabric
 //
 // v1 -> v2: within a committed subject, its own edges whose relationship type
 // the question names through the fact kinds it requires (graphrank.NamedByQuestion:
-// OWNED_BY_TEAM for identity, BLOCKS for blockers) come before the gate edges.
+// a project's or repository's OWNED_BY_TEAM for identity, BLOCKS for blockers)
+// come before the gate edges.
 // "Fewest hops" is counted over every resolved edge, so an edge a deeper walk
 // read goes to the subject nearest to it. Origins take turns within each run of
 // equal confidence, so a turn never puts a lower-confidence edge ahead of a
