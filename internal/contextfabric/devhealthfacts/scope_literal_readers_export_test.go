@@ -40,8 +40,8 @@ func ScopeLiteralCasesForTest(ctx context.Context, provider contextfabric.FactPr
 	}
 	cases := []ScopeLiteralCase{
 		{Name: "repo_mix", SQL: repoMixStatementScoped([]factTimeBound{bound}, scope, repoMixRowLimit(len(repoIDs), 1)), IDs: repoIDs, Bindings: withScope()},
-		{Name: "repo_units", SQL: investmentUnitsStatementScoped(bound, false, scope), IDs: repoIDs, Bindings: withScope(readers.Binding{Name: unitLimitParam, Value: strconv.Itoa(51)})},
-		{Name: "org_units", SQL: investmentOrgUnitsStatement(bound, false, scope), IDs: []string{}, Bindings: withScope(readers.Binding{Name: unitLimitParam, Value: strconv.Itoa(51)})},
+		{Name: "repo_units", SQL: investmentUnitsStatementScoped(bound, false, scope), IDs: repoIDs, Bindings: withScope(readers.Binding{Name: unitLimitParam, Value: strconv.Itoa(101)})},
+		{Name: "org_units", SQL: investmentOrgUnitsStatement(bound, false, scope), IDs: []string{}, Bindings: withScope(readers.Binding{Name: unitLimitParam, Value: strconv.Itoa(101)})},
 		{Name: "owned_unit_count", SQL: ownedUnitCountStatement(bound, scope), IDs: repoIDs, Bindings: withScope()},
 	}
 

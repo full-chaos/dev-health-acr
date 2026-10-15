@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -76,6 +78,32 @@ SELECT '%s', 'issue', concat('n-repo-', toString(number)), %s, 'theme', 'feature
 // read) every pinned unit.
 var scopeLiteralEmptyAllowed = map[string]bool{"project_rollup_evidence_arm": true}
 
+// scopeLiteralRowUnits is how many result units one row carries. The native
+// project statements return one row of parallel arrays even when empty, so
+// their rows count the units in the first array.
+func scopeLiteralRowUnits(name string, row readers.RowScanner) (int, error) {
+	switch name {
+	case "project_native_placement":
+		var unit, provider, project []string
+		var multi []uint8
+		err := row.Scan(&unit, &provider, &project, &multi)
+		return len(unit), err
+	case "project_native_theme_values":
+		var unit []string
+		var effort, feature, operational, maintenance, quality, risk []float64
+		var from []time.Time
+		err := row.Scan(&unit, &effort, &feature, &operational, &maintenance, &quality, &risk, &from)
+		return len(unit), err
+	case "project_native_bugfix_values":
+		var unit []string
+		var share []float64
+		err := row.Scan(&unit, &share)
+		return len(unit), err
+	default:
+		return 1, nil
+	}
+}
+
 type scopeLiteralRun struct {
 	mib      float64
 	readRows uint64
@@ -90,7 +118,11 @@ func runScopeLiteralCase(t *testing.T, ctx context.Context, client contextpacket
 	mark := serverNowMicros(t, ctx, direct)
 	rows := 0
 	err := readers.QueryOrgScopedNamed(ctx, client, "ScopeLiteralWideIDs", c.SQL, orgID, c.IDs,
-		func(readers.RowScanner) error { rows++; return nil }, c.Bindings...)
+		func(row readers.RowScanner) error {
+			n, scanErr := scopeLiteralRowUnits(c.Name, row)
+			rows += n
+			return scanErr
+		}, c.Bindings...)
 	if flushErr := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); flushErr != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", flushErr)
 	}
@@ -134,6 +166,8 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 	for i := 0; i < linkedWideIDProdShape.teamProjects; i++ {
 		projectIDs = append(projectIDs, fmt.Sprintf("linear:P-%d", i))
 	}
+	sort.Strings(scopeIDs)
+	sort.Strings(repoIDs)
 	cases, err := devhealthfacts.ScopeLiteralCasesForTest(ctx, provider, orgID, scopeIDs, repoIDs, projectIDs)
 	if err != nil {
 		t.Fatalf("render the scope-literal readers: %v", err)
@@ -150,27 +184,31 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 			t.Errorf("%s: no frozen bound", c.Name)
 			continue
 		}
-		runScopeLiteralCase(t, ctx, capped, direct, orgID, c)
+		cold := runScopeLiteralCase(t, ctx, capped, direct, orgID, c)
 		var warm []scopeLiteralRun
 		for i := 0; i < linkedShapeRuns; i++ {
 			warm = append(warm, runScopeLiteralCase(t, ctx, capped, direct, orgID, c))
 		}
 		lowest, highest := -1.0, 0.0
 		var highestRows uint64
-		for i, r := range warm {
+		for i, r := range append([]scopeLiteralRun{cold}, warm...) {
+			isWarm := i > 0
 			var exception *clickhousedriver.Exception
 			if r.err != nil {
 				if errors.As(r.err, &exception) && exception.Code == 241 {
-					t.Errorf("%s run %d: refused with code 241 at the %d MiB API cap (peak %.2f MiB): a finding, not a bound to raise", c.Name, i, contextpacket.APIStatementMaxMemoryUsage>>20, r.mib)
+					t.Errorf("%s run %d (0 is the cold run): refused with code 241 at the %d MiB API cap (peak %.2f MiB): a finding, not a bound to raise", c.Name, i, contextpacket.APIStatementMaxMemoryUsage>>20, r.mib)
 				} else {
-					t.Errorf("%s run %d: %v", c.Name, i, r.err)
+					t.Errorf("%s run %d (0 is the cold run): %v", c.Name, i, r.err)
 				}
 			}
 			if r.rows == 0 && !scopeLiteralEmptyAllowed[c.Name] {
-				t.Errorf("%s run %d: returned no rows, the row measured nothing", c.Name, i)
+				t.Errorf("%s run %d (0 is the cold run): returned no rows, the row measured nothing", c.Name, i)
 			}
 			if r.readRows < uint64(len(scopeIDs)/2) {
-				t.Errorf("%s run %d: read %d rows of work_unit_investments, under half of the %d scope units: the literal was not applied", c.Name, i, r.readRows, len(scopeIDs))
+				t.Errorf("%s run %d (0 is the cold run): read %d rows of work_unit_investments, under half of the %d scope units: the literal was not applied", c.Name, i, r.readRows, len(scopeIDs))
+			}
+			if !isWarm {
+				continue
 			}
 			if lowest < 0 || r.mib < lowest {
 				lowest = r.mib
