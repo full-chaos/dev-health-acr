@@ -119,7 +119,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 			continue
 		}
 		fields := map[string]contextfabric.FactValue{"state": stringOrNull(row.State)}
-		evidence := []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, row.RepoID+":"+strconv.FormatInt(number, 10))}
+		evidence := []string{}
 		// The projects this pull request reaches through the issue link of
 		// record, with the link tier on each row. Absent when no link row is
 		// admitted: a missing link is not an empty project list.
@@ -405,7 +405,7 @@ ORDER BY repo_id`
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactPullRequests, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
+			EvidenceRefIDs: []string{},
 		})
 	}
 	return outcome, nil
