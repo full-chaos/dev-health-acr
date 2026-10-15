@@ -169,8 +169,8 @@ The fix, concretely:
    | `model_output_invalid` | `retry_may_succeed` | the provider's output could not be used |
    | `model_receipt_unrecorded` | `retry_may_succeed` | the call ran; its receipt was not recorded, so no text from it is served |
    | `synthesis_rejected` | `retry_unlikely_to_help` | every draft broke the service's bounds over these facts |
-| `synthesis_deadline` | `retry_may_succeed` | no call failed: the first written answer was over the response budget and the time budget left no room for a second synthesis, so the facts are served |
-| `synthesis_not_narrowable` | `retry_unlikely_to_help` | no call failed: the first written answer was over the response budget and the cohort was already at its smallest, so the facts are served |
+   | `synthesis_deadline` | `retry_may_succeed` | no call failed: the first written answer was over the response budget and the time budget left no room for a second synthesis, so the facts are served |
+   | `synthesis_not_narrowable` | `retry_unlikely_to_help` | no call failed: the first written answer was over the response budget and the cohort was already at its smallest, so the facts are served |
 
    No model-authored field is served. Instead each scalar canonical field that
    was read is minted as a claimed fact (claim id `server:fact:<n>`), grounded

@@ -123,8 +123,13 @@ func TestAModelAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T
 			}
 			classes := []SynthesisFailureClass{}
 			for _, detail := range result.Coverage.Details {
-				if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+				if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisNotRun {
 					classes = append(classes, detail.FailureClass)
+				}
+			}
+			for _, detail := range result.Coverage.Details {
+				if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+					t.Fatalf("a facts-only answer filed %+v, which says a model call failed", detail)
 				}
 			}
 			if !slices.Equal(classes, []SynthesisFailureClass{tc.class}) {

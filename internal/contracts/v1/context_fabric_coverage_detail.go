@@ -351,6 +351,14 @@ const (
 	// RetryHint says whether asking again may succeed. A disclosure, never a
 	// second degradation: the answer's status already says degraded.
 	ContextFabricCoverageDetailSynthesisModelFailed ContextFabricCoverageDetailCode = "synthesis_model_failed"
+
+	// ContextFabricCoverageDetailSynthesisNotRun: no model call failed. The
+	// first written answer was over the response budget and a second
+	// synthesis could not run (the time budget was spent, or the cohort could
+	// not be narrowed), so the facts are served without model prose.
+	// FailureClass names which, RetryHint says whether asking again may
+	// succeed. A disclosure, never a second degradation.
+	ContextFabricCoverageDetailSynthesisNotRun ContextFabricCoverageDetailCode = "synthesis_not_run"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -384,6 +392,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphNoMemberFound,
 	ContextFabricCoverageDetailSynthesisInputBounded,
 	ContextFabricCoverageDetailSynthesisModelFailed,
+	ContextFabricCoverageDetailSynthesisNotRun,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -710,6 +719,9 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	// Failure class and retry hint, both REQUIRED, and nothing else: the model
 	// call failed in this way, and asking again may or may not help.
 	ContextFabricCoverageDetailSynthesisModelFailed: {requireFailure: true},
+	// The same pair for a facts-only answer served because no second synthesis
+	// could run.
+	ContextFabricCoverageDetailSynthesisNotRun: {requireFailure: true},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the
@@ -757,7 +769,7 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 		// row's own equal-counts exception. Named rather than left to the
 		// default for the same reason `fact_read_origin_state` is above.
 		return false
-	case ContextFabricCoverageDetailSynthesisInputBounded, ContextFabricCoverageDetailSynthesisModelFailed:
+	case ContextFabricCoverageDetailSynthesisInputBounded, ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailSynthesisNotRun:
 		// A disclosure about the synthesis step, never a population a value
 		// was computed over.
 		return false
@@ -818,7 +830,7 @@ func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailC
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
 		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded,
-		ContextFabricCoverageDetailSynthesisModelFailed:
+		ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailSynthesisNotRun:
 		return false
 	default:
 		return true

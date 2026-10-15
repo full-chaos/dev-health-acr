@@ -354,13 +354,13 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		label = fmt.Sprintf("%d of %d %s facts read were given to answer synthesis", coverageDetailIntOrZero(d.Served), coverageDetailIntOrZero(d.Declared), kind)
 	case ContextFabricCoverageDetailSynthesisModelFailed:
+		label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
+	case ContextFabricCoverageDetailSynthesisNotRun:
 		switch d.FailureClass {
 		case ContextFabricSynthesisFailureDeadline:
 			label = "Facts only; no second synthesis was started because the time budget was spent; " + humanizeVocabularyToken(string(d.RetryHint))
-		case ContextFabricSynthesisFailureNotNarrowable:
-			label = "Facts only; the written answer was over the response budget and could not be narrowed; " + humanizeVocabularyToken(string(d.RetryHint))
 		default:
-			label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
+			label = "Facts only; the written answer was over the response budget and could not be narrowed; " + humanizeVocabularyToken(string(d.RetryHint))
 		}
 	default:
 		label = "Coverage was limited"

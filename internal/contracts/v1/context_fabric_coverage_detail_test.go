@@ -91,6 +91,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source, d.Degrading, d.FactKind, d.Declared, d.Served = "context-fabric:synthesis", false, ContextFabricFactWork, intPtr(200), intPtr(90)
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		d.Source, d.FailureClass, d.RetryHint = "context-fabric:synthesis", ContextFabricSynthesisFailureRejected, ContextFabricRetryUnlikelyToHelp
+	case ContextFabricCoverageDetailSynthesisNotRun:
+		d.Source, d.FailureClass, d.RetryHint = "context-fabric:synthesis", ContextFabricSynthesisFailureDeadline, ContextFabricRetryMaySucceed
 	case ContextFabricCoverageDetailKindCensusTruncated:
 		// Kind, Declared and Served, all required together, nothing else:
 		// the census figure this call observed, and how many of that kind

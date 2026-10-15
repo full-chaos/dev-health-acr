@@ -42,10 +42,14 @@ func newSynthesisModelFailureDetail(class SynthesisFailureClass) (CoverageDetail
 	if err != nil {
 		return CoverageDetail{}, err
 	}
+	code := contractsv1.ContextFabricCoverageDetailSynthesisModelFailed
+	if _, notRun := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(class); notRun {
+		code = contractsv1.ContextFabricCoverageDetailSynthesisNotRun
+	}
 	detail := CoverageDetail{
-		Source: synthesisModelFailureSource, Code: contractsv1.ContextFabricCoverageDetailSynthesisModelFailed,
+		Source: synthesisModelFailureSource, Code: code,
 		FailureClass: class, RetryHint: hint,
-		Raw: string(contractsv1.ContextFabricCoverageDetailSynthesisModelFailed) + ":" + string(class),
+		Raw: string(code) + ":" + string(class),
 	}
 	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
 	return detail, nil
@@ -163,7 +167,7 @@ func IsSynthesisModelFailureAnswer(result InvestigationResult) bool {
 		return false
 	}
 	for _, detail := range result.Coverage.Details {
-		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed || detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisNotRun {
 			return true
 		}
 	}
