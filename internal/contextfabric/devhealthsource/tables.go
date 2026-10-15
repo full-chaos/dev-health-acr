@@ -1389,6 +1389,19 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowK
 	})
 }
 
+// ciRunLabel names a CI run by its stored pipeline_name when there is one
+// ("CI <pipeline_name> #<run_id>") and by its bare id otherwise; no job name
+// is stored, so none is shown.
+func ciRunLabel(pipelineName, runID string) string {
+	name := headRunes(strings.TrimSpace(pipelineName), ciRunLabelNameMaxRunes)
+	if name == "" {
+		return "CI " + runID
+	}
+	return "CI " + name + " #" + runID
+}
+
+const ciRunLabelNameMaxRunes = 80
+
 // queryCIRuns mints ci_pipeline_run.v2:<repo_id>:<enc(run_id)> (design brief
 // D-1, §1.2), fixing the cross-repo collision a bare run_id canonical id
 // carried: two different repos' CI runs sharing the same raw run_id used to
@@ -1425,7 +1438,7 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 		// A CI run is valid while it is executing; a run still in
 		// progress has no recorded end.
 		validFrom, validTo := requiredTime(startedAt), optionalTime(hasFinished, finishedAt)
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: canonicalID, Label: "CI " + runID}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: canonicalID, Label: ciRunLabel(pipelineName, runID)}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if status != "" {
 			properties["status"] = stringScalar(status)
