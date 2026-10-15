@@ -822,7 +822,7 @@ func workItemTeamsStatement(cursor cursorState) string {
        countIf(` + workItemTeamsQualifies + `) AS group_rows
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
-LEFT JOIN (SELECT id, is_active, updated_at FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ifNull(a.team_id, '')
+LEFT JOIN (SELECT id, is_active, updated_at FROM teams FINAL WHERE org_id = {org_id:String} AND (` + devhealthschema.ActiveTeamPredicate("") + ` OR ` + devhealthschema.InactiveTeamPredicate("") + `)) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE a.org_id = {org_id:String} AND ifNull(a.team_id, '') != ''
 GROUP BY ` + strings.Join(workItemTeamsGroupColumns, ", ") + havingSincePredicate(cursor, workItemTeamsWatermark, workItemTeamsRowKey) + orderBy(workItemTeamsWatermark, workItemTeamsRowKey)

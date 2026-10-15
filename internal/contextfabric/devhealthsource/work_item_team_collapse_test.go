@@ -34,7 +34,7 @@ func TestWorkItemTeamStatementCollapsesToOneRowPerPairAndLogsTheFold(t *testing.
 			statement = s
 		}
 	}
-	for _, want := range []string{"GROUP BY toString(w.repo_id), ifNull(r.repo, ''), a.work_item_id, ifNull(a.team_id, '')", "max(a.computed_at)", "argMin(tuple(toString(a.source)"} {
+	for _, want := range []string{"GROUP BY toString(w.repo_id), ifNull(r.repo, ''), a.work_item_id, ifNull(a.team_id, '')", "max(a.computed_at)", "argMinIf(tuple(toString(a.source)"} {
 		if !strings.Contains(statement, want) {
 			t.Errorf("statement lacks %q:\n%s", want, statement)
 		}
