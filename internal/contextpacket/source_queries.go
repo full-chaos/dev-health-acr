@@ -55,7 +55,8 @@ const (
 	deploymentTierColumnAbsent = "column_absent"
 )
 
-const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v6"
+// v7: incidents.v1 reads the latest revision of each incident and mapping.
+const SourceQueryCatalogVersionV1 = "dev-health-source-catalog.v7"
 
 // workGraphEndpointLabelSQL renders one edge endpoint as words. Only a pull
 // request of the scoped repository carries the repository name and its title;

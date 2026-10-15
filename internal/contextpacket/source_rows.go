@@ -43,8 +43,9 @@ import (
 
 // SourceRowQueryVersion versions the statements of this file (v2,
 // CHAOS-7252: the ".v2" statements and the work-item discovery; v3: the
-// review.v2 row statement).
-const SourceRowQueryVersion = "dev-health-source-rows.v3"
+// review.v2 row statement; v4: incident discovery reads the latest revision of
+// each incident and mapping).
+const SourceRowQueryVersion = "dev-health-source-rows.v4"
 
 // maxSourceRowRepositories bounds the repositories one row may map to (an
 // incident's services). A row that maps to more is refused as saturated
