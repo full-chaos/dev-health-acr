@@ -273,7 +273,7 @@ func sourceWatermarks(evidence []contractsv1.EvidenceRef) []contractsv1.SourceWa
 	watermarks := make([]contractsv1.SourceWatermark, 0, len(sources))
 	for _, source := range sources {
 		observed := latest[source]
-		watermarks = append(watermarks, contractsv1.SourceWatermark{Source: source, LastIngestedAt: &observed, Status: contractsv1.SourceWatermarkStatusFresh})
+		watermarks = append(watermarks, contractsv1.SourceWatermark{Source: source, LastEventAt: &observed, Status: contractsv1.SourceWatermarkStatusUnknown})
 	}
 	return watermarks
 }

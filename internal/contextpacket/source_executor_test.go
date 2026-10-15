@@ -47,12 +47,20 @@ func TestCatalogRows_maps_scanned_rows_and_discloses_missing_sources(t *testing.
 	if len(result.Watermarks) != len(contextpacket.SourceQueryCatalogV1) {
 		t.Fatalf("watermarks=%d, want one per catalog source (%d)", len(result.Watermarks), len(contextpacket.SourceQueryCatalogV1))
 	}
-	// ai_workflow_runs.v1 is repo-scoped and now runs under a branch-scoped
-	// request. Its fixture rows are dated 2026-01-01, so the honest watermark is
-	// stale: reachable, but not recent. A status of unavailable or missing would
-	// mean the scope gate had silently excluded it again.
-	if status := watermarkStatus(result.Watermarks, "ai_workflow_runs.v1"); status != "stale" {
-		t.Fatalf("repository-wide source watermark = %q, want stale: %#v", status, result.Watermarks)
+	// ai_workflow_runs.v1 is repo-scoped and runs under a branch-scoped
+	// request. It stores only a compute time, so its freshness is unknown:
+	// reachable, but never stale from an event time. A status of unavailable or
+	// missing would mean the scope gate had silently excluded it again.
+	if status := watermarkStatus(result.Watermarks, "ai_workflow_runs.v1"); status != "unknown" {
+		t.Fatalf("repository-wide source watermark = %q, want unknown: %#v", status, result.Watermarks)
+	}
+	// work_items.v1 stores only a row write time (fixture 2026-01-01): an old
+	// write is unknown, never stale. The repos row is a run stamp: stale.
+	if status := watermarkStatus(result.Watermarks, "work_items.v1"); status != "unknown" {
+		t.Fatalf("work_items watermark = %q, want unknown on an old write time: %#v", status, result.Watermarks)
+	}
+	if status := watermarkStatus(result.Watermarks, "repository_freshness.v1"); status != "stale" {
+		t.Fatalf("repository_freshness watermark = %q, want stale on its old run stamp: %#v", status, result.Watermarks)
 	}
 	if watermarkStatus(result.Watermarks, "pull_requests.v1") != "unavailable" {
 		t.Fatalf("missing source watermark: %#v", result.Watermarks)
@@ -182,6 +190,9 @@ func (timeoutQueryClient) Query(context.Context, string, []contextpacket.ClickHo
 func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	if strings.Contains(statement, "FROM system.columns") {
 		return &rowScanner{rows: [][]any{{uint64(1)}}}, nil
+	}
+	if strings.HasPrefix(statement, "SELECT max(") && !strings.HasPrefix(statement, "SELECT max(observed_at)") && strings.Contains(statement, "last_synced") {
+		return &rowScanner{rows: [][]any{{time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), uint64(1)}}}, nil
 	}
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
 		if strings.Contains(statement, query.Statement) {
