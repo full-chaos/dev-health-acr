@@ -221,7 +221,7 @@ func TestFactScopeExpansionOpenCountMapKeysAreNamesNeverIdsOrText(t *testing.T) 
 			t.Errorf("key %q was certified, want it refused as not a name token", bad)
 		}
 	}
-	for _, bad := range []string{"3.5", "-1"} {
+	for _, bad := range []string{"3.5", "-1", "9223372036854775808.1", "9223372036854775808", "9007199254740993"} {
 		raw := bytes.Replace(recordFactScopeExpansion(factScopeExpansionBaseEvent()), []byte(`"native_team":3`), []byte(`"native_team":`+bad), 1)
 		log, err := certify.Parse(raw)
 		if err != nil {

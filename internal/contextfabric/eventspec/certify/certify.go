@@ -853,6 +853,12 @@ var countMapOpenKeyShape = regexp.MustCompile(`^[a-z]+([_-][a-z]+)*$`)
 
 const countMapOpenKeyMaxLen = 32
 
+// countMapMaxCount is the largest count a count map may carry: 2^53-1, the
+// largest whole number a float64 holds exactly. Parse decodes JSON numbers to
+// float64, so above this a fractional value rounds to a whole one and cannot
+// be told from a count.
+const countMapMaxCount = float64(1<<53 - 1)
+
 func validateFields(fields []eventspec.Field, obj map[string]any, eventID string) error {
 	for _, field := range fields {
 		got, present := obj[field.Key]
@@ -939,8 +945,8 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				} else if !countMapOpenKeyShape.MatchString(key) || len(key) > countMapOpenKeyMaxLen {
 					return fmt.Errorf("certify: %s: %q carries key %q that is not a name token (lowercase words joined by _ or -, at most %d characters) -- an open count map may key only on a vocabulary name, never an id or free text", eventID, field.Key, key, countMapOpenKeyMaxLen)
 				}
-				if number, ok := value.(float64); !ok || !isWholeNumber(number) || number < 0 {
-					return fmt.Errorf("certify: %s: %q[%q] = %v (%T), declared a non-negative whole-number count", eventID, field.Key, key, value, value)
+				if number, ok := value.(float64); !ok || !isWholeNumber(number) || number < 0 || number > countMapMaxCount {
+					return fmt.Errorf("certify: %s: %q[%q] = %v (%T), declared a non-negative whole-number count of at most %d", eventID, field.Key, key, value, value, int64(countMapMaxCount))
 				}
 			}
 		case eventspec.FieldObject:
