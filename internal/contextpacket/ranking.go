@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"regexp"
 	"slices"
 	"sort"
@@ -46,11 +47,14 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 	for i := range scored {
 		refs[i] = scored[i].ref
 	}
+	beforeDedupe := len(refs)
 	refs = deduplicateEvidence(refs)
 	scores := effectiveGoalScores(refs, goal, roles)
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
 	refs = requestedEvidenceCategories(refs, requested, roles)
+	candidates := len(refs)
 	refs, truncated := allocateCategories(refs, scores, maxItems, roles)
+	slog.Debug("context packet ranking", "event", "ranking_decided", "evidence_in", beforeDedupe, "duplicates_dropped", beforeDedupe-candidates, "kept", len(refs), "max_items", maxItems, "truncated", truncated, "goal_words", len(goalWords(goal)))
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
 	for _, ref := range refs {
 		items = append(items, evidenceItemWithRoles(ref, scope, roles))
@@ -279,7 +283,7 @@ func itemEvidenceRefIDs(ref contractsv1.EvidenceRef, r rule) []string {
 // score among the causes of its own tier and weaker ones. The rank is a
 // per-item scalar, so the comparator built on it stays a strict weak order. An
 // inherited score loses to an equal own score, so an unrelated exact cause
-// never outranks an item that names the goal itself; among causes with no own
+// never outranks an item that names the goal itself at an equal score; a cause that inherits a higher score can still tie and win by tier; among causes with no own
 // match the tier order holds.
 func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles roleResolver) map[string]int {
 	own := make(map[string]int, len(refs))

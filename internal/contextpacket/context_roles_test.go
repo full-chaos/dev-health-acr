@@ -838,3 +838,43 @@ func TestAnUnrelatedExactCauseRanksBelowAnOrdinaryGoalMatchAtTheBudget(t *testin
 		t.Fatalf("the budget kept %v, want a goal-naming item, not the unrelated exact cause", got)
 	}
 }
+
+func demoShapeRows(at time.Time) []contractsv1.EvidenceRef {
+	rows := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-promo-revert", "pull_request", "77", "Promo code stacking rules", "merged revert", at),
+		tieredDeploymentRow("ev-d-promo", "d77", "failure", "77", "exact_merge_sha", at),
+	}
+	for i := 0; i < 14; i++ {
+		id := strings.Repeat(string(rune('a'+i)), 7) + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		rows = append(rows, roleRow("ev-checkout-"+string(rune('a'+i)), "commit", id, "checkout file "+string(rune('a'+i)), "checkout change", at))
+	}
+	return rows
+}
+
+func TestAPromotedCauseWithoutAGoalMatchSurvivesATwelveItemCut(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	request := fixtureRequest("req-demo-cut", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 12, 4000, 65536
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      demoShapeRows(at),
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !slices.Contains(itemEvidenceIDs(packet), "ev-pr-promo-revert") {
+		t.Fatalf("the promoted cause is not in %v", itemEvidenceIDs(packet))
+	}
+}
+
+func TestAPullRequestRowedTwiceIsServedOnce(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	first := roleRow("ev-pr-twice-a", "pull_request", "40", "Saved payment methods at checkout", "merged", at)
+	second := roleRow("ev-pr-twice-b", "pull_request", "40", "Saved payment methods at checkout", "merged", at.Add(time.Hour))
+	_, packet := servedRoles(t, []contractsv1.EvidenceRef{first, second})
+	if len(packet.Items) != 1 {
+		t.Fatalf("items = %v, want the pull request once", itemEvidenceIDs(packet))
+	}
+}
