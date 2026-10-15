@@ -174,7 +174,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	{
 		kept := evidence[:0:0]
 		for _, ref := range evidence {
-			if !strings.Contains(ref, ":team:") && !strings.Contains(ref, ":pull_request:") {
+			if !strings.Contains(ref, ":team:") && !strings.Contains(ref, ":pull-request:") {
 				kept = append(kept, ref)
 			}
 		}
