@@ -43,8 +43,9 @@ import (
 
 // SourceRowQueryVersion versions the statements of this file (v2,
 // CHAOS-7252: the ".v2" statements and the work-item discovery; v3: the
-// review.v2 row statement).
-const SourceRowQueryVersion = "dev-health-source-rows.v3"
+// review.v2 row statement; v4: incident discovery reads the latest revision of
+// each incident and mapping).
+const SourceRowQueryVersion = "dev-health-source-rows.v4"
 
 // maxSourceRowRepositories bounds the repositories one row may map to (an
 // incident's services). A row that maps to more is refused as saturated
@@ -115,7 +116,7 @@ const (
 
 var sourceRowDiscoveryStatements = map[SourceRowDiscovery]string{
 	SourceRowDiscoveryWorkItem: `SELECT DISTINCT toString(w.repo_id), ifNull(r.repo, '') FROM work_items AS w FINAL LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id WHERE w.org_id = {org_id:String} AND w.work_item_id = {entity_id:String} ORDER BY 2 ASC, 1 ASC LIMIT 65`,
-	SourceRowDiscoveryIncident: `SELECT DISTINCT toString(r.id), r.repo FROM operational_incidents AS i FINAL INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id WHERE i.org_id = {org_id:String} AND m.org_id = {org_id:String} AND i.id = {entity_id:String} AND i.is_deleted = 0 AND m.is_active = 1 AND m.valid_from <= now64(6) AND (m.valid_to IS NULL OR m.valid_to > now64(6)) ORDER BY r.repo ASC LIMIT 65`,
+	SourceRowDiscoveryIncident: `SELECT DISTINCT toString(r.id), r.repo FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id WHERE i.org_id = {org_id:String} AND m.org_id = {org_id:String} AND i.id = {entity_id:String} AND i.is_deleted = 0 AND m.is_active = 1 AND m.valid_from <= now64(6) AND (m.valid_to IS NULL OR m.valid_to > now64(6)) ORDER BY r.repo ASC LIMIT 65`,
 }
 
 // SourceRowDiscoveryStatement returns the statement of one discovery, and

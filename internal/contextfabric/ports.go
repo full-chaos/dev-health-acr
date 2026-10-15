@@ -1027,6 +1027,10 @@ type ReuseKey struct {
 	// existed holds NULL here and is permanently excluded from reuse on
 	// it, no per-row JSON field or bespoke predicate required.
 	OwnershipRoutingVersion string
+	// GraphWalkVersion binds reuse to contextfabric.GraphWalkVersion, the
+	// rules that pick which graph edges fit an investigation's edge budget.
+	// Same NULL-never-matches, fail-closed shape as every sibling above.
+	GraphWalkVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
 	// structurally distinct from every version-string dimension above: a
@@ -1135,6 +1139,9 @@ type ReuseVersionAuthorities struct {
 	// comment for what it binds (contextfabric.OwnershipRoutingVersion)
 	// and why an unset value never matches.
 	OwnershipRoutingVersion string
+	// GraphWalkVersion is ONE MORE version constant, same shape again -- see
+	// ReuseKey.GraphWalkVersion.
+	GraphWalkVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

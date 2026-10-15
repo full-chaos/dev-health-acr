@@ -129,7 +129,13 @@ const SourceName = "dev_health_clickhouse"
 // instead of asserting it. Already-projected organizations hold edges for
 // links removed before this; the rebuild (acr-projector rebuild --org) drops
 // them.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v11"
+//
+// (v12, current revision of incidents and service mappings: the producers read
+// one row per id, the latest revision. A mapping deactivated with no new
+// incident revision changes no row the cursor reads, so an already-projected
+// incident keeps its BELONGS_TO_REPOSITORY edge through it; the rebuild
+// (acr-projector rebuild --org) drops it.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v12"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

@@ -658,7 +658,12 @@ func TestOnlyAStoredExactOrMergedOrPushedTierOfAFailedDeploymentReachesTheCauseR
 	}
 }
 
-func TestAWeakerTierNeverOutranksAnExactOneEvenWhenTheGoalNamesIt(t *testing.T) {
+// CHAOS-9690: CHAOS-9648 pinned "exact first even when the goal names the
+// weaker tier" only as a side effect of the exact cause inheriting the weaker
+// cause's goal score. An item's own goal match now beats an inherited score, so
+// the goal-naming pushed cause ranks first; the tier order of causes with no own
+// match is pinned by TestOnlyAStoredExactOrMergedOrPushedTier....
+func TestAGoalNamingWeakerTierOutranksAnUnrelatedExactCause(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	evidence := []contractsv1.EvidenceRef{
 		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
@@ -673,7 +678,7 @@ func TestAWeakerTierNeverOutranksAnExactOneEvenWhenTheGoalNamesIt(t *testing.T) 
 			order = append(order, item.EvidenceRefIDs[0])
 		}
 	}
-	if strings.Join(order, ",") != "ev-pr-exact,ev-pr-pushed" {
+	if strings.Join(order, ",") != "ev-pr-pushed,ev-pr-exact" {
 		t.Errorf("cause order = %v", order)
 	}
 }
@@ -695,7 +700,10 @@ func TestATableWithoutTheTierColumnIsNamedAndEveryLinkStaysARelation(t *testing.
 	}
 }
 
-func TestAnItemBudgetCutsTheWeakestCauseTierFirstEvenWhenTheGoalNamesIt(t *testing.T) {
+// CHAOS-9690: with an item budget of one, the goal-naming pushed cause is kept
+// over an unrelated exact cause (the 9648 tier order held only through score
+// inheritance); the tier order without an own match is pinned elsewhere.
+func TestAnItemBudgetKeepsTheGoalNamingCauseOverAnUnrelatedExactOne(t *testing.T) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	evidence := []contractsv1.EvidenceRef{
 		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
@@ -716,8 +724,8 @@ func TestAnItemBudgetCutsTheWeakestCauseTierFirstEvenWhenTheGoalNamesIt(t *testi
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	if len(packet.Items) != 1 || packet.Items[0].EvidenceRefIDs[0] != "ev-pr-exact" {
-		t.Fatalf("the budget kept %v, want the exact_merge_sha cause", itemEvidenceIDs(packet))
+	if len(packet.Items) != 1 || packet.Items[0].EvidenceRefIDs[0] != "ev-pr-pushed" {
+		t.Fatalf("the budget kept %v, want the goal-naming pushed cause", itemEvidenceIDs(packet))
 	}
 }
 
@@ -774,5 +782,122 @@ func TestAnUnrelatedExactCauseNeverDropsOrdinaryGoalMatches(t *testing.T) {
 	slices.Sort(got)
 	if strings.Join(got, ",") != "ev-pr-goal-a,ev-pr-goal-b" {
 		t.Fatalf("kept %v, want both goal-matching pull requests", got)
+	}
+}
+
+func TestADroppedDuplicateCauseDoesNotLiftAnExactCauseItsGoalScore(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	twin := roleRow("ev-twin-a", "commit", "8888888aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout cart", "checkout cart", at)
+	twin.ContentDigest = "sha256:shared"
+	pushed := roleRow("ev-pr-pushed", "pull_request", "2", "checkout", "merged", at)
+	pushed.ContentDigest = "sha256:shared"
+	evidence := []contractsv1.EvidenceRef{
+		twin, pushed,
+		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
+		roleRow("ev-ordinary", "commit", "9999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout flow", "checkout", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-pushed", "d2", "failure", "2", "pushed", at),
+	}
+	request := fixtureRequest("req-dup-lift", "main", "")
+	request.Goal = "checkout cart"
+	request.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryEvidence}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if got, want := itemEvidenceIDs(packet), []string{"ev-twin-a", "ev-ordinary", "ev-pr-exact"}; !equalStrings(got, want) {
+		t.Fatalf("ranked %v, want %v", got, want)
+	}
+}
+
+func TestAnUnrelatedExactCauseRanksBelowAnOrdinaryGoalMatchAtTheBudget(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	evidence := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
+		roleRow("ev-ordinary", "commit", "9999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout flow", "checkout", at),
+		roleRow("ev-pr-pushed", "pull_request", "2", "checkout", "merged", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-pushed", "d2", "failure", "2", "pushed", at),
+	}
+	request := fixtureRequest("req-exact-vs-ordinary", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems = 1
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if got := itemEvidenceIDs(packet); len(got) != 1 || got[0] == "ev-pr-exact" {
+		t.Fatalf("the budget kept %v, want a goal-naming item, not the unrelated exact cause", got)
+	}
+}
+
+func demoShapeRows(at time.Time) []contractsv1.EvidenceRef {
+	rows := []contractsv1.EvidenceRef{
+		roleRow("ev-pr-promo-revert", "pull_request", "77", "Promo code stacking rules", "merged revert", at),
+		tieredDeploymentRow("ev-d-promo", "d77", "failure", "77", "exact_merge_sha", at),
+	}
+	for i := 0; i < 14; i++ {
+		id := strings.Repeat(string(rune('a'+i)), 7) + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		rows = append(rows, roleRow("ev-checkout-"+string(rune('a'+i)), "commit", id, "checkout file "+string(rune('a'+i)), "checkout change", at))
+	}
+	return rows
+}
+
+func TestAPromotedCauseWithoutAGoalMatchSurvivesATwelveItemCut(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	request := fixtureRequest("req-demo-cut", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 12, 4000, 65536
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      demoShapeRows(at),
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !slices.Contains(itemEvidenceIDs(packet), "ev-pr-promo-revert") {
+		t.Fatalf("the promoted cause is not in %v", itemEvidenceIDs(packet))
+	}
+}
+
+func TestAPullRequestRowedTwiceIsServedOnce(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	first := roleRow("ev-pr-twice-a", "pull_request", "40", "Saved payment methods at checkout", "merged", at)
+	second := roleRow("ev-pr-twice-b", "pull_request", "40", "Saved payment methods at checkout", "merged", at.Add(time.Hour))
+	_, packet := servedRoles(t, []contractsv1.EvidenceRef{first, second})
+	if len(packet.Items) != 1 {
+		t.Fatalf("items = %v, want the pull request once", itemEvidenceIDs(packet))
+	}
+}
+
+func TestAPromotedCauseSurvivesWhenGoalMatchesFillHalfTheBudgetAndStateAndPressureFillTheRest(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	rows := demoShapeRows(at)
+	for i := 0; i < 4; i++ {
+		rows = append(rows, roleRow("ev-state-"+string(rune('a'+i)), "state", "st-"+string(rune('a'+i)), "release marker", "released", at))
+		rows = append(rows, roleRow("ev-ci-bad-"+string(rune('a'+i)), "ci_pipeline_run", "run-bad-"+string(rune('a'+i)), "nightly job", "failed", at))
+	}
+	request := fixtureRequest("req-demo-starved", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 12, 4000, 65536
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      rows,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !slices.Contains(itemEvidenceIDs(packet), "ev-pr-promo-revert") {
+		t.Fatalf("the promoted cause is not in %v (warnings %v)", itemEvidenceIDs(packet), packet.Warnings)
 	}
 }

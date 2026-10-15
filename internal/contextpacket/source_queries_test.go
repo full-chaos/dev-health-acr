@@ -79,7 +79,7 @@ func TestCatalogSourceQueries_useTruthfulIdentityFallbacksForOptionalText(t *tes
 		expected string
 	}{
 		{"repository_freshness.v1", "if(lengthUTF8(ifNull(repo, '')) BETWEEN 1 AND 1000, ifNull(repo, ''), concat('repository ', toString(id))) display_label"},
-		{"work_items.v1", "if(lengthUTF8(ifNull(title, '')) BETWEEN 1 AND 1000, ifNull(title, ''), concat('work item ', work_item_id)) display_label"},
+		{"work_items.v1", "if(lengthUTF8(ifNull(w.title, '')) BETWEEN 1 AND 1000, ifNull(w.title, ''), concat('work item ', w.work_item_id)) display_label"},
 		{"work_item_dependencies.v1", "if(lengthUTF8(ifNull(d.relationship_type_raw, '')) BETWEEN 1 AND 2000, ifNull(d.relationship_type_raw, ''), concat('dependency=', d.source_work_item_id, ':', d.target_work_item_id)) citation"},
 		{"git_commit_files.v1", "if(lengthUTF8(ifNull(c.file_path, '')) BETWEEN 1 AND 1000, ifNull(c.file_path, ''), concat('commit file ', c.commit_hash)) display_label"},
 		{"pull_requests.v1", "if(lengthUTF8(ifNull(p.state, '')) BETWEEN 1 AND 2000, ifNull(p.state, ''), concat('PR #', toString(p.number))) citation"},
@@ -120,7 +120,7 @@ func TestWorkItemsSourceQuery_omitsUnsafeOptionalURI(t *testing.T) {
 	}
 
 	// When
-	const safeURI = "if(lengthUTF8(ifNull(url, '')) <= 2048 AND match(ifNull(url, ''), '^[A-Za-z][A-Za-z0-9+.-]*:'), ifNull(url, ''), '') safe_uri"
+	const safeURI = "if(lengthUTF8(ifNull(w.url, '')) <= 2048 AND match(ifNull(w.url, ''), '^[A-Za-z][A-Za-z0-9+.-]*:'), ifNull(w.url, ''), '') safe_uri"
 	preservesOnlyBoundedSchemeURI := strings.Contains(workItemsQuery.Statement, safeURI)
 
 	// Then
