@@ -625,6 +625,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		// see ReuseKey.OwnershipRoutingVersion's own field doc comment for
 		// why the routing gate's own arm-selection rules must fence reuse.
 		OwnershipRoutingVersion:  e.reuseVersionAuthorities.OwnershipRoutingVersion,
+		GraphWalkVersion:         e.reuseVersionAuthorities.GraphWalkVersion,
 		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
 		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
 		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,

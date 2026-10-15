@@ -366,6 +366,26 @@ func ValidCohortDriverNarrationAllocator(value CohortDriverNarrationAllocator) b
 	return false
 }
 
+// CohortDriverNarrationLineVocabulary is the closed value set of the narration
+// line's closed keys: its outcome, its allocator (plus the sink's own
+// "unclassified" stand-in) and the reasons a driver is counted as skipped
+// (the key set of drivers_skipped).
+func CohortDriverNarrationLineVocabulary(key string) []string {
+	switch key {
+	case "outcome":
+		return []string{string(CohortDriverNarrationEmitted), string(CohortDriverNarrationBudgetExhausted), string(CohortDriverNarrationNoDrivers)}
+	case "narration_allocator":
+		out := make([]string, 0, len(cohortDriverNarrationAllocators)+1)
+		for _, allocator := range cohortDriverNarrationAllocators {
+			out = append(out, string(allocator))
+		}
+		return append(out, "unclassified")
+	case "drivers_skipped":
+		return []string{string(CohortDriverSkipNoCitation), string(CohortDriverSkipUnknownSignal)}
+	}
+	panic("contextfabric: CohortDriverNarrationLineVocabulary has no key " + key)
+}
+
 // CohortDriverNarrationEvent is narrateCohortDriverJudgments' content-safe
 // telemetry payload -- counts and a closed outcome only, never a team name,
 // a score, or narration prose (the same "no person-to-person rankings"

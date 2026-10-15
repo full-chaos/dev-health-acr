@@ -208,6 +208,20 @@ func goVarName(e Event) string {
 		return "PlanCarry"
 	case PlanCarryOutcome.ID:
 		return "PlanCarryOutcome"
+	case ModelInterpretDecision.ID:
+		return "ModelInterpretDecision"
+	case ModelSynthesizeDecision.ID:
+		return "ModelSynthesizeDecision"
+	case ModelPhraseDecision.ID:
+		return "ModelPhraseDecision"
+	case FactScopeExpansionGap.ID:
+		return "FactScopeExpansionGap"
+	case FactScopeExpansionDecision.ID:
+		return "FactScopeExpansionDecision"
+	case CohortRanked.ID:
+		return "CohortRanked"
+	case CohortDriverNarration.ID:
+		return "CohortDriverNarration"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
@@ -254,6 +268,16 @@ func goVarName(e Event) string {
 // chooses. Such a field is excluded from the generated struct/constructor
 // (nothing to set) and hardcoded into SlogArgs() instead, so it can never be
 // supplied wrong or omitted.
+// appendedByProducer reports whether f is a conditional field of an event that
+// opted into required-only construction: the generated constructor and
+// SlogArgs cover the required fields, in declaration order, and the producer
+// appends each conditional field itself, after SlogArgs(), when its
+// Applicability holds. A constructor that took a conditional field would write
+// it on every line, which is what a conditional declaration forbids.
+func appendedByProducer(e Event, f Field) bool {
+	return e.RequiredOnlyConstruction && f.Presence == PresenceConditional
+}
+
 func isFixedStageField(f Field) bool {
 	return f.Key == "stage" && len(f.ClosedVocabulary) == 1
 }
@@ -313,6 +337,8 @@ func goFieldType(t FieldType) string {
 		return "[]string"
 	case FieldObjectSlice:
 		return "[]map[string]any"
+	case FieldCountMap:
+		return "map[string]int"
 	case FieldObject:
 		// One nested object. The generated construction interface carries it
 		// as a map the producer fills; its MEMBERS are still declared in
@@ -338,7 +364,7 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 	fmt.Fprintf(b, "// (CHAOS-5516): one Go field per Field %s.Fields declares in spec.go.\n", name)
 	fmt.Fprintf(b, "type %sFields struct {\n", name)
 	for _, f := range e.Fields {
-		if isFixedStageField(f) {
+		if isFixedStageField(f) || appendedByProducer(e, f) {
 			continue
 		}
 		fmt.Fprintf(b, "\t%s %s\n", snakeToPascal(f.Key), goFieldType(f.Type))
@@ -359,7 +385,7 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 	fmt.Fprintf(b, "func New%sFields(", name)
 	first := true
 	for _, f := range e.Fields {
-		if isFixedStageField(f) {
+		if isFixedStageField(f) || appendedByProducer(e, f) {
 			continue
 		}
 		if !first {
@@ -404,7 +430,7 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 	}
 	fmt.Fprintf(b, "\treturn %sFields{\n", name)
 	for _, f := range e.Fields {
-		if isFixedStageField(f) {
+		if isFixedStageField(f) || appendedByProducer(e, f) {
 			continue
 		}
 		key := snakeToPascal(f.Key)
@@ -430,6 +456,9 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 	fmt.Fprintf(b, "// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.\n")
 	fmt.Fprintf(b, "func (f %sFields) SlogArgs() []any {\n\treturn []any{\n", name)
 	for _, f := range e.Fields {
+		if appendedByProducer(e, f) {
+			continue
+		}
 		if isFixedStageField(f) {
 			// A compile-time string LITERAL -- the scanner's own
 			// "not a compile-time constant" trigger condition does not
@@ -461,6 +490,7 @@ type jsonField struct {
 	Presence         string      `json:"presence"`
 	ClosedVocabulary []string    `json:"closed_vocabulary,omitempty"`
 	Applicability    string      `json:"applicability,omitempty"`
+	Nullable         bool        `json:"nullable,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -483,6 +513,7 @@ func toJSONFields(fs []Field) []jsonField {
 			Presence:         string(f.Presence),
 			ClosedVocabulary: f.ClosedVocabulary,
 			Applicability:    f.Applicability,
+			Nullable:         f.Nullable,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

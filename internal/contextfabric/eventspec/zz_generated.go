@@ -23,7 +23,9 @@ var ByID = map[string]Event{
 	"contextfabric.anchor_binding_transition":        AnchorBindingTransition,
 	"contextfabric.answer_display":                   AnswerDisplay,
 	"contextfabric.client_synthesis_decision":        ClientSynthesisDecision,
+	"contextfabric.cohort_driver_narration":          CohortDriverNarration,
 	"contextfabric.cohort_kind_fulltext":             CohortKindFulltext,
+	"contextfabric.cohort_ranked":                    CohortRanked,
 	"contextfabric.completeness_authority":           CompletenessAuthority,
 	"contextfabric.confirmed_need_ledger":            ConfirmedNeedLedger,
 	"contextfabric.count_population_scope":           CountPopulationScope,
@@ -31,6 +33,8 @@ var ByID = map[string]Event{
 	"contextfabric.direct_read_authorization":        DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":        DirectRelationshipsRead,
 	"contextfabric.evidence_expansion":               EvidenceExpansion,
+	"contextfabric.fact_scope_expansion_decision":    FactScopeExpansionDecision,
+	"contextfabric.fact_scope_expansion_gap":         FactScopeExpansionGap,
 	"contextfabric.frame_validation":                 FrameValidation,
 	"contextfabric.graphql_query":                    GraphQLQuery,
 	"contextfabric.operation_read":                   OperationRead,
@@ -58,6 +62,9 @@ var ByID = map[string]Event{
 	"contextfabric.work_item_reuse":                  WorkItemReuse,
 	"contextfabric.work_item_stored_serving":         WorkItemStoredServing,
 	"contextfabric.work_item_tuple_admission":        WorkItemTupleAdmission,
+	"genkitruntime.model_interpret_decision":         ModelInterpretDecision,
+	"genkitruntime.model_phrase_decision":            ModelPhraseDecision,
+	"genkitruntime.model_synthesize_decision":        ModelSynthesizeDecision,
 	"graphrank.alias_lookup":                         AliasLookup,
 	"graphrank.anchor_kind_withheld":                 AnchorKindWithheld,
 	"graphrank.anchor_kind_withheld_summary":         AnchorKindWithheldSummary,
@@ -588,6 +595,77 @@ func (f ClientSynthesisDecisionFields) SlogArgs() []any {
 	}
 }
 
+// CohortDriverNarrationFields is contextfabric.cohort_driver_narration's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CohortDriverNarration.Fields declares in spec.go.
+type CohortDriverNarrationFields struct {
+	OrgID                     string
+	Outcome                   string
+	JudgmentsEmitted          int
+	FactsMinted               int
+	MembersNarrated           int
+	MembersSkippedNoEvidence  int
+	DriversSkipped            map[string]int
+	AnswerNarrativeRecomposed bool
+	NarrationAllocator        string
+	NarrationAllocatedItems   int
+	RequestID                 string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CohortDriverNarrationFields uniformly, set ONLY by NewCohortDriverNarrationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCohortDriverNarrationFields is the generated constructor for CohortDriverNarrationFields -- every
+// field CohortDriverNarration.Fields declares is a required parameter.
+func NewCohortDriverNarrationFields(orgID string, outcome string, judgmentsEmitted int, factsMinted int, membersNarrated int, membersSkippedNoEvidence int, driversSkipped map[string]int, answerNarrativeRecomposed bool, narrationAllocator string, narrationAllocatedItems int, requestID string) CohortDriverNarrationFields {
+	return CohortDriverNarrationFields{
+		OrgID:                     orgID,
+		Outcome:                   outcome,
+		JudgmentsEmitted:          judgmentsEmitted,
+		FactsMinted:               factsMinted,
+		MembersNarrated:           membersNarrated,
+		MembersSkippedNoEvidence:  membersSkippedNoEvidence,
+		DriversSkipped:            driversSkipped,
+		AnswerNarrativeRecomposed: answerNarrativeRecomposed,
+		NarrationAllocator:        narrationAllocator,
+		NarrationAllocatedItems:   narrationAllocatedItems,
+		RequestID:                 requestID,
+		constructed:               true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCohortDriverNarrationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CohortDriverNarrationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CohortDriverNarration's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CohortDriverNarrationFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"judgments_emitted", f.JudgmentsEmitted,
+		"facts_minted", f.FactsMinted,
+		"members_narrated", f.MembersNarrated,
+		"members_skipped_no_evidence", f.MembersSkippedNoEvidence,
+		"drivers_skipped", f.DriversSkipped,
+		"answer_narrative_recomposed", f.AnswerNarrativeRecomposed,
+		"narration_allocator", contextfabric.SanitizeLogAttr(f.NarrationAllocator),
+		"narration_allocated_items", f.NarrationAllocatedItems,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // CohortKindFulltextFields is contextfabric.cohort_kind_fulltext's generated typed construction interface
 // (CHAOS-5516): one Go field per Field CohortKindFulltext.Fields declares in spec.go.
 type CohortKindFulltextFields struct {
@@ -649,6 +727,86 @@ func (f CohortKindFulltextFields) SlogArgs() []any {
 		"added_by_kind_arm", f.AddedByKindArm,
 		"duplicates_with_general", f.DuplicatesWithGeneral,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// CohortRankedFields is contextfabric.cohort_ranked's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CohortRanked.Fields declares in spec.go.
+type CohortRankedFields struct {
+	OrgID                     string
+	CohortKind                string
+	MemberCount               int
+	FormulaVersion            string
+	ScoreMeaning              string
+	JudgmentMismatch          bool
+	RequestedJudgmentKind     string
+	DegradedMemberCount       int
+	SignalsAvailable          map[string]int
+	OutcomeCounts             map[string]int
+	InvestmentMixSourceCounts map[string]int
+	ReadAttributionCarried    bool
+	DeficiencyZeroWithheld    int
+	RequestID                 string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CohortRankedFields uniformly, set ONLY by NewCohortRankedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCohortRankedFields is the generated constructor for CohortRankedFields -- every
+// field CohortRanked.Fields declares is a required parameter.
+func NewCohortRankedFields(orgID string, cohortKind string, memberCount int, formulaVersion string, scoreMeaning string, judgmentMismatch bool, requestedJudgmentKind string, degradedMemberCount int, signalsAvailable map[string]int, outcomeCounts map[string]int, investmentMixSourceCounts map[string]int, readAttributionCarried bool, deficiencyZeroWithheld int, requestID string) CohortRankedFields {
+	return CohortRankedFields{
+		OrgID:                     orgID,
+		CohortKind:                cohortKind,
+		MemberCount:               memberCount,
+		FormulaVersion:            formulaVersion,
+		ScoreMeaning:              scoreMeaning,
+		JudgmentMismatch:          judgmentMismatch,
+		RequestedJudgmentKind:     requestedJudgmentKind,
+		DegradedMemberCount:       degradedMemberCount,
+		SignalsAvailable:          signalsAvailable,
+		OutcomeCounts:             outcomeCounts,
+		InvestmentMixSourceCounts: investmentMixSourceCounts,
+		ReadAttributionCarried:    readAttributionCarried,
+		DeficiencyZeroWithheld:    deficiencyZeroWithheld,
+		RequestID:                 requestID,
+		constructed:               true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCohortRankedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CohortRankedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CohortRanked's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CohortRankedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cohort_kind", contextfabric.SanitizeLogAttr(f.CohortKind),
+		"member_count", f.MemberCount,
+		"formula_version", contextfabric.SanitizeLogAttr(f.FormulaVersion),
+		"score_meaning", contextfabric.SanitizeLogAttr(f.ScoreMeaning),
+		"judgment_mismatch", f.JudgmentMismatch,
+		"requested_judgment_kind", contextfabric.SanitizeLogAttr(f.RequestedJudgmentKind),
+		"degraded_member_count", f.DegradedMemberCount,
+		"signals_available", f.SignalsAvailable,
+		"outcome_counts", f.OutcomeCounts,
+		"investment_mix_source_counts", f.InvestmentMixSourceCounts,
+		"read_attribution_carried", f.ReadAttributionCarried,
+		"deficiency_zero_withheld", f.DeficiencyZeroWithheld,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -1483,6 +1641,370 @@ func (f EvidenceExpansionFields) SlogArgs() []any {
 		"source_admitted", f.SourceAdmitted,
 		"source_rows", f.SourceRows,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// FactScopeExpansionDecisionFields is contextfabric.fact_scope_expansion_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactScopeExpansionDecision.Fields declares in spec.go.
+type FactScopeExpansionDecisionFields struct {
+	OrgID                              string
+	RequirementKind                    string
+	OriginKind                         string
+	TargetKind                         string
+	Policy                             string
+	Basis                              string
+	Axis                               string
+	Outcome                            string
+	OriginCount                        int
+	CandidateCount                     int
+	AdmittedCount                      int
+	AuthorizationDroppedCount          int
+	TemporalDroppedCount               int
+	UnboundedValidityCount             int
+	MalformedTouchCount                int
+	DuplicateAddCount                  int
+	MissingNextHopCount                int
+	TargetKindMismatchCount            int
+	Truncated                          bool
+	FailureClass                       string
+	AttributionSourceCounts            map[string]int
+	TargetLimit                        int
+	CensusComplete                     bool
+	AuthorizedCount                    int
+	RepoLessCandidateCount             int
+	RepoLessAdmittedCount              int
+	RepoLessAuthorizationDroppedCount  int
+	OrganizationGrantAuthorizedCount   int
+	DirectRepoAuthorizedCount          int
+	ProjectOwnershipAuthorizedCount    int
+	PrLinkAuthorizedCount              int
+	ProjectOwnershipAdmittedCount      int
+	PrLinkAdmittedCount                int
+	ExcludedExplicitTextLinkCount      int
+	ExcludedHeuristicLinkCount         int
+	AuthorizationGrantMeasured         bool
+	AuthorizationGrantOrganizationWide bool
+	AuthorizationGrantExactSelectors   int
+	AuthorizationGrantOwnerSelectors   int
+	OrphanedRepositoryCount            int
+	AmbiguousOriginCount               int
+	UnknownAttributionSourceCount      int
+	ScopeQueryCount                    int
+	ScopeRowsReturned                  int
+	RootsComplete                      bool
+	SharedTargetCount                  int
+	DecisionReason                     string
+	RequestID                          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactScopeExpansionDecisionFields uniformly, set ONLY by NewFactScopeExpansionDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactScopeExpansionDecisionFields is the generated constructor for FactScopeExpansionDecisionFields -- every
+// field FactScopeExpansionDecision.Fields declares is a required parameter.
+func NewFactScopeExpansionDecisionFields(orgID string, requirementKind string, originKind string, targetKind string, policy string, basis string, axis string, outcome string, originCount int, candidateCount int, admittedCount int, authorizationDroppedCount int, temporalDroppedCount int, unboundedValidityCount int, malformedTouchCount int, duplicateAddCount int, missingNextHopCount int, targetKindMismatchCount int, truncated bool, failureClass string, attributionSourceCounts map[string]int, targetLimit int, censusComplete bool, authorizedCount int, repoLessCandidateCount int, repoLessAdmittedCount int, repoLessAuthorizationDroppedCount int, organizationGrantAuthorizedCount int, directRepoAuthorizedCount int, projectOwnershipAuthorizedCount int, prLinkAuthorizedCount int, projectOwnershipAdmittedCount int, prLinkAdmittedCount int, excludedExplicitTextLinkCount int, excludedHeuristicLinkCount int, authorizationGrantMeasured bool, authorizationGrantOrganizationWide bool, authorizationGrantExactSelectors int, authorizationGrantOwnerSelectors int, orphanedRepositoryCount int, ambiguousOriginCount int, unknownAttributionSourceCount int, scopeQueryCount int, scopeRowsReturned int, rootsComplete bool, sharedTargetCount int, decisionReason string, requestID string) FactScopeExpansionDecisionFields {
+	return FactScopeExpansionDecisionFields{
+		OrgID:                              orgID,
+		RequirementKind:                    requirementKind,
+		OriginKind:                         originKind,
+		TargetKind:                         targetKind,
+		Policy:                             policy,
+		Basis:                              basis,
+		Axis:                               axis,
+		Outcome:                            outcome,
+		OriginCount:                        originCount,
+		CandidateCount:                     candidateCount,
+		AdmittedCount:                      admittedCount,
+		AuthorizationDroppedCount:          authorizationDroppedCount,
+		TemporalDroppedCount:               temporalDroppedCount,
+		UnboundedValidityCount:             unboundedValidityCount,
+		MalformedTouchCount:                malformedTouchCount,
+		DuplicateAddCount:                  duplicateAddCount,
+		MissingNextHopCount:                missingNextHopCount,
+		TargetKindMismatchCount:            targetKindMismatchCount,
+		Truncated:                          truncated,
+		FailureClass:                       failureClass,
+		AttributionSourceCounts:            attributionSourceCounts,
+		TargetLimit:                        targetLimit,
+		CensusComplete:                     censusComplete,
+		AuthorizedCount:                    authorizedCount,
+		RepoLessCandidateCount:             repoLessCandidateCount,
+		RepoLessAdmittedCount:              repoLessAdmittedCount,
+		RepoLessAuthorizationDroppedCount:  repoLessAuthorizationDroppedCount,
+		OrganizationGrantAuthorizedCount:   organizationGrantAuthorizedCount,
+		DirectRepoAuthorizedCount:          directRepoAuthorizedCount,
+		ProjectOwnershipAuthorizedCount:    projectOwnershipAuthorizedCount,
+		PrLinkAuthorizedCount:              prLinkAuthorizedCount,
+		ProjectOwnershipAdmittedCount:      projectOwnershipAdmittedCount,
+		PrLinkAdmittedCount:                prLinkAdmittedCount,
+		ExcludedExplicitTextLinkCount:      excludedExplicitTextLinkCount,
+		ExcludedHeuristicLinkCount:         excludedHeuristicLinkCount,
+		AuthorizationGrantMeasured:         authorizationGrantMeasured,
+		AuthorizationGrantOrganizationWide: authorizationGrantOrganizationWide,
+		AuthorizationGrantExactSelectors:   authorizationGrantExactSelectors,
+		AuthorizationGrantOwnerSelectors:   authorizationGrantOwnerSelectors,
+		OrphanedRepositoryCount:            orphanedRepositoryCount,
+		AmbiguousOriginCount:               ambiguousOriginCount,
+		UnknownAttributionSourceCount:      unknownAttributionSourceCount,
+		ScopeQueryCount:                    scopeQueryCount,
+		ScopeRowsReturned:                  scopeRowsReturned,
+		RootsComplete:                      rootsComplete,
+		SharedTargetCount:                  sharedTargetCount,
+		DecisionReason:                     decisionReason,
+		RequestID:                          requestID,
+		constructed:                        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactScopeExpansionDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactScopeExpansionDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactScopeExpansionDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactScopeExpansionDecisionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement_kind", contextfabric.SanitizeLogAttr(f.RequirementKind),
+		"origin_kind", contextfabric.SanitizeLogAttr(f.OriginKind),
+		"target_kind", contextfabric.SanitizeLogAttr(f.TargetKind),
+		"policy", contextfabric.SanitizeLogAttr(f.Policy),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"axis", contextfabric.SanitizeLogAttr(f.Axis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"origin_count", f.OriginCount,
+		"candidate_count", f.CandidateCount,
+		"admitted_count", f.AdmittedCount,
+		"authorization_dropped_count", f.AuthorizationDroppedCount,
+		"temporal_dropped_count", f.TemporalDroppedCount,
+		"unbounded_validity_count", f.UnboundedValidityCount,
+		"malformed_touch_count", f.MalformedTouchCount,
+		"duplicate_add_count", f.DuplicateAddCount,
+		"missing_next_hop_count", f.MissingNextHopCount,
+		"target_kind_mismatch_count", f.TargetKindMismatchCount,
+		"truncated", f.Truncated,
+		"failure_class", contextfabric.SanitizeLogAttr(f.FailureClass),
+		"attribution_source_counts", f.AttributionSourceCounts,
+		"target_limit", f.TargetLimit,
+		"census_complete", f.CensusComplete,
+		"authorized_count", f.AuthorizedCount,
+		"repo_less_candidate_count", f.RepoLessCandidateCount,
+		"repo_less_admitted_count", f.RepoLessAdmittedCount,
+		"repo_less_authorization_dropped_count", f.RepoLessAuthorizationDroppedCount,
+		"organization_grant_authorized_count", f.OrganizationGrantAuthorizedCount,
+		"direct_repo_authorized_count", f.DirectRepoAuthorizedCount,
+		"project_ownership_authorized_count", f.ProjectOwnershipAuthorizedCount,
+		"pr_link_authorized_count", f.PrLinkAuthorizedCount,
+		"project_ownership_admitted_count", f.ProjectOwnershipAdmittedCount,
+		"pr_link_admitted_count", f.PrLinkAdmittedCount,
+		"excluded_explicit_text_link_count", f.ExcludedExplicitTextLinkCount,
+		"excluded_heuristic_link_count", f.ExcludedHeuristicLinkCount,
+		"authorization_grant_measured", f.AuthorizationGrantMeasured,
+		"authorization_grant_organization_wide", f.AuthorizationGrantOrganizationWide,
+		"authorization_grant_exact_selectors", f.AuthorizationGrantExactSelectors,
+		"authorization_grant_owner_selectors", f.AuthorizationGrantOwnerSelectors,
+		"orphaned_repository_count", f.OrphanedRepositoryCount,
+		"ambiguous_origin_count", f.AmbiguousOriginCount,
+		"unknown_attribution_source_count", f.UnknownAttributionSourceCount,
+		"scope_query_count", f.ScopeQueryCount,
+		"scope_rows_returned", f.ScopeRowsReturned,
+		"roots_complete", f.RootsComplete,
+		"shared_target_count", f.SharedTargetCount,
+		"decision_reason", contextfabric.SanitizeLogAttr(f.DecisionReason),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// FactScopeExpansionGapFields is contextfabric.fact_scope_expansion_gap's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactScopeExpansionGap.Fields declares in spec.go.
+type FactScopeExpansionGapFields struct {
+	OrgID                              string
+	RequirementKind                    string
+	OriginKind                         string
+	TargetKind                         string
+	Policy                             string
+	Basis                              string
+	Axis                               string
+	Outcome                            string
+	OriginCount                        int
+	CandidateCount                     int
+	AdmittedCount                      int
+	AuthorizationDroppedCount          int
+	TemporalDroppedCount               int
+	UnboundedValidityCount             int
+	MalformedTouchCount                int
+	DuplicateAddCount                  int
+	MissingNextHopCount                int
+	TargetKindMismatchCount            int
+	Truncated                          bool
+	FailureClass                       string
+	AttributionSourceCounts            map[string]int
+	TargetLimit                        int
+	CensusComplete                     bool
+	AuthorizedCount                    int
+	RepoLessCandidateCount             int
+	RepoLessAdmittedCount              int
+	RepoLessAuthorizationDroppedCount  int
+	OrganizationGrantAuthorizedCount   int
+	DirectRepoAuthorizedCount          int
+	ProjectOwnershipAuthorizedCount    int
+	PrLinkAuthorizedCount              int
+	ProjectOwnershipAdmittedCount      int
+	PrLinkAdmittedCount                int
+	ExcludedExplicitTextLinkCount      int
+	ExcludedHeuristicLinkCount         int
+	AuthorizationGrantMeasured         bool
+	AuthorizationGrantOrganizationWide bool
+	AuthorizationGrantExactSelectors   int
+	AuthorizationGrantOwnerSelectors   int
+	OrphanedRepositoryCount            int
+	AmbiguousOriginCount               int
+	UnknownAttributionSourceCount      int
+	ScopeQueryCount                    int
+	ScopeRowsReturned                  int
+	RootsComplete                      bool
+	SharedTargetCount                  int
+	DecisionReason                     string
+	RequestID                          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactScopeExpansionGapFields uniformly, set ONLY by NewFactScopeExpansionGapFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactScopeExpansionGapFields is the generated constructor for FactScopeExpansionGapFields -- every
+// field FactScopeExpansionGap.Fields declares is a required parameter.
+func NewFactScopeExpansionGapFields(orgID string, requirementKind string, originKind string, targetKind string, policy string, basis string, axis string, outcome string, originCount int, candidateCount int, admittedCount int, authorizationDroppedCount int, temporalDroppedCount int, unboundedValidityCount int, malformedTouchCount int, duplicateAddCount int, missingNextHopCount int, targetKindMismatchCount int, truncated bool, failureClass string, attributionSourceCounts map[string]int, targetLimit int, censusComplete bool, authorizedCount int, repoLessCandidateCount int, repoLessAdmittedCount int, repoLessAuthorizationDroppedCount int, organizationGrantAuthorizedCount int, directRepoAuthorizedCount int, projectOwnershipAuthorizedCount int, prLinkAuthorizedCount int, projectOwnershipAdmittedCount int, prLinkAdmittedCount int, excludedExplicitTextLinkCount int, excludedHeuristicLinkCount int, authorizationGrantMeasured bool, authorizationGrantOrganizationWide bool, authorizationGrantExactSelectors int, authorizationGrantOwnerSelectors int, orphanedRepositoryCount int, ambiguousOriginCount int, unknownAttributionSourceCount int, scopeQueryCount int, scopeRowsReturned int, rootsComplete bool, sharedTargetCount int, decisionReason string, requestID string) FactScopeExpansionGapFields {
+	return FactScopeExpansionGapFields{
+		OrgID:                              orgID,
+		RequirementKind:                    requirementKind,
+		OriginKind:                         originKind,
+		TargetKind:                         targetKind,
+		Policy:                             policy,
+		Basis:                              basis,
+		Axis:                               axis,
+		Outcome:                            outcome,
+		OriginCount:                        originCount,
+		CandidateCount:                     candidateCount,
+		AdmittedCount:                      admittedCount,
+		AuthorizationDroppedCount:          authorizationDroppedCount,
+		TemporalDroppedCount:               temporalDroppedCount,
+		UnboundedValidityCount:             unboundedValidityCount,
+		MalformedTouchCount:                malformedTouchCount,
+		DuplicateAddCount:                  duplicateAddCount,
+		MissingNextHopCount:                missingNextHopCount,
+		TargetKindMismatchCount:            targetKindMismatchCount,
+		Truncated:                          truncated,
+		FailureClass:                       failureClass,
+		AttributionSourceCounts:            attributionSourceCounts,
+		TargetLimit:                        targetLimit,
+		CensusComplete:                     censusComplete,
+		AuthorizedCount:                    authorizedCount,
+		RepoLessCandidateCount:             repoLessCandidateCount,
+		RepoLessAdmittedCount:              repoLessAdmittedCount,
+		RepoLessAuthorizationDroppedCount:  repoLessAuthorizationDroppedCount,
+		OrganizationGrantAuthorizedCount:   organizationGrantAuthorizedCount,
+		DirectRepoAuthorizedCount:          directRepoAuthorizedCount,
+		ProjectOwnershipAuthorizedCount:    projectOwnershipAuthorizedCount,
+		PrLinkAuthorizedCount:              prLinkAuthorizedCount,
+		ProjectOwnershipAdmittedCount:      projectOwnershipAdmittedCount,
+		PrLinkAdmittedCount:                prLinkAdmittedCount,
+		ExcludedExplicitTextLinkCount:      excludedExplicitTextLinkCount,
+		ExcludedHeuristicLinkCount:         excludedHeuristicLinkCount,
+		AuthorizationGrantMeasured:         authorizationGrantMeasured,
+		AuthorizationGrantOrganizationWide: authorizationGrantOrganizationWide,
+		AuthorizationGrantExactSelectors:   authorizationGrantExactSelectors,
+		AuthorizationGrantOwnerSelectors:   authorizationGrantOwnerSelectors,
+		OrphanedRepositoryCount:            orphanedRepositoryCount,
+		AmbiguousOriginCount:               ambiguousOriginCount,
+		UnknownAttributionSourceCount:      unknownAttributionSourceCount,
+		ScopeQueryCount:                    scopeQueryCount,
+		ScopeRowsReturned:                  scopeRowsReturned,
+		RootsComplete:                      rootsComplete,
+		SharedTargetCount:                  sharedTargetCount,
+		DecisionReason:                     decisionReason,
+		RequestID:                          requestID,
+		constructed:                        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactScopeExpansionGapFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactScopeExpansionGapFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactScopeExpansionGap's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactScopeExpansionGapFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement_kind", contextfabric.SanitizeLogAttr(f.RequirementKind),
+		"origin_kind", contextfabric.SanitizeLogAttr(f.OriginKind),
+		"target_kind", contextfabric.SanitizeLogAttr(f.TargetKind),
+		"policy", contextfabric.SanitizeLogAttr(f.Policy),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"axis", contextfabric.SanitizeLogAttr(f.Axis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"origin_count", f.OriginCount,
+		"candidate_count", f.CandidateCount,
+		"admitted_count", f.AdmittedCount,
+		"authorization_dropped_count", f.AuthorizationDroppedCount,
+		"temporal_dropped_count", f.TemporalDroppedCount,
+		"unbounded_validity_count", f.UnboundedValidityCount,
+		"malformed_touch_count", f.MalformedTouchCount,
+		"duplicate_add_count", f.DuplicateAddCount,
+		"missing_next_hop_count", f.MissingNextHopCount,
+		"target_kind_mismatch_count", f.TargetKindMismatchCount,
+		"truncated", f.Truncated,
+		"failure_class", contextfabric.SanitizeLogAttr(f.FailureClass),
+		"attribution_source_counts", f.AttributionSourceCounts,
+		"target_limit", f.TargetLimit,
+		"census_complete", f.CensusComplete,
+		"authorized_count", f.AuthorizedCount,
+		"repo_less_candidate_count", f.RepoLessCandidateCount,
+		"repo_less_admitted_count", f.RepoLessAdmittedCount,
+		"repo_less_authorization_dropped_count", f.RepoLessAuthorizationDroppedCount,
+		"organization_grant_authorized_count", f.OrganizationGrantAuthorizedCount,
+		"direct_repo_authorized_count", f.DirectRepoAuthorizedCount,
+		"project_ownership_authorized_count", f.ProjectOwnershipAuthorizedCount,
+		"pr_link_authorized_count", f.PrLinkAuthorizedCount,
+		"project_ownership_admitted_count", f.ProjectOwnershipAdmittedCount,
+		"pr_link_admitted_count", f.PrLinkAdmittedCount,
+		"excluded_explicit_text_link_count", f.ExcludedExplicitTextLinkCount,
+		"excluded_heuristic_link_count", f.ExcludedHeuristicLinkCount,
+		"authorization_grant_measured", f.AuthorizationGrantMeasured,
+		"authorization_grant_organization_wide", f.AuthorizationGrantOrganizationWide,
+		"authorization_grant_exact_selectors", f.AuthorizationGrantExactSelectors,
+		"authorization_grant_owner_selectors", f.AuthorizationGrantOwnerSelectors,
+		"orphaned_repository_count", f.OrphanedRepositoryCount,
+		"ambiguous_origin_count", f.AmbiguousOriginCount,
+		"unknown_attribution_source_count", f.UnknownAttributionSourceCount,
+		"scope_query_count", f.ScopeQueryCount,
+		"scope_rows_returned", f.ScopeRowsReturned,
+		"roots_complete", f.RootsComplete,
+		"shared_target_count", f.SharedTargetCount,
+		"decision_reason", contextfabric.SanitizeLogAttr(f.DecisionReason),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -4077,6 +4599,294 @@ func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
 		"member_filter", contextfabric.SanitizeLogAttr(f.MemberFilter),
 		"member_time_role", contextfabric.SanitizeLogAttr(f.MemberTimeRole),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// ModelInterpretDecisionFields is genkitruntime.model_interpret_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelInterpretDecision.Fields declares in spec.go.
+type ModelInterpretDecisionFields struct {
+	RequestID                    string
+	OrgIDHash                    string
+	Operation                    string
+	Outcome                      string
+	Attempts                     int
+	FallbackUsed                 bool
+	PrimaryFailureClassification string
+	AxisSource                   string
+	DecodingSeed                 int
+	Sample                       int
+	InitialSample                int
+	Redraws                      int
+	ModelID                      string
+	ModelVersion                 string
+	PromptVersion                string
+	InterpretationSource         string
+	AttemptsTotal                int
+	AttemptsRetried              int
+	AttemptOutcomes              string
+	AttemptElapsedMs             string
+	FallbackAttemptsTotal        int
+	PrimaryProvider              string
+	PrimaryModelID               string
+	PrimaryModelVersion          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelInterpretDecisionFields uniformly, set ONLY by NewModelInterpretDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelInterpretDecisionFields is the generated constructor for ModelInterpretDecisionFields -- every
+// field ModelInterpretDecision.Fields declares is a required parameter.
+func NewModelInterpretDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, axisSource string, decodingSeed int, sample int, initialSample int, redraws int, modelID string, modelVersion string, promptVersion string, interpretationSource string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string) ModelInterpretDecisionFields {
+	return ModelInterpretDecisionFields{
+		RequestID:                    requestID,
+		OrgIDHash:                    orgIDHash,
+		Operation:                    operation,
+		Outcome:                      outcome,
+		Attempts:                     attempts,
+		FallbackUsed:                 fallbackUsed,
+		PrimaryFailureClassification: primaryFailureClassification,
+		AxisSource:                   axisSource,
+		DecodingSeed:                 decodingSeed,
+		Sample:                       sample,
+		InitialSample:                initialSample,
+		Redraws:                      redraws,
+		ModelID:                      modelID,
+		ModelVersion:                 modelVersion,
+		PromptVersion:                promptVersion,
+		InterpretationSource:         interpretationSource,
+		AttemptsTotal:                attemptsTotal,
+		AttemptsRetried:              attemptsRetried,
+		AttemptOutcomes:              attemptOutcomes,
+		AttemptElapsedMs:             attemptElapsedMs,
+		FallbackAttemptsTotal:        fallbackAttemptsTotal,
+		PrimaryProvider:              primaryProvider,
+		PrimaryModelID:               primaryModelID,
+		PrimaryModelVersion:          primaryModelVersion,
+		constructed:                  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelInterpretDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelInterpretDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelInterpretDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelInterpretDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"fallback_used", f.FallbackUsed,
+		"primary_failure_classification", contextfabric.SanitizeLogAttr(f.PrimaryFailureClassification),
+		"axis_source", contextfabric.SanitizeLogAttr(f.AxisSource),
+		"decoding_seed", f.DecodingSeed,
+		"sample", f.Sample,
+		"initial_sample", f.InitialSample,
+		"redraws", f.Redraws,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"interpretation_source", contextfabric.SanitizeLogAttr(f.InterpretationSource),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+		"fallback_attempts_total", f.FallbackAttemptsTotal,
+		"primary_provider", contextfabric.SanitizeLogAttr(f.PrimaryProvider),
+		"primary_model_id", contextfabric.SanitizeLogAttr(f.PrimaryModelID),
+		"primary_model_version", contextfabric.SanitizeLogAttr(f.PrimaryModelVersion),
+	}
+}
+
+// ModelPhraseDecisionFields is genkitruntime.model_phrase_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelPhraseDecision.Fields declares in spec.go.
+type ModelPhraseDecisionFields struct {
+	RequestID        string
+	OrgIDHash        string
+	Operation        string
+	Outcome          string
+	Attempts         int
+	ModelID          string
+	ModelVersion     string
+	PromptVersion    string
+	AttemptsTotal    int
+	AttemptsRetried  int
+	AttemptOutcomes  string
+	AttemptElapsedMs string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelPhraseDecisionFields uniformly, set ONLY by NewModelPhraseDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelPhraseDecisionFields is the generated constructor for ModelPhraseDecisionFields -- every
+// field ModelPhraseDecision.Fields declares is a required parameter.
+func NewModelPhraseDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string) ModelPhraseDecisionFields {
+	return ModelPhraseDecisionFields{
+		RequestID:        requestID,
+		OrgIDHash:        orgIDHash,
+		Operation:        operation,
+		Outcome:          outcome,
+		Attempts:         attempts,
+		ModelID:          modelID,
+		ModelVersion:     modelVersion,
+		PromptVersion:    promptVersion,
+		AttemptsTotal:    attemptsTotal,
+		AttemptsRetried:  attemptsRetried,
+		AttemptOutcomes:  attemptOutcomes,
+		AttemptElapsedMs: attemptElapsedMs,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelPhraseDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelPhraseDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelPhraseDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelPhraseDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+	}
+}
+
+// ModelSynthesizeDecisionFields is genkitruntime.model_synthesize_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelSynthesizeDecision.Fields declares in spec.go.
+type ModelSynthesizeDecisionFields struct {
+	RequestID                    string
+	OrgIDHash                    string
+	Operation                    string
+	Outcome                      string
+	Attempts                     int
+	FallbackUsed                 bool
+	PrimaryFailureClassification string
+	Drivers                      int
+	Findings                     int
+	Claims                       int
+	EvidenceRefs                 int
+	ModelID                      string
+	ModelVersion                 string
+	PromptVersion                string
+	AttemptsTotal                int
+	AttemptsRetried              int
+	AttemptOutcomes              string
+	AttemptElapsedMs             string
+	FallbackAttemptsTotal        int
+	PrimaryProvider              string
+	PrimaryModelID               string
+	PrimaryModelVersion          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelSynthesizeDecisionFields uniformly, set ONLY by NewModelSynthesizeDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelSynthesizeDecisionFields is the generated constructor for ModelSynthesizeDecisionFields -- every
+// field ModelSynthesizeDecision.Fields declares is a required parameter.
+func NewModelSynthesizeDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, fallbackUsed bool, primaryFailureClassification string, drivers int, findings int, claims int, evidenceRefs int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string, fallbackAttemptsTotal int, primaryProvider string, primaryModelID string, primaryModelVersion string) ModelSynthesizeDecisionFields {
+	return ModelSynthesizeDecisionFields{
+		RequestID:                    requestID,
+		OrgIDHash:                    orgIDHash,
+		Operation:                    operation,
+		Outcome:                      outcome,
+		Attempts:                     attempts,
+		FallbackUsed:                 fallbackUsed,
+		PrimaryFailureClassification: primaryFailureClassification,
+		Drivers:                      drivers,
+		Findings:                     findings,
+		Claims:                       claims,
+		EvidenceRefs:                 evidenceRefs,
+		ModelID:                      modelID,
+		ModelVersion:                 modelVersion,
+		PromptVersion:                promptVersion,
+		AttemptsTotal:                attemptsTotal,
+		AttemptsRetried:              attemptsRetried,
+		AttemptOutcomes:              attemptOutcomes,
+		AttemptElapsedMs:             attemptElapsedMs,
+		FallbackAttemptsTotal:        fallbackAttemptsTotal,
+		PrimaryProvider:              primaryProvider,
+		PrimaryModelID:               primaryModelID,
+		PrimaryModelVersion:          primaryModelVersion,
+		constructed:                  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelSynthesizeDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelSynthesizeDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelSynthesizeDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelSynthesizeDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"fallback_used", f.FallbackUsed,
+		"primary_failure_classification", contextfabric.SanitizeLogAttr(f.PrimaryFailureClassification),
+		"drivers", f.Drivers,
+		"findings", f.Findings,
+		"claims", f.Claims,
+		"evidence_refs", f.EvidenceRefs,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+		"fallback_attempts_total", f.FallbackAttemptsTotal,
+		"primary_provider", contextfabric.SanitizeLogAttr(f.PrimaryProvider),
+		"primary_model_id", contextfabric.SanitizeLogAttr(f.PrimaryModelID),
+		"primary_model_version", contextfabric.SanitizeLogAttr(f.PrimaryModelVersion),
 	}
 }
 
