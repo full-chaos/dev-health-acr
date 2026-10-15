@@ -207,16 +207,6 @@ func assertDeclaredOrderMatchesLive(t *testing.T, table string, declared []devhe
 	}
 }
 
-// knownEngineGaps names engines the declaration knowingly lags behind ops on,
-// each with the ticket that closes it. An entry is not a pass: the log line
-// names it on every run, and the entry goes away with the ticket.
-var knownEngineGaps = map[string]string{
-	"operational_incidents":                   "CHAOS-9748: real ordering-contract sort key not yet served by the readers",
-	"operational_service_repository_mappings": "CHAOS-9748: real ordering-contract sort key not yet served by the readers",
-}
-
-func declaredEngine(table string) string { return devhealthschema.EngineFull[table] }
-
 // assertEngineAndSortingKeyAreFresh verifies the metadata that is NOT a
 // column type (round-3 F3).
 //
@@ -252,8 +242,8 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 		// FINAL semantics several providers rely on. It also covers
 		// PARTITION BY, ORDER BY and SETTINGS in the same string, so no
 		// facet of the physical definition is left unverified.
-		if reason, known := knownEngineGaps[name]; known && declaredEngine(name) != engineFull {
-			t.Logf("known engine gap, not failed: %s -- %s", name, reason)
+		if gap, known := knownEngineGaps[name]; known && gap.matches(name, devhealthschema.EngineFull[name], engineFull) {
+			t.Logf("known engine gap, not failed: %s -- %s", name, gap.ticket)
 			continue
 		}
 		if declared, ok := devhealthschema.EngineFull[name]; ok && declared != engineFull {
