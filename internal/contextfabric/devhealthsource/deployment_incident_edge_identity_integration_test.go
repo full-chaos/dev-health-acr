@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -129,20 +128,19 @@ func TestSharedDeploymentIDAcrossReposDoesNotWedgeTheProjection(t *testing.T) {
 		t.Fatalf("%d graphs, want 1", len(keys))
 	}
 	for key := range keys {
-		state := readGraphState(t, ctx, raw, key)
-		edges := 0
-		for id := range state.edges {
-			if strings.HasPrefix(id, "CORRELATED_WITH_INCIDENT|") {
-				edges++
-			}
+		reply, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, "MATCH ()-[r:CORRELATED_WITH_INCIDENT]->() RETURN count(r)").Slice()
+		if err != nil || len(reply) < 2 {
+			t.Fatalf("count edges: reply of %d parts, err=%v", len(reply), err)
 		}
-		if edges != 2 {
-			t.Errorf("%d CORRELATED_WITH_INCIDENT edges, want 2 (one per repository's deployment)", edges)
+		records, _ := reply[1].([]any)
+		cells, _ := records[0].([]any)
+		if edges, _ := cells[0].(int64); edges != 2 {
+			t.Errorf("%v CORRELATED_WITH_INCIDENT edges, want 2 (one per repository's deployment)", cells[0])
 		}
 	}
 }
 
-// The native row (CHAOS-5110) and the heuristic row for one deployment and incident are one row in the source table
+// The native row (5110) and the heuristic row for one deployment and incident are one row in the source table
 // (ops keys it by repository, deployment and incident, no source) and the higher tier wins whatever the time: the
 // producer projects one relationship for the pair, from the native row.
 func TestNativeAndHeuristicDeploymentIncidentRowsAreOneRelationship(t *testing.T) {
