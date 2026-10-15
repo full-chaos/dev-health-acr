@@ -1132,6 +1132,24 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 	return graphrank.SortEdgesByRelevance(edges)
 }
 
+// gateEdgesFirst moves the edges the answer gate can use for the walk's origin
+// (a driver-making type with the origin at its From end, graphrank.MakesDriver)
+// ahead of the rest, keeping the ranked order inside both groups.
+func gateEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string) []graphrank.CandidateEdge {
+	out := make([]graphrank.CandidateEdge, 0, len(ranked))
+	for _, edge := range ranked {
+		if edge.SourceNodeUUID == originUUID && graphrank.MakesDriver(edge.Name) {
+			out = append(out, edge)
+		}
+	}
+	for _, edge := range ranked {
+		if edge.SourceNodeUUID != originUUID || !graphrank.MakesDriver(edge.Name) {
+			out = append(out, edge)
+		}
+	}
+	return out
+}
+
 // hopWalk performs a bounded N-hop traversal from one origin subject,
 // returning every neighbor node and resolved edge reached, plus a count of
 // edges/nodes dropped due to a genuine lookup failure (Codex P2c -- see
@@ -1153,9 +1171,17 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // higher-ranked edge discovered later ever got a chance to compete for the
 // budget. Every graph-walked edge ties at ResultConfidence=0 (there is no
 // real relevance signal for a hop-walked edge the way a full-text search
-// score is one), so graphrank.SortEdgesByRelevance's own deterministic
-// tie-break -- ascending relationship UUID -- IS the correct admission
-// order, not an approximation of one; this function now collects an ENTIRE
+// score is one), so graphrank.SortEdgesByRelevance's deterministic tie-break
+// -- ascending relationship UUID -- orders the edges of this walk's ONE
+// origin. That id order is an order within one subject only: where several
+// subjects share one edge budget (DiscoverContext's full-text arm, and the
+// final admission of every walk's edges against MaxRelationshipPaths and
+// MaxEvidenceRefs), the budget is split round-robin across them --
+// committed subjects first, then full-text matches -- and a subject that runs
+// out gives its turns to the others (graphrank.RankEdgesByOrigin,
+// GraphWalkVersion). Here, and within a committed subject at admission, the
+// edges the answer gate can use for the origin come first (gateEdgesFirst). This
+// function collects an ENTIRE
 // hop's candidate edges from every frontier node before making ANY
 // truncation decision, ranks that full set with the exact same tie-break,
 // and only then resolves/admits edges in ranked order up to the remaining
@@ -1208,7 +1234,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			continue
 		}
 		var next []string
-		for _, ce := range rankCandidateEdges(hopCandidates) {
+		for _, ce := range gateEdgesFirst(rankCandidateEdges(hopCandidates), originUUID) {
 			if collectLimit > 0 && len(edges) >= collectLimit {
 				// Candidate edges remain and the budget is spent: this walk
 				// is returning less than it found, and the endpoints of

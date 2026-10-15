@@ -70,7 +70,7 @@ func newFollowUpEngine(t *testing.T, interpreter contextfabric.RuntimeQuestionIn
 		options.ReuseModelIdentities = []string{"test-provider/test-model"}
 		options.ReuseRetrievalIdentity = contextfabric.ReuseRetrievalIdentity{EmbedRetrievalIdentity: "none", RetrievalPolicyVersion: "follow-up-v1"}
 		options.ReusePromptVersions = contextfabric.ReusePromptVersions{InterpretationPromptVersion: "follow-up-interpret-v1", SynthesisPromptVersion: "follow-up-synthesis-v1"}
-		options.ReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{QueryVersion: "query-v1", CanonicalServiceVersion: "follow-up-facts-v1", ModelOutputSchemaVersion: "follow-up-schema-v1", IdentityNormalizationVersion: "follow-up-identity-v1", WindowInferenceVersion: contextfabric.WindowInferenceVersion, CommitGateVersion: contextfabric.CommitGateVersion, RankingFormulaVersion: contextfabric.RankingFormulaVersion, QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion, OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion}
+		options.ReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{QueryVersion: "query-v1", CanonicalServiceVersion: "follow-up-facts-v1", ModelOutputSchemaVersion: "follow-up-schema-v1", IdentityNormalizationVersion: "follow-up-identity-v1", WindowInferenceVersion: contextfabric.WindowInferenceVersion, CommitGateVersion: contextfabric.CommitGateVersion, RankingFormulaVersion: contextfabric.RankingFormulaVersion, QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion, OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion, GraphWalkVersion: contextfabric.GraphWalkVersion}
 	}
 	engine, err := contextfabric.NewEngine(deps, options)
 	if err != nil {
