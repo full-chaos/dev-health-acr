@@ -367,13 +367,12 @@ func (r *GraphQLRunner) Run(ctx context.Context, principal storage.Principal, re
 		if errors.Is(err, ErrOperationAuthorizationUnavailable) {
 			x.read.Decision = OperationDecisionAuthorizationUnavailable
 		}
+		x.read.SchemaDigest = r.policy.catalogue.StampedSchemaDigest()
 		r.recorder.RecordGraphQLQuery(ctx, principal, x.read)
 		return GraphQLResponse{}, err
 	}
-	if resp.Call == CallRefused {
-		resp.Source.SchemaDigest = r.policy.catalogue.SchemaDigest()
-		x.read.SchemaDigest = resp.Source.SchemaDigest
-	}
+	resp.Source.SchemaDigest = r.policy.catalogue.StampedSchemaDigest()
+	x.read.SchemaDigest = resp.Source.SchemaDigest
 	x.read.Completeness = resp.Completeness
 	x.read.Result = resp.Result
 	r.recorder.RecordGraphQLQuery(ctx, principal, x.read)

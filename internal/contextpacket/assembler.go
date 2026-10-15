@@ -110,7 +110,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	}
 	validation := validateEvidenceBundle(bundle.Evidence, bundle.Dropped)
 	bundle.Evidence = validation.valid
-	bundle.Watermarks = validatedEvidenceWatermarks(bundle.Watermarks, validation, packet.Freshness.AsOf)
+	bundle.Watermarks = validatedEvidenceWatermarks(bundle.Watermarks, validation)
 	visible, hidden := displayableEvidence(bundle.Evidence)
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
