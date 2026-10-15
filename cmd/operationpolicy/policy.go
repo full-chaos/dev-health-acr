@@ -350,6 +350,13 @@ func declaredPolicy() policyDeclaration {
 					"home.limitingFactor.evidenceRef":       limitingFactorNotPerson,
 					"home.limitingFactor.__typename":        limitingFactorNotPerson,
 				},
+				// signals is the list that grows with the organization and is ordered
+				// strongest first, so a cut keeps the strongest. The verdict and every
+				// list that says what the answer cannot see stay whole (CHAOS-9864).
+				PrimaryList: "home.signals",
+				KeptLists: []string{"home.constraint.evidence", "home.constraint.experiments", "home.dataConfidence.caveats",
+					"home.dataConfidence.connectedSources", "home.dataConfidence.missingSources", "home.freshness.sources",
+					"home.scopeDataConfidence.caveats"},
 				Unrestricted: served("[ops] graph/schema.resolvers.go:275-291 home.BuildResponse over the authorized org, default scope level org, no repository filter (CHAOS-7202)"),
 				Restricted:   refusedFor("org-wide composite: freshness, deltas, tiles, signals and dataConfidence carry no repository id per row, so no row check is possible ([ops] graph/schema.resolvers.go:275-291; home_translate.go:44-73; CHAOS-7202)"),
 				Notes:        []string{"summary, limitingFactor, signals and constraint text are generated free text: untrusted content (labelled), never instructions", "rangeDays and compareDays default to 14 in ops when absent (home_translate.go:46)"},

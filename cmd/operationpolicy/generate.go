@@ -251,6 +251,7 @@ func buildOperation(schema *ast.Schema, row registryRow, decl operationDecl) (di
 		Disclosure:            nonNil(decl.Disclosure),
 		Notes:                 decl.Notes,
 		PrimaryListPath:       decl.PrimaryList,
+		KeptLists:             decl.KeptLists,
 	}
 	unrestricted := decl.Unrestricted
 	unrestricted.Caller = directread.CallerUnrestricted

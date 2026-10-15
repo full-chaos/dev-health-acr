@@ -218,7 +218,10 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	//
 	// v20 -> v21: ownership edges carry no start (the sync stamp is not the start
 	// of ownership); only the rebuild clears the stored start.
-	if want := "devhealthsource.teams_projects.v21"; TeamsProjectsSourceVersion != want {
+	//
+	// v21 -> v22: a work item -> team edge is retracted when its attribution
+	// stops qualifying; only the rebuild clears the ones already stale.
+	if want := "devhealthsource.teams_projects.v22"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
