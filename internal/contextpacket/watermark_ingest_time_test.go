@@ -27,7 +27,7 @@ var ingestTables = map[string]string{
 	"work_items.v1":             "FROM work_items FINAL",
 	"work_item_dependencies.v1": "FROM work_item_dependencies AS d",
 	"work_graph.v1":             "FROM work_graph_edges FINAL",
-	"incidents.v1":              "FROM operational_incidents AS i",
+	"incidents.v1":              "SELECT * FROM operational_incidents WHERE org_id",
 }
 
 // syncStoreClient models a repository that is fully synced but quiet: every
@@ -281,10 +281,13 @@ func TestSyncTimeStatementsCarryTheRequestScopeAndTimeTravel(t *testing.T) {
 		t.Fatalf("ran %d sync-time statements, want at least one per sync-stamped source (%d)", len(statements), len(ingestTables))
 	}
 	for index, statement := range statements {
-		for _, want := range []string{"{org_id:String}", "{as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR", "FINAL"} {
+		for _, want := range []string{"{org_id:String}", "{as_of:Nullable(DateTime64(3, 'UTC'))} IS NULL OR"} {
 			if !strings.Contains(statement, want) {
 				t.Errorf("sync-time statement lacks %s: %s", want, statement)
 			}
+		}
+		if !strings.Contains(statement, "FINAL") && !strings.Contains(statement, "LIMIT 1 BY") {
+			t.Errorf("sync-time statement reads neither FINAL nor the current-row pick: %s", statement)
 		}
 		if !strings.Contains(statement, "{repo_id:UUID}") {
 			t.Errorf("sync-time statement is not repository scoped: %s", statement)
