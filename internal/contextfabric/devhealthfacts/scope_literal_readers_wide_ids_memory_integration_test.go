@@ -46,7 +46,9 @@ const scopeLiteralRepoUnits = 500
 // seedRepositoryUnits adds wide-id units that carry an owned repository id and
 // sit in the membership run: the shape's own units carry none, so the owned
 // unit count and the project roll-up's repository arm would otherwise return
-// no row. It returns the new scope ids.
+// no row. Each unit also names two of the team's work items, so the native
+// project mix's placement statement finds placements. It returns the new scope
+// ids.
 func seedRepositoryUnits(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, s linkedProdShape) []string {
 	t.Helper()
 	at := "toDateTime64('2026-09-18 00:00:00', 3, 'UTC')"
@@ -56,8 +58,8 @@ func seedRepositoryUnits(t *testing.T, ctx context.Context, direct clickhousedri
 	}
 	unit := "concat('wu-repo-', toString(number), '-', lower(hex(SHA256(concat('repo', toString(number))))))"
 	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
-SELECT %s, %s, %s, toUUID([%s][1 + number %% %d]), 1.0, map('feature_delivery', 0.6, 'operational', 0.4), map(), '{}', %s, '%s' FROM numbers(%d)`,
-		unit, at, at, strings.Join(owned, ","), s.ownedRepos, at, orgID, scopeLiteralRepoUnits)); err != nil {
+SELECT %s, %s, %s, toUUID([%s][1 + number %% %d]), 1.0, map('feature_delivery', 0.6, 'operational', 0.4), map(), concat('{"issues":["wi-', toString((number * 7) %% %d), '","wi-', toString((number * 13 + 1) %% %d), '"]}'), %s, '%s' FROM numbers(%d)`,
+		unit, at, at, strings.Join(owned, ","), s.ownedRepos, s.teamLinkedItems, s.teamLinkedItems, at, orgID, scopeLiteralRepoUnits)); err != nil {
 		t.Fatalf("seed repository units: %v", err)
 	}
 	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
