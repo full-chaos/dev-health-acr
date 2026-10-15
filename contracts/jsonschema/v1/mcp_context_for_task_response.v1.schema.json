@@ -346,7 +346,7 @@
                   "last_event_at": {
                     "type": "string",
                     "format": "date-time",
-                    "description": "Event time of the newest row of this source in scope (commit time, deploy time, work item update, CI finish). It says how recent the activity is, never how recently the source was synced, and no status is judged from it."
+                    "description": "Newest observed_at of this source's rows in scope. Where the source has an event time (commit, review, CI run, deploy, work item update) it is that event time and says how recent the activity is, never how recently the source was synced. Where the source has none (pull requests, commit files, dependencies, the repository row) observed_at is the row's own sync time. No status is judged from it."
                   },
                   "status": {
                     "type": "string",

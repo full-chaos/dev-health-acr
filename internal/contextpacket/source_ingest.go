@@ -62,8 +62,8 @@ func ingestTail(column string) string {
 
 const joinedRepo = ` INNER JOIN repos AS repo FINAL ON repo.id = %[1]s.repo_id AND repo.org_id = %[1]s.org_id WHERE %[1]s.org_id = {org_id:String} AND repo.org_id = {org_id:String} AND repo.id = {repo_id:UUID}`
 
-func joinedIngest(table, alias string) string {
-	return fmt.Sprintf("SELECT max(%[1]s.last_synced), count() FROM %[2]s AS %[1]s FINAL"+joinedRepo+ingestTail(alias+".last_synced"), alias, table)
+func joinedIngest(alias, from string) string {
+	return fmt.Sprintf("SELECT max(%[1]s.last_synced), count() FROM %[2]s FINAL"+joinedRepo+ingestTail(alias+".last_synced"), alias, from)
 }
 
 // sourceIngestStatements read the newest stored sync time of a source's rows
@@ -72,12 +72,12 @@ func joinedIngest(table, alias string) string {
 // subset of rows a request kept.
 var sourceIngestStatements = map[string]string{
 	"repository_freshness.v1":   `SELECT max(last_synced), count() FROM repos FINAL WHERE org_id = {org_id:String} AND id = {repo_id:UUID} AND repo = {repo_slug:String}` + ingestTail("last_synced"),
-	"git_commits.v1":            joinedIngest("git_commits", "c"),
-	"git_commit_files.v1":       joinedIngest("git_commit_stats", "c"),
-	"pull_requests.v1":          joinedIngest("git_pull_requests", "p"),
-	"pull_request_reviews.v1":   joinedIngest("git_pull_request_reviews", "r"),
-	"ci_pipeline_runs.v1":       joinedIngest("ci_pipeline_runs", "c"),
-	"deployments.v1":            joinedIngest("deployments", "d"),
+	"git_commits.v1":            joinedIngest("c", "git_commits AS c"),
+	"git_commit_files.v1":       joinedIngest("c", "git_commit_stats AS c"),
+	"pull_requests.v1":          joinedIngest("p", "git_pull_requests AS p"),
+	"pull_request_reviews.v1":   joinedIngest("r", "git_pull_request_reviews AS r"),
+	"ci_pipeline_runs.v1":       joinedIngest("c", "ci_pipeline_runs AS c"),
+	"deployments.v1":            joinedIngest("d", "deployments AS d"),
 	"work_items.v1":             `SELECT max(greatest(last_synced, ingested_at)), count() FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}` + ingestTail("greatest(last_synced, ingested_at)"),
 	"work_item_dependencies.v1": `SELECT max(d.last_synced), count() FROM work_item_dependencies AS d FINAL INNER JOIN work_items AS w FINAL ON d.source_work_item_id = w.work_item_id WHERE d.org_id = {org_id:String} AND w.org_id = {org_id:String} AND w.repo_id = {repo_id:UUID}` + ingestTail("d.last_synced"),
 	"work_graph.v1":             `SELECT max(last_synced), count() FROM work_graph_edges FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}` + ingestTail("last_synced"),

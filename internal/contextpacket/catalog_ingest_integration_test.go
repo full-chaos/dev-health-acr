@@ -62,6 +62,11 @@ func TestQuietSyncedRepositoryReadsFreshOnARealStore(t *testing.T) {
 		if source == "repository_freshness.v1" {
 			continue
 		}
+		// pull_requests and commit files take their observed_at from the row's
+		// own sync time: no event time exists for them.
+		if source == "pull_requests.v1" || source == "git_commit_files.v1" {
+			continue
+		}
 		if w.LastEventAt == nil || now.Sub(*w.LastEventAt) < 8*24*time.Hour {
 			t.Errorf("%s last_event_at = %v, want the nine-day-old event", source, w.LastEventAt)
 		}
