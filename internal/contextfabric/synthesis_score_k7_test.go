@@ -20,7 +20,10 @@ func k7Input(withTable bool) (SynthesisInput, SubjectRef) {
 	risk, severity := 0.993773746751932, "high"
 	fields := map[string]FactValue{"compounding_risk": {Number: &risk}, "severity": {String: &severity}}
 	if withTable {
-		fields[k7TableField] = FactValue{}
+		fields[k7TableField] = TableFactValue(FactTable{
+			Shape: FactTableBreakdown, Key: []string{"rule"}, Measures: []string{"weight"},
+			Rows: []FactValueRow{{Fields: map[string]FactValue{"rule": StringFactValue("r1"), "weight": NumberFactValue(1)}}},
+		})
 	}
 	input.Facts.Facts = []CanonicalFact{{
 		Kind: FactHealth, Subject: team, Fields: fields,
@@ -186,5 +189,39 @@ func TestAClientSynthesisPayloadHasABareScoreOnlyWithItsDrivers(t *testing.T) {
 		if got := len(scoreWithheldDetails(result)) == 1; got == withTable {
 			t.Fatalf("withTable=%v: fact_score_withheld disclosed = %v", withTable, got)
 		}
+	}
+}
+
+// Each fact is judged on its own fields: a bare score of one team does not take the served score of another.
+func TestOneBareScoreDoesNotWithholdAnotherSubjectsServedScore(t *testing.T) {
+	bare, _ := k7Input(false)
+	served, _ := k7Input(true)
+	other := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_b", Label: "Team B"}
+	servedFact := served.Facts.Facts[0]
+	servedFact.Subject = other
+	bare.Facts.Facts = append(bare.Facts.Facts, servedFact)
+
+	given := RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}.withholdBareScores(context.Background(), storage.Principal{OrgID: "org_1"}, bare)
+
+	if _, has := given.Facts.Facts[0].Fields["compounding_risk"]; has {
+		t.Fatal("team_a kept a score without its drivers table")
+	}
+	if _, has := given.Facts.Facts[1].Fields["compounding_risk"]; !has {
+		t.Fatal("team_b lost a score whose drivers table was served")
+	}
+}
+
+// A derived claim never carries a table, so a derived claim of a declared score is removed even where the fact carries
+// the drivers table.
+func TestADerivedClaimOfAScoreIsStrippedEvenWhereTheTableIsServed(t *testing.T) {
+	input, team := k7Input(true)
+	draft := k7Draft(input, team, "compounding_risk")
+	draft.ClaimedFacts[0].DerivedFrom = []contractsv1.ContextFabricDerivationInput{{FactID: "fact_1", Field: "severity"}, {FactID: "fact_2", Field: "severity"}}
+	draft.ClaimedFacts[0].Operation = contractsv1.ContextFabricDerivationRatio
+
+	got := RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}.withholdBareScoreClaims(context.Background(), storage.Principal{OrgID: "org_1"}, input, draft)
+
+	if len(got.ClaimedFacts) != 0 || len(got.scoresWithheld) != 1 {
+		t.Fatalf("claims %v withheld %v, want the derived score claim removed and disclosed", got.ClaimedFacts, got.scoresWithheld)
 	}
 }

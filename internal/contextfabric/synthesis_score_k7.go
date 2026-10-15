@@ -4,19 +4,24 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// withheldBareScoreFields lists the declared score fields of facts whose drivers table the fact does not carry. The
-// lookup is the K7 lookup of the degraded composition. A nil lookup withholds nothing.
-func withheldBareScoreFields(facts []CanonicalFact, scoreOf func(CanonicalFact, string) (string, bool)) []withheldScore {
+// withholdBareScores is decision K7 at the input: a declared score whose drivers table is not among the fields of the
+// SAME fact is removed before a model or a client synthesizer sees the facts, so neither can write it. Another subject's
+// fact of the same kind is judged on its own fields. The caller's input is not changed.
+func (r RuntimeAnswerSynthesizer) withholdBareScores(ctx context.Context, principal storage.Principal, input SynthesisInput) SynthesisInput {
+	scoreOf := scoreLookup(r.FactCapabilities)
 	if scoreOf == nil {
-		return nil
+		return input
 	}
 	var withheld []withheldScore
-	for _, fact := range facts {
+	var facts []CanonicalFact
+	for index, fact := range input.Facts.Facts {
+		var bare []string
 		for field := range fact.Fields {
 			table, isScore := scoreOf(fact, field)
 			if !isScore {
@@ -25,36 +30,24 @@ func withheldBareScoreFields(facts []CanonicalFact, scoreOf func(CanonicalFact, 
 			if _, served := fact.Fields[table]; served && table != "" {
 				continue
 			}
+			bare = append(bare, field)
 			withheld = append(withheld, withheldScore{Kind: fact.Kind, SubjectKind: fact.Subject.Kind, Field: field, DriversTable: table})
 		}
-	}
-	return withheld
-}
-
-// withholdBareScores is decision K7 at the input: a declared score whose drivers table is not among the fact's fields is
-// removed before a model or a client synthesizer sees the facts, so neither can write it. The caller's input is not
-// changed.
-func (r RuntimeAnswerSynthesizer) withholdBareScores(ctx context.Context, principal storage.Principal, input SynthesisInput) SynthesisInput {
-	scoreOf := scoreLookup(r.FactCapabilities)
-	if scoreOf == nil {
-		return input
-	}
-	withheld := withheldBareScoreFields(input.Facts.Facts, scoreOf)
-	if len(withheld) == 0 {
-		return input
-	}
-	facts := make([]CanonicalFact, len(input.Facts.Facts))
-	for index, fact := range input.Facts.Facts {
+		if len(bare) == 0 {
+			continue
+		}
+		if facts == nil {
+			facts = slices.Clone(input.Facts.Facts)
+		}
 		fields := maps.Clone(fact.Fields)
-		for _, item := range withheld {
-			if item.Kind == fact.Kind && item.SubjectKind == fact.Subject.Kind {
-				if table, isScore := scoreOf(fact, item.Field); isScore && table == item.DriversTable {
-					delete(fields, item.Field)
-				}
-			}
+		for _, field := range bare {
+			delete(fields, field)
 		}
 		fact.Fields = fields
 		facts[index] = fact
+	}
+	if len(withheld) == 0 {
+		return input
 	}
 	input.Facts.Facts = facts
 	input.withheldScores = append(append([]withheldScore(nil), input.withheldScores...), withheld...)
@@ -75,7 +68,9 @@ func (r RuntimeAnswerSynthesizer) withholdBareScoreClaims(ctx context.Context, p
 	kept := make([]ClaimedFact, 0, len(draft.ClaimedFacts))
 	for _, claim := range draft.ClaimedFacts {
 		table, isScore := scoreOf(CanonicalFact{Kind: claim.Kind, Subject: claim.Subject}, claim.Field)
-		if isScore && !driversTableServed(input.Facts.Facts, claim, table) {
+		// A derived claim is computed from other claims' values and never carries a table, so a derived claim of a score is
+		// never served with its drivers.
+		if isScore && (len(claim.DerivedFrom) > 0 || !driversTableServed(input.Facts.Facts, claim, table)) {
 			removed[claim.ClaimID] = struct{}{}
 			withheld = append(withheld, withheldScore{Kind: claim.Kind, SubjectKind: claim.Subject.Kind, Field: claim.Field, DriversTable: table})
 			continue
