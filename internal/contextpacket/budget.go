@@ -7,21 +7,35 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-func applyBudget(packet *contractsv1.ContextPacket, candidates []contractsv1.ContextPacketItem) error {
-	items, tokens := []contractsv1.ContextPacketItem{}, 0
-	for _, candidate := range candidates {
-		cost := estimateTokens(candidate)
-		if len(items) >= packet.Budget.MaxItems || tokens+cost > packet.Budget.MaxOutputTokens {
-			packet.Budget.Truncated = true
-			continue
+// applyBudget keeps candidates in rank order but spends the item and token
+// budgets on every first row of a subject before any later row of one.
+func applyBudget(packet *contractsv1.ContextPacket, candidates []contractsv1.ContextPacketItem, later map[string]bool) error {
+	keep, tokens := make([]bool, len(candidates)), 0
+	used := 0
+	for _, pass := range []bool{false, true} {
+		for index, candidate := range candidates {
+			if later[candidate.PacketItemID] != pass {
+				continue
+			}
+			cost := estimateTokens(candidate)
+			if used >= packet.Budget.MaxItems || tokens+cost > packet.Budget.MaxOutputTokens {
+				packet.Budget.Truncated = true
+				continue
+			}
+			keep[index], used, tokens = true, used+1, tokens+cost
 		}
-		items, tokens = append(items, candidate), tokens+cost
+	}
+	items := []contractsv1.ContextPacketItem{}
+	for index, candidate := range candidates {
+		if keep[index] {
+			items = append(items, candidate)
+		}
 	}
 	packet.Items, packet.Budget.ItemsUsed, packet.Budget.EstimatedTokens = items, len(items), tokens
 	return nil
 }
 
-func finalizePacket(packet *contractsv1.ContextPacket) error {
+func finalizePacket(packet *contractsv1.ContextPacket, later map[string]bool) error {
 	for {
 		ensurePacketArrays(packet)
 		packet.RequiredChecks, packet.RecommendedNextSteps = actionsFor(packet.Items)
@@ -41,7 +55,14 @@ func finalizePacket(packet *contractsv1.ContextPacket) error {
 		if len(packet.Items) == 0 {
 			return fmt.Errorf("base packet serialized bytes %d exceeds maximum %d", bytes, packet.Budget.MaxSerializedBytes)
 		}
-		packet.Items, packet.Budget.Truncated = packet.Items[:len(packet.Items)-1], true
+		drop := len(packet.Items) - 1
+		for index := len(packet.Items) - 1; index >= 0; index-- {
+			if later[packet.Items[index].PacketItemID] {
+				drop = index
+				break
+			}
+		}
+		packet.Items, packet.Budget.Truncated = append(packet.Items[:drop], packet.Items[drop+1:]...), true
 	}
 }
 
