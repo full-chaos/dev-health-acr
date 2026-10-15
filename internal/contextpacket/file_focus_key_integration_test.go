@@ -24,6 +24,7 @@ func TestFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
 		fmt.Sprintf(`INSERT INTO file_hotspot_daily (org_id, repo_id, day, file_path, computed_at) VALUES ('%s', '%s', %s, 'src/checkout.go', %s)`, injOrg, injRepoID, day, now),
 		fmt.Sprintf(`INSERT INTO file_complexity_snapshots (org_id, repo_id, as_of_day, file_path, computed_at) VALUES ('%s', '%s', %s, 'src/checkout.go', %s)`, injOrg, injRepoID, day, now),
 		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%s', '%s', 'c0ffee', 'src/checkout.go', 1, 2, %s)`, injOrg, injRepoID, now),
+		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%s', '%s', 'c0ffee', '__AGGREGATE__', 5, 6, %s)`, injOrg, injRepoID, now),
 	} {
 		scopeExec(t, ctx, direct, statement)
 	}
@@ -39,13 +40,19 @@ func TestFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", source.ID, err)
 		}
-		if len(refs) != 1 {
-			t.Fatalf("%s: %d rows, want 1", source.ID, len(refs))
+		for _, ref := range refs {
+			got, _ := ref.Metadata["focus_key"].(string)
+			if ref.Source.EntityID == "c0ffee:__AGGREGATE__" {
+				if got != "" {
+					t.Errorf("aggregate sentinel focus_key = %q, want none", got)
+				}
+				continue
+			}
+			if got != want {
+				t.Errorf("%s focus_key = %q, want %q", source.ID, got, want)
+			}
+			seen++
 		}
-		if got, _ := refs[0].Metadata["focus_key"].(string); got != want {
-			t.Errorf("%s focus_key = %q, want %q", source.ID, got, want)
-		}
-		seen++
 	}
 	if seen != 3 {
 		t.Fatalf("read %d of the 3 file sources", seen)
