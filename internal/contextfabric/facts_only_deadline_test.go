@@ -42,9 +42,9 @@ func (s factsOnlySynth) Synthesize(ctx context.Context, principal storage.Princi
 	}
 	return InvestigationResult{
 		Status: InvestigationComplete, DirectJudgment: "Model prose.", CurrentState: "Model prose.",
-		StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
+		StrongestPressures: []string{"Model pressure."}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
 		ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
-		Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
+		Limitations: []string{"Model limitation."}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
 		Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		DeterministicAnswer: "Model prose.", Warnings: []string{},
 		Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
@@ -149,8 +149,16 @@ func TestAModelAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T
 			if !slices.Equal(classes, []SynthesisFailureClass{tc.class}) {
 				t.Fatalf("coverage failure classes = %q, want [%s]", classes, tc.class)
 			}
-			if encoded, marshalErr := json.Marshal(result); marshalErr != nil || strings.Contains(string(encoded), "Model prose.") {
-				t.Fatalf("the served document carries the model's prose anywhere (marshal err %v)", marshalErr)
+			encoded, marshalErr := json.Marshal(result)
+			for _, leaked := range []string{"Model prose.", "Model pressure.", "Model limitation."} {
+				if marshalErr != nil || strings.Contains(string(encoded), leaked) {
+					t.Fatalf("the served document carries %q from the model draft (marshal err %v)", leaked, marshalErr)
+				}
+			}
+			for _, claim := range result.ClaimedFacts {
+				if !strings.HasPrefix(claim.ClaimID, "server:fact:") {
+					t.Fatalf("claim %q is not a server-minted canonical fact claim", claim.ClaimID)
+				}
 			}
 			var served *PlanNarrowingEvent
 			for index := range telemetry.planNarrowings {
@@ -321,5 +329,182 @@ func TestAWorkItemTupleAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *t
 	}
 	if gate.Stats().InFlight != 0 {
 		t.Error("facts-only tuple answer leaked a membership lease")
+	}
+}
+
+// memberCutDegradeCapable gives the member-cut fixture's model synthesizer the degraded composer production has.
+type memberCutDegradeCapable struct{ AnswerSynthesizer }
+
+func (m memberCutDegradeCapable) ComposeDegraded(ctx context.Context, principal storage.Principal, input SynthesisInput, failure *SynthesisFailure) (InvestigationResult, error) {
+	return RuntimeAnswerSynthesizer{}.ComposeDegraded(ctx, principal, input, failure)
+}
+
+func factsOnlyServedEvent(telemetry *recordingTelemetry) *PlanNarrowingEvent {
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].FactsOnlyServed {
+			return &telemetry.planNarrowings[index]
+		}
+	}
+	return nil
+}
+
+func assertFactsOnlyLabelled(t *testing.T, result InvestigationResult, class SynthesisFailureClass) {
+	t.Helper()
+	notRun := 0
+	for _, detail := range result.Coverage.Details {
+		switch detail.Code {
+		case contractsv1.ContextFabricCoverageDetailSynthesisNotRun:
+			notRun++
+			if detail.FailureClass != class {
+				t.Fatalf("not_run detail class %q, want %q", detail.FailureClass, class)
+			}
+		case contractsv1.ContextFabricCoverageDetailSynthesisModelFailed:
+			t.Fatalf("a facts-only answer filed %+v, which says a model call failed", detail)
+		}
+	}
+	if notRun != 1 || result.Status != InvestigationDegraded || !result.Coverage.Partial {
+		t.Fatalf("not_run details %d status %q partial %v, want one, degraded, partial", notRun, result.Status, result.Coverage.Partial)
+	}
+}
+
+// The member cut declines for want of a second synthesis (no deadline reserve in this deployment, so the first
+// answer was model-written and over the item budget): the facts are served, labelled, and the cut's trace says why it did not run.
+func TestAMemberCutDeclinedForWantOfSynthesisTimeServesTheFactsLabelled(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	engine := memberCutEngine(t, memberCutGaps, nil, 0, telemetry)
+	engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+
+	result, err := investigateMemberCut(t, engine)
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only answer", err)
+	}
+	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureDeadline)
+	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Declined != MemberCutNoSynthesisTime {
+		t.Fatalf("member-cut events %+v, want one declined no_synthesis_time", telemetry.memberCuts)
+	}
+	if served := factsOnlyServedEvent(telemetry); served == nil || served.RetryDeclined != RetryDeclinedNoReserve {
+		t.Fatalf("served event %+v, want facts_only_served with retry_declined no_reserve", served)
+	}
+	if cohortMemberCount(result.Cohort) != memberCutCallerCap {
+		t.Fatalf("cohort has %d members, want all %d: the facts-only answer narrows nothing", cohortMemberCount(result.Cohort), memberCutCallerCap)
+	}
+}
+
+// A bytes overrun is outside the member cut (it cuts members for items only): the facts-only answer is served from the
+// early return of the same block, labelled the same way.
+func TestABytesOverrunTheMemberCutDoesNotCoverServesTheFactsLabelled(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	engine := memberCutEngineAtCeiling(t, 10, nil, 0, 29000, memberCutPopulation, telemetry)
+	engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+
+	result, err := investigateMemberCut(t, engine)
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only answer", err)
+	}
+	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureDeadline)
+	if len(telemetry.memberCuts) != 0 {
+		t.Fatalf("member-cut events %+v, want none: the cut does not cover a bytes overrun", telemetry.memberCuts)
+	}
+}
+
+// Refusals the budget block does not own stay refusals: a fact read that aborted never reaches a synthesis, and the retry
+// reasons that say a second synthesis could not help (or that the caller wrote the synthesis) never serve facts-only.
+func TestRefusalsOutsideTheBudgetBlockStayRefusals(t *testing.T) {
+	t.Parallel()
+	for _, declined := range []RetryDeclinedReason{RetryDeclinedSuppliedSynthesis, RetryDeclinedNotApplicable} {
+		if factsOnlyDeclinedReason(declined) {
+			t.Fatalf("retry declined %q serves facts-only", declined)
+		}
+	}
+	for _, declined := range []RetryDeclinedReason{RetryDeclinedInsufficientDeadline, RetryDeclinedNoReserve, RetryDeclinedNothingToNarrow, RetryDeclinedCannotReduceAxis} {
+		if !factsOnlyDeclinedReason(declined) {
+			t.Fatalf("retry declined %q does not serve facts-only", declined)
+		}
+	}
+	var modelCalls, degraded int
+	engine := factsOnlyEngine(t, budgetStageCohort(2), budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, &recordingTelemetry{})
+	engine.facts = factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return CanonicalFactBundle{}, ErrFactReadAborted
+	})
+	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if !errors.Is(err, ErrFactReadAborted) || modelCalls != 0 || degraded != 0 {
+		t.Fatalf("err %v model calls %d compositions %d, want the abort and no synthesis", err, modelCalls, degraded)
+	}
+}
+
+// A facts-only answer over the byte ceiling is not served and not cut silently: the budget refusal stands with its
+// continuation, and the trace says the facts-only answer was tried.
+func TestAFactsOnlyAnswerOverTheByteCeilingLeavesTheBudgetRefusal(t *testing.T) {
+	telemetry := &recordingTelemetry{}
+	engine := memberCutEngineAtCeiling(t, 10, nil, 0, 28000, memberCutPopulation, telemetry)
+	engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+
+	_, err := investigateMemberCut(t, engine)
+
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("err = %v, want the bytes budget refusal", err)
+	}
+	attempted := false
+	for _, event := range telemetry.planNarrowings {
+		attempted = attempted || (event.RefusalPlanned && event.FactsOnlyAttempted && !event.FactsOnlyServed)
+	}
+	if !attempted || factsOnlyServedEvent(telemetry) != nil {
+		t.Fatal("the refusal event does not say the facts-only answer was tried and not served")
+	}
+}
+
+// The rows alone overran and a second synthesis could not shrink them (cannot_reduce_axis): the facts-only answer
+// carries scalar values, not tables, so it is served when it fits.
+func TestAByteOverrunTheRowsAloneCauseServesTheFactsLabelled(t *testing.T) {
+	var calls int
+	telemetry := &recordingTelemetry{}
+	engine := chaos6558Engine(t, &calls, telemetry, chaos6558Shape{rowPadding: 2000, maxBytes: 40000})
+	engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only answer", err)
+	}
+	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureNotNarrowable)
+	if served := factsOnlyServedEvent(telemetry); served == nil || served.RetryDeclined != RetryDeclinedCannotReduceAxis {
+		t.Fatalf("served event %+v, want facts_only_served with retry_declined cannot_reduce_axis", served)
+	}
+}
+
+// The retry ran and its answer still overran: the facts the first pass read are served instead of the refusal.
+func TestARetryThatStillOverranServesTheFactsLabelled(t *testing.T) {
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	engine := budgetStageEngine(t, budgetStageCohort(4), 20, budgetStageOptions(4, time.Second), &calls, telemetry)
+	engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only answer", err)
+	}
+	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureNotNarrowable)
+	served := factsOnlyServedEvent(telemetry)
+	if calls != 2 || served == nil || !served.RetryAttempted {
+		t.Fatalf("model calls %d served event %+v, want the retry to have run and the served event to say so", calls, served)
+	}
+	for _, event := range telemetry.planNarrowings {
+		if event.RefusalPlanned {
+			t.Fatalf("a refusal was planned for a served answer: %+v", event)
+		}
+	}
+}
+
+// supplied_synthesis stays a refusal: the caller wrote the answer, so facts-only is not eligible for a client synthesis.
+func TestASuppliedSynthesisIsNeverReplacedByTheFactsOnlyAnswer(t *testing.T) {
+	var modelCalls, degraded int
+	engine := factsOnlyEngine(t, budgetStageCohort(2), budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, &recordingTelemetry{})
+	request := validInvestigationRequestWithConfirmedWindow()
+	if factsOnlyDeclinedReason(RetryDeclinedSuppliedSynthesis) || engine.factsOnlyEligible(context.Background(), synthesisAssemblyParams{Request: func() InvestigationRequest { r := request; r.SynthesisMode = SynthesisModeClient; return r }()}, InvestigationResult{}) {
+		t.Fatal("a supplied synthesis is eligible for the facts-only answer")
 	}
 }

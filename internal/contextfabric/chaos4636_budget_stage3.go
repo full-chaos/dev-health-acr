@@ -981,7 +981,17 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return served, retryPending, nil
 	}
 	retryPending.discardObservationCoverFrom(ceilingMark)
+	// The retry ran and its answer is still over: the facts the first pass read are served instead of a refusal, when
+	// they fit. Before the refusal event, for the same reason as the ceiling fit above.
+	retryFactsOnlyAttempted := false
+	if retryOverrun != contractsv1.ContextFabricBudgetFits && len(cutRemoved) == 0 && e.factsOnlyEligible(ctx, params, result) {
+		retryFactsOnlyAttempted = true
+		if served, pending, ok := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, RetryDeclinedNotApplicable, before); ok {
+			return served, pending, nil
+		}
+	}
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryMeasured.Overrun, narrowed.Basis)
+	event.FactsOnlyAttempted = retryFactsOnlyAttempted
 	event.recordMeasurement(retryMeasured)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
 	// which ran against the narrowed cohort. Predicting from `before` would
