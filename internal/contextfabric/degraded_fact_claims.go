@@ -40,6 +40,9 @@ type withheldScore struct {
 // per fact kind. A nil lookup claims every scalar, as before.
 func mintDegradedFactClaimsWithholding(facts []CanonicalFact, claimLimit int, scoreOf func(CanonicalFact, string) (driversTable string, isScore bool)) (claims []ClaimedFact, evidence []string, truncated bool, withheld []withheldScore) {
 	omitted := false
+	// full is set when the claim limit or the evidence bound is reached: from then on no field is claimed, and the scan
+	// goes on only to find every declared score the answer withheld, so the trace names all of them.
+	full := false
 	seenWithheld := map[string]struct{}{}
 	claims = []ClaimedFact{}
 	evidence = []string{}
@@ -72,6 +75,9 @@ func mintDegradedFactClaimsWithholding(facts []CanonicalFact, claimLimit int, sc
 				Field:   field,
 				Value:   value,
 			}
+			if full {
+				continue
+			}
 			if claim.Validate() != nil {
 				// A value the contract cannot carry as a claim is left out,
 				// and the answer says part of the facts is missing.
@@ -86,7 +92,8 @@ func mintDegradedFactClaimsWithholding(facts []CanonicalFact, claimLimit int, sc
 			}
 			if len(claims) >= claimLimit ||
 				len(evidence)+len(added) > contractsv1.ContextFabricEvidenceRefIDsMaxCount {
-				return claims, evidence, true, withheld
+				full = true
+				continue
 			}
 			for _, ref := range added {
 				seenEvidence[ref] = struct{}{}
@@ -95,7 +102,7 @@ func mintDegradedFactClaimsWithholding(facts []CanonicalFact, claimLimit int, sc
 			claims = append(claims, claim)
 		}
 	}
-	return claims, evidence, omitted, withheld
+	return claims, evidence, omitted || full, withheld
 }
 
 // degradedClaimLimit is how many claims a degraded answer may carry: the

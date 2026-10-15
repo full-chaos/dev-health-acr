@@ -120,3 +120,23 @@ func TestTheWithheldScoreTraceNamesTheDriversTableOfEachSubjectKind(t *testing.T
 		t.Fatalf("withheld kinds %v, want health once", kinds)
 	}
 }
+
+// The claim limit stops claims, not the search for withheld scores: with room for one claim, the score of a later fact
+// is still named on the trace (the answer is truncated and the score is not claimed either way).
+func TestTheClaimLimitDoesNotStopTheSearchForWithheldScores(t *testing.T) {
+	capabilities := k7Capabilities()
+	plain := CanonicalFact{Kind: FactStatus, Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "A"},
+		Fields: map[string]FactValue{"a": {String: ptrString("x")}, "b": {String: ptrString("y")}}, EvidenceRefIDs: []string{"ref_1"}}
+	risk, severity := 0.5, "high"
+	health := CanonicalFact{Kind: FactHealth, Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "A"},
+		Fields: map[string]FactValue{"compounding_risk": {Number: &risk}, "severity": {String: &severity}}, EvidenceRefIDs: []string{"ref_2"}}
+
+	claims, _, truncated, withheld := mintDegradedFactClaimsWithholding([]CanonicalFact{plain, health}, 1, scoreLookup(capabilities))
+
+	if len(claims) != 1 || !truncated {
+		t.Fatalf("claims %d truncated %v, want one claim and a truncated answer", len(claims), truncated)
+	}
+	if len(withheld) != 1 || withheld[0].Field != "compounding_risk" || withheld[0].DriversTable != "compounding_risk_drivers" {
+		t.Fatalf("withheld %+v, want the later fact's compounding_risk named", withheld)
+	}
+}
