@@ -280,7 +280,12 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // the start of ownership, so the edges projected before v21 hide a synced
 // ownership from every graph read of a window that ended before the stamp;
 // only the rebuild clears their stored start.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v21"
+//
+// v21 -> v22 (CHAOS-9794): a work item -> team edge is retracted by a
+// relationship tombstone when its attribution stops qualifying (the row leaves
+// is_primary 1/2). A deactivated team still leaves its edges open (v20). Edges
+// that went stale before v22 are only cleared by the rebuild.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v22"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -893,6 +898,10 @@ type presenceTelemetryLedger struct {
 	// workItemTeamCollapsed counts work_item_team_attributions rows folded
 	// into another row of the same (work item, team) by queryWorkItemTeams.
 	workItemTeamCollapsed int
+	// workItemTeamRetracted counts the tombstones queryWorkItemTeams emitted
+	// for pairs whose attribution no longer qualifies. A tombstone for an
+	// edge that was never projected is a no-op, so this is an upper bound.
+	workItemTeamRetracted int
 	// membership is the page-level record of the read
 	// (membership_read_telemetry.go).
 	membership membershipReadLedger
@@ -969,6 +978,24 @@ func (l *presenceTelemetryLedger) recordWorkItemTeamCollapsed(rows int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.workItemTeamCollapsed += rows
+}
+
+func (l *presenceTelemetryLedger) recordWorkItemTeamRetracted() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.workItemTeamRetracted++
+}
+
+func (l *presenceTelemetryLedger) workItemTeamRetractedCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.workItemTeamRetracted
 }
 
 func (l *presenceTelemetryLedger) workItemTeamCollapsedCount() int {
@@ -1162,6 +1189,12 @@ func logWorkItemTeamCollapsed(ctx context.Context, logger *slog.Logger, orgID st
 		logger.InfoContext(ctx, "devhealthsource collapsed work item team attribution rows onto one edge per work item and team",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"work_item_team_rows_collapsed", collapsed)
+	}
+	if retracted := ledger.workItemTeamRetractedCount(); retracted > 0 {
+		logger.InfoContext(ctx, "devhealthsource tombstoned work item team edges whose attribution no longer qualifies",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
+			"counts", "tombstones emitted; a tombstone for an edge that was never projected is a no-op, so this is an upper bound on edges removed",
+			"work_item_team_edge_tombstones", retracted)
 	}
 }
 

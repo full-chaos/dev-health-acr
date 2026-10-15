@@ -63,8 +63,10 @@ func TestFailureGoalRanksFailuresAndTheirCausesAboveUnrelatedSuccesses(t *testin
 func TestGoalWordsFitCitationValuesAndLabelsNeverFieldNames(t *testing.T) {
 	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	byKeyName := roleRow("ev-key-name", "deployment", "d1", "production deployment", "status=success, release_ref=abc123", at)
+	byKeyName.SourceVersion = "deployments.v1"
 	byLabel := roleRow("ev-label", "pull_request", "1", "Release notes draft", "merged", at.Add(-48*time.Hour))
 	byValue := roleRow("ev-value", "deployment", "d2", "production deployment", "status=success, release_ref=release-2026-10", at.Add(-72*time.Hour))
+	byValue.SourceVersion = "deployments.v1"
 	other := roleRow("ev-other", "pull_request", "2", "Unrelated change", "merged", at)
 	got := rankedIDs(t, "release", 10, []contractsv1.EvidenceRef{other, byKeyName, byLabel, byValue})
 	if !slices.Equal(got[:2], []string{"ev-label", "ev-value"}) && !slices.Equal(got[:2], []string{"ev-value", "ev-label"}) {
@@ -103,5 +105,27 @@ func TestGoalNamingFailureAndCodeHealthFitsBothRoleSets(t *testing.T) {
 		if !slices.Contains(top, id) {
 			t.Fatalf("top 4 = %v, want the failed deployment, its cause and both code-health rows (%s missing)", top, id)
 		}
+	}
+}
+
+func TestGoalWordInAFreeTextCitationStillFits(t *testing.T) {
+	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	commit := roleRow("ev-commit-text", "commit", "c1", "Update deploy script", "release=blocked until QA signs off", at.Add(-48*time.Hour))
+	commit.SourceVersion = "git_commits.v1"
+	other := roleRow("ev-unrelated", "pull_request", "2", "Unrelated change", "merged", at)
+	got := rankedIDs(t, "release", 10, []contractsv1.EvidenceRef{other, commit})
+	if got[0] != "ev-commit-text" {
+		t.Fatalf("order = %v, want the commit whose message contains the goal word first", got)
+	}
+}
+
+func TestAFieldNameTheSourceDidNotWriteStillFits(t *testing.T) {
+	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	graph := roleRow("ev-graph-text", "work_graph_edge", "e1", "Edge", "release=blocked by QA", at.Add(-48*time.Hour))
+	graph.SourceVersion = "work_graph.v1"
+	other := roleRow("ev-unrelated", "pull_request", "2", "Unrelated change", "merged", at)
+	got := rankedIDs(t, "release", 10, []contractsv1.EvidenceRef{other, graph})
+	if got[0] != "ev-graph-text" {
+		t.Fatalf("order = %v, want the edge whose text contains the goal word first: work_graph writes edge_id=, not release=", got)
 	}
 }

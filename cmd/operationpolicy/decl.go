@@ -32,7 +32,9 @@ type operationDecl struct {
 	Restricted        directread.CallerScope
 	// PrimaryList names the list a cut page cuts when the operation has more
 	// than one top-level list (for example "hotspots.rows").
-	PrimaryList       string
+	PrimaryList string
+	// KeptLists names the top-level lists a cut page never empties.
+	KeptLists         []string
 	AdditionalOutputs []string
 	OutputExceptions  map[string]string
 	WithheldOutputs   map[string]string
