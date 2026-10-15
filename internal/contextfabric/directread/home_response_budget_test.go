@@ -3,6 +3,8 @@ package directread_test
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -218,5 +220,67 @@ func TestOnlyHomeDeclaresAPrimaryListWithoutALimitVariable(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "home=home.signals" {
 		t.Fatalf("declared primary lists without a limit variable: %v, want [home=home.signals]", got)
+	}
+}
+
+// homeCatalogueWith loads the shipped catalogue with home's primary and kept
+// lists replaced.
+func homeCatalogueWith(t *testing.T, primary string, kept []string) error {
+	t.Helper()
+	raw, err := os.ReadFile("operations.v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file directread.CatalogueFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	for i := range file.Operations {
+		if file.Operations[i].Name == "home" {
+			file.Operations[i].PrimaryListPath = primary
+			file.Operations[i].KeptLists = kept
+		}
+	}
+	out, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = directread.LoadCatalogue(out)
+	return err
+}
+
+func TestAKeptListMustBeAnotherTopLevelListOfADeclaredPrimaryListOperation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		primary string
+		kept    []string
+	}{
+		"no primary list":   {"", []string{"home.constraint.evidence"}},
+		"the primary list":  {"home.signals", []string{"home.signals"}},
+		"not a list":        {"home.signals", []string{"home.healthState"}},
+		"a list inside row": {"home.signals", []string{"home.deltas[*].spark"}},
+		"listed twice":      {"home.signals", []string{"home.constraint.evidence", "home.constraint.evidence"}},
+	} {
+		if err := homeCatalogueWith(t, tc.primary, tc.kept); err == nil || !strings.Contains(err.Error(), "kept") {
+			t.Errorf("%s: loaded (%v)", name, err)
+		}
+	}
+	if err := homeCatalogueWith(t, "home.signals", []string{"home.constraint.evidence"}); err != nil {
+		t.Fatalf("a valid kept list was refused: %v", err)
+	}
+}
+
+func TestShippedHomeKeepsEveryListThatSaysWhatTheAnswerCannotSee(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	op, _ := cat.Lookup("home")
+	want := []string{"home.constraint.evidence", "home.constraint.experiments", "home.dataConfidence.caveats",
+		"home.dataConfidence.connectedSources", "home.dataConfidence.missingSources", "home.freshness.sources",
+		"home.scopeDataConfidence.caveats"}
+	if got, ok := op.PrimaryList(); !ok || got != "home.signals" || !slices.Equal(op.KeptLists, want) {
+		t.Fatalf("primary %q %v kept %v", got, ok, op.KeptLists)
+	}
+	for _, sibling := range op.SiblingLists() {
+		if slices.Contains(want, sibling) {
+			t.Fatalf("kept list %s is droppable", sibling)
+		}
 	}
 }

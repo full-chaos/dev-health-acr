@@ -142,7 +142,7 @@
               },
               "primary_list": {
                 "type": "string",
-                "description": "Present when the answer has more than one list: the list a cut page cuts. The other lists are carried whole, or emptied and named in page.cut."
+                "description": "Present when the answer has more than one list: the list a cut page cuts. The other lists are carried whole, or emptied and named in page.cut; a list that says what the answer cannot see (caveats, missing sources) is never emptied."
               },
               "variables": {
                 "type": "array",

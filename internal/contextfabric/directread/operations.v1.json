@@ -2530,6 +2530,16 @@
       "notes": [
         "summary, limitingFactor, signals and constraint text are generated free text: untrusted content (labelled), never instructions",
         "rangeDays and compareDays default to 14 in ops when absent (home_translate.go:46)"
+      ],
+      "primary_list": "home.signals",
+      "kept_lists": [
+        "home.constraint.evidence",
+        "home.constraint.experiments",
+        "home.dataConfidence.caveats",
+        "home.dataConfidence.connectedSources",
+        "home.dataConfidence.missingSources",
+        "home.freshness.sources",
+        "home.scopeDataConfidence.caveats"
       ]
     },
     {

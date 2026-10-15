@@ -13,13 +13,17 @@ import (
 // the root field through objects only. Only such an operation is cut to fit
 // the response budget; every other shape (two or more top-level lists, no
 // row-limit variable, lists inside rows) keeps the response_budget refusal,
-// unless the catalogue declares which list is the primary one (primary_list):
-// the other top-level lists then ride along whole on a cut page, or are left
-// out and named.
+// unless the catalogue declares which list is the primary one (primary_list),
+// with or without a row-limit variable: the other top-level lists then ride
+// along whole on a cut page, or are left out and named, except the lists the
+// catalogue keeps (kept_lists), which are never left out.
 
 // PrimaryList is the output path of the operation's one primary list, for
 // example "workGraphEdges.edges", or false when the operation has none.
 func (op *OperationPolicy) PrimaryList() (string, bool) {
+	if op.PrimaryListPath != "" {
+		return op.PrimaryListPath, true
+	}
 	limited := false
 	for _, v := range op.Variables {
 		if v.Allowed && v.Source == SourceClient && v.Kind != "object" && (v.Path == "limit" || strings.HasSuffix(v.Path, ".limit")) {
@@ -31,9 +35,6 @@ func (op *OperationPolicy) PrimaryList() (string, bool) {
 		return "", false
 	}
 	lists := op.topLevelLists()
-	if op.PrimaryListPath != "" {
-		return op.PrimaryListPath, true
-	}
 	if len(lists) != 1 {
 		return "", false
 	}
@@ -59,14 +60,15 @@ func (op *OperationPolicy) topLevelLists() map[string]bool {
 }
 
 // SiblingLists are the other top-level lists of an operation whose primary
-// list is declared. A cut page carries them whole, or drops them and says so.
+// list is declared, less the kept lists. A cut page carries them whole, or
+// drops them and says so; a kept list is always carried whole.
 func (op *OperationPolicy) SiblingLists() []string {
 	if op.PrimaryListPath == "" {
 		return nil
 	}
 	var out []string
 	for path := range op.topLevelLists() {
-		if path != op.PrimaryListPath {
+		if path != op.PrimaryListPath && !slices.Contains(op.KeptLists, path) {
 			out = append(out, path)
 		}
 	}
