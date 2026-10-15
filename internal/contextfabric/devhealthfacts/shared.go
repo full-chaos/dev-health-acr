@@ -1191,7 +1191,12 @@ import (
 // incident stored at several revisions counted once per revision, and one
 // deleted, or a mapping deactivated, in its latest revision still counted
 // through an earlier one; an answer saved under v232 is not reused.
-const QueryVersion = "devhealthfacts.clickhouse.v233"
+//
+// v235 -> v236: the team metrics fact and the project rollup fact carry
+// commit_counts_basis beside the commit counts (owner_share_weighted_latest_day);
+// an answer saved under v235 lacks it. (v234 and v235 are held by CHAOS-9752 and
+// CHAOS-9757; the number is re-checked against main at merge.)
+const QueryVersion = "devhealthfacts.clickhouse.v236"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

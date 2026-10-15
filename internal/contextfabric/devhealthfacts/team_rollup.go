@@ -32,6 +32,13 @@ import (
 // teamRollupBasis is the rollup_basis value every team rollup fact carries.
 const teamRollupBasis = "team_owned_repositories"
 
+// commitCountsBasis is the commit_counts_basis value the team metrics fact and
+// the project rollup fact carry beside the commit counts: the fact's value is
+// the latest day, and each count is the sum over the owned repositories of the
+// repository's count times the team's linked ownership share (a co-owner
+// reads a fraction). It is not a mean and not a window total.
+const commitCountsBasis = "owner_share_weighted_latest_day"
+
 // teamNoOwnedRepositoriesReason is the not_applicable reason when every
 // requested team owns no resolvable repository: the kind cannot be rolled up
 // for it, which is distinct from a measured zero.
