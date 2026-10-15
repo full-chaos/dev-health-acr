@@ -1145,33 +1145,27 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 // candidate, is cheap and permanent; live ClickHouse holds zero such rows
 // today (verified), but the filter guards against a future one.
 // The parent join is LEFT: a child whose parent_id is empty, names no work
-// item, or names several without one in the child's own repository is read
-// too, and emits a part_of_edges tombstone instead of an edge, so a changed
+// item in the child's own repository is read too, and emits a part_of_edges tombstone instead of an edge, so a changed
 // parent never leaves the old edge open. The repos join is LEFT for the
 // zero-UUID reason queryWorkItems has -- a Linear-sourced child work item's
 // repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(c.repo_id), ':', c.work_item_id)"
-	// parent_id names its parent by work item id alone. pa counts the work item
-	// rows that id names (one per repository that holds it); p2 is the one in
-	// the child's own repository, if any. A child gets one row: its parent
-	// (the only candidate, or the one in its own repository), a row that
-	// retracts its PART_OF edges (no parent, none found, or several candidates
-	// none in its own repository), never several parents.
+	// parent_id names its parent by work item id alone, which is not a
+	// qualified key: the parent is the work item of that id in the CHILD'S OWN
+	// repository, and nothing else. pa counts the rows the id names anywhere,
+	// so a child whose id names none and one whose id names only other
+	// repositories are told apart (the second is counted and logged). A child
+	// gets one row: its parent, or a row that retracts its PART_OF edges.
 	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
        p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id),
-       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p2.work_item_id, '') != ''), c.last_synced
+       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), c.last_synced
 FROM work_items AS c FINAL
-LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
-LEFT JOIN work_items AS p2 FINAL ON p2.org_id = c.org_id AND p2.work_item_id = c.parent_id AND p2.repo_id = c.repo_id
-LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, min(toString(repo_id)) AS first_repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
+LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id AND p.repo_id = c.repo_id
+LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + `
-  AND (c.parent_id = ''
-    OR (c.parent_id = c.work_item_id AND p.repo_id = c.repo_id)
-    OR (c.parent_id != c.work_item_id AND (ifNull(pa.candidates, 0) <= 1
-      OR if(p2.work_item_id != '', p.repo_id = c.repo_id, toString(p.repo_id) = pa.first_repo))))` + orderBy("c.last_synced", rowKey)
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
 	ambiguous := 0
 	items, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var childID, parentID, repoID, repoSlug, parentRepoID string
@@ -1200,8 +1194,8 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 			retract = "part_of_parent_cleared"
 		case candidates == 0:
 			retract = "part_of_parent_unresolved"
-		case candidates > 1 && ownRepoCandidate == 0:
-			retract = "part_of_parent_ambiguous"
+		case ownRepoCandidate == 0:
+			retract = "part_of_parent_not_in_own_repository"
 			ambiguous++
 		}
 		if retract != "" {
@@ -1246,7 +1240,7 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 	if ambiguous > 0 {
 		startLogger(ctx).WarnContext(ctx, "devhealthsource part_of parent ambiguous",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "children", ambiguous,
-			"reason", "the parent id is held under several repositories and none is the child's own; no PART_OF edge is asserted")
+			"reason", "the parent id is held only under other repositories, and a bare parent id resolves in the child's own repository only; no PART_OF edge is asserted")
 	}
 	return items, truncated, err
 }
