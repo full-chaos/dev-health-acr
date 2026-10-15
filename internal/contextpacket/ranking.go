@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v4"
+	RankingVersionV1          = "ranker.v5"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -27,16 +27,25 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 		}
 		refs = append(refs, ref)
 	}
-	ownScores := make(map[string]int, len(refs))
-	for _, ref := range refs {
-		ownScores[ref.EvidenceRefID] = max(ownScores[ref.EvidenceRefID], goalScore(ref, goal))
+	type scoredRef struct {
+		ref   contractsv1.EvidenceRef
+		score int
 	}
-	sort.SliceStable(refs, func(i, j int) bool {
-		if l, r := goalScore(refs[i], goal), goalScore(refs[j], goal); l != r {
-			return l > r
+	scored := make([]scoredRef, len(refs))
+	ownScores := make(map[string]int, len(refs))
+	for i, ref := range refs {
+		scored[i] = scoredRef{ref: ref, score: goalScore(ref, goal)}
+		ownScores[ref.EvidenceRefID] = max(ownScores[ref.EvidenceRefID], scored[i].score)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
 		}
-		return evidenceBefore(refs[i], refs[j], ownScores, roles)
+		return evidenceBefore(scored[i].ref, scored[j].ref, ownScores, roles)
 	})
+	for i := range scored {
+		refs[i] = scored[i].ref
+	}
 	refs = deduplicateEvidence(refs)
 	scores := effectiveGoalScores(refs, goal, roles)
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
