@@ -3,6 +3,7 @@ package contextpacket_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -148,13 +149,9 @@ func TestAssembler_rows_without_a_focus_key_are_allocated_as_before(t *testing.T
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	files := 0
-	for _, item := range packet.Items {
-		if item.RelatedEntities[0].Label == "saved-payment-methods-at-checkout.go" {
-			files++
-		}
-	}
-	if files != 3 {
-		t.Fatalf("files = %d, want 3: rows without a focus key keep their old allocation (%v)", files, itemEvidenceIDs(packet))
+	// The served ids and their order on main (ranker.v6) for the same input.
+	want := []string{"ev-commit_file", "ev-file_complexity", "ev-file_hotspot", "ev-commit-0", "ev-commit-1", "ev-commit-2", "ev-commit-3", "ev-commit-4", "ev-commit-5", "ev-state", "ev-pressure", "ev-action"}
+	if got := itemEvidenceIDs(packet); !slices.Equal(got, want) {
+		t.Fatalf("served = %v, want the main order %v: rows without a focus key keep their old allocation", got, want)
 	}
 }

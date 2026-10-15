@@ -4,43 +4,64 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
+	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // The hotspot, complexity and commit-file facts of one file must carry the same
-// focus key so the packet gives the file one slot first.
-func TestFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
+// focus key so the packet gives the file one slot first. It runs the three real
+// catalog statements against a ClickHouse migrated by the ops checkout (the
+// live schema parity job), never a hand-built schema.
+func TestLiveFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
+	dsn := os.Getenv("ACR_CLICKHOUSE_INTEGRATION_DSN")
+	if dsn == "" {
+		if os.Getenv("ACR_CLICKHOUSE_INTEGRATION_REQUIRED") == "1" {
+			t.Fatal("ACR_CLICKHOUSE_INTEGRATION_DSN is required when native ClickHouse integration is mandatory")
+		}
+		t.Skip("ACR_CLICKHOUSE_INTEGRATION_DSN is required to run the file statements against an ops-migrated ClickHouse")
+	}
 	ctx := context.Background()
-	query, direct := startScopeClickHouse(t, ctx)
-	for _, statement := range devhealthschema.DDL() {
-		scopeExec(t, ctx, direct, statement)
+	options, err := clickhousedriver.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse DSN: %v", err)
 	}
-	for _, statement := range devhealthschema.ProjectionDDL("file_hotspot_daily") {
-		scopeExec(t, ctx, direct, statement)
+	direct, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatalf("open native connection: %v", err)
 	}
-	// The complexity run projection of ops migration 069 is not declared in
-	// devhealthschema.Projections; the complexity statement forces it.
-	scopeExec(t, ctx, direct, `ALTER TABLE file_complexity_snapshots ADD PROJECTION IF NOT EXISTS prj_acr_file_complexity_runs (SELECT org_id, repo_id, ref, as_of_day, computed_at GROUP BY org_id, repo_id, ref, as_of_day, computed_at)`)
-	// devhealthschema does not declare the commit tables: the ops definition with
-	// the org_id column and sorting key of ops migration 027.
-	scopeExec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
-	now := "'2026-09-01 12:00:00.000'"
-	day := "'2026-09-01'"
+	t.Cleanup(func() { _ = direct.Close() })
+	query, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{DSN: dsn, DialTimeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("open query client: %v", err)
+	}
+	t.Cleanup(func() { _ = query.Close() })
+
+	const (
+		orgID  = "10000000-0000-4000-8000-0000000000f1"
+		repoID = "30000000-0000-4000-8000-0000000000f1"
+		repo   = "acme/focus"
+	)
+	now, day := "'2026-09-01 12:00:00.000'", "'2026-09-01'"
 	for _, statement := range []string{
-		fmt.Sprintf(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES ('%s', '%s', %s, %s, '%s', 'github')`, injRepoID, injRepo, now, now, injOrg),
-		fmt.Sprintf(`INSERT INTO file_hotspot_daily (org_id, repo_id, day, file_path, computed_at) VALUES ('%s', '%s', %s, 'src/checkout.go', %s)`, injOrg, injRepoID, day, now),
-		fmt.Sprintf(`INSERT INTO file_complexity_snapshots (org_id, repo_id, as_of_day, file_path, computed_at) VALUES ('%s', '%s', %s, 'src/checkout.go', %s)`, injOrg, injRepoID, day, now),
-		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%s', '%s', 'c0ffee', 'src/checkout.go', 1, 2, %s)`, injOrg, injRepoID, now),
-		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%s', '%s', 'c0ffee', '__AGGREGATE__', 5, 6, %s)`, injOrg, injRepoID, now),
+		fmt.Sprintf(`INSERT INTO repos (id, repo, last_synced, org_id, provider) VALUES ('%s', '%s', %s, '%s', 'github')`, repoID, repo, now, orgID),
+		fmt.Sprintf(`INSERT INTO file_hotspot_daily (org_id, repo_id, day, file_path, computed_at) VALUES ('%s', '%s', %s, 'src/checkout.go', %s)`, orgID, repoID, day, now),
+		fmt.Sprintf(`INSERT INTO file_complexity_snapshots (org_id, repo_id, ref, as_of_day, file_path, computed_at) VALUES ('%s', '%s', 'main', %s, 'src/checkout.go', %s)`, orgID, repoID, day, now),
+		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%s', '%s', 'c0ffee', 'src/checkout.go', 1, 2, %s)`, orgID, repoID, now),
+		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%s', '%s', 'c0ffee', '__AGGREGATE__', 5, 6, %s)`, orgID, repoID, now),
 	} {
-		scopeExec(t, ctx, direct, statement)
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
 	}
-	plan := contextpacket.ReadPlan{OrgID: injOrg, RepoID: injRepoID, RepoSlug: injRepo}
+
+	plan := contextpacket.ReadPlan{OrgID: orgID, RepoID: repoID, RepoSlug: repo}
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
-	want := "file:" + injRepoID + ":src/checkout.go"
+	want := "file:" + repoID + ":src/checkout.go"
 	seen := 0
 	for _, source := range contextpacket.SourceQueryCatalogV1 {
 		if source.ID != "file_hotspots.v1" && source.ID != "file_complexity.v1" && source.ID != "git_commit_files.v1" {
