@@ -180,3 +180,55 @@ func TestAFactsOnlyAnswerThatDoesNotFitLeavesTheRefusal(t *testing.T) {
 		t.Fatalf("refusal event = %+v, want facts_only_attempted, not served, insufficient_deadline", refusal)
 	}
 }
+
+func factsOnlyGroupedCohort() *Cohort {
+	cohort := groupedCohort(2, 3)
+	cohort.Rationale, cohort.Complete = "facts-only fixture", true
+	for index := range cohort.Members {
+		member := &cohort.Members[index]
+		member.Subject.Kind = SubjectProject
+		member.Subject.Label = member.Subject.CanonicalID
+		member.Rank = index + 1
+		member.InclusionReasons = []string{"Graph retrieval associated this subject with the requested condition."}
+	}
+	for index := range cohort.Groups {
+		cohort.Groups[index].Subject.Kind = SubjectTeam
+		cohort.Groups[index].Total, cohort.Groups[index].Complete = len(cohort.Groups[index].MemberCanonicalIDs), true
+		cohort.Groups[index].Subject.Label = cohort.Groups[index].Subject.CanonicalID
+	}
+	return &cohort
+}
+
+func TestAFactsOnlyAnswerOverAGroupedCohortKeepsEveryGroupAndMemberAndNarrowsNothing(t *testing.T) {
+	t.Parallel()
+	var modelCalls, degraded int
+	telemetry := &recordingTelemetry{}
+	cohort := factsOnlyGroupedCohort()
+	engine := factsOnlyEngine(t, cohort, budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, telemetry)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only answer served", err)
+	}
+	if modelCalls != 1 || degraded != 1 || result.Status != InvestigationDegraded {
+		t.Fatalf("model calls = %d, compositions = %d, status = %q, want one of each and degraded", modelCalls, degraded, result.Status)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != len(cohort.Members) || len(result.Cohort.Groups) != len(cohort.Groups) {
+		t.Fatalf("cohort = %+v, want all %d members in %d groups", result.Cohort, len(cohort.Members), len(cohort.Groups))
+	}
+	var served *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if event := telemetry.planNarrowings[index]; event.Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult && event.Before != event.After {
+			t.Fatalf("assembled_result narrowing %+v, but a facts-only answer narrows nothing", event)
+		}
+		if telemetry.planNarrowings[index].FactsOnlyServed {
+			served = &telemetry.planNarrowings[index]
+		}
+	}
+	if served == nil || served.Before != len(cohort.Members) || served.After != len(cohort.Members) || served.Groups {
+		t.Fatalf("served event = %+v, want before == after == %d and no group narrowing", served, len(cohort.Members))
+	}
+}
