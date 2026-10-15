@@ -25,7 +25,7 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	entitled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, agentContextRuntimeEntitlement)
 	if err != nil {
-		a.writeCapabilitiesEntitlementError(w, r, err)
+		a.writeEntitlementLookupError(w, r, err)
 		return
 	}
 	capabilities.Entitlements.AgentContextRuntime = entitled

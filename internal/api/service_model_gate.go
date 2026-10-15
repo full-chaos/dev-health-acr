@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -46,6 +47,9 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	basis, granted, featureErr := a.deploymentModelGrant(ctx, principal)
 	if granted {
 		return basis, true, nil
+	}
+	if errors.Is(featureErr, entitlements.ErrOrganizationUnknown) {
+		return "", false, entitlements.ErrOrganizationUnknown
 	}
 	if featureErr != nil {
 		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
@@ -132,6 +136,9 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	ctx := r.Context()
 	basis, allowed, err := a.serviceModelDecision(ctx, principal, request)
 	switch {
+	case errors.Is(err, entitlements.ErrOrganizationUnknown):
+		a.writeEntitlementLookupError(w, r, err)
+		return nil, false
 	case errors.Is(err, errServiceModelEntitlementUnavailable):
 		a.logger.WarnContext(ctx, "context fabric service model decision unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "dependency", "entitlement")
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)

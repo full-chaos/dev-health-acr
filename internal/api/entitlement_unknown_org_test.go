@@ -63,17 +63,32 @@ func TestCapabilitiesEntitlementFailureClasses(t *testing.T) {
 	}
 }
 
-func TestEntitlementGatesOutsideCapabilitiesKeepUnknownOrganizationAs503(t *testing.T) {
-	provider := EntitlementFunc(func(context.Context, string, string) (bool, error) {
-		return false, entitlements.ErrOrganizationUnknown
-	})
-	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, provider, nil)
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/acr:v1:x:1", nil)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("X-ACR-Client-Version", "1.0.0")
-	response := httptest.NewRecorder()
-	app.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (CHAOS-9491 rule outside capabilities): %s", response.Code, response.Body.String())
+func TestEntitlementGatesAnswerUnknownOrganizationAs401AndOutageAs503(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"unknown organization", entitlements.ErrOrganizationUnknown, http.StatusUnauthorized},
+		{"outage", errors.New("Dev Health entitlement service unavailable"), http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := EntitlementFunc(func(context.Context, string, string) (bool, error) { return false, tc.err })
+			app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, provider, nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/acr:v1:x:1", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("X-ACR-Client-Version", "1.0.0")
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+			if response.Code != tc.status {
+				t.Fatalf("runtime gate status = %d, want %d: %s", response.Code, tc.status, response.Body.String())
+			}
+			post := contextPacketRequest(t, app, token, hostedContextRequest())
+			postResponse := httptest.NewRecorder()
+			app.Handler().ServeHTTP(postResponse, post)
+			if postResponse.Code != tc.status {
+				t.Fatalf("read gate status = %d, want %d: %s", postResponse.Code, tc.status, postResponse.Body.String())
+			}
+		})
 	}
 }

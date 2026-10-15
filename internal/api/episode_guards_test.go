@@ -123,7 +123,7 @@ func (s *episodeAuditStore) Record(_ context.Context, event storage.AuditEvent) 
 	return nil
 }
 
-func TestUnknownOrganizationFromDevHealthIsAnUpstreamOutageNeverAnEntitlementOrADenial(t *testing.T) {
+func TestUnknownOrganizationFromDevHealthIsAnInvalidCredentialNeverAnEntitlementOrADenial(t *testing.T) {
 	// Given
 	creator := &fakeEpisodeCreator{episode: storedEpisode()}
 	unknown := EntitlementFunc(func(context.Context, string, string) (bool, error) {
@@ -136,7 +136,7 @@ func TestUnknownOrganizationFromDevHealthIsAnUpstreamOutageNeverAnEntitlementOrA
 	app.Handler().ServeHTTP(response, authenticatedEpisodeRequest(t, token, episodeCreate(), "idempotency_01"))
 
 	// Then
-	assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
 	if creator.create.ClientEpisodeID != "" {
 		t.Fatalf("episode created for an unknown organization: %#v", creator.create)
 	}
