@@ -242,10 +242,6 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 		// FINAL semantics several providers rely on. It also covers
 		// PARTITION BY, ORDER BY and SETTINGS in the same string, so no
 		// facet of the physical definition is left unverified.
-		if gap, known := knownEngineGaps[name]; known && gap.matches(name, devhealthschema.EngineFull[name], engineFull) {
-			t.Logf("known engine gap, not failed: %s -- %s", name, gap.ticket)
-			continue
-		}
 		if declared, ok := devhealthschema.EngineFull[name]; ok && declared != engineFull {
 			t.Errorf("live %s is %q but devhealthschema says %q -- regenerate from system.tables.engine_full rather than authoring any part of it", name, engineFull, declared)
 		}

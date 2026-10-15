@@ -277,7 +277,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.repo_id IS NOT NULL AND e.deplo
     SELECT incident_id FROM work_graph_deployment_incident_edges FINAL
     WHERE toString(org_id) = {org_id:String} AND repo_id IS NOT NULL AND deployment_id != '' AND toString(repo_id) IN {repo_ids:Array(String)}
   )
-  AND e.incident_id IN (SELECT id FROM operational_incidents FINAL WHERE org_id = {org_id:String} AND is_deleted = 0)
+  AND e.incident_id IN (SELECT id FROM ` + devhealthschema.CurrentOperationalIncidents + ` WHERE org_id = {org_id:String} AND is_deleted = 0)
 GROUP BY e.incident_id
 ORDER BY e.incident_id
 LIMIT ` + strconv.Itoa(limitPlusOne)

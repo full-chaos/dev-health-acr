@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"regexp"
 	"slices"
 	"sort"
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v4"
+	RankingVersionV1          = "ranker.v5"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -27,11 +28,33 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 		}
 		refs = append(refs, ref)
 	}
+	type scoredRef struct {
+		ref   contractsv1.EvidenceRef
+		score int
+	}
+	scored := make([]scoredRef, len(refs))
+	ownScores := make(map[string]int, len(refs))
+	for i, ref := range refs {
+		scored[i] = scoredRef{ref: ref, score: goalScore(ref, goal)}
+		ownScores[ref.EvidenceRefID] = max(ownScores[ref.EvidenceRefID], scored[i].score)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return evidenceBefore(scored[i].ref, scored[j].ref, ownScores, roles)
+	})
+	for i := range scored {
+		refs[i] = scored[i].ref
+	}
+	beforeDedupe := len(refs)
+	refs = deduplicateEvidence(refs)
 	scores := effectiveGoalScores(refs, goal, roles)
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
-	refs = deduplicateEvidence(refs)
 	refs = requestedEvidenceCategories(refs, requested, roles)
+	candidates := len(refs)
 	refs, truncated := allocateCategories(refs, scores, maxItems, roles)
+	slog.Debug("context packet ranking", "event", "ranking_decided", "evidence_in", beforeDedupe, "duplicates_dropped", beforeDedupe-candidates, "kept", len(refs), "max_items", maxItems, "truncated", truncated, "goal_words", len(goalWords(goal)))
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
 	for _, ref := range refs {
 		items = append(items, evidenceItemWithRoles(ref, scope, roles))
@@ -181,7 +204,9 @@ func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, m
 			quotas[category]--
 		}
 	}
-	for _, category := range categories {
+	// Causes fill their quota before state and pressure so goal matches plus
+	// state and pressure rows cannot spend the whole budget before a cause.
+	for _, category := range []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryEvidence, contractsv1.CategoryAction} {
 		for _, ref := range refs {
 			if roles.rule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
 				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
@@ -254,36 +279,35 @@ func itemEvidenceRefIDs(ref contractsv1.EvidenceRef, r rule) []string {
 	return ids
 }
 
-// effectiveGoalScores is the goal score every item ranks by. A cause is ranked
-// at least as high as every cause of a weaker match tier: its score is the
-// largest goal score among the causes of its own tier and weaker ones. The
-// score is a per-item scalar, so the comparator built on it stays a strict
-// weak order; a weaker tier can therefore never outrank, or survive an item
-// budget ahead of, a stronger one, while a goal-less exact cause still ranks
-// below ordinary evidence that names the goal when no weaker cause does.
+// effectiveGoalScores is the goal rank every item sorts by, encoded as
+// 2*score plus one when the score is the item's own. A cause is ranked at least
+// as high as every cause of a weaker match tier: its score is the largest goal
+// score among the causes of its own tier and weaker ones. The rank is a
+// per-item scalar, so the comparator built on it stays a strict weak order. An
+// inherited score loses to an equal own score, so an unrelated exact cause
+// never outranks an item that names the goal itself at an equal score; a cause that inherits a higher score can still tie and win by tier; among causes with no own
+// match the tier order holds.
 func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles roleResolver) map[string]int {
-	scores := make(map[string]int, len(refs))
+	own := make(map[string]int, len(refs))
 	bestAtOrBelow := map[int]int{}
 	for _, ref := range refs {
-		own := goalScore(ref, goal)
-		if own > scores[ref.EvidenceRefID] {
-			scores[ref.EvidenceRefID] = own
-		}
+		score := goalScore(ref, goal)
+		own[ref.EvidenceRefID] = max(own[ref.EvidenceRefID], score)
 		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
-			if own > bestAtOrBelow[rule.subRank] {
-				bestAtOrBelow[rule.subRank] = own
-			}
+			bestAtOrBelow[rule.subRank] = max(bestAtOrBelow[rule.subRank], score)
 		}
 	}
+	scores := make(map[string]int, len(refs))
 	for _, ref := range refs {
-		rule := roles.rule(ref)
-		if rule.category != contractsv1.CategoryCause || rule.subRank == 0 {
-			continue
-		}
-		for tier := 1; tier <= rule.subRank; tier++ {
-			if score := bestAtOrBelow[tier]; score > scores[ref.EvidenceRefID] {
-				scores[ref.EvidenceRefID] = score
+		effective, mine := own[ref.EvidenceRefID], own[ref.EvidenceRefID]
+		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
+			for tier := 1; tier <= rule.subRank; tier++ {
+				effective = max(effective, bestAtOrBelow[tier])
 			}
+		}
+		scores[ref.EvidenceRefID] = effective * 2
+		if effective > 0 && effective == mine {
+			scores[ref.EvidenceRefID]++
 		}
 	}
 	return scores
