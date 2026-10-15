@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV15ForTheDeploymentIncidentEdgeRebuild pins the constant,
+// TestClickHouseSourceVersionIsV14ForTheDeploymentIncidentEdgeRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -391,10 +391,10 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // old id, and edges of mappings that ended before the roll are behind every
 // checkpoint, so the rebuild re-projects them.
 //
-// v15 (deployment-incident edges per repository) is the latest: the
+// v14 (deployment-incident edges per repository) is the latest: the
 // CORRELATED_WITH_INCIDENT edge id derives from the deployment's canonical id,
 // so every already-projected edge carries the old id; the rebuild re-projects
-// them. (v14 is the PART_OF edge rebuild, another change.)
+// them. (The PART_OF edge rebuild takes the next number.)
 //
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
@@ -406,11 +406,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV15ForTheDeploymentIncidentEdgeRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV14ForTheDeploymentIncidentEdgeRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v15" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v14" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v15")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v14")
 	}
 }
 
