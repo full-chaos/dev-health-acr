@@ -5,6 +5,10 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func TestIncidentRowCandidatesProjectWhatAFromZeroReadProjects(t *testing.T) {
@@ -89,5 +93,30 @@ func TestIncidentRowMemoKeyChangesWithTheMappingSet(t *testing.T) {
 	plain := candidate{table: "repos", observedAt: at, sortKey: "repo-1"}
 	if rowMemoKey(plain) != "repos\x00"+strconv.FormatInt(at.UnixNano(), 10)+"|repo-1" {
 		t.Fatalf("memo key of a row without a version changed: %q", rowMemoKey(plain))
+	}
+}
+
+// An incident two active mappings tie to two repositories is read by a caller
+// scoped to either one, under the one existing rule for a multi-repository
+// authorization (graphrank.AuthorizedAttributes: any of the caller's
+// repositories in the list), and by no caller scoped to neither.
+func TestIncidentOfTwoRepositoriesIsReadByACallerOfEither(t *testing.T) {
+	row := incidentRow{
+		id: "8e4b1d70-2c9a-4f63-b815-000000000002", title: "ledger drift", observedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC),
+		activeRepos: parseIncidentRepos([]string{"6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0a01|acme/checkout", "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0a02|acme/ledger"}),
+	}
+	var stats incidentPageStats
+	var slugs []string
+	for _, c := range incidentRowCandidates(row, &stats) {
+		if c.entity != nil {
+			slugs = c.entity.Authorization.RepositorySlugs
+		}
+	}
+	attributes := map[string]interface{}{"authorization_repositories": slugs}
+	for scope, want := range map[string]bool{"acme/checkout": true, "acme/ledger": true, "acme/payments": false} {
+		principal := storage.Principal{OrgID: "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0b09", RepositoryScopes: []string{scope}}
+		if got := graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, attributes); got != want {
+			t.Errorf("a caller scoped to %s reads the incident authorized for %v: %v, want %v", scope, slugs, got, want)
+		}
 	}
 }
