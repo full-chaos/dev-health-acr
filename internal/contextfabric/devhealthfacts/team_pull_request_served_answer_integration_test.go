@@ -79,6 +79,7 @@ type servedPRModel struct {
 	claimSubjectKind contextfabric.SubjectKind
 	claimField       string
 	facts            contextfabric.CanonicalFactBundle
+	draftErr         error
 }
 
 func (m *servedPRModel) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
@@ -105,7 +106,7 @@ func (m *servedPRModel) SynthesizeAnswer(_ context.Context, _ storage.Principal,
 		draft.ClaimedFacts = append(draft.ClaimedFacts, contextfabric.ClaimedFact{ClaimID: "claim_served_pr_0001", Kind: fact.Kind, Subject: fact.Subject, Field: m.claimField, Value: contextfabric.ScalarValue{String: value}})
 		draft.EvidenceRefIDs = append(draft.EvidenceRefIDs, fact.EvidenceRefIDs...)
 		draft.Drivers = append(draft.Drivers, contextfabric.DriverJudgment{
-			DriverID: "driver_served_pr_01", Standing: contextfabric.DriverPrincipal, Category: "pull_requests",
+			DriverID: "driver_served_pr_01", Standing: contextfabric.DriverPrincipal, Category: "narrative",
 			Title: "Pull requests", Summary: "Pull request state of the team.",
 			AffectedSubjects: []contextfabric.SubjectRef{fact.Subject}, EvidenceRefIDs: append([]string(nil), fact.EvidenceRefIDs...),
 			ClaimedFactIDs: []string{"claim_served_pr_0001"},
@@ -113,6 +114,7 @@ func (m *servedPRModel) SynthesizeAnswer(_ context.Context, _ storage.Principal,
 		})
 		break
 	}
+	m.draftErr = draft.ValidateAgainst(input)
 	return draft, freshLiveReceipt(contextfabric.ModelOperationSynthesize), nil
 }
 
@@ -134,9 +136,9 @@ func seedServedPRTeam(t *testing.T, ctx context.Context, orgID string) (repo str
 		}
 	}
 	repo = repoUUID("served-pr-" + servedPRTeamID)
-	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, orgID, "acme/served-pr", "github", at)
+	exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, orgID, "acme/allowed", "github", at)
 	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		orgID, "github", servedPRTeamID, repo, "acme/served-pr", "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
+		orgID, "github", servedPRTeamID, repo, "acme/allowed", "exact", "native", uint8(1), uint16(1), int32(1), at.Add(-time.Hour), nil, at)
 	for number := 1; number <= servedPROpenCount; number++ {
 		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
 			repo, orgID, uint32(number), "open pr", "open", at, at, "feat/x", "")
@@ -202,7 +204,7 @@ func TestServedAnswerToATeamAggregatePullRequestQuestionCitesTheTeamEvidenceRef(
 		contextfabric.SubjectTeam, "pull_requests_by_state_basis",
 		"How are the pull requests of the Platform team doing?")
 	if result.Status != contextfabric.InvestigationComplete {
-		t.Fatalf("status = %s, want complete (limitations %v, warnings %v)", result.Status, result.Limitations, result.Warnings)
+		t.Fatalf("status = %s, want complete (limitations %v, warnings %v, draft validation %v)", result.Status, result.Limitations, result.Warnings, model.draftErr)
 	}
 	teamRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, servedPRTeamID)
 
@@ -262,7 +264,7 @@ func TestServedAnswerToATeamPullRequestStatusQuestionCitesThePullRequestEvidence
 		contextfabric.SubjectPullRequest, "state",
 		"Which pull requests of the Platform team are open?")
 	if result.Status != contextfabric.InvestigationComplete {
-		t.Fatalf("status = %s, want complete (limitations %v, warnings %v)", result.Status, result.Limitations, result.Warnings)
+		t.Fatalf("status = %s, want complete (limitations %v, warnings %v, draft validation %v)", result.Status, result.Limitations, result.Warnings, model.draftErr)
 	}
 	wantRefs := map[string]bool{}
 	for number := 1; number <= servedPROpenCount; number++ {
