@@ -1170,6 +1170,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// reasoning as its eight siblings; see
 			// ReuseKey.OwnershipRoutingVersion for the full reasoning.
 			OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion,
+			// The graph walk's edge-budget rules; see ReuseKey.GraphWalkVersion.
+			GraphWalkVersion: contextfabric.GraphWalkVersion,
 		},
 	})
 	if err != nil {

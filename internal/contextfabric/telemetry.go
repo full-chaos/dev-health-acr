@@ -826,6 +826,28 @@ func (t SlogEngineTelemetry) RecordSynthesisModelFailure(ctx context.Context, pr
 // would let the allow-list be widened from a caller.
 const factScopeDecisionReasonUnrecognized FactScopeDecisionReason = "unrecognized"
 
+// FactScopeDecisionReasonLineVocabulary is every value the decision_reason key
+// of the fact-scope expansion lines can carry: the closed reasons plus the
+// sink's own "unrecognized" stand-in.
+func FactScopeDecisionReasonLineVocabulary() []string {
+	out := make([]string, 0, len(factScopeDecisionReasons)+1)
+	for _, reason := range factScopeDecisionReasons {
+		out = append(out, string(reason))
+	}
+	return append(out, string(factScopeDecisionReasonUnrecognized))
+}
+
+// FactScopeFailureClassLineVocabulary is every value the failure_class key of
+// the fact-scope expansion lines can carry: empty for a non-failure, then the
+// declared classes.
+func FactScopeFailureClassLineVocabulary() []string {
+	out := []string{string(FactScopeFailureNone)}
+	for _, class := range factScopeFailureClasses {
+		out = append(out, string(class))
+	}
+	return out
+}
+
 func loggableFactScopeDecisionReason(reason FactScopeDecisionReason) FactScopeDecisionReason {
 	if validFactScopeDecisionReason(reason) {
 		return reason
@@ -2785,7 +2807,7 @@ func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal stora
 	t.logger.InfoContext(ctx, "context fabric path drop", args...)
 }
 
-// RecordMemberCut emits one member-cut application, at Info.
+// RecordMemberCut emits one member-cut decision, at Info.
 func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal storage.Principal, event MemberCutEvent) {
 	if t.logger == nil {
 		return
@@ -2800,7 +2822,12 @@ func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal stor
 		"items_before", event.ItemsBefore,
 		"listed", event.Listed,
 		"uncited", event.Uncited,
+		"kept", event.Kept,
+		"need", event.Need,
+		"keep_by", string(event.KeepBy),
 		"basis", string(event.Basis),
+		"recomposed", event.Recomposed,
+		"served", event.Served,
 		"declined", string(event.Declined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)

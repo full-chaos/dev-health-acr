@@ -861,6 +861,90 @@
     ]
   },
   {
+    "id": "contextfabric.cohort_driver_narration",
+    "msg": "context fabric cohort driver narration",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call that narrates cohort drivers.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "emitted",
+          "budget_exhausted",
+          "no_drivers"
+        ]
+      },
+      {
+        "key": "judgments_emitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_minted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "members_narrated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "members_skipped_no_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "drivers_skipped",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_citation",
+          "unknown_signal"
+        ],
+        "nullable": true
+      },
+      {
+        "key": "answer_narrative_recomposed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "narration_allocator",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "plan_budget",
+          "static_caps",
+          "not_applicable",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "narration_allocated_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.cohort_kind_fulltext",
     "msg": "context_fabric: cohort kind fulltext",
     "level": "info",
@@ -936,6 +1020,107 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when decision=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.cohort_ranked",
+    "msg": "context fabric cohort ranked",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call that ranks a cohort.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cohort_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "formula_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "score_meaning",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "judgment_mismatch",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "requested_judgment_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "degraded_member_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "signals_available",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "investment_mix",
+          "health.compounding_risk",
+          "operational_deficiencies.severity",
+          "readiness.coverage_gap",
+          "workload.forecast_pressure"
+        ]
+      },
+      {
+        "key": "outcome_counts",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "qualified",
+          "provisional",
+          "insufficient_evidence",
+          "not_applicable"
+        ]
+      },
+      {
+        "key": "investment_mix_source_counts",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "project_native",
+          "owning_team_rollup",
+          "unlabeled"
+        ]
+      },
+      {
+        "key": "read_attribution_carried",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "deficiency_zero_withheld",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",
@@ -2534,6 +2719,574 @@
           "internal"
         ],
         "applicability": "written when the search, a read, the authorization, a source-row read or the built expansion failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.fact_scope_expansion_decision",
+    "msg": "context fabric fact scope expansion outcome",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "requirement_kind",
+      "origin_kind",
+      "policy"
+    ],
+    "bounded_aggregation": "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "origin_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "policy",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_needed",
+          "expanded",
+          "attempted_empty"
+        ]
+      },
+      {
+        "key": "origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "temporal_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unbounded_validity_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "malformed_touch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "duplicate_add_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_next_hop_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "failure_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "backend_unavailable",
+          "timeout",
+          "axis_unsupported",
+          "read_limit_exceeded"
+        ]
+      },
+      {
+        "key": "attribution_source_counts",
+        "type": "count_map",
+        "presence": "required",
+        "nullable": true
+      },
+      {
+        "key": "target_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_grant_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "direct_repo_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_explicit_text_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_heuristic_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_measured",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_organization_wide",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_exact_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_owner_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "orphaned_repository_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ambiguous_origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unknown_attribution_source_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_query_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_rows_returned",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "roots_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shared_target_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "executed",
+          "policy_none",
+          "policy_disabled",
+          "axis_unsupported",
+          "time_bounds_invalid",
+          "expander_unwired",
+          "backend_error",
+          "timeout",
+          "capacity_timeout",
+          "origin_unresolved",
+          "attribution_source_unrecognized",
+          "unrecognized"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.fact_scope_expansion_gap",
+    "msg": "context fabric fact scope expansion left a gap",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "requirement_kind",
+      "origin_kind",
+      "policy"
+    ],
+    "bounded_aggregation": "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "origin_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "policy",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "policy_unavailable",
+          "expanded_partial",
+          "failed",
+          "target_kind_mismatch",
+          "matched_unauthorized"
+        ]
+      },
+      {
+        "key": "origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "temporal_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unbounded_validity_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "malformed_touch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "duplicate_add_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_next_hop_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "failure_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "backend_unavailable",
+          "timeout",
+          "axis_unsupported",
+          "read_limit_exceeded"
+        ]
+      },
+      {
+        "key": "attribution_source_counts",
+        "type": "count_map",
+        "presence": "required",
+        "nullable": true
+      },
+      {
+        "key": "target_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_grant_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "direct_repo_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_explicit_text_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_heuristic_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_measured",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_organization_wide",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_exact_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_owner_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "orphaned_repository_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ambiguous_origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unknown_attribution_source_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_query_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_rows_returned",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "roots_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shared_target_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "executed",
+          "policy_none",
+          "policy_disabled",
+          "axis_unsupported",
+          "time_bounds_invalid",
+          "expander_unwired",
+          "backend_error",
+          "timeout",
+          "capacity_timeout",
+          "origin_unresolved",
+          "attribution_source_unrecognized",
+          "unrecognized"
+        ]
       },
       {
         "key": "request_id",
@@ -7388,6 +8141,434 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_interpret_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "exactly one line per InterpretQuestion call, written from the call's deferred exit so a failure at any step still reports.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "interpret",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_used",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "primary_failure_classification",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis_source",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "decoding_seed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "sample",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "initial_sample",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "redraws",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "interpretation_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "server"
+        ]
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "primary_provider",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rejection_reason",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the call ended in a rejection of the model's interpretation"
+      },
+      {
+        "key": "rejected_fact_kind",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written alongside rejection_reason when the rejecting rule was fact_requirement_kind_invalid; the one model-authored value on the line, sanitised and bounded"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_phrase_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "exactly one line per PhraseOffers call, including a call that returned before the model was reached.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "phrase_offers",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_synthesize_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "exactly one line per SynthesizeAnswer call, written from the call's deferred exit so a failure at any step still reports.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "synthesize",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_used",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "primary_failure_classification",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "drivers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "findings",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claims",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "primary_provider",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "draws_total",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the draw loop judged at least one draft; a pure transport failure carries no draw fields"
+      },
+      {
+        "key": "draws_retried",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_outcomes",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_output_digests",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_rejected_clauses",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_rejected_reasons",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "resynthesis_deadline_remaining_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the loop consulted the caller's remaining request deadline"
+      },
+      {
+        "key": "resynthesis_deadline_reserved_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with resynthesis_deadline_remaining_ms"
+      },
+      {
+        "key": "resynthesis_stopped_for_deadline",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written with resynthesis_deadline_remaining_ms"
+      },
+      {
+        "key": "rejection_reason",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the call ended in a rejection of the model's draft"
+      },
+      {
+        "key": "fact_group_size",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the accepted or rejected draft carried a fact group"
+      },
+      {
+        "key": "grounded_beyond_first",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with fact_group_size, including a measured zero"
       }
     ]
   },

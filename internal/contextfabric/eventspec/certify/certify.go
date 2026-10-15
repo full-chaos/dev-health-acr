@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -840,6 +841,24 @@ func validateLevel(ev eventspec.Event, line Line) error {
 // (round r2's P1s: nested fields were never checked at all, and
 // Field.Type/ClosedVocabulary were consulted only for fields a caller
 // happened to list in Want).
+// countMapOpenKeyShape is the shape every key of an OPEN count map must have.
+// The real keys are stored attribution-source and link-tier names:
+// native_team, issue_project, project_ownership, repo_ownership,
+// assignee_membership, linked_issue, manual_fallback (devhealthfacts
+// knownComputedAttributionSource and attributionSourceNativeTeamForScope), the
+// link tiers native and heuristic, and team_repo_ownership. A uuid, an email
+// address or any sentence fails: it carries a digit, an @ or a dot, a space, or
+// runs past the bound.
+var countMapOpenKeyShape = regexp.MustCompile(`^[a-z]+([_-][a-z]+)*$`)
+
+const countMapOpenKeyMaxLen = 32
+
+// countMapMaxCount is the largest count a count map may carry: 2^53-1, the
+// largest whole number a float64 holds exactly. Parse decodes JSON numbers to
+// float64, so above this a fractional value rounds to a whole one and cannot
+// be told from a count.
+const countMapMaxCount = float64(1<<53 - 1)
+
 func validateFields(fields []eventspec.Field, obj map[string]any, eventID string) error {
 	for _, field := range fields {
 		got, present := obj[field.Key]
@@ -905,6 +924,29 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				// nothing for one that does not.
 				if len(field.ClosedVocabulary) > 0 && !contains(field.ClosedVocabulary, elemStr) {
 					return fmt.Errorf("certify: %s: %q[%d] = %v is not in the declared closed vocabulary %v", eventID, field.Key, i, elemStr, field.ClosedVocabulary)
+				}
+			}
+		case eventspec.FieldCountMap:
+			if got == nil {
+				if !field.Nullable {
+					return fmt.Errorf("certify: %s: %q = null, declared type=count_map and not nullable", eventID, field.Key)
+				}
+				break
+			}
+			counts, ok := got.(map[string]any)
+			if !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=count_map", eventID, field.Key, got, got)
+			}
+			for key, value := range counts {
+				if len(field.ClosedVocabulary) > 0 {
+					if !contains(field.ClosedVocabulary, key) {
+						return fmt.Errorf("certify: %s: %q carries key %q outside the declared closed key set %v", eventID, field.Key, key, field.ClosedVocabulary)
+					}
+				} else if !countMapOpenKeyShape.MatchString(key) || len(key) > countMapOpenKeyMaxLen {
+					return fmt.Errorf("certify: %s: %q carries key %q that is not a name token (lowercase words joined by _ or -, at most %d characters) -- an open count map may key only on a vocabulary name, never an id or free text", eventID, field.Key, key, countMapOpenKeyMaxLen)
+				}
+				if number, ok := value.(float64); !ok || !isWholeNumber(number) || number < 0 || number > countMapMaxCount {
+					return fmt.Errorf("certify: %s: %q[%q] = %v (%T), declared a non-negative whole-number count of at most %d", eventID, field.Key, key, value, value, int64(countMapMaxCount))
 				}
 			}
 		case eventspec.FieldObject:
