@@ -85,3 +85,23 @@ func TestOwnedByTeamIsNamedByAnIdentityQuestionAndMakesNoDriver(t *testing.T) {
 		t.Fatal("only BLOCKS makes a driver")
 	}
 }
+
+// The driving relationship types are a census: an entry added to
+// relationMeaningTable without drives makes no driver (the zero value), and a
+// new driving type must be added here on purpose.
+func TestOnlyTheListedRelationshipTypesMakeDrivers(t *testing.T) {
+	driving := map[string]bool{"BLOCKS": true}
+	for name, entry := range relationMeaningTable {
+		if entry.drives != driving[name] {
+			t.Fatalf("%s: drives=%v, census says %v", name, entry.drives, driving[name])
+		}
+		if MakesDriver(name) != driving[name] {
+			t.Fatalf("%s: MakesDriver=%v, census says %v", name, MakesDriver(name), driving[name])
+		}
+	}
+	for name := range driving {
+		if _, ok := relationMeaningTable[name]; !ok {
+			t.Fatalf("census lists %s, which the table does not have", name)
+		}
+	}
+}

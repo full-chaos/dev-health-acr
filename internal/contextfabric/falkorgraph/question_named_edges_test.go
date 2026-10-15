@@ -11,7 +11,10 @@ import (
 
 // A question that asks for the project's identity names its OWNED_BY_TEAM edge:
 // with more own edges than the path budget, a BLOCKS edge, and an owner id that
-// sorts after every other id, the owner edge is still admitted, and first.
+// sorts after every other id, the owner edge is still admitted, and first. The
+// subject is a project, which the identity fact provider does not serve
+// (repositories and work items only): the class reads the question's fact
+// requirements, never which subjects a provider serves.
 func TestOwnershipQuestionAdmitsTheOwnerEdgeBeyondTheCap(t *testing.T) {
 	const paths = 25
 	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:checkout", Label: "checkout"}
