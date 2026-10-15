@@ -237,6 +237,47 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 	return sorted
 }
 
+// InterleaveByOrigin orders ranked edges for one budget that several origin
+// subjects share: each origin in turn gives its next edge, origins in the
+// given order, each origin's own edges in their ranked order. An origin with
+// no edges left gives its turns to the others, so the total budget is
+// unchanged. Edges whose origin is not listed follow, in ranked order.
+//
+// The id tie-break of SortEdgesByRelevance orders edges WITHIN one origin;
+// across origins it would let the spelling of one origin's relationship ids
+// decide whether another origin's edges fit the budget at all.
+func InterleaveByOrigin(ranked []CandidateEdge, originOf map[string]string, origins []string) []CandidateEdge {
+	queues := make(map[string][]CandidateEdge, len(origins))
+	listed := make(map[string]bool, len(origins))
+	order := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		if !listed[origin] {
+			listed[origin] = true
+			order = append(order, origin)
+		}
+	}
+	var unlisted []CandidateEdge
+	for _, edge := range ranked {
+		origin := originOf[edge.UUID]
+		if !listed[origin] {
+			unlisted = append(unlisted, edge)
+			continue
+		}
+		queues[origin] = append(queues[origin], edge)
+	}
+	out := make([]CandidateEdge, 0, len(ranked))
+	for remaining := len(ranked) - len(unlisted); remaining > 0; {
+		for _, origin := range order {
+			if queue := queues[origin]; len(queue) > 0 {
+				out = append(out, queue[0])
+				queues[origin] = queue[1:]
+				remaining--
+			}
+		}
+	}
+	return append(out, unlisted...)
+}
+
 // DiscoveredCohort discovers a subjectless team/project cohort from a
 // backend's first-hop search result nodes, when the interpreted question
 // shape calls for one. Pure: only reads already-fetched nodes, no I/O of its

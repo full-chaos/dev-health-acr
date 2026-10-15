@@ -996,6 +996,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// across all three emit sites, which is what makes the site value the only
 	// thing a reader has to compare.
 	textCandidateOrigin := make(map[string]string, len(textNodes))
+	// The matched subjects in match order (the full-text query's own
+	// deterministic order): the order their edges take turns in the budget.
+	var textOrigins []string
 	for _, n := range textNodes {
 		subject, ok := graphrank.NodeSubject(n)
 		if !ok {
@@ -1042,9 +1045,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			textCandidateOrigin[ce.UUID] = subject.CanonicalID
 			textCandidates = append(textCandidates, ce)
 		}
+		textOrigins = append(textOrigins, subject.CanonicalID)
 	}
 	textAdmitted := 0
-	for _, ce := range rankCandidateEdges(textCandidates) {
+	for _, ce := range graphrank.InterleaveByOrigin(rankCandidateEdges(textCandidates), textCandidateOrigin, textOrigins) {
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}

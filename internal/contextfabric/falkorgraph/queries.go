@@ -1153,9 +1153,14 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // higher-ranked edge discovered later ever got a chance to compete for the
 // budget. Every graph-walked edge ties at ResultConfidence=0 (there is no
 // real relevance signal for a hop-walked edge the way a full-text search
-// score is one), so graphrank.SortEdgesByRelevance's own deterministic
-// tie-break -- ascending relationship UUID -- IS the correct admission
-// order, not an approximation of one; this function now collects an ENTIRE
+// score is one), so graphrank.SortEdgesByRelevance's deterministic tie-break
+// -- ascending relationship UUID -- orders the edges of this walk's ONE
+// origin. That id order is an order within one subject only: where several
+// subjects share one edge budget (DiscoverContext's full-text arm), the
+// budget is split round-robin across them in their match order, each
+// subject's edges in this ranked order, and a subject that runs out gives its
+// turns to the others (graphrank.InterleaveByOrigin, GraphWalkVersion). This
+// function collects an ENTIRE
 // hop's candidate edges from every frontier node before making ANY
 // truncation decision, ranks that full set with the exact same tie-break,
 // and only then resolves/admits edges in ranked order up to the remaining

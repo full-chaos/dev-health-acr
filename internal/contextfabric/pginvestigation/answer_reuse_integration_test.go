@@ -108,6 +108,8 @@ var testReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{
 	// routing fence. FindReusable fails CLOSED on an unset value, so
 	// leaving this blank would make every test in this file miss.
 	OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion,
+	// The graph walk's edge-budget fence; blank would fail closed too.
+	GraphWalkVersion: contextfabric.GraphWalkVersion,
 }
 
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
@@ -137,6 +139,7 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		QuestionFamilyVersion: testReuseVersionAuthorities.QuestionFamilyVersion,
 		// Same mirror, one more dimension (the ownership-routing fence).
 		OwnershipRoutingVersion: testReuseVersionAuthorities.OwnershipRoutingVersion,
+		GraphWalkVersion:        testReuseVersionAuthorities.GraphWalkVersion,
 		QuestionHash:            contextfabric.QuestionHash(result.Question),
 		ContractVersion:         result.Versions.ContractVersion,
 		ProjectionVersion:       result.Versions.ProjectionVersion,
@@ -1421,6 +1424,71 @@ func TestFindReusable_OwnershipRoutingVersionIsConjunctive(t *testing.T) {
 	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected the identical ownership-routing version to still match")
+}
+
+// A stored answer read under other graph-walk rules (which edges fit the
+// edge budget) misses once the version moves; the same version still hits.
+func TestFindReusable_GraphWalkVersionIsConjunctive(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-graph-walk-version"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_graph_walk_0001", principal.OrgID, "Which team owns the checkout project?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	bumped := reuseKeyFor(result)
+	bumped.GraphWalkVersion = reuseKeyFor(result).GraphWalkVersion + ".next"
+	_, ok, _, err := store.FindReusable(ctx, principal, bumped)
+	require.NoError(t, err)
+	require.False(t, ok, "an answer read under another graph-walk version was reused")
+
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "the identical graph-walk version did not match")
+}
+
+// A row saved before migration 0053 holds NULL graph_walk_version and never
+// matches.
+func TestFindReusable_PreMigrationNullGraphWalkVersionColumnNeverMatches(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-graph-walk-pre-migration"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_gw_premigration01", principal.OrgID, "Is a pre-migration graph-walk row unreusable?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	_, err := db.ExecContext(ctx, `
+UPDATE acr.context_fabric_investigation_results
+   SET graph_walk_version = NULL
+ WHERE result_id = $1`, result.ResultID)
+	require.NoError(t, err)
+
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "a pre-0053 row (NULL graph_walk_version) matched")
+}
+
+// A composition that never wired GraphWalkVersion misses without querying.
+func TestFindReusable_EmptyGraphWalkVersionKeyFieldMissesWithoutQuerying(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-empty-graph-walk-key"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_gw_emptykey01", principal.OrgID, "Does an empty graph-walk key fail closed?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	missing := reuseKeyFor(result)
+	missing.GraphWalkVersion = ""
+	require.NoError(t, db.Close())
+	_, ok, _, err := store.FindReusable(ctx, principal, missing)
+	require.NoError(t, err)
+	require.False(t, ok, "an empty graph-walk key did not miss")
 }
 
 // TestFindReusable_PreMigrationNullOwnershipRoutingVersionColumnNeverMatches
