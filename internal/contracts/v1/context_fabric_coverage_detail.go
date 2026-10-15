@@ -352,6 +352,13 @@ const (
 	// second degradation: the answer's status already says degraded.
 	ContextFabricCoverageDetailSynthesisModelFailed ContextFabricCoverageDetailCode = "synthesis_model_failed"
 
+	// ContextFabricCoverageDetailSynthesisNotRun: no model call failed. The
+	// first written answer was over the response budget and a second
+	// synthesis could not run (the time budget was spent, or the cohort could
+	// not be narrowed), so the facts are served without model prose.
+	// FailureClass names which, RetryHint says whether asking again may
+	// succeed. A disclosure, never a second degradation.
+	ContextFabricCoverageDetailSynthesisNotRun ContextFabricCoverageDetailCode = "synthesis_not_run"
 	// ContextFabricCoverageDetailFactScoreWithheld: a fact kind read for the
 	// answer has declared score fields, and the answer did not serve them
 	// because it serves no drivers table beside them (decision K7: never a
@@ -390,6 +397,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphNoMemberFound,
 	ContextFabricCoverageDetailSynthesisInputBounded,
 	ContextFabricCoverageDetailSynthesisModelFailed,
+	ContextFabricCoverageDetailSynthesisNotRun,
 	ContextFabricCoverageDetailFactScoreWithheld,
 }
 
@@ -717,6 +725,9 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	// Failure class and retry hint, both REQUIRED, and nothing else: the model
 	// call failed in this way, and asking again may or may not help.
 	ContextFabricCoverageDetailSynthesisModelFailed: {requireFailure: true},
+	// The same pair for a facts-only answer served because no second synthesis
+	// could run.
+	ContextFabricCoverageDetailSynthesisNotRun: {requireFailure: true},
 	// The fact kind alone: its scores were withheld.
 	ContextFabricCoverageDetailFactScoreWithheld: {requireFactKind: true, allowFactKind: true},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
@@ -766,7 +777,7 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 		// row's own equal-counts exception. Named rather than left to the
 		// default for the same reason `fact_read_origin_state` is above.
 		return false
-	case ContextFabricCoverageDetailSynthesisInputBounded, ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailFactScoreWithheld:
+	case ContextFabricCoverageDetailSynthesisInputBounded, ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailSynthesisNotRun, ContextFabricCoverageDetailFactScoreWithheld:
 		// A disclosure about the synthesis step, never a population a value
 		// was computed over.
 		return false
@@ -827,7 +838,7 @@ func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailC
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
 		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded,
-		ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailFactScoreWithheld:
+		ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailSynthesisNotRun, ContextFabricCoverageDetailFactScoreWithheld:
 		return false
 	default:
 		return true
@@ -998,6 +1009,27 @@ const (
 	// finish after the runtime's own retries (a per-call timeout, a call
 	// cancelled before it ended, a rate limit or an unavailable provider).
 	ContextFabricSynthesisFailureCallNotCompleted ContextFabricSynthesisFailureClass = "model_call_not_completed"
+	// ContextFabricSynthesisFailureDeadline: the model wrote a first answer
+	// that did not fit the response budget and the request's time budget left
+	// no room for a second synthesis, so the facts are served without model
+	// prose. No model call failed.
+	ContextFabricSynthesisFailureDeadline ContextFabricSynthesisFailureClass = "synthesis_deadline"
+	// ContextFabricSynthesisFailureNotNarrowable: the model wrote a first
+	// answer that did not fit the response budget and the cohort was already
+	// at its smallest, so a second synthesis could not shrink it; the facts
+	// are served without model prose. No model call failed.
+	ContextFabricSynthesisFailureNotNarrowable ContextFabricSynthesisFailureClass = "synthesis_not_narrowable"
+	// ContextFabricSynthesisFailureRowsOverBudget: the model wrote a first
+	// answer that did not fit the response budget because of the rows it
+	// carried; the cohort could still be narrowed, but a smaller cohort would
+	// not have made the rows fit, so the facts are served without model prose.
+	// No model call failed.
+	ContextFabricSynthesisFailureRowsOverBudget ContextFabricSynthesisFailureClass = "synthesis_rows_over_budget"
+	// ContextFabricSynthesisFailureRetryOverBudget: a narrower second
+	// synthesis ran and its answer still did not fit the response budget, so
+	// the facts of the first pass are served without model prose. No model
+	// call failed.
+	ContextFabricSynthesisFailureRetryOverBudget ContextFabricSynthesisFailureClass = "synthesis_retry_over_budget"
 )
 
 // ContextFabricRetryHint is the closed vocabulary of what a caller may expect
@@ -1019,6 +1051,10 @@ var contextFabricSynthesisFailureClasses = [...]ContextFabricSynthesisFailureCla
 	ContextFabricSynthesisFailureRejected,
 	ContextFabricSynthesisFailureReceiptUnrecorded,
 	ContextFabricSynthesisFailureCallNotCompleted,
+	ContextFabricSynthesisFailureDeadline,
+	ContextFabricSynthesisFailureNotNarrowable,
+	ContextFabricSynthesisFailureRowsOverBudget,
+	ContextFabricSynthesisFailureRetryOverBudget,
 }
 
 var contextFabricRetryHints = [...]ContextFabricRetryHint{
@@ -1055,9 +1091,9 @@ func validRetryHint(hint ContextFabricRetryHint) bool {
 // class must say whether asking again helps.
 func ContextFabricRetryHintFor(class ContextFabricSynthesisFailureClass) (ContextFabricRetryHint, error) {
 	switch class {
-	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded, ContextFabricSynthesisFailureCallNotCompleted:
+	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded, ContextFabricSynthesisFailureCallNotCompleted, ContextFabricSynthesisFailureDeadline:
 		return ContextFabricRetryMaySucceed, nil
-	case ContextFabricSynthesisFailureRejected:
+	case ContextFabricSynthesisFailureRejected, ContextFabricSynthesisFailureNotNarrowable, ContextFabricSynthesisFailureRowsOverBudget, ContextFabricSynthesisFailureRetryOverBudget:
 		return ContextFabricRetryUnlikelyToHelp, nil
 	}
 	return "", fmt.Errorf("synthesis failure class %q has no retry hint", class)

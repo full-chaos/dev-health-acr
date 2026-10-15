@@ -2658,7 +2658,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 	}
 	if failure != nil {
 		result.Coverage.Partial = true
-		result.CurrentState = composeFailedSynthesisCurrentState(claimedFacts)
+		result.CurrentState = composeFailureCurrentState(claimedFacts, failure.Class)
 	}
 	modelFacingCoverageDetailIDs := coverageDetailIDSet(result.Coverage.Details)
 	outcome, violation := classifyCoverageDisclosures(draft, &result, modelFacingCoverageDetailIDs)

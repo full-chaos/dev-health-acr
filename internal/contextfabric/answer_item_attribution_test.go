@@ -535,6 +535,10 @@ type assembledResultArmCase struct {
 	// cohort size is read from the LAST cohort synthesis was handed, captured
 	// at the synthesizer seam -- so it is exact, like every other arm.
 	measuresNarrowedCohort bool
+	// factsOnly marks the arm that serves the facts without a model-written
+	// answer. Its document is composed by the production composer, so its
+	// buckets are read off the served document and not off fixture literals.
+	factsOnly bool
 	// drive runs the scenario. It returns the SERVED result when the arm
 	// serves one, and served=false when the answer was refused or the retry
 	// failed, in which case there is no served document to count.
@@ -866,7 +870,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 			// The retry ran, its document still overran, and the budget-trim
 			// lever served the RETRIED document. The event measures it.
 			name:          "budget-trim lever served the re-synthesized result",
-			discriminator: "retry_attempted=true retry_fit=false retry_failed=false refusal_planned=false deadline_reserved=true",
+			discriminator: "retry_attempted=true retry_fit=false retry_failed=false refusal_planned=false facts_only_attempted=false facts_only_served=false facts_only_declined=\"\" deadline_reserved=true",
 			spec:          attributionFixtureSpec{members: 4, globalFindings: 7, groupDrivers: 4, multiGroupDrivers: 2, memberDrivers: 1, memberClaims: 3},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(17, time.Second), cohortSizes)
@@ -877,6 +881,29 @@ func assembledResultArmCases() []assembledResultArmCase {
 				if len(*cohortSizes) != 2 || budgetTrimTrimLines(result) != 1 {
 					t.Fatalf("want one retry and the trim disclosure; cohorts=%v limitations=%v", *cohortSizes, result.Limitations)
 				}
+				return result, true
+			},
+		},
+		{
+			// The first answer overran, no second synthesis could run, and the
+			// facts-only composition fit: the event measures that composition.
+			name:          "facts-only answer served",
+			discriminator: "facts_only_served=true",
+			factsOnly:     true,
+			spec:          attributionFixtureSpec{members: 6},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				var modelCalls, degraded int
+				engine := factsOnlyEngine(t, budgetStageCohort(spec.members), budgetStageOptions(12, 20*time.Second), &modelCalls, &degraded, 2, NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(sink, nil))))
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the facts-only answer served", err)
+				}
+				if modelCalls != 1 || degraded != 1 {
+					t.Fatalf("model calls = %d, degraded compositions = %d, want one model pass and one composition", modelCalls, degraded)
+				}
+				*cohortSizes = append(*cohortSizes, spec.members)
 				return result, true
 			},
 		},
@@ -1087,6 +1114,40 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 			result, servedDocument := one.drive(t, &sink, one.spec, &cohortSizes)
 
 			line := one.emittedLine(t, sink.String())
+
+			if one.factsOnly {
+				fields := attributionFieldsOf(t, line)
+				sum := fields["global"] + fields["member"] + fields["group"] + fields["multi_group"]
+				measured := measuredItemsOf(t, line)
+				if counted := contractsv1.CountContextFabricResultItems(result).Budgeted(); measured != counted || sum != measured {
+					t.Errorf("measured_items = %d, split sums to %d, served document counts %d: all three must agree\nline: %s", measured, sum, counted, line)
+				}
+				// Per bucket, from the served document alone: the cohort rows and
+				// the claims about a member are member items, every other claim is
+				// global, and the composer writes no driver, finding or path.
+				if len(result.Drivers)+len(result.Paths)+len(result.RemainingWork)+len(result.ReadinessGaps)+len(result.Conflicts) != 0 {
+					t.Fatalf("a facts-only document carries model-shaped items: drivers=%d paths=%d", len(result.Drivers), len(result.Paths))
+				}
+				isMember := map[string]bool{}
+				for _, member := range result.Cohort.Members {
+					isMember[member.Subject.CanonicalID] = true
+				}
+				wantMember, wantGlobal := len(result.Cohort.Members), 0
+				for _, claim := range result.ClaimedFacts {
+					if isMember[claim.Subject.CanonicalID] {
+						wantMember++
+					} else {
+						wantGlobal++
+					}
+				}
+				if wantMember == len(result.Cohort.Members) {
+					t.Fatalf("the served document has no claim about a member, so the member bucket cannot tell claims from rows")
+				}
+				if fields["member"] != wantMember || fields["global"] != wantGlobal || fields["group"] != 0 || fields["multi_group"] != 0 {
+					t.Errorf("attribution = %v, want member %d global %d group 0 multi_group 0 from the served document\nline: %s", fields, wantMember, wantGlobal, line)
+				}
+				return
+			}
 
 			// ---- the INDEPENDENT expectation ----
 			//

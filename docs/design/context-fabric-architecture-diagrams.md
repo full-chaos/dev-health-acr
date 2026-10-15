@@ -2138,7 +2138,7 @@ flowchart TD
     D2 --> REFUSE
     D3 --> REFUSE
     D4 --> REFUSE
-    REFUSE["planRefusal → AnswerBudgetRefusal → 413<br/>refusal_planned=true, and it NAMES which lever failed"]
+    REFUSE["planRefusal → AnswerBudgetRefusal → 413<br/>refusal_planned=true, and it NAMES which lever failed<br/>(retry declined as insufficient_deadline or nothing_to_narrow: a facts-only answer that fits is served first, facts_only_served=true)"]
 
     classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
     classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
@@ -2898,7 +2898,7 @@ flowchart TD
   ASSEMBLE -->|"retry selected"| SELECT["Info: initial measured overrun + selected narrowing<br/>before second synthesis; retry outcome flags false"]
   SELECT --> ASSEMBLE
   ASSEMBLE -->|"fits with required anchor"| SAVE["final retained-member evidence closure<br/>D47 served from final canonical cohort<br/>save raw-scope census + digest"]
-  ASSEMBLE -->|"still over budget / retry declined"| BUDGET["preserve sole project candidate<br/>existing explained budget refusal; no save"]
+  ASSEMBLE -->|"still over budget / retry declined"| BUDGET["preserve sole project candidate<br/>existing explained budget refusal; no save<br/>(retry declined for deadline: a fitting facts-only answer is served instead)"]
   SAVE --> WRITE["HTTP encode and synchronous write<br/>creator completes lease owner at exit"]
 ```
 
