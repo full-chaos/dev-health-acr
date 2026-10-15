@@ -280,7 +280,12 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // the start of ownership, so the edges projected before v21 hide a synced
 // ownership from every graph read of a window that ended before the stamp;
 // only the rebuild clears their stored start.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v21"
+//
+// v21 -> v22 (CHAOS-9794): a work item -> team edge is retracted by a
+// relationship tombstone when its attribution stops qualifying (the row leaves
+// is_primary 1/2, or its team is deactivated). Edges that went stale before v22
+// are only cleared by the rebuild.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v22"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
