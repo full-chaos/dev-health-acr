@@ -27,16 +27,16 @@ type scopeLiteralBound struct {
 }
 
 var scopeLiteralBounds = map[string]scopeLiteralBound{
-	"repo_mix":                     {memoryMiB: 240, readRows: 1 << 40},
-	"repo_units":                   {memoryMiB: 240, readRows: 1 << 40},
-	"org_units":                    {memoryMiB: 240, readRows: 1 << 40},
-	"owned_unit_count":             {memoryMiB: 240, readRows: 1 << 40},
-	"project_rollup_repo_themes":   {memoryMiB: 240, readRows: 1 << 40},
-	"project_rollup_repo_bugfix":   {memoryMiB: 240, readRows: 1 << 40},
-	"project_rollup_evidence_arm":  {memoryMiB: 240, readRows: 1 << 40},
-	"project_native_placement":     {memoryMiB: 240, readRows: 1 << 40},
-	"project_native_theme_values":  {memoryMiB: 240, readRows: 1 << 40},
-	"project_native_bugfix_values": {memoryMiB: 240, readRows: 1 << 40},
+	"repo_mix":                     {memoryMiB: 135, readRows: 34300},
+	"repo_units":                   {memoryMiB: 132, readRows: 34300},
+	"org_units":                    {memoryMiB: 190, readRows: 34300},
+	"owned_unit_count":             {memoryMiB: 46, readRows: 34300},
+	"project_rollup_repo_themes":   {memoryMiB: 66, readRows: 34300},
+	"project_rollup_repo_bugfix":   {memoryMiB: 65, readRows: 34300},
+	"project_rollup_evidence_arm":  {memoryMiB: 87, readRows: 34400},
+	"project_native_placement":     {memoryMiB: 90, readRows: 52200},
+	"project_native_theme_values":  {memoryMiB: 59, readRows: 34300},
+	"project_native_bugfix_values": {memoryMiB: 58, readRows: 34300},
 }
 
 const scopeLiteralRepoUnits = 500
@@ -69,6 +69,12 @@ SELECT '%s', 'issue', concat('n-repo-', toString(number)), %s, 'theme', 'feature
 	}
 	return ids
 }
+
+// The evidence arm counts units without a repository that an owning team's
+// evidence vote reaches; the shape has no team-attributed work item for them,
+// so it returns no row while it still reads (and the floor below proves it
+// read) every pinned unit.
+var scopeLiteralEmptyAllowed = map[string]bool{"project_rollup_evidence_arm": true}
 
 type scopeLiteralRun struct {
 	mib      float64
@@ -160,8 +166,11 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 					t.Errorf("%s run %d: %v", c.Name, i, r.err)
 				}
 			}
-			if r.rows == 0 {
+			if r.rows == 0 && !scopeLiteralEmptyAllowed[c.Name] {
 				t.Errorf("%s run %d: returned no rows, the row measured nothing", c.Name, i)
+			}
+			if r.readRows < uint64(len(scopeIDs)/2) {
+				t.Errorf("%s run %d: read %d rows of work_unit_investments, under half of the %d scope units: the literal was not applied", c.Name, i, r.readRows, len(scopeIDs))
 			}
 			if lowest < 0 || r.mib < lowest {
 				lowest = r.mib
