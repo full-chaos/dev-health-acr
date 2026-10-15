@@ -25,7 +25,7 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	entitled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, agentContextRuntimeEntitlement)
 	if err != nil {
-		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)
+		a.writeEntitlementLookupError(w, r, err)
 		return
 	}
 	capabilities.Entitlements.AgentContextRuntime = entitled
