@@ -22,6 +22,10 @@ var memberCutExtraGoals []InvestigationGoal
 // merges the graph's coverage into the result.
 var memberCutGraphDetails []CoverageDetail
 
+// memberCutWrapSynthesizer, when set, wraps the fixture's synthesizer for a
+// row that needs the model call to fail.
+var memberCutWrapSynthesizer func(AnswerSynthesizer) AnswerSynthesizer
+
 // memberCutDegradedReasons pairs each degrading detail with its reason, as the
 // graph reader mints them.
 func memberCutDegradedReasons() []string {
@@ -81,7 +85,7 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
 		}),
-		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+		Synthesizer: memberCutWrapped(synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 			claims := []ClaimedFact{}
 			refs := []string{}
 			if gaps > 0 {
@@ -121,7 +125,7 @@ func memberCutEngineNaming(t *testing.T, gaps int, cited []int, reserve time.Dur
 				}(), DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
 				Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
 			}, nil
-		}),
+		})),
 		Requirements: deriver,
 		Telemetry:    telemetry,
 	}, func() EngineOptions {
@@ -162,7 +166,8 @@ func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
 		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention},
 		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
 	}
-	basis, order, ok := memberCutOrder(result, nil)
+	basis, ok := memberCutBasis(result.Cohort)
+	order := memberCutOrder(result.Cohort, basis, result)
 	if !ok || basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
 		t.Fatalf("basis %q ok=%v, want attention_rank", basis, ok)
 	}
@@ -191,38 +196,38 @@ func currentStateFor(hook func(*Cohort) string, cohort *Cohort) string {
 // team" keeps its member listed, and "said" does not.
 func TestAShortLabelIsMatchedAsAWholeWordInTheDraftProse(t *testing.T) {
 	member := SubjectRef{Kind: SubjectProject, CanonicalID: "project_001", Label: "AI"}
-	if !namedInProse(member, draftProse(InvestigationResult{CurrentState: "The AI team is stretched."})) {
+	if !namedInProse(member, answerProse(InvestigationResult{CurrentState: "The AI team is stretched."})) {
 		t.Fatal("a one-word mention of the two-character label is not matched")
 	}
-	if namedInProse(member, draftProse(InvestigationResult{CurrentState: "Reviewers said it is fine."})) {
+	if namedInProse(member, answerProse(InvestigationResult{CurrentState: "Reviewers said it is fine."})) {
 		t.Fatal("the label matched inside another word")
 	}
-	if !namedInProse(SubjectRef{Kind: SubjectProject, CanonicalID: "x", Label: "A"}, draftProse(InvestigationResult{CurrentState: "Team A is late."})) {
+	if !namedInProse(SubjectRef{Kind: SubjectProject, CanonicalID: "x", Label: "A"}, answerProse(InvestigationResult{CurrentState: "Team A is late."})) {
 		t.Fatal("a one-character label mentioned as a word is not matched")
 	}
 }
 
-// An items overrun with the retry unavailable is still refused (the served cut
-// is deferred) and the trace says what the answer could have left out: how many
-// members are listed, how many nothing names, and the order that would apply.
-func TestAnItemsRefusalWithTheRetryUnavailableRecordsTheMemberCutAssessment(t *testing.T) {
+// A model-written answer that overran on items, with no deadline reserve for a
+// second model call, is refused: the cut is not composed without the model it
+// would need, and the trace says what it would have kept.
+func TestAModelWrittenItemsOverrunWithNoSynthesisTimeIsRefused(t *testing.T) {
 	telemetry := &recordingTelemetry{}
 	_, err := investigateMemberCut(t, memberCutEngine(t, memberCutGaps, nil, 0, telemetry))
 	var refusal AnswerBudgetRefusal
-	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunItems {
-		t.Fatalf("err = %v, want the items refusal (the served cut is deferred)", err)
+	if !errors.As(err, &refusal) || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunItems || refusal.RetryAttempted {
+		t.Fatalf("err = %v, want the items refusal with no second synthesis", err)
 	}
 	if len(telemetry.memberCuts) != 1 {
 		t.Fatalf("member-cut events = %d, want 1: %+v", len(telemetry.memberCuts), telemetry.memberCuts)
 	}
 	event := telemetry.memberCuts[0]
-	if event.Declined != MemberCutServedCutDeferred || event.Listed != memberCutCallerCap || event.Uncited != memberCutCallerCap ||
-		event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank || event.ItemsBefore <= event.MaxItems {
-		t.Fatalf("member-cut event = %+v, want deferred, listed %d, uncited %d, attention_rank, over the item budget", event, memberCutCallerCap, memberCutCallerCap)
+	if event.Declined != MemberCutNoSynthesisTime || event.Served || event.Recomposed || event.Listed != memberCutCallerCap || event.Uncited != memberCutCallerCap ||
+		event.Kept != memberCutCallerCap/2 || event.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank || event.ItemsBefore <= event.MaxItems {
+		t.Fatalf("member-cut event = %+v, want no_synthesis_time, listed %d, uncited %d, kept %d, attention_rank, over the item budget", event, memberCutCallerCap, memberCutCallerCap, memberCutCallerCap/2)
 	}
 }
 
-// A member the draft's prose names is not counted as cuttable: the assessment
+// A member the answer's prose names is not counted as cuttable: the assessment
 // excludes it, and the control without the prose counts every member.
 func TestAMemberNamedOnlyInTheDraftProseIsNotCountedAsCuttable(t *testing.T) {
 	named := fmt.Sprintf("project_%03d", memberCutCallerCap-1)
@@ -266,11 +271,19 @@ func TestAnUnrankedSortedListIsOrderedFromTheEnd(t *testing.T) {
 		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true},
 		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
 	}
-	basis, order, ok := memberCutOrder(result, nil)
+	basis, ok := memberCutBasis(result.Cohort)
+	order := memberCutOrder(result.Cohort, basis, result)
 	if !ok || basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Fatalf("basis %q ok=%v, want canonical_id_lexical", basis, ok)
 	}
 	if got := fmt.Sprint(order[:2]); got != fmt.Sprint([]int{4, 3}) {
 		t.Fatalf("order %v, want [4 3] (the cited member 5 is not cuttable)", order[:2])
 	}
+}
+
+func memberCutWrapped(synthesizer AnswerSynthesizer) AnswerSynthesizer {
+	if memberCutWrapSynthesizer != nil {
+		return memberCutWrapSynthesizer(synthesizer)
+	}
+	return synthesizer
 }
