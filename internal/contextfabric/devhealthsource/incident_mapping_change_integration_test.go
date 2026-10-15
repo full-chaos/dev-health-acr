@@ -89,6 +89,9 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 		name, orgID   string
 		before, after []mappingRevision
 		wantRepos     []string
+		// startedAfterChange stamps the incident after the mapping change: the
+		// retraction must not be older than the node and edge it retracts.
+		startedAfterChange bool
 	}{
 		{
 			name: "a mapping moved to another repository", orgID: "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0b01",
@@ -117,6 +120,12 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 			wantRepos: []string{repoA, repoB},
 		},
 		{
+			name: "the last mapping ended, the incident started after the change", orgID: "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0b05",
+			before:             []mappingRevision{{"svc:github:acme/checkout:admin", repoA, earlier, 1}},
+			after:              []mappingRevision{{"svc:github:acme/checkout:admin", repoA, later, 0}},
+			startedAfterChange: true,
+		},
+		{
 			name: "the last mapping ended", orgID: "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0b03",
 			before: []mappingRevision{{"svc:github:acme/checkout:admin", repoA, earlier, 1}},
 			after:  []mappingRevision{{"svc:github:acme/checkout:admin", repoA, later, 0}},
@@ -134,8 +143,12 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 				}
 			}
 			write(tc.before)
+			started := earlier
+			if tc.startedAfterChange {
+				started = now.Add(time.Hour)
+			}
 			mustExec(t, ctx, direct, `INSERT INTO operational_incidents (id, org_id, source_version_at, service_id, title, normalized_status, raw_status, normalized_severity, raw_severity, started_at, source_event_at, observed_at, is_deleted, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				incidentID, tc.orgID, earlier, serviceID, "checkout timeouts", "triggered", "triggered", "sev2", "sev2", earlier, earlier, earlier, uint8(0), earlier)
+				incidentID, tc.orgID, earlier, serviceID, "checkout timeouts", "triggered", "triggered", "sev2", "sev2", started, started, started, uint8(0), earlier)
 
 			src, err := devhealthsource.NewClickHouseProjectionSource(query)
 			if err != nil {
