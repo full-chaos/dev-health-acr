@@ -204,7 +204,9 @@ func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, m
 			quotas[category]--
 		}
 	}
-	for _, category := range categories {
+	// Causes fill their quota before state and pressure so goal matches plus
+	// state and pressure rows cannot spend the whole budget before a cause.
+	for _, category := range []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryEvidence, contractsv1.CategoryAction} {
 		for _, ref := range refs {
 			if roles.rule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
 				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1

@@ -878,3 +878,26 @@ func TestAPullRequestRowedTwiceIsServedOnce(t *testing.T) {
 		t.Fatalf("items = %v, want the pull request once", itemEvidenceIDs(packet))
 	}
 }
+
+func TestAPromotedCauseSurvivesWhenGoalMatchesFillHalfTheBudgetAndStateAndPressureFillTheRest(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	rows := demoShapeRows(at)
+	for i := 0; i < 4; i++ {
+		rows = append(rows, roleRow("ev-state-"+string(rune('a'+i)), "state", "st-"+string(rune('a'+i)), "release marker", "released", at))
+		rows = append(rows, roleRow("ev-ci-bad-"+string(rune('a'+i)), "ci_pipeline_run", "run-bad-"+string(rune('a'+i)), "nightly job", "failed", at))
+	}
+	request := fixtureRequest("req-demo-starved", "main", "")
+	request.Goal = "checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 12, 4000, 65536
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      rows,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !slices.Contains(itemEvidenceIDs(packet), "ev-pr-promo-revert") {
+		t.Fatalf("the promoted cause is not in %v (warnings %v)", itemEvidenceIDs(packet), packet.Warnings)
+	}
+}
