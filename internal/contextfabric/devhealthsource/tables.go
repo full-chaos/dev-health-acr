@@ -789,7 +789,7 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, incidentCursorExpr, "
 // later. A mapping write stamps last_synced, an ended mapping included (ops
 // providersync/pagerduty_services_effects_clickhouse.go
 // pagerDutyServiceMappingTombstone).
-const incidentCursorExpr = "greatest(i.last_synced, s.changed_at)"
+const incidentCursorExpr = "i.last_synced"
 
 // incidentServiceMappings is one row per service over its current mappings:
 // when one was last written; the repositories its active mappings name, as
