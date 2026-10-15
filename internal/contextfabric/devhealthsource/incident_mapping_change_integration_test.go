@@ -108,6 +108,14 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 			wantRepos: []string{repoA},
 		},
 		{
+			name: "two active mappings", orgID: "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0b04",
+			before: []mappingRevision{
+				{"svc:github:acme/checkout:admin", repoA, earlier, 1},
+				{"svc:github:acme/ledger:admin", repoB, earlier, 1},
+			},
+			wantRepos: []string{repoA, repoB},
+		},
+		{
 			name: "the last mapping ended", orgID: "6c2f9a10-4b7e-4d21-9f3a-8e5d1c7b0b03",
 			before: []mappingRevision{{"svc:github:acme/checkout:admin", repoA, earlier, 1}},
 			after:  []mappingRevision{{"svc:github:acme/checkout:admin", repoA, later, 0}},
