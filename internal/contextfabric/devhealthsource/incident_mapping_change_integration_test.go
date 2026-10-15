@@ -2,6 +2,7 @@ package devhealthsource_test
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -146,7 +147,7 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 			t.Cleanup(func() { _ = incremental.PurgeOrganization(context.Background(), tc.orgID) })
 			write(tc.after)
 			apply(t, incremental, key, h.drain(first.cursor).batches)
-			got := subjects(readGraphState(t, ctx, raw, key))
+			got := subjects(readSubjectGraph(t, ctx, raw, key))
 
 			var repos []string
 			incidentNode := false
@@ -173,7 +174,7 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 				_ = rebuildA.PurgeOrganization(context.Background(), tc.orgID)
 				_ = rebuildB.PurgeOrganization(context.Background(), tc.orgID)
 			})
-			stateA, stateB := subjects(readGraphState(t, ctx, raw, keyA)), subjects(readGraphState(t, ctx, raw, keyB))
+			stateA, stateB := subjects(readSubjectGraph(t, ctx, raw, keyA)), subjects(readSubjectGraph(t, ctx, raw, keyB))
 			volatile := map[string]bool{}
 			for _, pair := range [][2]map[string]map[string]any{{stateA.nodes, stateB.nodes}, {stateA.edges, stateB.edges}} {
 				for id, props := range pair[0] {
@@ -252,4 +253,63 @@ func TestIncidentPagesNeitherSkipNorRepeatAcrossAServiceReread(t *testing.T) {
 	check("before the mapping change")
 	mapping("svc:github:acme/ledger:admin", repoB, later)
 	check("after the mapping change")
+}
+
+// readSubjectGraph reads the subject nodes and the edges of one graph, by
+// named properties (a node's search text holds newlines, which toJSON does
+// not escape).
+func readSubjectGraph(t *testing.T, ctx context.Context, raw *redis.Client, key string) graphState {
+	t.Helper()
+	rows := func(query string) [][]any {
+		reply, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, query).Slice()
+		if err != nil || len(reply) < 2 {
+			t.Fatalf("%s: reply of %d parts, err=%v", query, len(reply), err)
+		}
+		records, ok := reply[1].([]any)
+		if !ok {
+			t.Fatalf("%s: the records are a %T", query, reply[1])
+		}
+		out := make([][]any, 0, len(records))
+		for _, record := range records {
+			cells, ok := record.([]any)
+			if !ok {
+				t.Fatalf("%s: a record is a %T", query, record)
+			}
+			out = append(out, cells)
+		}
+		return out
+	}
+	nodeProps := []string{"label", "authorization_repositories", "valid_from", "valid_to", "observed_at", "evidence_refs", "property_status", "property_severity", "source_version"}
+	edgeProps := []string{"relation_type", "authorization_repositories", "valid_from", "valid_to", "observed_at", "evidence_refs", "source_version"}
+	ret := func(alias string, names []string) string {
+		parts := make([]string, len(names))
+		for i, name := range names {
+			parts[i] = alias + "." + name
+		}
+		return strings.Join(parts, ", ")
+	}
+	state := graphState{nodes: map[string]map[string]any{}, edges: map[string]map[string]any{}}
+	for _, cells := range rows("MATCH (n) WHERE n.canonical_id IS NOT NULL RETURN n.subject_kind, n.canonical_id, " + ret("n", nodeProps)) {
+		id := fmt.Sprintf("%v|%v", cells[0], cells[1])
+		if _, twice := state.nodes[id]; twice {
+			t.Fatalf("two nodes are %s", id)
+		}
+		props := map[string]any{"canonical_id": cells[1], "subject_kind": cells[0]}
+		for i, name := range nodeProps {
+			props[name] = cells[2+i]
+		}
+		state.nodes[id] = props
+	}
+	for _, cells := range rows("MATCH (a)-[r]->(b) RETURN r.relationship_id, a.canonical_id, b.canonical_id, " + ret("r", edgeProps)) {
+		id := fmt.Sprintf("%v|%v>%v", cells[0], cells[1], cells[2])
+		if _, twice := state.edges[id]; twice {
+			t.Fatalf("two edges are %s", id)
+		}
+		props := map[string]any{"relationship_id": cells[0]}
+		for i, name := range edgeProps {
+			props[name] = cells[3+i]
+		}
+		state.edges[id] = props
+	}
+	return state
 }
