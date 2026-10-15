@@ -194,8 +194,13 @@ unit_dedicated_packages=(
 # union of `go list ./...` and the closure proof does not count them.
 # Why: devhealthfacts ran 1539s of the 1800s package budget in one binary
 # after two real-ClickHouse cohort-cap tests joined it, over the 85% guard.
+# devhealthsource is listed twice: its rest half (shard 6) alone reached 85-87%
+# of the 600s package budget, so its slowest tests (devhealthsource-race-mid-tests.txt)
+# get a third leg of their own. Legs 8 and 9 emit the same package; the three
+# halves are disjoint (race-split.sh devhealthsource unit-partition).
 unit_split_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 # devhealthsource joined both lists because its single unit binary ran 503s to
