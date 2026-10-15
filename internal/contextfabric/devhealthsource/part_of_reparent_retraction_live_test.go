@@ -38,17 +38,14 @@ type edgeWorld struct {
 	now     time.Time
 }
 
-func newEdgeWorld(t *testing.T, orgID string) *edgeWorld {
+func newEdgeWorld(t *testing.T, adapter *falkorgraph.Adapter, orgID string) *edgeWorld {
 	t.Helper()
-	ctx := context.Background()
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	applyProductionSchema(t, ctx, direct, "")
-	adapter := chaos7074FalkorAdapter(t, ctx)
+	query, direct := orgIsolationClickHouseFixture(t)
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &edgeWorld{t: t, ctx: ctx, direct: direct, adapter: adapter, source: source, orgID: orgID, now: time.Now().UTC().Truncate(time.Second)}
+	return &edgeWorld{t: t, ctx: context.Background(), direct: direct, adapter: adapter, source: source, orgID: orgID, now: time.Now().UTC().Truncate(time.Second)}
 }
 
 func (w *edgeWorld) exec(label, statement string, args ...any) {
@@ -123,9 +120,9 @@ func (w *edgeWorld) edgesOut(origin string, relation contractsv1.ContextFabricRe
 	return out
 }
 
-func TestPartOfReparentLeavesOneOpenEdge(t *testing.T) {
+func partOfReparentLeavesOneOpenEdge(t *testing.T, adapter *falkorgraph.Adapter) {
 	const org = "97950000-0000-4000-8000-000000000001"
-	w := newEdgeWorld(t, org)
+	w := newEdgeWorld(t, adapter, org)
 	const repo = "97950000-0000-4000-8000-0000000000a1"
 	w.repo(repo, "acme/tree")
 	first, second := w.now.Add(-5*time.Hour), time.Now().UTC().Add(time.Second)
@@ -161,9 +158,9 @@ func TestPartOfReparentLeavesOneOpenEdge(t *testing.T) {
 // under several repositories. The parent is the work item of that id in the
 // child's own repository; held only elsewhere, or under other repositories but
 // not the child's own, it names no parent and no PART_OF edge stands.
-func TestPartOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T) {
+func partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T, adapter *falkorgraph.Adapter) {
 	const org = "97950000-0000-4000-8000-000000000002"
-	w := newEdgeWorld(t, org)
+	w := newEdgeWorld(t, adapter, org)
 	const repoA, repoB, repoC = "97950000-0000-4000-8000-0000000000b1", "97950000-0000-4000-8000-0000000000b2", "97950000-0000-4000-8000-0000000000b3"
 	w.repo(repoA, "acme/a")
 	w.repo(repoB, "acme/b")
@@ -195,9 +192,9 @@ func TestPartOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T) {
 
 // A blocks link the provider stopped reporting is retracted by tombstone, by
 // the id the asserting row minted; the graph must hold no BLOCKS edge after.
-func TestRemovedBlockerLinkLeavesNoOpenEdgeInTheGraph(t *testing.T) {
+func removedBlockerLinkLeavesNoOpenEdgeInTheGraph(t *testing.T, adapter *falkorgraph.Adapter) {
 	const org = "97950000-0000-4000-8000-000000000003"
-	w := newEdgeWorld(t, org)
+	w := newEdgeWorld(t, adapter, org)
 	const repo = "97950000-0000-4000-8000-0000000000c1"
 	w.repo(repo, "acme/blocks")
 	linked, resynced := w.now.Add(-5*time.Hour), time.Now().UTC().Add(time.Second)
@@ -216,4 +213,14 @@ func TestRemovedBlockerLinkLeavesNoOpenEdgeInTheGraph(t *testing.T) {
 	if got := w.edgesOut(blocker, contractsv1.ContextFabricRelationshipBlocks); len(got) != 0 {
 		t.Fatalf("the provider stopped reporting the link and the graph holds %d open BLOCKS edges: %v", len(got), got)
 	}
+}
+
+// The three cases share one FalkorDB container and the package's shared
+// ClickHouse (each case has its own organization), to stay inside the package
+// time budget.
+func TestEdgeRetractionOnRealStores(t *testing.T) {
+	adapter := chaos7074FalkorAdapter(t, context.Background())
+	t.Run("a re-parent and a cleared parent", func(t *testing.T) { partOfReparentLeavesOneOpenEdge(t, adapter) })
+	t.Run("a bare parent id", func(t *testing.T) { partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t, adapter) })
+	t.Run("a removed blocks link", func(t *testing.T) { removedBlockerLinkLeavesNoOpenEdgeInTheGraph(t, adapter) })
 }

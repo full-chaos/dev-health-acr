@@ -203,10 +203,10 @@ func rowCases() []rowCase {
 		{hierarchy, []string{grantedID, "jira:P:Q", "jira:R"}, true, true, "child=jira:P:Q, parent=jira:R", ""},
 		{hierarchy, []string{grantedID, "jira:P", "Q:jira:R"}, true, true, "child=jira:P, parent=Q:jira:R", ""},
 		{hierarchy, []string{grantedID, "jira:U", "V:jira:W"}, true, true, "child=jira:U, parent=V:jira:W", ""},
-		// A parent in two repositories: one row (no fan-out join).
+		// A parent in two repositories: the child's own repository's row.
 		{hierarchy, []string{grantedID, "jira:K", "jira:PARENT2"}, true, true, "child=jira:K", ""},
-		// A parent only in other-org/secret.
-		{hierarchy, []string{grantedID, "jira:S1", "jira:SP"}, false, true, "child=jira:S1", ""},
+		// A parent only in other-org/secret: a bare parent id resolves in the
+		// child's own repository only, so no producer mints a ref for jira:S1.
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
 		// The resolver here has no subject gate, so a restricted caller is
