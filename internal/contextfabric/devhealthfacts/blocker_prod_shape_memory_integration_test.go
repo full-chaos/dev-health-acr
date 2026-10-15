@@ -164,6 +164,39 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	return out
 }
 
+// blockerProdShapeBlockSizeOffenders reads the max_block_size each blocker
+// statement EXECUTED with from system.query_log (its Settings map, not the
+// statement text or the Go source), and returns the statements that did not run
+// with want rows per block. A wrapper or session default that drops the
+// setting leaves it out of the map, so it is reported here.
+func blockerProdShapeBlockSizeOffenders(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64, want string) (offenders []string, statements int) {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, any(Settings['max_block_size']), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+GROUP BY normalized_query_hash`, mark)
+	if err != nil {
+		t.Fatalf("read executed settings: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash uint64
+		var blockSize, head string
+		if err := rows.Scan(&hash, &blockSize, &head); err != nil {
+			t.Fatal(err)
+		}
+		statements++
+		t.Logf("PRODSHAPE executed max_block_size %q (want %q) statement %d: %s", blockSize, want, hash, head)
+		if blockSize != want {
+			offenders = append(offenders, fmt.Sprintf("%d max_block_size=%q: %s", hash, blockSize, head))
+		}
+	}
+	return offenders, statements
+}
+
 func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
 	t.Helper()
 	out := blockerProdShapeQueryLog(t, ctx, direct, mark)
@@ -471,6 +504,36 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			t.Errorf("library authorization forced: fact %d differs from the shipped shape: %+v vs %+v", index, forced.Facts[index].Fields, orgWideResult.Facts[index].Fields)
 		}
 	}
+
+	// Structural guard on the cause of the #1304 fix: the executed blocker
+	// statements carry the 8192-row block size. Memory alone cannot separate
+	// the real rollback (#1256 and #1304 undone together reads 39-42 MiB
+	// against a 37-39 MiB product), so the setting is checked directly. The
+	// same read-back under the rollback must find offenders, or it guards
+	// nothing.
+	shippedMark := serverNowMicros(t, ctx, direct)
+	read(restricted)
+	if offenders, statements := blockerProdShapeBlockSizeOffenders(t, ctx, direct, shippedMark, "8192"); statements == 0 {
+		t.Error("the executed-settings read-back found no blocker statement: it checks nothing")
+	} else if len(offenders) > 0 {
+		t.Errorf("blocker statements executed without max_block_size = 8192 (the #1304 fix): %v", offenders)
+	}
+	rollbackOffenders, rollbackStatements := func() ([]string, int) {
+		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
+		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(0)()
+		rollbackMark := serverNowMicros(t, ctx, direct)
+		read(restricted)
+		return blockerProdShapeBlockSizeOffenders(t, ctx, direct, rollbackMark, "8192")
+	}()
+	if rollbackStatements == 0 || len(rollbackOffenders) != rollbackStatements {
+		t.Errorf("with #1256 and #1304 undone, %d of %d blocker statements lacked max_block_size = 8192: the read-back cannot catch the rollback", len(rollbackOffenders), rollbackStatements)
+	}
+	// Advisory, not a guard: the real rollback's memory reading is logged only.
+	func() {
+		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
+		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(0)()
+		blockerProdShapePlantedReading(t, ctx, direct, "advisory only, not a guard: real rollback (#1256 and #1304 undone), restricted", func() { read(restricted) })
+	}()
 
 	// Planted defect, absolute: the authorization relation inside every
 	// statement (#1256) and oversized blocks (the server's default is 65409
