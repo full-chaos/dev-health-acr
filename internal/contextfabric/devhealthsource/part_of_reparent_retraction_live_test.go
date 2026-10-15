@@ -128,7 +128,7 @@ func TestPartOfReparentLeavesOneOpenEdge(t *testing.T) {
 	w := newEdgeWorld(t, org)
 	const repo = "97950000-0000-4000-8000-0000000000a1"
 	w.repo(repo, "acme/tree")
-	first, second := w.now.Add(-5*time.Hour), w.now.Add(-time.Hour)
+	first, second := w.now.Add(-5*time.Hour), time.Now().UTC().Add(time.Second)
 	w.item(repo, "jira:PAR-1", "", first)
 	w.item(repo, "jira:PAR-2", "", first)
 	w.item(repo, "jira:CHD-1", "jira:PAR-1", first)
@@ -149,7 +149,7 @@ func TestPartOfReparentLeavesOneOpenEdge(t *testing.T) {
 	})
 
 	t.Run("the parent is cleared", func(t *testing.T) {
-		w.item(repo, "jira:CHD-1", "", w.now.Add(-30*time.Minute))
+		w.item(repo, "jira:CHD-1", "", time.Now().UTC().Add(2*time.Second))
 		w.drain()
 		if got := w.edgesOut(child, contractsv1.ContextFabricRelationshipPartOf); len(got) != 0 {
 			t.Fatalf("the parent was cleared and the graph holds %d open PART_OF edges from the child: %v, want none", len(got), got)
@@ -184,7 +184,7 @@ func TestRemovedBlockerLinkLeavesNoOpenEdgeInTheGraph(t *testing.T) {
 	w := newEdgeWorld(t, org)
 	const repo = "97950000-0000-4000-8000-0000000000c1"
 	w.repo(repo, "acme/blocks")
-	linked, resynced := w.now.Add(-5*time.Hour), w.now.Add(-time.Hour)
+	linked, resynced := w.now.Add(-5*time.Hour), time.Now().UTC().Add(time.Second)
 	w.item(repo, "jira:BLK-1", "", linked)
 	w.item(repo, "jira:BLK-2", "", linked)
 	w.exec("blocks row", `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, org_id, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
