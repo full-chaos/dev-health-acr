@@ -380,7 +380,9 @@ jobs:
   # ClickHouse schema (columns, order, engine, sorting key, projections) with a
   # server migrated by the ops checkout. It needs only ClickHouse and the ops
   # ClickHouse migrations, so this job starts that one service and runs that one
-  # test with REQUIRED=1: a missing DSN or a skip fails the job.
+  # test with REQUIRED=1: a missing DSN or a skip fails the job. CHAOS-9751 adds
+  # the file focus key test to the same job: it runs the three file statements
+  # against the migrated tables.
   live-schema-parity:
     name: live schema parity (ops-migrated ClickHouse)
     runs-on: ubuntu-24.04
@@ -431,7 +433,9 @@ jobs:
           set -euo pipefail
           go test -count=1 -v -run '^TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse$' ./internal/contextfabric/devhealthsource | tee "$RUNNER_TEMP/parity.log"
           grep -q -- '--- PASS: TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse' "$RUNNER_TEMP/parity.log"
-          if grep -q -- '--- SKIP' "$RUNNER_TEMP/parity.log"; then echo '::error::live schema parity test skipped'; exit 1; fi
+          go test -count=1 -v -run '^TestLiveFileFactsShareOneFocusKeyAcrossTheThreeFileSources$' ./internal/contextpacket | tee "$RUNNER_TEMP/focus.log"
+          grep -q -- '--- PASS: TestLiveFileFactsShareOneFocusKeyAcrossTheThreeFileSources' "$RUNNER_TEMP/focus.log"
+          if grep -q -- '--- SKIP' "$RUNNER_TEMP/parity.log" "$RUNNER_TEMP/focus.log"; then echo '::error::live schema parity test skipped'; exit 1; fi
   web-contract-changed:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
