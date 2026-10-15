@@ -286,7 +286,7 @@ func TestChaos5405_TheTwelveNewDecisionFieldsExistAndReachTheSink(t *testing.T) 
 func TestChaos5405_DecisionReasonCarriesTheRuledVocabularyAndRejectsTheRest(t *testing.T) {
 	t.Parallel()
 	ruled := []string{
-		"attribution_source_unrecognized", "authorization_error", "axis_unsupported",
+		"attribution_source_unrecognized", "axis_unsupported",
 		"backend_error", "capacity_timeout", "executed", "expander_unwired",
 		"origin_unresolved", "policy_disabled", "policy_none", "time_bounds_invalid",
 		"timeout",
