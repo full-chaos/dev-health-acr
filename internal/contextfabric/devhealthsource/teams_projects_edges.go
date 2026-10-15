@@ -783,9 +783,17 @@ var workItemTeamsGroupColumns = []string{"toString(w.repo_id)", "ifNull(r.repo, 
 
 var workItemTeamsRowKey = rowKeySQL("toString(w.repo_id)", "a.work_item_id", "ifNull(a.team_id, '')")
 
+// workItemTeamsQualifies is the row-level rule for an edge: a primary or
+// co-owner attribution of an active team. A pair with no qualifying row is not
+// dropped from the read: it is read to be retracted (CHAOS-9794).
+var workItemTeamsQualifies = "(" + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + " AND " + devhealthschema.ActiveTeamPredicate("t") + ")"
+
 // workItemTeamsWatermark is the page position: the newest computed_at of the
-// group, so a later row of the pair moves the edge past the cursor.
-const workItemTeamsWatermark = "max(a.computed_at)"
+// group, so a later row of the pair moves the edge past the cursor. A pair
+// whose team is inactive also carries the team's change time: the attribution
+// row does not change when its team is deactivated, so without it the
+// retraction would be older than the edge it retracts.
+const workItemTeamsWatermark = "greatest(max(a.computed_at), maxIf(t.updated_at, t.is_active = 0))"
 
 // workItemTeamsCurrentOrder picks the row that represents one (work item,
 // team): the primary row before a co-owner row (the is_primary meaning
@@ -798,7 +806,7 @@ const workItemTeamsCurrentOrder = "tuple(toUInt8(a.is_primary != 1), -toUnixTime
 
 // workItemTeamsWinner is the winning row's (source, confidence, attribution
 // repo_id).
-const workItemTeamsWinner = "argMin(tuple(toString(a.source), toString(a.confidence), toString(a.repo_id)), " + workItemTeamsCurrentOrder + ")"
+var workItemTeamsWinner = "argMinIf(tuple(toString(a.source), toString(a.confidence), toString(a.repo_id)), " + workItemTeamsCurrentOrder + ", " + workItemTeamsQualifies + ")"
 
 // workItemTeamsStatement reads one row per (work item, team). The table keys
 // on source, so a pair can hold a primary row and a co-owner row, or rows of
@@ -811,12 +819,12 @@ func workItemTeamsStatement(cursor cursorState) string {
        toString(w.repo_id) AS work_item_repo_id, ifNull(r.repo, '') AS work_item_repo_slug,
        ` + workItemTeamsWatermark + ` AS observed_at,
        ` + workItemTeamsWinner + `.3 AS attribution_repo_id,
-       count() AS group_rows
+       countIf(` + workItemTeamsQualifies + `) AS group_rows
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
-INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = ifNull(a.team_id, '')
+LEFT JOIN (SELECT id, is_active, updated_at FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE a.org_id = {org_id:String} AND ` + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ` AND ifNull(a.team_id, '') != ''
+WHERE a.org_id = {org_id:String} AND ifNull(a.team_id, '') != ''
 GROUP BY ` + strings.Join(workItemTeamsGroupColumns, ", ") + havingSincePredicate(cursor, workItemTeamsWatermark, workItemTeamsRowKey) + orderBy(workItemTeamsWatermark, workItemTeamsRowKey)
 }
 
@@ -828,9 +836,6 @@ func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQuer
 		if err := r.Scan(&workItemID, &teamID, &source, &confidence, &repoID, &repoSlug, &observedAt, &attributionRepoID, &groupRows); err != nil {
 			return nil, err
 		}
-		if groupRows > 1 {
-			ledger.recordWorkItemTeamCollapsed(int(groupRows - 1))
-		}
 		observedAt = observedAt.UTC()
 		rowSortKey := identity.JoinSegments(repoID, workItemID, teamID)
 		workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
@@ -839,6 +844,28 @@ func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQuer
 		}
 		if omitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		// RETRACTION (CHAOS-9794). The pair has attribution rows but none
+		// qualifies (the row left is_primary 1/2, or its team is inactive), so
+		// an edge projected on an EARLIER tick would stay open: incremental
+		// application never deletes an absent relationship. The tombstone is
+		// the retraction. It is idempotent (a never-projected id matches zero
+		// rows) and cannot delete an edge this batch asserts, because a pair
+		// emits an edge or a tombstone, never both. Its EffectiveAt is the
+		// pair's watermark, which is not older than the edge it retracts.
+		if groupRows == 0 {
+			ledger.recordWorkItemTeamRetracted()
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind:          "relationship",
+				CanonicalID:   workItemTeamRelationshipID(workItemCanonicalID, teamID),
+				Reason:        "work item team attribution no longer qualifies: not a primary or co-owner row of an active team",
+				EffectiveAt:   observedAt,
+				SourceVersion: TeamsProjectsSourceVersion,
+			}
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
+		}
+		if groupRows > 1 {
+			ledger.recordWorkItemTeamCollapsed(int(groupRows - 1))
 		}
 		derivation, epistemicStatus := workItemTeamAttributionDerivation(source)
 		// CHAOS-7252: the ref is the attribution row's full key -- its OWN

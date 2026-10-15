@@ -893,6 +893,10 @@ type presenceTelemetryLedger struct {
 	// workItemTeamCollapsed counts work_item_team_attributions rows folded
 	// into another row of the same (work item, team) by queryWorkItemTeams.
 	workItemTeamCollapsed int
+	// workItemTeamRetracted counts the tombstones queryWorkItemTeams emitted
+	// for pairs whose attribution no longer qualifies. A tombstone for an
+	// edge that was never projected is a no-op, so this is an upper bound.
+	workItemTeamRetracted int
 	// membership is the page-level record of the read
 	// (membership_read_telemetry.go).
 	membership membershipReadLedger
@@ -969,6 +973,24 @@ func (l *presenceTelemetryLedger) recordWorkItemTeamCollapsed(rows int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.workItemTeamCollapsed += rows
+}
+
+func (l *presenceTelemetryLedger) recordWorkItemTeamRetracted() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.workItemTeamRetracted++
+}
+
+func (l *presenceTelemetryLedger) workItemTeamRetractedCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.workItemTeamRetracted
 }
 
 func (l *presenceTelemetryLedger) workItemTeamCollapsedCount() int {
@@ -1162,6 +1184,12 @@ func logWorkItemTeamCollapsed(ctx context.Context, logger *slog.Logger, orgID st
 		logger.InfoContext(ctx, "devhealthsource collapsed work item team attribution rows onto one edge per work item and team",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"work_item_team_rows_collapsed", collapsed)
+	}
+	if retracted := ledger.workItemTeamRetractedCount(); retracted > 0 {
+		logger.InfoContext(ctx, "devhealthsource tombstoned work item team edges whose attribution no longer qualifies",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
+			"counts", "tombstones emitted; a tombstone for an edge that was never projected is a no-op, so this is an upper bound on edges removed",
+			"work_item_team_edge_tombstones", retracted)
 	}
 }
 
