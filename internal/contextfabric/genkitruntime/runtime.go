@@ -3056,62 +3056,22 @@ const rejectedInterpretDrawMessage = "context fabric interpret draw rejected"
 // verified per-PR, not assumed from this comment.
 
 func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample, initialSample, redraws int, rejectionReason, rejectedFactKind string, rejectedFactKindSet bool, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
-	fields := []any{
-		"request_id", contextfabric.SanitizeLogAttr(requestID),
-		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
-		"operation", contextfabric.SanitizeLogAttr(string(receipt.Operation)),
-		"outcome", contextfabric.SanitizeLogAttr(receipt.Outcome),
-		"attempts", receipt.Attempts,
-		"fallback_used", receipt.FallbackUsed,
-
-		"primary_failure_classification", contextfabric.SanitizeLogAttr(primaryFailureClassification),
-		"axis_source", contextfabric.SanitizeLogAttr(axisSource),
-		// CHAOS-4631: the exact decoding config chaos4631InterpretDecodingConfig
-		// applied to this call (seed + which sample index derived it), logged
-		// as concrete values (never the request/response payload) so replay
-		// can prove determinism was actually requested, and which sample it
-		// was, without re-inspecting the receipt. This function only ever
-		// logs the interpret operation, so this is unconditional, unlike
-		// logSynthesizeDecision's appended-only fields. No temperature field:
-		// this model family rejects a non-default temperature outright (see
-		// chaos4631InterpretDecodingConfig's doc comment for the executed
-		// repro), so seed is the only decoding parameter this change applies.
-		"decoding_seed", decodingSeed,
-		"sample", sample,
-		"initial_sample", initialSample,
-		"redraws", redraws,
-		// CHAOS-4631 ticket point 4: model id and prompt version recorded in
-		// telemetry, not on the result -- receipt.Model/ModelVersion/
-		// PromptVersion are already the durable ModelExecutionReceipt sink's
-		// own fields (model_runtime.go), so this is the SAME values on the
-		// log-line surface too, closing the "diagnosable from the run's own
-		// completed artifacts alone" bar for this decision event specifically
-		// rather than only the separate receipt sink.
-		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
-		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
-		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
-		"interpretation_source", string(contextfabric.InterpretationSourceServer),
-	}
-	// CHAOS-5380: the attempt sequence, appended by the ONE renderer all three
-	// decision emitters share -- written as a literal in each of them the three
-	// would agree only by inspection, and this seam's entire history is two
-	// readers of one fact disagreeing about it.
-	fields = append(fields, attemptLogFields(attemptOutcomes)...)
-	// The FALLBACK leg's own attempts, explicit zero when no fallback ran.
-	// mergeFallbackReceipt keeps the PRIMARY's Attempts (deliberately -- the
-	// primary's record must not be overwritten), so without this a fallback
-	// that itself retried left no trace anywhere. Deliberately NOT part of
-	// attemptLogFields: offer phrasing has no fallback model, and a field that
-	// could only ever be zero there would be noise rather than a real zero.
-	fields = append(fields, "fallback_attempts_total", fallbackAttempts)
-	// CHAOS-5380 PR-A B4 (r5 P1-1): the PRIMARY's own identity, separate from
-	// model_id/model_version above (which stay the ANSWER identity --
-	// CHAOS-4631 r3, do not revert). On a fallback success these two triples
-	// diverge; attempt_outcomes describes the PRIMARY's attempts, so its
-	// identity must be on the line too, or a primary-model regression is
-	// invisible at Info behind a fallback that happens to still serve. Equal
-	// to model_id/model_version/receipt.Provider when no fallback ran.
-	fields = append(fields, "primary_provider", contextfabric.SanitizeLogAttr(primaryProvider), "primary_model_id", contextfabric.SanitizeLogAttr(primaryModel), "primary_model_version", contextfabric.SanitizeLogAttr(primaryModelVersion))
+	// The required fields are built through the generated constructor, so the
+	// declaration in eventspec and this line cannot drift apart; only the
+	// conditional fields below are appended here.
+	//
+	// model_id/model_version are the ANSWER identity (CHAOS-4631 r3: the
+	// fallback's after a fallback success); the primary_* triple is the PRIMARY
+	// leg's own identity, which attempt_outcomes describes. fallback_attempts_total
+	// is spelled out as an explicit zero when no fallback ran.
+	fields := eventspec.NewModelInterpretDecisionFields(
+		requestID, decisionOrgIDHash(orgID), string(receipt.Operation), receipt.Outcome, receipt.Attempts,
+		receipt.FallbackUsed, primaryFailureClassification, axisSource,
+		int(decodingSeed), sample, initialSample, redraws,
+		receipt.Model, receipt.ModelVersion, receipt.PromptVersion, string(contextfabric.InterpretationSourceServer),
+		len(attemptOutcomes), attemptsRetried(attemptOutcomes), formatAttemptOutcomes(attemptOutcomes), formatAttemptElapsed(attemptOutcomes),
+		fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion,
+	).SlogArgs()
 	// Appended only when a rejection actually happened, exactly as
 	// logSynthesizeDecision does with its own rejection_reason: an
 	// unconditional field would put rejection_reason="" on every
@@ -3185,38 +3145,17 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
 func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string, draws []synthesisDraw, budgetChecked bool, budgetRemainingMS, budgetReservedMS int64, budgetStopped bool) {
-	fields := []any{
-		"request_id", contextfabric.SanitizeLogAttr(requestID),
-		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
-		"operation", contextfabric.SanitizeLogAttr(string(receipt.Operation)),
-		"outcome", contextfabric.SanitizeLogAttr(receipt.Outcome),
-		"attempts", receipt.Attempts,
-		"fallback_used", receipt.FallbackUsed,
-
-		"primary_failure_classification", contextfabric.SanitizeLogAttr(primaryFailureClassification),
-		"drivers", grounding.Drivers,
-		"findings", grounding.Findings,
-		"claims", grounding.Claims,
-		"evidence_refs", grounding.EvidenceRefs,
-		// codex r1 observation, fixed here rather than ticketed because it is
-		// three fields on a line this change already rewrites: interpret and
-		// phrase_offers both carry the model/prompt identity and synthesize did
-		// not, so an Info-only reader could see an interpretation-model or
-		// -prompt regression and NOT a synthesis one. Same values the durable
-		// receipt already holds; the point is that the collected line carries
-		// them too, for all three operations rather than two of them.
-		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
-		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
-		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
-	}
-	// CHAOS-5380: see logInterpretDecision for both of these -- the shared
-	// renderer, and why the fallback count is separate from it.
-	fields = append(fields, attemptLogFields(attemptOutcomes)...)
-	fields = append(fields, "fallback_attempts_total", fallbackAttempts)
-	// CHAOS-5380 PR-A B4 (r5 P1-1): the PRIMARY's own identity, separate
-	// from model_id/model_version above -- see logInterpretDecision's
-	// matching comment for the full rationale.
-	fields = append(fields, "primary_provider", contextfabric.SanitizeLogAttr(primaryProvider), "primary_model_id", contextfabric.SanitizeLogAttr(primaryModel), "primary_model_version", contextfabric.SanitizeLogAttr(primaryModelVersion))
+	// Required fields through the generated constructor, as in
+	// logInterpretDecision; the draw, deadline, rejection and fact-group fields
+	// below are conditional and appended here.
+	fields := eventspec.NewModelSynthesizeDecisionFields(
+		requestID, decisionOrgIDHash(orgID), string(receipt.Operation), receipt.Outcome, receipt.Attempts,
+		receipt.FallbackUsed, primaryFailureClassification,
+		grounding.Drivers, grounding.Findings, grounding.Claims, grounding.EvidenceRefs,
+		receipt.Model, receipt.ModelVersion, receipt.PromptVersion,
+		len(attemptOutcomes), attemptsRetried(attemptOutcomes), formatAttemptOutcomes(attemptOutcomes), formatAttemptElapsed(attemptOutcomes),
+		fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion,
+	).SlogArgs()
 	// CHAOS-5655: appended only when the draw loop actually judged a draft --
 	// see drawLogFields's own doc comment for why a pure transport failure
 	// must not carry these fields at all.
@@ -3278,17 +3217,11 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 // "reached and fine" -- and says so through operation="" with an empty
 // attempt list, which is a different shape from every real outcome.
 func (r *Runtime) logPhraseDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, attemptOutcomes []attemptOutcome) {
-	fields := []any{
-		"request_id", contextfabric.SanitizeLogAttr(requestID),
-		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
-		"operation", contextfabric.SanitizeLogAttr(string(receipt.Operation)),
-		"outcome", contextfabric.SanitizeLogAttr(receipt.Outcome),
-		"attempts", receipt.Attempts,
-		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
-		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
-		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
-	}
-	fields = append(fields, attemptLogFields(attemptOutcomes)...)
+	fields := eventspec.NewModelPhraseDecisionFields(
+		requestID, decisionOrgIDHash(orgID), string(receipt.Operation), receipt.Outcome, receipt.Attempts,
+		receipt.Model, receipt.ModelVersion, receipt.PromptVersion,
+		len(attemptOutcomes), attemptsRetried(attemptOutcomes), formatAttemptOutcomes(attemptOutcomes), formatAttemptElapsed(attemptOutcomes),
+	).SlogArgs()
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 

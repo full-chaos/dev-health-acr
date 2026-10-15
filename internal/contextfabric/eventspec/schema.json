@@ -7392,6 +7392,434 @@
     ]
   },
   {
+    "id": "genkitruntime.model_interpret_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "exactly one line per InterpretQuestion call, written from the call's deferred exit so a failure at any step still reports.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "interpret",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_used",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "primary_failure_classification",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis_source",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "decoding_seed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "sample",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "initial_sample",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "redraws",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "interpretation_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "server"
+        ]
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "primary_provider",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rejection_reason",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the call ended in a rejection of the model's interpretation"
+      },
+      {
+        "key": "rejected_fact_kind",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written alongside rejection_reason when the rejecting rule was fact_requirement_kind_invalid; the one model-authored value on the line, sanitised and bounded"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_phrase_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "exactly one line per PhraseOffers call, including a call that returned before the model was reached.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "phrase_offers",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_synthesize_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "exactly one line per SynthesizeAnswer call, written from the call's deferred exit so a failure at any step still reports.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "synthesize",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_used",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "primary_failure_classification",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "drivers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "findings",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claims",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "primary_provider",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "primary_model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "draws_total",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the draw loop judged at least one draft; a pure transport failure carries no draw fields"
+      },
+      {
+        "key": "draws_retried",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_outcomes",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_output_digests",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_rejected_clauses",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "draw_rejected_reasons",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written with draws_total"
+      },
+      {
+        "key": "resynthesis_deadline_remaining_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the loop consulted the caller's remaining request deadline"
+      },
+      {
+        "key": "resynthesis_deadline_reserved_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with resynthesis_deadline_remaining_ms"
+      },
+      {
+        "key": "resynthesis_stopped_for_deadline",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written with resynthesis_deadline_remaining_ms"
+      },
+      {
+        "key": "rejection_reason",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the call ended in a rejection of the model's draft"
+      },
+      {
+        "key": "fact_group_size",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the accepted or rejected draft carried a fact group"
+      },
+      {
+        "key": "grounded_beyond_first",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with fact_group_size, including a measured zero"
+      }
+    ]
+  },
+  {
     "id": "graphrank.alias_lookup",
     "msg": "context fabric resolution trace: alias lookup",
     "level": "info",
