@@ -206,10 +206,6 @@ var ProductionColumns = map[string][]Column{
 	"operational_incidents": {
 		{Name: "org_id", Type: "String"},
 		{Name: "source_version_at", Type: "DateTime64(6, 'UTC')"},
-		// Ops migration 067: the engine version and the sort-key tiebreakers.
-		{Name: "source_revision", Type: "UInt128"},
-		{Name: "source_conflict_key", Type: "String"},
-		{Name: "ingest_revision", Type: "UInt128"},
 		{Name: "id", Type: "String"},
 		{Name: "source_url", Type: "Nullable(String)"},
 		{Name: "source_event_at", Type: "Nullable(DateTime64(6, 'UTC'))"},
@@ -235,10 +231,6 @@ var ProductionColumns = map[string][]Column{
 	"operational_service_repository_mappings": {
 		{Name: "org_id", Type: "String"},
 		{Name: "source_version_at", Type: "DateTime64(6, 'UTC')"},
-		// Ops migration 067: the engine version and the sort-key tiebreakers.
-		{Name: "source_revision", Type: "UInt128"},
-		{Name: "source_conflict_key", Type: "String"},
-		{Name: "ingest_revision", Type: "UInt128"},
 		{Name: "id", Type: "String"},
 		{Name: "relationship_provenance", Type: "Nullable(String)"},
 		{Name: "relationship_confidence", Type: "Nullable(Float64)"},
@@ -781,10 +773,10 @@ var EngineFull = map[string]string{
 	"git_pull_request_reviews":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id) SETTINGS index_granularity = 8192",
 	"git_pull_requests":                       "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number) SETTINGS index_granularity = 8192",
 	"ic_landscape_rolling_30d":                "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day) ORDER BY (org_id, repo_id, team_id, map_name, as_of_day, identity_id) SETTINGS index_granularity = 8192",
-	"operational_incidents":                   "ReplacingMergeTree(ingest_revision) PRIMARY KEY (org_id, id) ORDER BY (org_id, id, source_revision, source_conflict_key) SETTINGS index_granularity = 8192",
+	"operational_incidents":                   "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"project_membership_transitions":          "ReplacingMergeTree(last_synced) ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id) SETTINGS index_granularity = 8192",
 	"projects":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192",
-	"operational_service_repository_mappings": "ReplacingMergeTree(ingest_revision) PRIMARY KEY (org_id, id) ORDER BY (org_id, id, source_revision, source_conflict_key) SETTINGS index_granularity = 8192",
+	"operational_service_repository_mappings": "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"recommendations_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(window_end) ORDER BY (org_id, team_id, rule_id, window_end) SETTINGS index_granularity = 8192",
 	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repo_metrics_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
