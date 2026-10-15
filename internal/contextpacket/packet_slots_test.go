@@ -93,3 +93,68 @@ func TestAssembler_second_row_of_a_subject_takes_only_a_slot_nothing_else_wants(
 		t.Fatalf("items=%d files=%d categories=%v, want 4 slots: state, pressure and 2 file rows", len(packet.Items), files, categories)
 	}
 }
+
+func TestAssembler_subject_cap_never_starves_a_category_quota(t *testing.T) {
+	request := fixtureRequest("req-slots-quota", "main", "")
+	request.Goal = "saved payment methods checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 10, 8000, 200000
+	observed := time.Date(2026, 1, 15, 11, 0, 0, 0, time.UTC)
+	var evidence []contractsv1.EvidenceRef
+	for _, ref := range slotsEvidence() {
+		if ref.Metadata != nil {
+			evidence = append(evidence, ref)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		state := testEvidence(fmt.Sprintf("ev-state-%d", i), "dev_health", observed.Add(-time.Duration(i+1)*time.Hour))
+		state.Source.EntityType, state.Citation = "deployment", "status=success, deployment_id=d1"
+		pressure := testEvidence(fmt.Sprintf("ev-pressure-%d", i), "ci", observed.Add(-time.Duration(i+1)*time.Hour))
+		action := testEvidence(fmt.Sprintf("ev-action-%d", i), "dev_health", observed.Add(-time.Duration(i+1)*time.Hour))
+		action.Source.EntityType, action.SourceVersion = "recommendation", "operational_deficiencies.v1"
+		evidence = append(evidence, state, pressure, action)
+	}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence, QueryVersion: contextpacket.QueryVersionV1,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	evidenceItems := 0
+	for _, item := range packet.Items {
+		if item.Category == contractsv1.CategoryEvidence {
+			evidenceItems++
+		}
+	}
+	if evidenceItems != 2 {
+		t.Fatalf("evidence items = %d (%v), want its quota of 2 filled by the second row of the file", evidenceItems, itemEvidenceIDs(packet))
+	}
+}
+
+func TestAssembler_rows_without_a_focus_key_are_allocated_as_before(t *testing.T) {
+	request := fixtureRequest("req-slots-nofocus", "main", "")
+	request.Goal = "saved payment methods checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 12, 8000, 200000
+	evidence := slotsEvidence()
+	for i := range evidence {
+		evidence[i].Metadata = nil
+	}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence, QueryVersion: contextpacket.QueryVersionV1,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	files := 0
+	for _, item := range packet.Items {
+		if item.RelatedEntities[0].Label == "saved-payment-methods-at-checkout.go" {
+			files++
+		}
+	}
+	if files != 3 {
+		t.Fatalf("files = %d, want 3: rows without a focus key keep their old allocation (%v)", files, itemEvidenceIDs(packet))
+	}
+}

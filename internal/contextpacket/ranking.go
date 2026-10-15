@@ -200,18 +200,52 @@ func evidenceTieKey(ref contractsv1.EvidenceRef) string {
 }
 
 // allocateCategories gives one slot to each focus (the entity a row is about,
-// such as one file) before a focus takes a second; later rows of a focus fill
-// only the slots no other candidate wants.
+// such as one file) before a focus takes a second. Category quotas still come
+// first: a second row of a focus takes a slot only when no first row can fill
+// the quota or the slots that remain.
 func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
 	if len(refs) <= maxItems {
 		return refs, false
 	}
 	primary, secondary := splitByFocus(refs)
-	selected, _ := allocatePrimaryCategories(primary, scores, maxItems, roles)
-	if room := maxItems - len(selected); room > 0 && len(secondary) > 0 {
-		selected = append(selected, secondary[:min(room, len(secondary))]...)
-		sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
+	ordered := append(append(make([]contractsv1.EvidenceRef, 0, len(refs)), primary...), secondary...)
+	categories := []contractsv1.PacketCategory{contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryCause, contractsv1.CategoryEvidence, contractsv1.CategoryAction}
+	quotas, selected := map[contractsv1.PacketCategory]int{}, make([]contractsv1.EvidenceRef, 0, maxItems)
+	for index, category := range categories {
+		quotas[category] = maxItems / len(categories)
+		if index < maxItems%len(categories) {
+			quotas[category]++
+		}
 	}
+	selectedIDs := map[string]bool{}
+	for _, ref := range primary {
+		if len(selected) >= (maxItems+1)/2 || scores[ref.EvidenceRefID] == 0 {
+			break
+		}
+		category := roles.rule(ref).category
+		selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
+		if quotas[category] > 0 {
+			quotas[category]--
+		}
+	}
+	// Causes fill their quota before state and pressure so goal matches plus
+	// state and pressure rows cannot spend the whole budget before a cause.
+	for _, category := range []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryEvidence, contractsv1.CategoryAction} {
+		for _, ref := range ordered {
+			if roles.rule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
+				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
+			}
+		}
+	}
+	for _, ref := range ordered {
+		if len(selected) == maxItems {
+			break
+		}
+		if !selectedIDs[ref.EvidenceRefID] {
+			selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
 	slog.Debug("context packet focus cap", "event", "focus_cap_applied", "deferred", len(secondary), "kept", len(selected), "max_items", maxItems)
 	return selected, true
 }
@@ -229,50 +263,6 @@ func splitByFocus(refs []contractsv1.EvidenceRef) (primary, secondary []contract
 		primary = append(primary, ref)
 	}
 	return primary, secondary
-}
-
-func allocatePrimaryCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
-	if len(refs) <= maxItems {
-		return refs, false
-	}
-	categories := []contractsv1.PacketCategory{contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryCause, contractsv1.CategoryEvidence, contractsv1.CategoryAction}
-	quotas, selected := map[contractsv1.PacketCategory]int{}, make([]contractsv1.EvidenceRef, 0, maxItems)
-	for index, category := range categories {
-		quotas[category] = maxItems / len(categories)
-		if index < maxItems%len(categories) {
-			quotas[category]++
-		}
-	}
-	selectedIDs := map[string]bool{}
-	for _, ref := range refs {
-		if len(selected) >= (maxItems+1)/2 || scores[ref.EvidenceRefID] == 0 {
-			break
-		}
-		category := roles.rule(ref).category
-		selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
-		if quotas[category] > 0 {
-			quotas[category]--
-		}
-	}
-	// Causes fill their quota before state and pressure so goal matches plus
-	// state and pressure rows cannot spend the whole budget before a cause.
-	for _, category := range []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryEvidence, contractsv1.CategoryAction} {
-		for _, ref := range refs {
-			if roles.rule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
-				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
-			}
-		}
-	}
-	for _, ref := range refs {
-		if len(selected) == maxItems {
-			break
-		}
-		if !selectedIDs[ref.EvidenceRefID] {
-			selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
-		}
-	}
-	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
-	return selected, true
 }
 
 func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) contractsv1.ContextPacketItem {
