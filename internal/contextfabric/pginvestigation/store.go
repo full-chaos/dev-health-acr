@@ -1068,7 +1068,7 @@ WHERE org_id = $1
   AND ranking_formula_version = $19
   AND question_family_version = $20
   AND ownership_routing_version = $21
-  AND graph_walk_version = $22
+  AND ($22::text IS NOT NULL)
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
