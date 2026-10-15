@@ -36,7 +36,8 @@ const (
 )
 
 type servedPRGraph struct {
-	t *testing.T
+	t       *testing.T
+	members []contextfabric.SubjectRef
 }
 
 func (*servedPRGraph) AuthorizeStoredSubjects(_ context.Context, p storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
@@ -65,9 +66,18 @@ func (g *servedPRGraph) ResolveSubjects(_ context.Context, p storage.Principal, 
 	return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{candidate}, Committed: []contextfabric.SubjectRef{candidate.Subject}}, contextfabric.StructureOfferMaterial{}, nil, nil, nil
 }
 
-func (*servedPRGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+func (g *servedPRGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+	var cohort *contextfabric.Cohort
+	if len(g.members) > 0 {
+		members := make([]contextfabric.CohortMember, 0, len(g.members))
+		for i, subject := range g.members {
+			members = append(members, contextfabric.CohortMember{Subject: subject, Rank: i + 1, InclusionReasons: []string{"matched"}})
+		}
+		cohort = &contextfabric.Cohort{Kind: contextfabric.SubjectPullRequest, Rationale: "open pull requests of the anchor team", Members: members, Complete: true}
+	}
 	return contextfabric.GraphContext{
-		Paths: []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
+		Cohort: cohort,
+		Paths:  []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
 		FactRequirements: []contextfabric.FactRequirement{}, EvidenceRefIDs: []string{},
 		Coverage: contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
 	}, nil
@@ -85,11 +95,16 @@ type servedPRModel struct {
 func (m *servedPRModel) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	receipt := freshLiveReceipt(contextfabric.ModelOperationInterpret)
 	receipt.QuestionFrame = m.frame
-	receipt.QuestionFamily = contextfabric.QuestionFamilyScopedCohortStatus
-	receipt.ScopeAnchorKind = contextfabric.SubjectTeam
-	receipt.ScopeAnchorTerm = "Platform"
-	receipt.RequestedSubjectKind = m.frame.SubjectExpression.Scoped.MemberKind
-	return contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "pull_requests", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, SubjectTerms: []string{"Platform"}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}}}, receipt, nil
+	shape := contextfabric.ShapeSingleSubject
+	receipt.QuestionFamily = contextfabric.QuestionFamilySubjectInvestigation
+	if scoped := m.frame.SubjectExpression.Scoped; scoped != nil {
+		shape = contextfabric.ShapeDiscoveredCohort
+		receipt.QuestionFamily = contextfabric.QuestionFamilyScopedCohortStatus
+		receipt.ScopeAnchorKind = contextfabric.SubjectTeam
+		receipt.ScopeAnchorTerm = "Platform"
+		receipt.RequestedSubjectKind = scoped.MemberKind
+	}
+	return contextfabric.InterpretedQuestion{Shape: shape, RequestedJudgment: "pull_requests", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, SubjectTerms: []string{"Platform"}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactPullRequests}}}, receipt, nil
 }
 
 func (m *servedPRModel) SynthesizeAnswer(_ context.Context, _ storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
@@ -150,7 +165,7 @@ func seedServedPRTeam(t *testing.T, ctx context.Context, orgID string) (repo str
 	return repo
 }
 
-func serveTeamPullRequestQuestion(t *testing.T, ctx context.Context, frame *contextfabric.QuestionFrame, claimSubjectKind contextfabric.SubjectKind, claimField, question string) (contextfabric.InvestigationResult, *servedPRModel, string) {
+func serveTeamPullRequestQuestion(t *testing.T, ctx context.Context, members []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame, claimSubjectKind contextfabric.SubjectKind, claimField, question string) (contextfabric.InvestigationResult, *servedPRModel, string) {
 	t.Helper()
 	orgID := sharedTestOrgID(t)
 	repo := seedServedPRTeam(t, ctx, orgID)
@@ -163,7 +178,7 @@ func serveTeamPullRequestQuestion(t *testing.T, ctx context.Context, frame *cont
 	at := time.Now().UTC()
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter:  contextfabric.RuntimeQuestionInterpreter{Runtime: model, Requirements: registry},
-		Graph:        &servedPRGraph{t: t},
+		Graph:        &servedPRGraph{t: t, members: members},
 		Facts:        registry,
 		Requirements: registry,
 		Synthesizer:  contextfabric.RuntimeAnswerSynthesizer{Runtime: model, Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "served-pr-proof", Backend: "graph", ProjectionVersion: "v1", QueryVersion: "v1"}},
@@ -199,8 +214,12 @@ func servedPRFrame(memberKind contextfabric.SubjectKind, qualifier contextfabric
 // carries the claim on the team subject, and no pull request is served.
 func TestServedAnswerToATeamAggregatePullRequestQuestionCitesTheTeamEvidenceRef(t *testing.T) {
 	ctx := context.Background()
-	result, model, _ := serveTeamPullRequestQuestion(t, ctx,
-		servedPRFrame(contextfabric.SubjectRepository, "", ""),
+	result, model, _ := serveTeamPullRequestQuestion(t, ctx, nil,
+		&contextfabric.QuestionFrame{
+			Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState, contextfabric.GoalCountOrAggregate},
+			SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"Platform"}}},
+			Temporal:          contextfabric.TemporalIntentCurrent,
+		},
 		contextfabric.SubjectTeam, "pull_requests_by_state_basis",
 		"How are the pull requests of the Platform team doing?")
 	if result.Status != contextfabric.InvestigationComplete {
@@ -259,7 +278,12 @@ func TestServedAnswerToATeamAggregatePullRequestQuestionCitesTheTeamEvidenceRef(
 // request it restates, derived from the seeded repository and number.
 func TestServedAnswerToATeamPullRequestStatusQuestionCitesThePullRequestEvidenceRef(t *testing.T) {
 	ctx := context.Background()
-	result, model, repo := serveTeamPullRequestQuestion(t, ctx,
+	repo := repoUUID("served-pr-" + servedPRTeamID)
+	var open []contextfabric.SubjectRef
+	for number := 1; number <= servedPROpenCount; number++ {
+		open = append(open, pullRequestSubject(repo, strconv.Itoa(number)))
+	}
+	result, model, _ := serveTeamPullRequestQuestion(t, ctx, open,
 		servedPRFrame(contextfabric.SubjectPullRequest, contextfabric.MemberQualifierStatus, contextfabric.PullRequestStatusOpen),
 		contextfabric.SubjectPullRequest, "state",
 		"Which pull requests of the Platform team are open?")
