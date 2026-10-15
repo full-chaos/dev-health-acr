@@ -274,3 +274,91 @@ func TestOwnEdgeReachedAtAnotherSubjectsSecondHopStaysWithItsSubject(t *testing.
 		t.Fatalf("admitted %v, want %v: the project's own edge belongs to the project, not to the repository's second hop", got, want)
 	}
 }
+
+// ownerFixtureFake is the fixture owner question's graph shape: a committed
+// project with 17 own membership edges and one owner edge (ownerID), seven
+// second-hop link edges, and 20 text-matched review subjects with one edge
+// each. gateEdge adds a BLOCKS edge from the project with id gateID.
+func ownerFixtureFake(ownerID, gateID string, members int) *fakeConn {
+	one := func(rid, kind, srcKind, srcID, dstKind, dstID string) row {
+		return row{
+			"r":       &edge{Properties: map[string]interface{}{propRelationType: kind, propRelationshipID: rid, propEvidenceRefs: []string{"evidence_" + rid}}},
+			"srcKind": srcKind, "srcId": srcID, "dstKind": dstKind, "dstId": dstID,
+		}
+	}
+	return &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "db.idx.fulltext.queryNodes"):
+			var rows []row
+			for i := 0; i < 20; i++ {
+				rows = append(rows, row{"node": &node{Properties: map[string]interface{}{propKind: "pull_request_review", propCanonicalID: fmt.Sprintf("pull_request_review:%02d", i), propLabel: "checkout review", propSearchText: "checkout"}}, "score": 1.0})
+			}
+			return rows, nil
+		case strings.Contains(cypher, "UNION"):
+			id, _ := params["id"].(string)
+			switch {
+			case id == "project:checkout":
+				var rows []row
+				for k := 0; k < members; k++ {
+					rows = append(rows, one(fmt.Sprintf("relationship.v2:m:%02d", k), "BELONGS_TO_PROJECT", "work_item", fmt.Sprintf("work_item:%02d", k), "project", "project:checkout"))
+				}
+				rows = append(rows, one(ownerID, "OWNED_BY_TEAM", "project", "project:checkout", "team", "team:core"))
+				if gateID != "" {
+					rows = append(rows, one(gateID, "BLOCKS", "project", "project:checkout", "project", "project:ledger"))
+				}
+				return rows, nil
+			case strings.HasPrefix(id, "work_item:"):
+				return []row{one("relationship.v2:a:"+id, "LINKS_PULL_REQUEST", "work_item", id, "pull_request", "pull_request:"+id)}, nil
+			case strings.HasPrefix(id, "pull_request_review:"):
+				return []row{one("relationship.v2:b:"+id, "BELONGS_TO_PULL_REQUEST", "pull_request_review", id, "pull_request", "pull_request:"+id)}, nil
+			}
+			return nil, nil
+		default:
+			kind, _ := params["kind"].(string)
+			id, _ := params["id"].(string)
+			if kind == "" || id == "" {
+				return nil, nil
+			}
+			return []row{fakeSubjectNodeRow(kind, id, id)}, nil
+		}
+	}}
+}
+
+// The committed subject takes its turns before the subjects the question text
+// matched, and its own edges come before its second-hop edges: 20 weakly
+// matched subjects with one edge each cannot push the committed project's owner
+// edge out of a 25-path budget, however its id is spelled.
+func TestCommittedSubjectsOwnEdgesComeBeforeTextMatches(t *testing.T) {
+	const paths = 25
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:checkout", Label: "checkout"}
+	for _, ownerID := range []string{"relationship.v2:z:owner", "relationship.v2:0:owner"} {
+		result, err := newFakeAdapter(t, ownerFixtureFake(ownerID, "", 17)).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, committedRequest(paths, project))
+		if err != nil {
+			t.Fatalf("DiscoverContext() error = %v", err)
+		}
+		got := admittedRelationships(t, result)
+		owner := false
+		for _, id := range got {
+			owner = owner || id == ownerID
+		}
+		if !owner || len(got) != paths {
+			t.Fatalf("owner id %s: admitted %d paths, owner edge admitted=%v: %v", ownerID, len(got), owner, got)
+		}
+	}
+}
+
+// An edge the answer gate can use for the committed subject (its driver is
+// about that subject) comes before the subject's other edges: with more own
+// edges than the budget and an id that sorts last, it is still admitted.
+func TestGateEdgeOfTheCommittedSubjectComesFirst(t *testing.T) {
+	const paths = 25
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:checkout", Label: "checkout"}
+	result, err := newFakeAdapter(t, ownerFixtureFake("relationship.v2:n:owner", "relationship.v2:zz:blocks", 30)).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, committedRequest(paths, project))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	got := admittedRelationships(t, result)
+	if len(got) == 0 || got[0] != "relationship.v2:zz:blocks" {
+		t.Fatalf("admitted %v, want the project's BLOCKS edge first", got)
+	}
+}

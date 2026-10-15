@@ -88,11 +88,14 @@ type AdmitEdgesResult struct {
 // edges win the scarce path and evidence budgets (Codex N2); AdmitEdges does
 // not re-sort.
 //
-// The order (RankEdgesByOrigin, GraphWalkVersion): descending confidence;
-// within one confidence level, the subjects the edges were read for take turns
-// in a fixed order (committed subjects in resolution order, then full-text
-// matches in match order), each subject's edges in ascending edge id, and a
-// subject with no edges left gives its turns to the others. Each edge belongs
+// The order (RankEdgesByOrigin, GraphWalkVersion): the committed subjects take
+// turns in resolution order, then the full-text matches take turns in match
+// order (a tier's unused budget goes to the next); a subject with no edges left
+// gives its turns to the others. Within a committed subject: first the edges
+// whose driver would be about it (DriverSubject, the predicate the drivers
+// built here and the commit gate reading them share), then its other own
+// edges, then its second-hop edges; within each group, and within a full-text
+// match, descending relevance then ascending edge id. Each edge belongs
 // to the subject that reaches it in the fewest hops: an edge with a subject at
 // one end is that subject's own; an edge touching two subjects, or reached by
 // several only at a second hop, goes to the earliest of them. An edge's id
@@ -181,10 +184,11 @@ func AdmitEdges(orgID string, edges []ResolvedEdge, options contextfabric.Invest
 			evidenceSet[id] = struct{}{}
 		}
 		paths = append(paths, path)
-		if standing, category, factKind, relevant := relationMeaning(edge.Name); relevant {
+		if about, drives := DriverSubject(edge); drives {
+			standing, category, factKind, _ := relationMeaning(edge.Name)
 			driver := contextfabric.DriverJudgment{
 				DriverID: DeterministicUUID("context-fabric-driver", orgID, edge.UUID), Standing: standing, Category: category,
-				Title: relationTitle(edge.Name, edge.To.Label), Summary: edgeFact(edge), AffectedSubjects: []contextfabric.SubjectRef{edge.From},
+				Title: relationTitle(edge.Name, edge.To.Label), Summary: edgeFact(edge), AffectedSubjects: []contextfabric.SubjectRef{about},
 				PathIDs: []string{pathID}, EvidenceRefIDs: evidence, Derivation: contextfabric.DerivationGraphAssociated,
 				EpistemicStatus: contextfabric.EpistemicInferred, Confidence: ResultConfidence(edge.Relevance, edge.Score), Current: edge.InvalidAt == nil && edge.ExpiredAt == nil,
 			}
@@ -244,23 +248,57 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 	return sorted
 }
 
-// RankEdgesByOrigin ranks edges for a budget several origin subjects share:
-// by confidence first (SortEdgesByRelevance), and within each run of equal
-// confidence round-robin by origin (InterleaveByOrigin), so an edge's id
-// spelling orders it only among the same origin's edges.
-func RankEdgesByOrigin(edges []CandidateEdge, originOf map[string]string, origins []string) []CandidateEdge {
+// RankEdgesByOrigin ranks edges for a budget several origin subjects share. By
+// confidence first (SortEdgesByRelevance); within each run of equal confidence,
+// Tier by tier (tiers[0]'s origins before tiers[1]'s), the origins of one tier
+// take turns (InterleaveByOrigin). Within one origin, edges go by class
+// (class[id], lower first; an edge with no class is class 0), then by
+// relevance, then by ascending id. An edge's id spelling therefore orders it
+// only among one origin's edges of one class. Edges of origins in no tier
+// follow, in the same order.
+func RankEdgesByOrigin(edges []CandidateEdge, originOf map[string]string, class map[string]int, tiers ...[]string) []CandidateEdge {
 	ranked := SortEdgesByRelevance(edges)
-	out := make([]CandidateEdge, 0, len(ranked))
-	for start := 0; start < len(ranked); {
-		confidence := ResultConfidence(ranked[start].Relevance, ranked[start].Score)
-		end := start + 1
-		for end < len(ranked) && ResultConfidence(ranked[end].Relevance, ranked[end].Score) == confidence {
-			end++
+	sort.SliceStable(ranked, func(i, j int) bool { return class[ranked[i].UUID] < class[ranked[j].UUID] })
+	tierOf := make(map[string]int)
+	for index, tier := range tiers {
+		for _, origin := range tier {
+			if _, seen := tierOf[origin]; !seen {
+				tierOf[origin] = index
+			}
 		}
-		out = append(out, InterleaveByOrigin(ranked[start:end], originOf, origins)...)
-		start = end
 	}
-	return out
+	byTier := make([][]CandidateEdge, len(tiers))
+	var untiered []CandidateEdge
+	for _, edge := range ranked {
+		if index, ok := tierOf[originOf[edge.UUID]]; ok {
+			byTier[index] = append(byTier[index], edge)
+		} else {
+			untiered = append(untiered, edge)
+		}
+	}
+	out := make([]CandidateEdge, 0, len(ranked))
+	for index, tier := range tiers {
+		out = append(out, InterleaveByOrigin(byTier[index], originOf, tier)...)
+	}
+	return append(out, untiered...)
+}
+
+// DriverSubject reports the subject an edge's driver is about, when the edge
+// makes a driver at all (a relationship type that carries one, its From end).
+// AdmitEdges builds drivers with it, and the post-synthesis commit gate reads
+// those drivers, so a ranker that asks it can never disagree with them.
+func DriverSubject(edge ResolvedEdge) (contextfabric.SubjectRef, bool) {
+	if !MakesDriver(edge.Name) {
+		return contextfabric.SubjectRef{}, false
+	}
+	return edge.From, true
+}
+
+// MakesDriver reports whether an edge of this relationship type makes a
+// driver, about its From end (DriverSubject).
+func MakesDriver(relationship string) bool {
+	_, _, _, relevant := relationMeaning(relationship)
+	return relevant
 }
 
 // InterleaveByOrigin orders ranked edges for one budget that several origin

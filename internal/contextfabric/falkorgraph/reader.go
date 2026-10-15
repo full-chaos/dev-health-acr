@@ -570,7 +570,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// order (committed subjects in resolution order, then the full-text
 	// arm's matches in match order): admission takes turns across them.
 	resolvedEdgeOrigin := make(map[string]string)
-	var edgeOrigins []string
+	var edgeOrigins, committedOrigins []string
 	seenEdge := make(map[string]bool)
 	seenNode := make(map[string]bool)
 	// failedLookups counts edges dropped because a genuine backend lookup
@@ -848,6 +848,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		edgeOrigins = append(edgeOrigins, graphrank.SubjectKey(subject))
+		committedOrigins = append(committedOrigins, graphrank.SubjectKey(subject))
 	}
 
 	if teamWalkTally.ran && a.config.Telemetry != nil {
@@ -1059,7 +1060,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		textOrigins = append(textOrigins, graphrank.SubjectKey(subject))
 	}
 	textAdmitted := 0
-	for _, ce := range graphrank.RankEdgesByOrigin(textCandidates, textCandidateOriginKey, textOrigins) {
+	for _, ce := range graphrank.RankEdgesByOrigin(textCandidates, textCandidateOriginKey, nil, textOrigins) {
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
@@ -1241,8 +1242,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			UUID: r.UUID, Name: r.Name, Fact: r.Fact, Relevance: r.Relevance, Score: r.Score,
 		})
 	}
-	attributeEdgesByFewestHops(resolvedEdges, resolvedEdgeOrigin, edgeOrigins)
-	order := graphrank.RankEdgesByOrigin(candidateEdges, resolvedEdgeOrigin, edgeOrigins)
+	ownEdge := attributeEdgesByFewestHops(resolvedEdges, resolvedEdgeOrigin, edgeOrigins)
+	// The question's committed subjects take their turns before the subjects
+	// the full-text arm matched; a matched subject that is also committed takes
+	// its turns with the committed ones. Within a committed subject: the edges
+	// the answer gate can use for it first, then its other own edges, then its
+	// second-hop edges. A full-text match keeps the ranked order.
+	order := graphrank.RankEdgesByOrigin(candidateEdges, resolvedEdgeOrigin,
+		committedEdgeClasses(resolvedEdges, resolvedEdgeOrigin, ownEdge, committedOrigins),
+		committedOrigins, edgeOrigins[len(committedOrigins):])
 	orderedResolved := make([]graphrank.ResolvedEdge, 0, len(resolvedEdges))
 	byUUID := make(map[string]graphrank.ResolvedEdge, len(resolvedEdges))
 	for _, r := range resolvedEdges {
@@ -2110,19 +2118,23 @@ func exactHintCandidate(ctx context.Context, rows []row) (graphrank.CandidateNod
 }
 
 // attributeEdgesByFewestHops gives each resolved edge to the origin that
-// reaches it in the fewest hops; origins are keyed by subject kind and id. An edge with an origin's subject at one end is
+// reaches it in the fewest hops; origins are keyed by subject kind and id. It
+// returns which edges are their origin's own (one hop). An edge with an origin's subject at one end is
 // that subject's own (one hop), whichever walk read it first; an edge touching
 // two origins goes to the earlier one in origins' order. Any other edge keeps
 // the origin that first reached it at its second hop.
-func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[string]string, origins []string) {
+func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[string]string, origins []string) map[string]bool {
+	own := make(map[string]bool, len(edges))
 	for _, e := range edges {
 		for _, candidate := range origins {
 			if graphrank.SubjectKey(e.From) == candidate || graphrank.SubjectKey(e.To) == candidate {
 				origin[e.UUID] = candidate
+				own[e.UUID] = true
 				break
 			}
 		}
 	}
+	return own
 }
 
 // logSharedEdgeBudget records how the shared edge budgets split across the
@@ -2157,4 +2169,31 @@ func logSharedEdgeBudget(ctx context.Context, orgID string, ordered []graphrank.
 		"edges_ranked", len(ordered),
 		"text_arm_candidates", textCandidates,
 		"text_arm_kept", textAdmitted)
+}
+
+// committedEdgeClasses orders the edges of a committed subject: class 0 for an
+// edge whose driver would be about that subject (graphrank.DriverSubject, the
+// predicate the answer gate's drivers come from), 1 for its other own edges, 2
+// for its second-hop edges. Edges of other origins get no class.
+func committedEdgeClasses(edges []graphrank.ResolvedEdge, origin map[string]string, own map[string]bool, committed []string) map[string]int {
+	isCommitted := make(map[string]bool, len(committed))
+	for _, key := range committed {
+		isCommitted[key] = true
+	}
+	class := make(map[string]int, len(edges))
+	for _, e := range edges {
+		key := origin[e.UUID]
+		if !isCommitted[key] {
+			continue
+		}
+		switch about, drives := graphrank.DriverSubject(e); {
+		case drives && graphrank.SubjectKey(about) == key:
+			class[e.UUID] = 0
+		case own[e.UUID]:
+			class[e.UUID] = 1
+		default:
+			class[e.UUID] = 2
+		}
+	}
+	return class
 }
