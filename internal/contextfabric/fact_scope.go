@@ -372,10 +372,6 @@ const (
 	FactScopeFailureBackendUnavailable FactScopeFailureClass = "backend_unavailable"
 	// FactScopeFailureTimeout: the traversal exceeded its own deadline.
 	FactScopeFailureTimeout FactScopeFailureClass = "timeout"
-	// FactScopeFailureAuthorization: the authorization check itself failed
-	// (distinct from a subject being authorization-DROPPED, which is a
-	// normal, telemetry-only outcome -- see AuthorizationDroppedCount).
-	FactScopeFailureAuthorization FactScopeFailureClass = "authorization_error"
 	// FactScopeFailureAxisUnsupported: the expander refused the requested
 	// temporal axis. Reachable only when the resolver's own axis gate did not
 	// hold, which is why it is a failure rather than a gate outcome.
@@ -385,6 +381,16 @@ const (
 	// the resource bound rather than a backend fault.
 	FactScopeFailureReadLimitExceeded FactScopeFailureClass = "read_limit_exceeded"
 )
+
+// factScopeFailureClasses is the closed set of non-empty failure classes.
+// Every member must have a producer: see
+// TestEveryDeclaredFactScopeFailureClassHasAProducer.
+var factScopeFailureClasses = []FactScopeFailureClass{
+	FactScopeFailureBackendUnavailable,
+	FactScopeFailureTimeout,
+	FactScopeFailureAxisUnsupported,
+	FactScopeFailureReadLimitExceeded,
+}
 
 // ---------------------------------------------------------------------------
 // The telemetry event (CHAOS-4089 standing order)
@@ -643,9 +649,8 @@ const (
 	// Execution failures, mirroring the failure classes without merging with
 	// them: a failure CLASS says what broke, a reason says what the resolver
 	// decided as a result.
-	FactScopeDecisionAuthorizationError FactScopeDecisionReason = "authorization_error"
-	FactScopeDecisionBackendError       FactScopeDecisionReason = "backend_error"
-	FactScopeDecisionTimeout            FactScopeDecisionReason = "timeout"
+	FactScopeDecisionBackendError FactScopeDecisionReason = "backend_error"
+	FactScopeDecisionTimeout      FactScopeDecisionReason = "timeout"
 	// FactScopeDecisionCapacityTimeout is the bounded admission queue
 	// expiring (maxWorkItemScopeInFlight), which is a DIFFERENT operational
 	// story from a slow query hitting the request deadline even though both
@@ -664,7 +669,6 @@ var factScopeDecisionReasons = []FactScopeDecisionReason{
 	FactScopeDecisionAxisUnsupported,
 	FactScopeDecisionTimeBoundsInvalid,
 	FactScopeDecisionExpanderUnwired,
-	FactScopeDecisionAuthorizationError,
 	FactScopeDecisionBackendError,
 	FactScopeDecisionTimeout,
 	FactScopeDecisionCapacityTimeout,
@@ -2506,26 +2510,11 @@ func (r *FactReadScopeResolver) expand(
 //
 // Everything else defaults to backend_unavailable, which is the conservative
 // reading -- it says "the traversal did not complete", true of every error.
-// Stage 2 adds cases here alongside the implementation that produces the
-// errors they classify; a class is never inferred from an error STRING,
-// which is why authorization_error has no case yet: nothing returns a typed
-// error for it, and matching on message text is how a vocabulary silently
-// stops being closed.
-// ErrFactScopeAuthorization is the typed sentinel an expander wraps when the
-// AUTHORIZATION CHECK ITSELF failed -- not when a subject was
-// authorization-dropped, which is an ordinary outcome the counts already
-// describe (CHAOS-5405 D-c).
-//
-// It exists because the two are indistinguishable at this boundary otherwise.
-// FactScopeFailureAuthorization has been a declared member of the failure
-// vocabulary since CHAOS-4099, but nothing could ever produce it: the
-// classifier below recognised a deadline and treated EVERYTHING else as a
-// backend fault, so an authorization subsystem that was down reported itself
-// as "the graph backend returned an error" -- an operator alerting on the
-// wrong thing, and a vocabulary member that was decoration rather than a
-// signal.
-var ErrFactScopeAuthorization = errors.New("contextfabric: fact scope authorization check failed")
-
+// A class is never inferred from an error STRING, and a class exists only
+// while a production producer returns its typed error: an authorization_error
+// class was declared here with no producer and was removed (the one expander
+// authorizes inside its SQL and an in-memory predicate, so that check has no
+// failure mode distinct from a backend error).
 // ErrFactScopeAxisUnsupported is the typed sentinel an expander wraps when it
 // refuses a temporal axis its policy does not support (CHAOS-5405).
 //
@@ -2552,8 +2541,6 @@ func classifyFactScopeFailure(err error) FactScopeFailureClass {
 	// CHAOS-5405 D-c: checked BEFORE the default, and by errors.Is rather
 	// than by string matching, so an expander can wrap it with its own
 	// context without losing the classification.
-	case errors.Is(err, ErrFactScopeAuthorization):
-		return FactScopeFailureAuthorization
 	case errors.Is(err, ErrFactScopeReadLimitExceeded):
 		return FactScopeFailureReadLimitExceeded
 	case errors.Is(err, ErrFactScopeAxisUnsupported):
@@ -2752,8 +2739,6 @@ func factScopeDecisionReasonForFailure(class FactScopeFailureClass) FactScopeDec
 	switch class {
 	case FactScopeFailureTimeout:
 		return FactScopeDecisionTimeout
-	case FactScopeFailureAuthorization:
-		return FactScopeDecisionAuthorizationError
 	case FactScopeFailureAxisUnsupported:
 		return FactScopeDecisionAxisUnsupported
 	default:
