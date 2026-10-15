@@ -166,6 +166,18 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 			if incidentNode != (len(tc.wantRepos) > 0) {
 				t.Errorf("after the incremental read the incident node is present=%v, want %v", incidentNode, len(tc.wantRepos) > 0)
 			}
+			slugOf := map[string]string{repoA: "acme/checkout", repoB: "acme/ledger"}
+			for id, props := range got.nodes {
+				if !strings.HasSuffix(id, "|incident:"+incidentID) {
+					continue
+				}
+				readers := fmt.Sprint(props["authorization_repositories"])
+				for _, repo := range tc.wantRepos {
+					if !strings.Contains(readers, slugOf[repo]) {
+						t.Errorf("the incident node is authorized for %s, not for %s, which it belongs to", readers, slugOf[repo])
+					}
+				}
+			}
 
 			rebuilt := h.drain("")
 			keyA := apply(t, rebuildA, "", rebuilt.batches)
@@ -198,8 +210,8 @@ func TestIncidentGraphFollowsServiceMappingChanges(t *testing.T) {
 }
 
 // When a mapping changes, every incident of its service is re-read at one
-// keyset position. Pages of a few rows, with a boundary inside the rows of one
-// incident (two active mappings give two rows each), read each incident once.
+// keyset position. Pages of a few incidents, with boundaries between incidents
+// at that one position, read each incident once.
 func TestIncidentPagesNeitherSkipNorRepeatAcrossAServiceReread(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)

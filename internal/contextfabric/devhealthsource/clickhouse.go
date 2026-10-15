@@ -349,6 +349,9 @@ type candidate struct {
 	// already an ingest stamp).
 	cursorAt time.Time
 	sortKey  string
+	// memoVersion tells two reads of one row apart in the overlap memo when
+	// what the row projects changed without moving its keyset place.
+	memoVersion string
 	// passOver marks a page's last row whose key the cursor cannot carry; its
 	// cursor lands after the whole timestamp (cursorSentinelKey).
 	passOver bool

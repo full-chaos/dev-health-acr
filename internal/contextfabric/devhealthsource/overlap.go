@@ -160,7 +160,11 @@ func newWindowMemo() *windowMemo { return &windowMemo{scopes: map[string]*window
 // its table, position and row key. Position and row key alone collide across
 // tables (the keyset shares one order across all of them).
 func rowMemoKey(c candidate) string {
-	return c.table + "\x00" + strconv.FormatInt(c.position().UnixNano(), 10) + "|" + c.sortKey
+	key := c.table + "\x00" + strconv.FormatInt(c.position().UnixNano(), 10) + "|" + c.sortKey
+	if c.memoVersion != "" {
+		key += "\x00" + c.memoVersion
+	}
+	return key
 }
 
 // readTable runs one producer and labels its candidates with the table they

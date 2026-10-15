@@ -126,8 +126,8 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	return &fakeScanner{}, nil
 }
 
-// incidentDescriptions serves queryIncidents' description read (CHAOS-8683)
-// from the incident table's canned rows (id first, description sixteenth):
+// incidentDescriptions serves queryIncidents' description read
+// from the incident table's canned rows (id first, description fourteenth):
 // the description of each incident the bindings name.
 func (c *fakeClient) incidentDescriptions(bindings []contextpacket.ClickHouseBinding) [][]any {
 	named := map[any]bool{}
@@ -143,9 +143,9 @@ func (c *fakeClient) incidentDescriptions(bindings []contextpacket.ClickHouseBin
 		}
 		seen := map[any]bool{}
 		for _, row := range table.rows {
-			if len(row) > 15 && named[row[0]] && !seen[row[0]] {
+			if len(row) > 13 && named[row[0]] && !seen[row[0]] {
 				seen[row[0]] = true
-				out = append(out, []any{row[0], row[15]})
+				out = append(out, []any{row[0], row[13]})
 			}
 		}
 	}
@@ -341,7 +341,7 @@ func baseTables(at time.Time) []fakeTable {
 		{match: "FROM work_items AS w", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime, "bug", "CHAOS", "Widget Reliability", []string{"checkout", "flake"}}}},
 		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at, at, uint8(0), zeroTime, "feat/chaos-1042-typed-session-tokens", "Rotate session tokens through typed issuance."}}},
 		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at, uint8(1), at, uint8(0), zeroTime, "v0.1.1"}}},
-		{match: incidentsPageMatch, rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", uint8(1), uint8(1), uint8(1), "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""}}},
+		{match: incidentsPageMatch, rows: [][]any{{"incident-1", []string{"repo-1|example-org/widget-service"}, []string{}, "", "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""}}},
 		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, at}}},
 		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at, uint8(1), at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1", "native"}}},
 	}
@@ -899,7 +899,7 @@ func TestClickHouseProjectionSourceIncidentTombstoneOnSoftDelete(t *testing.T) {
 	tables := baseTables(at)
 	for index, table := range tables {
 		if table.match == incidentsPageMatch {
-			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service", uint8(1), uint8(1), uint8(1), "Widget incident", "open", "low", at, uint8(1), uint8(1), at, uint8(0), zeroTime, ""}}
+			tables[index].rows = [][]any{{"incident-1", []string{"repo-1|example-org/widget-service"}, []string{}, "", "Widget incident", "open", "low", at, uint8(1), uint8(1), at, uint8(0), zeroTime, ""}}
 		}
 	}
 	client := &fakeClient{tables: tables}
@@ -954,7 +954,7 @@ func TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedT
 		workItemRows = append(workItemRows, []any{"WIDGET-" + id, "repo-1", "example-org/widget-service", "task " + id, "in_progress", "", at, at, uint8(0), zeroTime, "", "", "", []string{}})
 		pullRequestRows = append(pullRequestRows, []any{"repo-1", "example-org/widget-service", uint32(i), "PR " + id, "open", at, at, uint8(0), zeroTime, "", ""})
 		deploymentRows = append(deploymentRows, []any{"repo-1", "example-org/widget-service", "deploy-" + id, "success", "production", at, uint8(1), at, uint8(0), zeroTime, ""})
-		incidentRows = append(incidentRows, []any{"incident-" + id, "repo-1", "example-org/widget-service", uint8(1), uint8(1), uint8(1), "incident " + id, "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""})
+		incidentRows = append(incidentRows, []any{"incident-" + id, []string{"repo-1|example-org/widget-service"}, []string{}, "", "incident " + id, "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""})
 		reviewRows = append(reviewRows, []any{"review-" + id, "repo-1", uint32(i), "approved", at, "example-org/widget-service", at, uint8(0), zeroTime, ""})
 		ciRunRows = append(ciRunRows, []any{"run-" + id, "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at, ""})
 	}
