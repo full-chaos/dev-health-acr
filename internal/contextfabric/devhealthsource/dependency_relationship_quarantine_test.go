@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV11ForTheRemovedBlockerLinkRebuild pins the constant,
+// TestClickHouseSourceVersionIsV12ForTheCurrentRevisionRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -377,9 +377,13 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // retired "<repo>:<review_id>" ref, which named one ref for a review id on two
 // pull requests of one repository; the rebuild re-mints them as review.v2.
 //
-// v11 (removed blocks links) is the latest: an already-projected organization
+// v11 (removed blocks links) is the next: an already-projected organization
 // holds the edge of every blocks link the provider removed before the producer
 // ended such rows; the rebuild drops them.
+//
+// v12 (current revision of incidents and service mappings) is the latest: an
+// already-projected incident keeps its BELONGS_TO_REPOSITORY edge through a
+// mapping deactivated in its latest revision; the rebuild drops it.
 //
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
@@ -391,11 +395,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV11ForTheRemovedBlockerLinkRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV12ForTheCurrentRevisionRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v11" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v12" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v11")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v12")
 	}
 }
 

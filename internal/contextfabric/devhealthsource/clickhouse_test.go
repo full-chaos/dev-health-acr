@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -36,6 +37,9 @@ func testCursor(t *testing.T, since time.Time, after string) string {
 	}
 	return base64.RawURLEncoding.EncodeToString(encoded)
 }
+
+// incidentsPageMatch is the FROM clause of queryIncidents' page statement.
+const incidentsPageMatch = "FROM " + devhealthschema.CurrentOperationalIncidents + " AS i"
 
 type fakeTable struct {
 	match string
@@ -337,7 +341,7 @@ func baseTables(at time.Time) []fakeTable {
 		{match: "FROM work_items AS w", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime, "bug", "CHAOS", "Widget Reliability", []string{"checkout", "flake"}}}},
 		{match: "FROM git_pull_requests AS p", rows: [][]any{{"repo-1", "example-org/widget-service", uint32(1042), "Typed session tokens", "open", at, at, uint8(0), zeroTime, "feat/chaos-1042-typed-session-tokens", "Rotate session tokens through typed issuance."}}},
 		{match: "FROM deployments AS d", rows: [][]any{{"repo-1", "example-org/widget-service", "deploy-1", "success", "production", at, uint8(1), at, uint8(0), zeroTime, "v0.1.1"}}},
-		{match: "FROM operational_incidents AS i", rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""}}},
+		{match: incidentsPageMatch, rows: [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(0), uint8(1), at, uint8(0), zeroTime, ""}}},
 		{match: "FROM work_item_dependencies AS d", rows: [][]any{{"WIDGET-101", "WIDGET-099", "blocks", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1", uint8(0), zeroTime, at}}},
 		{match: "FROM work_graph_deployment_incident_edges AS e", rows: [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at, uint8(1), at, uint8(0), zeroTime, uint8(1), at, uint8(0), zeroTime, "repo-1", "native"}}},
 	}
@@ -894,7 +898,7 @@ func TestClickHouseProjectionSourceIncidentTombstoneOnSoftDelete(t *testing.T) {
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
 	tables := baseTables(at)
 	for index, table := range tables {
-		if table.match == "FROM operational_incidents AS i" {
+		if table.match == incidentsPageMatch {
 			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service", "Widget incident", "open", "low", at, uint8(1), uint8(1), at, uint8(0), zeroTime, ""}}
 		}
 	}
@@ -965,7 +969,7 @@ func TestClickHouseProjectionSourceFullSnapshotPagesWhenAggregateEntitiesExceedT
 			tables[index].rows = pullRequestRows
 		case "FROM deployments AS d":
 			tables[index].rows = deploymentRows
-		case "FROM operational_incidents AS i":
+		case incidentsPageMatch:
 			tables[index].rows = incidentRows
 		default:
 			tables[index].rows = nil

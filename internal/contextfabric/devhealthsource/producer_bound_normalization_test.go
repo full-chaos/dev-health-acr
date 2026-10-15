@@ -252,7 +252,7 @@ func TestNormalizationCoversEverySingleRowWindowSite(t *testing.T) {
 		{match: "FROM deployments AS d", rows: [][]any{
 			{"repo-1", slug, "deploy-1", "success", "production", at, uint8(1), late, uint8(1), early, "v1"}}},
 		// operational_incidents: optionalTime(started_at) vs optionalTime(ended_at)
-		{match: "FROM operational_incidents AS i", rows: [][]any{
+		{match: incidentsPageMatch, rows: [][]any{
 			{"incident-1", "repo-1", slug, "incident", "open", "low", at, uint8(0), uint8(1), late, uint8(1), early, ""}}},
 		// ci_pipeline_runs: requiredTime(started_at) vs optionalTime(finished_at)
 		{match: "FROM ci_pipeline_runs AS c", rows: [][]any{
@@ -340,7 +340,7 @@ func TestNormalizationCoversEveryUncappedPropertyWriteSite(t *testing.T) {
 		{match: "FROM deployments AS d", rows: [][]any{
 			{"repo-1", slug, "deploy-1", big + "status", big + "env", at, uint8(1), created, uint8(0), zeroTime, big + "release"}}},
 		// operational_incidents: status, severity (both direct)
-		{match: "FROM operational_incidents AS i", rows: [][]any{
+		{match: incidentsPageMatch, rows: [][]any{
 			{"incident-1", "repo-1", slug, "incident", big + "status", big + "severity", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
 		// git_pull_request_reviews: pr_title (setStringProperty) + state (direct)
 		{match: "FROM git_pull_request_reviews AS r", rows: [][]any{
@@ -531,7 +531,7 @@ func TestNormalizationCoversEveryLabelFamily(t *testing.T) {
 			{"WI-1", "repo-1", slug, dirty("wi"), "open", "", at, created, uint8(0), zeroTime, "", "", "", []string{}}}},
 		{match: "FROM git_pull_requests AS p", rows: [][]any{
 			{"repo-1", slug, uint32(1042), dirty("pr"), "open", at, created, uint8(0), zeroTime, "main", ""}}},
-		{match: "FROM operational_incidents AS i", rows: [][]any{
+		{match: incidentsPageMatch, rows: [][]any{
 			{"incident-1", "repo-1", slug, dirty("inc"), "open", "low", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
 		// The families the ticket does NOT name: the deployment label is built
 		// from the environment column, and the ref stub's label is the raw

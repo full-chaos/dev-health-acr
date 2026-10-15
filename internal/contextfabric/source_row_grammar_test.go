@@ -359,16 +359,7 @@ func rowTable(t *testing.T, g producerGrammar) string {
 	t.Helper()
 	switch {
 	case g.rowQuery != "":
-		var statement string
-		statements := append(append([]contextpacket.SourceQuery(nil), contextpacket.SourceQueryCatalogV1...), contextpacket.SourceRowOnlyQueriesV2...)
-		for _, query := range contextpacket.OrganizationRowQueriesV1 {
-			statements = append(statements, query.SourceQuery)
-		}
-		for _, query := range statements {
-			if query.ID == g.rowQuery {
-				statement = query.Statement
-			}
-		}
+		statement := rowStatement(g)
 		for _, match := range fromTable.FindAllStringSubmatch(statement, -1) {
 			if _, declared := devhealthschema.EngineFull[match[1]]; declared {
 				return match[1]
@@ -405,6 +396,29 @@ func rowTable(t *testing.T, g producerGrammar) string {
 	return ""
 }
 
+// rowStatement is the statement of the entry's row query, "" when it has none.
+func rowStatement(g producerGrammar) string {
+	statements := append(append([]contextpacket.SourceQuery(nil), contextpacket.SourceQueryCatalogV1...), contextpacket.SourceRowOnlyQueriesV2...)
+	for _, query := range contextpacket.OrganizationRowQueriesV1 {
+		statements = append(statements, query.SourceQuery)
+	}
+	var statement string
+	for _, query := range statements {
+		if query.ID == g.rowQuery {
+			statement = query.Statement
+		}
+	}
+	return statement
+}
+
+// currentRowRelations are the tables whose readers pick one row per
+// (org_id, id): a row statement that reads through the relation is keyed
+// (org_id, id), whatever the sorting key.
+var currentRowRelations = map[string]string{
+	"operational_incidents":                   devhealthschema.CurrentOperationalIncidents,
+	"operational_service_repository_mappings": devhealthschema.CurrentServiceRepositoryMappings,
+}
+
 // keyGaps lists the table's key columns (org_id aside) the grammar neither
 // carries nor names as an exception.
 func keyGaps(t *testing.T, g producerGrammar) []string {
@@ -413,8 +427,13 @@ func keyGaps(t *testing.T, g producerGrammar) []string {
 	for _, column := range g.keyColumns {
 		carried[column] = true
 	}
+	table := rowTable(t, g)
+	key := orderByColumns(table)
+	if relation, current := currentRowRelations[table]; current && strings.Contains(rowStatement(g), relation) {
+		key = []string{"org_id", "id"}
+	}
 	var gaps []string
-	for _, column := range orderByColumns(rowTable(t, g)) {
+	for _, column := range key {
 		if column == "org_id" || carried[column] {
 			continue
 		}
