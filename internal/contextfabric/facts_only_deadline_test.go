@@ -131,6 +131,7 @@ func TestAModelAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T
 			if modelCalls != 1 || degraded != 1 {
 				t.Fatalf("model calls = %d, degraded compositions = %d, want the one model pass and one composition", modelCalls, degraded)
 			}
+			assertRetryRanSentence(t, result, false)
 			if result.Status != InvestigationDegraded || !slices.Contains(result.Limitations, tc.limit) {
 				t.Fatalf("status = %q limitations = %q, want degraded and facts only", result.Status, result.Limitations)
 			}
@@ -350,8 +351,17 @@ func factsOnlyServedEvent(telemetry *recordingTelemetry) *PlanNarrowingEvent {
 	return nil
 }
 
+// assertRetryRanSentence checks the retry limitation both ways: present exactly when a retry ran.
+func assertRetryRanSentence(t *testing.T, result InvestigationResult, retryRan bool) {
+	t.Helper()
+	if has := slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisRetryRanLimitation); has != retryRan {
+		t.Fatalf("retry-ran sentence present=%v, want %v (limitations %q)", has, retryRan, result.Limitations)
+	}
+}
+
 func assertFactsOnlyLabelled(t *testing.T, result InvestigationResult, class SynthesisFailureClass) {
 	t.Helper()
+
 	notRun := 0
 	for _, detail := range result.Coverage.Details {
 		switch detail.Code {
@@ -382,6 +392,7 @@ func TestAMemberCutDeclinedForWantOfSynthesisTimeServesTheFactsLabelled(t *testi
 		t.Fatalf("error = %v, want the facts-only answer", err)
 	}
 	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureDeadline)
+	assertRetryRanSentence(t, result, false)
 	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Declined != MemberCutNoSynthesisTime {
 		t.Fatalf("member-cut events %+v, want one declined no_synthesis_time", telemetry.memberCuts)
 	}
@@ -472,6 +483,7 @@ func TestAByteOverrunTheRowsAloneCauseServesTheFactsLabelled(t *testing.T) {
 		t.Fatalf("error = %v, want the facts-only answer", err)
 	}
 	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureNotNarrowable)
+	assertRetryRanSentence(t, result, false)
 	if served := factsOnlyServedEvent(telemetry); served == nil || served.RetryDeclined != RetryDeclinedCannotReduceAxis {
 		t.Fatalf("served event %+v, want facts_only_served with retry_declined cannot_reduce_axis", served)
 	}
@@ -490,6 +502,7 @@ func TestARetryThatStillOverranServesTheFactsLabelled(t *testing.T) {
 		t.Fatalf("error = %v, want the facts-only answer", err)
 	}
 	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureNotNarrowable)
+	assertRetryRanSentence(t, result, true)
 	served := factsOnlyServedEvent(telemetry)
 	if calls != 2 || served == nil || !served.RetryAttempted {
 		t.Fatalf("model calls %d served event %+v, want the retry to have run and the served event to say so", calls, served)

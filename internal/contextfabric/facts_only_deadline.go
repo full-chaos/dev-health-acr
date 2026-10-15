@@ -26,7 +26,7 @@ func factsOnlyFailureClass(declined RetryDeclinedReason) SynthesisFailureClass {
 }
 
 func factsOnlyFailure(declined RetryDeclinedReason) *SynthesisFailure {
-	return &SynthesisFailure{Class: factsOnlyFailureClass(declined), DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom}
+	return &SynthesisFailure{Class: factsOnlyFailureClass(declined), DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom, retryRan: declined == RetryDeclinedNotApplicable}
 }
 
 // factsOnlyDeclinedReason: the retry reasons after which a facts-only answer

@@ -225,6 +225,9 @@ type SynthesisFailure struct {
 	// bounded it.
 	CallDeadline time.Time
 	cause        error
+	// retryRan is set on a facts-only answer served after a narrower retry ran and did not fit: its facts are the first
+	// pass's, and the answer says a retry ran.
+	retryRan bool
 }
 
 func (f *SynthesisFailure) Error() string { return f.cause.Error() }
@@ -250,7 +253,11 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 		if len(claims) == 0 {
 			draft.ClaimedFacts, draft.EvidenceRefIDs = []ClaimedFact{}, []string{}
 		}
-		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, []string{limitation})
+		additions := []string{limitation}
+		if failure.retryRan {
+			additions = append(additions, contractsv1.ContextFabricSynthesisRetryRanLimitation)
+		}
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, additions)
 	} else if len(claims) > 0 {
 		draft.ClaimedFacts = claims
 		draft.EvidenceRefIDs = evidence
