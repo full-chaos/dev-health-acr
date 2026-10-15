@@ -289,16 +289,23 @@
               },
               "last_ingested_at": {
                 "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "description": "Newest stored sync time of this source's rows in the repository (last_synced; work items also ingested_at). For repository_freshness it is the repository row's last_synced, rewritten on every repository sync run. For every other source it is a row WRITE time: a sync that finds nothing new rewrites nothing, so a quiet repository can show an old time here although it synced. It is never an event time (a commit, deploy or work item change). Omitted when the source stores no sync time (status unknown) or holds no rows."
+              },
+              "last_event_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Event time of the newest row of this source in scope (commit time, deploy time, work item update, CI finish). It says how recent the activity is, never how recently the source was synced, and no status is judged from it."
               },
               "status": {
                 "type": "string",
-                "description": "Open vocabulary; documented values: fresh, stale, missing, unavailable. A client must tolerate values it does not know.",
+                "description": "Open vocabulary; documented values: fresh, stale, missing, unavailable, unknown. fresh = last_ingested_at is within stale_after_seconds before as_of. stale is served only for repository_freshness, whose last_ingested_at is a sync run stamp, when older than stale_after_seconds. unknown = rows exist but freshness cannot be judged: the source stores no sync time, only an old row write time (a quiet repository looks the same), or the time could not be read; never stale. A client must tolerate values it does not know.",
                 "x-documented-values": [
                   "fresh",
                   "stale",
                   "missing",
-                  "unavailable"
+                  "unavailable",
+                  "unknown"
                 ]
               }
             }
