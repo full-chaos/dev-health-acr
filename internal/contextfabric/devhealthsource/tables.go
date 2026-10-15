@@ -3,10 +3,12 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
@@ -716,78 +718,203 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 // source_queries.go) rather than inventing a new repo-scoping path.
 // is_deleted is the one confirmed soft-delete signal in this schema and
 // becomes a ProjectionTombstone.
+//
+// A row is one incident with the current mappings of its service
+// (incidentServiceMappings). The keyset position is the later of the
+// incident's ingest stamp and the last write to a current mapping of its
+// service (incidentCursorExpr), so a mapping that moves or ends re-reads every
+// incident of the service, and the read leaves what a from-zero read leaves:
+// an edge per repository an active mapping names, a retracted edge per
+// repository only ended mappings name, and no incident when no active mapping
+// names a known repository.
 func queryIncidents(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const timestampExpr = "coalesce(i.started_at, i.source_event_at, i.observed_at)"
-	// Two reads (CHAOS-8683), as for pull requests: the page is read without
-	// the wide description (the statement selects an empty one in its place),
-	// then each page row's description is read from the version the page
-	// chose, a few incidents per statement (readIncidentDescriptions).
-	statement := `SELECT i.id, toString(m.repo_id) AS repo_id, r.repo AS repo_slug, ifNull(i.title, ''),
+	// Two reads, as for pull requests: the page is read without the wide
+	// description (the statement selects an empty one in its place), then
+	// each page row's description is read from the version the page chose, a
+	// few incidents per statement (readIncidentDescriptions).
+	statement := `SELECT i.id, s.active_repos, s.ended_repos, s.mapping_state, ifNull(i.title, ''),
        ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, '')),
        ` + timestampExpr + `, i.is_deleted,
        ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `,
-       '' AS description_read_later, i.last_synced
+       '' AS description_read_later, i.last_synced, ` + incidentCursorExpr + `
 FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i
-INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
-INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
-WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "i.last_synced", "i.id") + orderBy("i.last_synced", "i.id")
-	page, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var incidentID, repoID, repoSlug, title, status, severity, description string
-		var observedAt, startedAt, endedAt time.Time
+INNER JOIN ` + incidentServiceMappings + ` AS s ON s.service_id = i.service_id
+WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, incidentCursorExpr, "i.id") + orderBy(incidentCursorExpr, "i.id")
+	versions := map[string]time.Time{}
+	var stats incidentPageStats
+	page, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var incidentID, mappingState, title, status, severity, description string
+		var activeRepos, endedRepos []string
+		var observedAt, startedAt, endedAt, ingestedAt, cursorAt time.Time
 		var isDeleted, hasStarted, hasEnded uint8
-		if err := r.Scan(&incidentID, &repoID, &repoSlug, &title, &status, &severity, &observedAt, &isDeleted, &hasStarted, &startedAt, &hasEnded, &endedAt, &description); err != nil {
+		if err := r.Scan(&incidentID, &activeRepos, &endedRepos, &mappingState, &title, &status, &severity, &observedAt, &isDeleted, &hasStarted, &startedAt, &hasEnded, &endedAt, &description, &ingestedAt, &cursorAt); err != nil {
 			return nil, err
 		}
-		observedAt = observedAt.UTC()
-		// An incident is valid while it is ongoing: from when it started
-		// until it resolved (or was soft-deleted). An unresolved
-		// incident has no end.
-		validFrom, validTo := optionalTime(hasStarted, startedAt), optionalTime(hasEnded, endedAt)
-		canonicalID := "incident:" + incidentID
-		if isDeleted != 0 {
-			tombstone := contractsv1.ContextFabricProjectionTombstone{
-				Kind: "incident", CanonicalID: canonicalID, Reason: "source_deleted", EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
-			}
-			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
+		observedAt, cursorAt, ingestedAt = observedAt.UTC(), cursorAt.UTC(), ingestedAt.UTC()
+		rows := incidentRowCandidates(incidentRow{
+			id: incidentID, activeRepos: parseIncidentRepos(activeRepos), endedRepos: endedRepos,
+			title: title, status: status, severity: severity, description: description, deleted: isDeleted != 0,
+			observedAt: observedAt, cursorAt: cursorAt,
+			validFrom: optionalTime(hasStarted, startedAt), validTo: optionalTime(hasEnded, endedAt),
+		}, &stats)
+		if cursorAt.After(ingestedAt) {
+			stats.mappingRereads++
 		}
-		// Raw title, trimmed and counted by item_normalization.go -- see
-		// queryWorkItems' note on why the trim does not happen here.
-		label := title
-		if strings.TrimSpace(label) == "" {
-			label = incidentID
+		versions[incidentID] = ingestedAt
+		for i := range rows {
+			rows[i].cursorAt = cursorAt
+			rows[i].memoVersion = mappingState
 		}
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: canonicalID, Label: label}
-		properties := map[string]contractsv1.ContextFabricScalarValue{}
-		if status != "" {
-			properties["status"] = stringScalar(status)
-		}
-		if severity != "" {
-			properties["severity"] = stringScalar(severity)
-		}
-		// CHAOS-3833 (embed-text spec §2): only the description HEAD
-		// (first 800 runes) is persisted. 0% populated live today, but the
-		// column is the natural payload when a real incident provider
-		// ships; it is body-class text and follows the §3 provider-
-		// locality gate at composition time.
-		setStringProperty(properties, "description", description, 800)
-		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityIncident, incidentID)
-		entity := contractsv1.ContextFabricEntityProjection{
-			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
-			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
-		}
-		return []candidate{
-			{observedAt: observedAt, sortKey: incidentID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, incidentID, validFrom, validTo),
-		}, nil
+		return rows, nil
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	if err := readIncidentDescriptions(ctx, client, orgID, page); err != nil {
+	if stats != (incidentPageStats{}) {
+		startLogger(ctx).DebugContext(ctx, "incident page read",
+			"org_id", contextfabric.SanitizeLogAttr(orgID),
+			"incidents_reread_for_mapping_change", stats.mappingRereads,
+			"repository_edges_retracted", stats.edgesRetracted,
+			"incidents_unmapped", stats.unmapped)
+	}
+	if err := readIncidentDescriptions(ctx, client, orgID, page, versions); err != nil {
 		return nil, false, err
 	}
 	return page, truncated, nil
+}
+
+// incidentCursorExpr is queryIncidents' keyset position: the incident's ingest
+// stamp, or the last write to a current mapping of its service when that is
+// later. A mapping write stamps last_synced, an ended mapping included (ops
+// providersync/pagerduty_services_effects_clickhouse.go
+// pagerDutyServiceMappingTombstone).
+const incidentCursorExpr = "greatest(i.last_synced, s.changed_at)"
+
+// incidentServiceMappings is one row per service over its current mappings:
+// when one was last written; the repositories its active mappings name, as
+// "id|slug", for the repositories the organization knows; the repositories
+// its ended mappings name; and a digest of the whole set (mapping_state),
+// which tells a late mapping write apart in the overlap memo when it moves no
+// keyset position.
+const incidentServiceMappings = `(SELECT ms.service_id AS service_id, max(ms.last_synced) AS changed_at,
+        arraySort(groupUniqArrayIf(concat(ifNull(toString(ms.repo_id), ''), '|', ifNull(rs.repo, '')), ms.is_active = 1 AND isNotNull(ms.repo_id) AND ifNull(rs.repo, '') != '')) AS active_repos,
+        arraySort(groupUniqArrayIf(ifNull(toString(ms.repo_id), ''), ms.is_active = 0 AND isNotNull(ms.repo_id))) AS ended_repos,
+        toString(cityHash64(arraySort(groupArray(concat(ms.id, '|', toString(ms.is_active), '|', ifNull(toString(ms.repo_id), ''), '|', ifNull(rs.repo, '')))))) AS mapping_state
+    FROM ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS ms
+    LEFT JOIN repos AS rs FINAL ON rs.id = ms.repo_id AND rs.org_id = ms.org_id
+    GROUP BY ms.service_id)`
+
+// incidentUnmappedReason is the tombstone reason of an incident whose service
+// has no active mapping to a known repository; source_deleted is a deleted one.
+const incidentUnmappedReason = "unmapped"
+
+type incidentPageStats struct {
+	mappingRereads, edgesRetracted, unmapped int
+}
+
+type incidentRepo struct{ id, slug string }
+
+type incidentRow struct {
+	id, title, status, severity, description string
+	activeRepos                              []incidentRepo
+	endedRepos                               []string
+	deleted                                  bool
+	observedAt, cursorAt                     time.Time
+	validFrom, validTo                       *time.Time
+}
+
+// parseIncidentRepos splits incidentServiceMappings' "id|slug" entries.
+func parseIncidentRepos(entries []string) []incidentRepo {
+	out := make([]incidentRepo, 0, len(entries))
+	for _, entry := range entries {
+		if id, slug, ok := strings.Cut(entry, "|"); ok && id != "" && slug != "" {
+			out = append(out, incidentRepo{id: id, slug: slug})
+		}
+	}
+	return out
+}
+
+// incidentRowCandidates is what one incident row of queryIncidents projects.
+func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidate {
+	canonicalID := "incident:" + row.id
+	// A retraction must not be older than what it retracts: the backend
+	// deletes only rows observed at or before it, and the incident's node and
+	// edges carry its own observed time.
+	retractAt := row.cursorAt
+	if row.observedAt.After(retractAt) {
+		retractAt = row.observedAt
+	}
+	tombstone := func(kind, id, reason string, effectiveAt time.Time) candidate {
+		t := contractsv1.ContextFabricProjectionTombstone{Kind: kind, CanonicalID: id, Reason: reason, EffectiveAt: effectiveAt, SourceVersion: ClickHouseSourceVersion}
+		return candidate{observedAt: row.observedAt, sortKey: row.id, tombstone: &t}
+	}
+	switch {
+	case row.deleted:
+		return []candidate{tombstone("incident", canonicalID, "source_deleted", row.observedAt)}
+	case len(row.activeRepos) == 0:
+		// The one place an unmapped incident is decided. A from-zero read
+		// does not project it, and its authorization is its repositories: an
+		// incident no active mapping ties to a known repository is visible to
+		// no repository (fail closed). So it is retracted, with its own reason,
+		// told apart from a deleted one.
+		stats.unmapped++
+		return []candidate{tombstone("incident", canonicalID, incidentUnmappedReason, retractAt)}
+	}
+	// Raw title, trimmed and counted by item_normalization.go -- see
+	// queryWorkItems' note on why the trim does not happen here.
+	label := row.title
+	if strings.TrimSpace(label) == "" {
+		label = row.id
+	}
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: canonicalID, Label: label}
+	properties := map[string]contractsv1.ContextFabricScalarValue{}
+	if row.status != "" {
+		properties["status"] = stringScalar(row.status)
+	}
+	if row.severity != "" {
+		properties["severity"] = stringScalar(row.severity)
+	}
+	// Only the description HEAD (first 800 runes) is persisted (embed-text
+	// spec §2); it is body-class text and follows the §3 provider-locality
+	// gate at composition time.
+	setStringProperty(properties, "description", row.description, 800)
+	evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityIncident, row.id)
+	// The incident belongs to every repository an active mapping names, so a
+	// caller of any of them reads it.
+	slugs := make([]string, 0, len(row.activeRepos))
+	active := map[string]bool{}
+	for _, repo := range row.activeRepos {
+		slugs = append(slugs, repo.slug)
+		active[repo.id] = true
+	}
+	sort.Strings(slugs)
+	entity := contractsv1.ContextFabricEntityProjection{
+		Subject: subject, Properties: properties, Authorization: contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: slices.Compact(slugs)},
+		EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: row.observedAt,
+		ValidFrom: row.validFrom, ValidTo: row.validTo, SourceVersion: ClickHouseSourceVersion,
+	}
+	out := []candidate{{observedAt: row.observedAt, sortKey: row.id, entity: &entity}}
+	for _, repo := range row.activeRepos {
+		edge := belongsToRepository(subject, repo.slug, repo.id, row.observedAt, evidenceRefID, row.id, row.validFrom, row.validTo)
+		edge.relationship.RelationshipID = incidentRepositoryRelationshipID(canonicalID, repo.id)
+		out = append(out, edge)
+	}
+	for _, repoID := range row.endedRepos {
+		if active[repoID] {
+			continue
+		}
+		stats.edgesRetracted++
+		out = append(out, tombstone("relationship", incidentRepositoryRelationshipID(canonicalID, repoID), "the service mapping to the repository ended", retractAt))
+	}
+	return out
+}
+
+// incidentRepositoryRelationshipID names an incident's BELONGS_TO_REPOSITORY
+// edge per repository: an incident mapped to two repositories has two edges,
+// and an edge to a repository whose mapping ended is retracted by its own id.
+func incidentRepositoryRelationshipID(incidentCanonicalID, repoID string) string {
+	return identity.DeriveRelationship(identity.RelationshipFamilyIncidentRepository, incidentCanonicalID, "repository:"+repoID, "BELONGS_TO_REPOSITORY")
 }
 
 // readIncidentDescriptions reads the description of the page's incidents, a
@@ -795,7 +922,7 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "i.last_synced", "i.i
 // without FINAL, and sets it on the page's incident entities. An incident
 // whose version moved between the reads keeps no description in this page;
 // its new version has a later ingest time, so a later page reads it whole.
-func readIncidentDescriptions(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, page []candidate) error {
+func readIncidentDescriptions(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, page []candidate, ingested map[string]time.Time) error {
 	type version struct {
 		id string
 		at time.Time
@@ -809,7 +936,7 @@ func readIncidentDescriptions(ctx context.Context, client contextpacket.ClickHou
 		}
 		id := page[i].sortKey
 		if _, seen := entities[id]; !seen {
-			versions = append(versions, version{id: id, at: page[i].position().UTC()})
+			versions = append(versions, version{id: id, at: ingested[id]})
 		}
 		entities[id] = append(entities[id], entity)
 	}

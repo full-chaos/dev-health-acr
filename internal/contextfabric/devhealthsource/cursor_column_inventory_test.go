@@ -28,7 +28,7 @@ var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"work_items_hierarchy":                 {"c.last_synced", "same column as work_items"},
 	"git_pull_requests":                    {"p.last_synced", "providersync/github_prs_route.go:394 (unchanged)"},
 	"deployments":                          {"d.last_synced", "providersync/github_deployments_route.go:303"},
-	"operational_incidents":                {"i.last_synced", "providersync/pagerduty_incidents_route.go:1009, gitlab_incidents_route.go:402"},
+	"operational_incidents":                {incidentCursorExpr, "i.last_synced: providersync/pagerduty_incidents_route.go:1009, gitlab_incidents_route.go:402; the service's mappings' last_synced: providersync/pagerduty_services_effects_clickhouse.go pagerDutyServiceMappingTombstone (an ended mapping is stamped at its write time)"},
 	"work_graph_issue_pr":                  {"l.last_synced", "ops workgraph.build job (the link table's write stamp; version_rank folds it, so a tier upgrade re-stamps the row) -- UNSURE: ops file:line not verified from this repo"},
 	"work_item_dependencies":               {dependencyCursorExpr(), "providersync/github_work_items_direct_effects_clickhouse.go:466 (d.last_synced; a removed link's end time from work_item_relations_read / work_items.last_synced)"},
 	"work_graph_deployment_incident_edges": {"e.computed_at", "migrations/clickhouse/037_ai_workgraph.sql:122 DEFAULT now64()"},

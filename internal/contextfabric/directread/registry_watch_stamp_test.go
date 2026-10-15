@@ -16,10 +16,10 @@ import (
 const watchServedDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 
 // data_catalog stamps the SERVED digest once a registry watch knows it, the
-// pinned one before. A refused run_operation never reaches the query service,
-// so it always reports the pinned digest of the policy that refused it, never a
-// cached served digest that may be older than the last watch.
-func TestRegistryWatchStampsDataCatalogAndARefusalReportsThePinnedDigest(t *testing.T) {
+// pinned one before. A refused run_operation reports the same stamped digest
+// as a served call, from the same source, never the pinned one beside a served
+// digest the watch already knows.
+func TestRegistryWatchStampsDataCatalogAndARefusalReportsTheServedDigest(t *testing.T) {
 	cat, err := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
 	if err != nil {
 		t.Fatal(err)
@@ -58,11 +58,11 @@ func TestRegistryWatchStampsDataCatalogAndARefusalReportsThePinnedDigest(t *test
 	}
 	watch.Start()
 	watch.Wait()
-	if got := run().Source.SchemaDigest; got != cat.SchemaDigest() {
-		t.Fatalf("refused run_operation stamp %s, want pinned %s", got, cat.SchemaDigest())
+	if got := run().Source.SchemaDigest; got != watchServedDigest {
+		t.Fatalf("refused run_operation stamp %s, want served %s", got, watchServedDigest)
 	}
-	if last := opRec.reads[len(opRec.reads)-1]; last.SchemaDigest != cat.SchemaDigest() {
-		t.Fatalf("the run_operation read log carries %s, want the pinned digest %s", last.SchemaDigest, cat.SchemaDigest())
+	if last := opRec.reads[len(opRec.reads)-1]; last.SchemaDigest != watchServedDigest {
+		t.Fatalf("the run_operation read log carries %s, want the served digest %s", last.SchemaDigest, watchServedDigest)
 	}
 	if got := catalog(); got != watchServedDigest {
 		t.Fatalf("data_catalog stamp %s, want served %s", got, watchServedDigest)
@@ -81,7 +81,7 @@ func (r *digestRecorder) RecordGraphQLQuery(_ context.Context, _ storage.Princip
 	r.reads = append(r.reads, read)
 }
 
-func TestRefusedGraphQLQueryReportsThePinnedDigestNotACachedServedOne(t *testing.T) {
+func TestRefusedGraphQLQueryReportsTheServedDigest(t *testing.T) {
 	rec := &digestRecorder{}
 	h := newGQLHarness(t, gqlHarnessOptions{recorder: rec, ownCatalogue: true})
 	cat := h.policy.Catalogue()
@@ -99,11 +99,11 @@ func TestRefusedGraphQLQueryReportsThePinnedDigestNotACachedServedOne(t *testing
 	if resp.Call != directread.CallRefused {
 		t.Fatalf("want a refusal, got %s", resp.Call)
 	}
-	if resp.Source.SchemaDigest != cat.SchemaDigest() {
-		t.Fatalf("refused graphql_query stamp %s, want pinned %s", resp.Source.SchemaDigest, cat.SchemaDigest())
+	if resp.Source.SchemaDigest != watchServedDigest {
+		t.Fatalf("refused graphql_query stamp %s, want served %s", resp.Source.SchemaDigest, watchServedDigest)
 	}
-	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != cat.SchemaDigest() {
-		t.Fatalf("the read log carries %+v, want the pinned digest %s", rec.reads, cat.SchemaDigest())
+	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != watchServedDigest {
+		t.Fatalf("the read log carries %+v, want the served digest %s", rec.reads, watchServedDigest)
 	}
 }
 
@@ -125,9 +125,9 @@ func startWatch(t *testing.T, cat *directread.Catalogue) {
 }
 
 // A refusal decided AFTER the query service answered (a row outside the grant)
-// reports the pinned digest of the policy that refused it, in the reply and in
-// the read log, while the watch caches another digest.
-func TestPostDispatchRefusalOfRunOperationReportsThePinnedDigest(t *testing.T) {
+// reports the served digest the watch holds, in the reply and in the read log,
+// the same digest a served call carries.
+func TestPostDispatchRefusalOfRunOperationReportsTheServedDigest(t *testing.T) {
 	cat, err := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
 	if err != nil {
 		t.Fatal(err)
@@ -145,15 +145,15 @@ func TestPostDispatchRefusalOfRunOperationReportsThePinnedDigest(t *testing.T) {
 	if len(h.upstream.requests()) == 0 {
 		t.Fatal("the query service was not called: this is not a post-dispatch refusal")
 	}
-	if resp.Source.SchemaDigest != cat.SchemaDigest() {
-		t.Fatalf("reply digest %s, want pinned %s", resp.Source.SchemaDigest, cat.SchemaDigest())
+	if resp.Source.SchemaDigest != watchServedDigest {
+		t.Fatalf("reply digest %s, want served %s", resp.Source.SchemaDigest, watchServedDigest)
 	}
-	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != cat.SchemaDigest() {
-		t.Fatalf("read log %+v, want pinned %s", rec.reads, cat.SchemaDigest())
+	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != watchServedDigest {
+		t.Fatalf("read log %+v, want served %s", rec.reads, watchServedDigest)
 	}
 }
 
-func TestPostDispatchRefusalOfGraphQLQueryReportsThePinnedDigest(t *testing.T) {
+func TestPostDispatchRefusalOfGraphQLQueryReportsTheServedDigest(t *testing.T) {
 	rec := &digestRecorder{}
 	h := newGQLHarness(t, gqlHarnessOptions{recorder: rec, ownCatalogue: true, fake: func(cfg *fakeMCPConfig) { cfg.RowID = func() string { return opRepoB } }})
 	startWatch(t, h.policy.Catalogue())
@@ -167,11 +167,10 @@ func TestPostDispatchRefusalOfGraphQLQueryReportsThePinnedDigest(t *testing.T) {
 	if len(h.listener.requests()) == 0 {
 		t.Fatal("the listener was not called: this is not a post-dispatch refusal")
 	}
-	pinned := h.policy.Catalogue().SchemaDigest()
-	if resp.Source.SchemaDigest != pinned {
-		t.Fatalf("reply digest %s, want pinned %s", resp.Source.SchemaDigest, pinned)
+	if resp.Source.SchemaDigest != watchServedDigest {
+		t.Fatalf("reply digest %s, want served %s", resp.Source.SchemaDigest, watchServedDigest)
 	}
-	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != pinned {
-		t.Fatalf("read log %+v, want pinned %s", rec.reads, pinned)
+	if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != watchServedDigest {
+		t.Fatalf("read log %+v, want served %s", rec.reads, watchServedDigest)
 	}
 }
