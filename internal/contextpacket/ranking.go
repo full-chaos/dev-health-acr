@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v6"
+	RankingVersionV1          = "ranker.v7"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -199,7 +199,39 @@ func evidenceTieKey(ref contractsv1.EvidenceRef) string {
 	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel, ref.Source.SafeURI, ref.Provenance, string(ref.Availability), ref.SourceVersion, ref.SnapshotHash, string(metadata)}, "\000")
 }
 
+// allocateCategories gives one slot to each focus (the entity a row is about,
+// such as one file) before a focus takes a second; later rows of a focus fill
+// only the slots no other candidate wants.
 func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
+	if len(refs) <= maxItems {
+		return refs, false
+	}
+	primary, secondary := splitByFocus(refs)
+	selected, _ := allocatePrimaryCategories(primary, scores, maxItems, roles)
+	if room := maxItems - len(selected); room > 0 && len(secondary) > 0 {
+		selected = append(selected, secondary[:min(room, len(secondary))]...)
+		sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
+	}
+	slog.Debug("context packet focus cap", "event", "focus_cap_applied", "deferred", len(secondary), "kept", len(selected), "max_items", maxItems)
+	return selected, true
+}
+
+func splitByFocus(refs []contractsv1.EvidenceRef) (primary, secondary []contractsv1.EvidenceRef) {
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if focus, _ := ref.Metadata[metadataFocusKey].(string); focus != "" {
+			if seen[focus] {
+				secondary = append(secondary, ref)
+				continue
+			}
+			seen[focus] = true
+		}
+		primary = append(primary, ref)
+	}
+	return primary, secondary
+}
+
+func allocatePrimaryCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
 	if len(refs) <= maxItems {
 		return refs, false
 	}
