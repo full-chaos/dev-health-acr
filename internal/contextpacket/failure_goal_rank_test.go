@@ -71,3 +71,37 @@ func TestGoalWordsFitCitationValuesAndLabelsNeverFieldNames(t *testing.T) {
 		t.Fatalf("order = %v, want the label and the value that contain the word ahead of the row that only has release_ref=", got)
 	}
 }
+
+func codeHealthEvidence() []contractsv1.EvidenceRef {
+	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	hotspot := roleRow("ev-hotspot", "file_hotspot", "src/checkout.go", "src/checkout.go", "churn=40, complexity=12", at.Add(-72*time.Hour))
+	complexity := roleRow("ev-complexity", "file_complexity", "src/cart.go", "src/cart.go", "complexity=30", at.Add(-73*time.Hour))
+	commit := roleRow("ev-commit", "commit", "c1", "Update checkout copy", "1 file", at)
+	pr := roleRow("ev-pr-redesign", "pull_request", "9", "Checkout redesign", "merged", at)
+	deployment := tieredDeploymentRow("ev-dep-fail", "d9", "failed", "9", "exact_merge_sha", at.Add(-96*time.Hour))
+	return []contractsv1.EvidenceRef{commit, pr, hotspot, complexity, deployment}
+}
+
+func TestCodeHealthGoalRanksHotspotAndComplexityRowsFirst(t *testing.T) {
+	got := rankedIDs(t, "reduce churn in the checkout service", 10, codeHealthEvidence())
+	if !slices.Equal(got[:2], []string{"ev-hotspot", "ev-complexity"}) {
+		t.Fatalf("order = %v, want the hotspot and complexity rows first", got)
+	}
+}
+
+func TestGoalWithoutACodeHealthWordIsNotLiftedByThatFit(t *testing.T) {
+	got := rankedIDs(t, "update the checkout copy", 10, codeHealthEvidence())
+	if want := []string{"ev-commit", "ev-pr-redesign", "ev-hotspot", "ev-complexity", "ev-dep-fail"}; !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v: the matching commit first, then recency, with no code-health lift", got, want)
+	}
+}
+
+func TestGoalNamingFailureAndCodeHealthFitsBothRoleSets(t *testing.T) {
+	got := rankedIDs(t, "reduce failed deployments and churn", 10, codeHealthEvidence())
+	top := got[:4]
+	for _, id := range []string{"ev-dep-fail", "ev-pr-redesign", "ev-hotspot", "ev-complexity"} {
+		if !slices.Contains(top, id) {
+			t.Fatalf("top 4 = %v, want the failed deployment, its cause and both code-health rows (%s missing)", top, id)
+		}
+	}
+}

@@ -20,6 +20,25 @@ var failureGoalWords = map[string]bool{
 	"regression": true, "regressions": true, "rollback": true, "rollbacks": true, "revert": true, "reverts": true, "reverted": true,
 }
 
+// codeHealthGoalWords are the goal words that name code health; a goal
+// containing one is about the rows of codeHealthEntityTypes.
+var codeHealthGoalWords = map[string]bool{
+	"churn": true, "hotspot": true, "hotspots": true, "complexity": true, "complex": true, "refactor": true, "refactoring": true,
+}
+
+// codeHealthEntityTypes are the entity types of the hotspot and complexity
+// catalog sources (the census test pins them to the catalog statements).
+var codeHealthEntityTypes = map[string]bool{"file_hotspot": true, "file_complexity": true}
+
+func goalNamesCodeHealth(goal string) bool {
+	for _, word := range goalWords(goal) {
+		if codeHealthGoalWords[word] {
+			return true
+		}
+	}
+	return false
+}
+
 func goalNamesFailure(goal string) bool {
 	for _, word := range goalWords(goal) {
 		if failureGoalWords[word] {
