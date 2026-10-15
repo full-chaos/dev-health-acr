@@ -248,6 +248,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "source_conflict_key", Type: "String"},
 		{Name: "ingest_revision", Type: "UInt128 DEFAULT toUInt128(toUnixTimestamp64Micro(source_version_at))"},
 		{Name: "id", Type: "String"},
+		// The write time of the mapping's revision, an ended mapping's
+		// included: the incident projection's cursor follows it. TEST DDL:
+		// it defaults to source_version_at.
+		{Name: "last_synced", Type: "DateTime64(6, 'UTC') DEFAULT source_version_at"},
 		{Name: "relationship_provenance", Type: "Nullable(String)"},
 		{Name: "relationship_confidence", Type: "Nullable(Float64)"},
 		{Name: "service_id", Type: "String"},

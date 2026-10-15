@@ -100,11 +100,10 @@ func TestIncidentProjectionServesTheLatestRevision(t *testing.T) {
 	}
 }
 
-// A mapping deactivated with no new incident revision changes no row the
-// incremental cursor reads, so the incident's BELONGS_TO_REPOSITORY edge to
-// that repository stays until a rebuild. The rebuild resets the checkpoint and
-// reads from an empty cursor: from there the edge is gone.
-func TestDeactivatedMappingLeavesNoRepositoryEdgeAfterTheRebuild(t *testing.T) {
+// A mapping deactivated with no new incident revision re-reads the incident:
+// the next incremental read retracts it (its service has no active mapping),
+// and a read from an empty cursor, as the rebuild does, agrees.
+func TestDeactivatedMappingLeavesNoRepositoryEdgeAfterTheNextRead(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
 	const (
@@ -145,8 +144,18 @@ func TestDeactivatedMappingLeavesNoRepositoryEdgeAfterTheRebuild(t *testing.T) {
 	}
 
 	mapping(later, 0)
-	if got := edgesTo(h.drain(first.cursor)); len(got) != 0 {
-		t.Fatalf("incremental read after the deactivation: incident edges %v; the residual this test covers is that it emits nothing", got)
+	next := h.drain(first.cursor)
+	if got := edgesTo(next); len(got) != 0 {
+		t.Fatalf("incremental read after the deactivation: incident edges %v, want none", got)
+	}
+	retracted := false
+	for _, batch := range next.batches {
+		for _, tombstone := range batch.Tombstones {
+			retracted = retracted || (tombstone.Kind == "incident" && tombstone.CanonicalID == "incident:"+incidentID)
+		}
+	}
+	if !retracted {
+		t.Fatalf("incremental read after the deactivation does not retract incident:%s", incidentID)
 	}
 	rebuilt := h.drain("")
 	if got := edgesTo(rebuilt); len(got) != 0 {
