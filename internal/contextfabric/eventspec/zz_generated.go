@@ -3751,6 +3751,9 @@ type SynthesisRetrySelectionFields struct {
 	RetryFit                 bool
 	RetryFailed              bool
 	RefusalPlanned           bool
+	FactsOnlyAttempted       bool
+	FactsOnlyServed          bool
+	FactsOnlyDeclined        string
 	DeadlineReserved         bool
 	RetryDeclined            string
 	NarrowerContinuationAxis string
@@ -3782,7 +3785,7 @@ type SynthesisRetrySelectionFields struct {
 
 // NewSynthesisRetrySelectionFields is the generated constructor for SynthesisRetrySelectionFields -- every
 // field SynthesisRetrySelection.Fields declares is a required parameter.
-func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string, requestID string) SynthesisRetrySelectionFields {
+func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string, requestID string) SynthesisRetrySelectionFields {
 	return SynthesisRetrySelectionFields{
 		OrgID:                    orgID,
 		Family:                   family,
@@ -3807,6 +3810,9 @@ func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion
 		RetryFit:                 retryFit,
 		RetryFailed:              retryFailed,
 		RefusalPlanned:           refusalPlanned,
+		FactsOnlyAttempted:       factsOnlyAttempted,
+		FactsOnlyServed:          factsOnlyServed,
+		FactsOnlyDeclined:        factsOnlyDeclined,
 		DeadlineReserved:         deadlineReserved,
 		RetryDeclined:            retryDeclined,
 		NarrowerContinuationAxis: narrowerContinuationAxis,
@@ -3865,6 +3871,9 @@ func (f SynthesisRetrySelectionFields) SlogArgs() []any {
 		"retry_fit", f.RetryFit,
 		"retry_failed", f.RetryFailed,
 		"refusal_planned", f.RefusalPlanned,
+		"facts_only_attempted", f.FactsOnlyAttempted,
+		"facts_only_served", f.FactsOnlyServed,
+		"facts_only_declined", contextfabric.SanitizeLogAttr(f.FactsOnlyDeclined),
 		"deadline_reserved", f.DeadlineReserved,
 		"retry_declined", contextfabric.SanitizeLogAttr(f.RetryDeclined),
 		"narrower_continuation_axis", contextfabric.SanitizeLogAttr(f.NarrowerContinuationAxis),
