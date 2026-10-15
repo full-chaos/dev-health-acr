@@ -7,6 +7,7 @@ const (
 	SourceWatermarkStatusStale       = "stale"
 	SourceWatermarkStatusMissing     = "missing"
 	SourceWatermarkStatusUnavailable = "unavailable"
+	SourceWatermarkStatusUnknown     = "unknown"
 
 	EvidenceProvenanceNative       = "native"
 	EvidenceProvenanceExplicitText = "explicit_text"
@@ -24,7 +25,7 @@ const (
 )
 
 func SourceWatermarkStatusVocabulary() []string {
-	return []string{SourceWatermarkStatusFresh, SourceWatermarkStatusStale, SourceWatermarkStatusMissing, SourceWatermarkStatusUnavailable}
+	return []string{SourceWatermarkStatusFresh, SourceWatermarkStatusStale, SourceWatermarkStatusMissing, SourceWatermarkStatusUnavailable, SourceWatermarkStatusUnknown}
 }
 
 func EvidenceProvenanceVocabulary() []string {
