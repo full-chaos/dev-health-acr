@@ -48,6 +48,7 @@ ORDER BY p.name LIMIT 1`, org))
 			}
 		}
 	}
+	t.Logf("DIAG9789 project=%q team=%q status=%s raw=%.12000s", project, team, str(structured(d), "status"), raw)
 	if !strings.Contains(raw, team) {
 		t.Fatalf("answer for project %q never names its owning team %q: status=%s\n%.3000s", project, team, str(structured(d), "status"), raw)
 	}
