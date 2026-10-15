@@ -1191,7 +1191,13 @@ import (
 // incident stored at several revisions counted once per revision, and one
 // deleted, or a mapping deactivated, in its latest revision still counted
 // through an earlier one; an answer saved under v232 is not reused.
-const QueryVersion = "devhealthfacts.clickhouse.v233"
+//
+// v233 -> v234: a refused run_operation or graphql_query reply reports the same
+// stamped schema digest a served call reports, read when the reply is built,
+// not the pinned digest. An answer saved under v233 may hold a refusal stamped
+// with the pinned digest while the registry watch served another; it is not
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v234"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
