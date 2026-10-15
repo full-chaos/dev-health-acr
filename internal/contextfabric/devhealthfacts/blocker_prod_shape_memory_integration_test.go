@@ -170,14 +170,23 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 // with want rows per block (the blocker statements aggregate with uniqExactIf;
 // the authorization read that precedes them is a different statement). A wrapper or session default that drops the
 // setting leaves it out of the map, so it is reported here.
-func blockerProdShapeBlockSizeOffenders(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64, want string) (offenders []string, statements int) {
+// blockerProdShapeBlockerStatements is the number of blocker statements over
+// work_item_dependencies (the two team statements and the repository one); a new,
+// renamed or dropped statement changes it and fails the read-back.
+const blockerProdShapeBlockerStatements = 3
+
+// blockerProdShapeAuthorizationRead is the head of the one other statement over
+// that table, the authorization read that precedes them.
+const blockerProdShapeAuthorizationRead = "SELECT work_item_id FROM ("
+
+func blockerProdShapeBlockSizeOffenders(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64, want string) (offenders []string, statements int, others []string) {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, any(Settings['max_block_size']), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, any(Settings['max_block_size']), position(any(query), 'uniqExactIf') > 0, any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'uniqExactIf') > 0
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) 
 GROUP BY normalized_query_hash`, mark)
 	if err != nil {
 		t.Fatalf("read executed settings: %v", err)
@@ -186,8 +195,13 @@ GROUP BY normalized_query_hash`, mark)
 	for rows.Next() {
 		var hash uint64
 		var blockSize, head string
-		if err := rows.Scan(&hash, &blockSize, &head); err != nil {
+		var aggregates bool
+		if err := rows.Scan(&hash, &blockSize, &aggregates, &head); err != nil {
 			t.Fatal(err)
+		}
+		if !aggregates {
+			others = append(others, head)
+			continue
 		}
 		statements++
 		t.Logf("PRODSHAPE executed max_block_size %q (want %q) statement %d: %s", blockSize, want, hash, head)
@@ -195,7 +209,7 @@ GROUP BY normalized_query_hash`, mark)
 			offenders = append(offenders, fmt.Sprintf("%d max_block_size=%q: %s", hash, blockSize, head))
 		}
 	}
-	return offenders, statements
+	return offenders, statements, others
 }
 
 func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
@@ -514,19 +528,21 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	// nothing.
 	shippedMark := serverNowMicros(t, ctx, direct)
 	read(restricted)
-	if offenders, statements := blockerProdShapeBlockSizeOffenders(t, ctx, direct, shippedMark, "8192"); statements == 0 {
-		t.Error("the executed-settings read-back found no blocker statement: it checks nothing")
-	} else if len(offenders) > 0 {
+	offenders, statements, others := blockerProdShapeBlockSizeOffenders(t, ctx, direct, shippedMark, "8192")
+	if statements != blockerProdShapeBlockerStatements || len(others) != 1 || !strings.HasPrefix(others[0], blockerProdShapeAuthorizationRead) {
+		t.Errorf("the read-back saw %d blocker statements (want %d) and other statements %q (want exactly the authorization read): a statement was added, renamed or dropped", statements, blockerProdShapeBlockerStatements, others)
+	}
+	if len(offenders) > 0 {
 		t.Errorf("blocker statements executed without max_block_size = 8192 (the #1304 fix): %v", offenders)
 	}
-	rollbackOffenders, rollbackStatements := func() ([]string, int) {
+	rollbackOffenders, rollbackStatements, rollbackOthers := func() ([]string, int, []string) {
 		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
 		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(0)()
 		rollbackMark := serverNowMicros(t, ctx, direct)
 		read(restricted)
 		return blockerProdShapeBlockSizeOffenders(t, ctx, direct, rollbackMark, "8192")
 	}()
-	if rollbackStatements == 0 || len(rollbackOffenders) != rollbackStatements {
+	if rollbackStatements != blockerProdShapeBlockerStatements || len(rollbackOthers) != 1 || len(rollbackOffenders) != rollbackStatements {
 		t.Errorf("with #1256 and #1304 undone, %d of %d blocker statements lacked max_block_size = 8192: the read-back cannot catch the rollback", len(rollbackOffenders), rollbackStatements)
 	}
 	// Advisory, not a guard: the real rollback's memory reading is logged only.
