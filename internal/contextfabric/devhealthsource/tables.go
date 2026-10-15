@@ -1390,7 +1390,6 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 		validFrom, validTo := edgeValidity(
 			optionalTime(hasDeployStart, deployStartedAt), optionalTime(hasDeployEnd, deployFinishedAt),
 			optionalTime(hasIncidentStart, incidentStartedAt), optionalTime(hasIncidentEnd, incidentEndedAt))
-		relationshipID := "relationship:deployment_incident:" + edgeID
 		// CHAOS-3898: the deployment endpoint now references
 		// deployment.v2:<repo_id>:<enc(deployment_id)> (the SAME canonical
 		// id queryDeployments mints for this row's own deployment, since
@@ -1411,7 +1410,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 		// or the source, so it can name two rows.
 		deploymentIncidentRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, repoID, deploymentID, incidentID, source)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: relationshipID, Type: "CORRELATED_WITH_INCIDENT",
+			RelationshipID: identity.DeriveRelationship(identity.RelationshipFamilyDeploymentIncident, deploymentCanonicalID, "incident:"+incidentID, "CORRELATED_WITH_INCIDENT"), Type: "CORRELATED_WITH_INCIDENT",
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: deploymentCanonicalID, Label: deploymentID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
