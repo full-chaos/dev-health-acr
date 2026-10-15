@@ -2,6 +2,7 @@ package contextpacket_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -17,6 +18,12 @@ func TestFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
 	for _, statement := range devhealthschema.DDL() {
 		scopeExec(t, ctx, direct, statement)
 	}
+	for _, statement := range devhealthschema.ProjectionDDL("file_hotspot_daily") {
+		scopeExec(t, ctx, direct, statement)
+	}
+	// The complexity run projection of ops migration 069 is not declared in
+	// devhealthschema.Projections; the complexity statement forces it.
+	scopeExec(t, ctx, direct, `ALTER TABLE file_complexity_snapshots ADD PROJECTION IF NOT EXISTS prj_acr_file_complexity_runs (SELECT org_id, repo_id, ref, as_of_day, computed_at GROUP BY org_id, repo_id, ref, as_of_day, computed_at)`)
 	// devhealthschema does not declare the commit tables: the ops definition with
 	// the org_id column and sorting key of ops migration 027.
 	scopeExec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
@@ -41,7 +48,7 @@ func TestFileFactsShareOneFocusKeyAcrossTheThreeFileSources(t *testing.T) {
 		}
 		refs, err := executor.QueryEvidence(ctx, source, plan.Bindings())
 		if err != nil {
-			t.Fatalf("%s: %v", source.ID, err)
+			t.Fatalf("%s: %v (cause: %v)", source.ID, err, errors.Unwrap(err))
 		}
 		for _, ref := range refs {
 			got, _ := ref.Metadata["focus_key"].(string)
