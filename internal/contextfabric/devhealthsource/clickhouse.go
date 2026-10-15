@@ -135,7 +135,14 @@ const SourceName = "dev_health_clickhouse"
 // incident revision changes no row the cursor reads, so an already-projected
 // incident keeps its BELONGS_TO_REPOSITORY edge through it; the rebuild
 // (acr-projector rebuild --org) drops it.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v12"
+//
+// (v13, incident edges per repository: an incident's BELONGS_TO_REPOSITORY
+// edge id names its repository (identity.RelationshipFamilyIncidentRepository)
+// and queryIncidents re-reads an incident when a mapping of its service
+// changes. Already-projected incident edges carry the old per-incident id, and
+// mappings that ended before the roll are behind every checkpoint; the
+// rebuild re-projects both.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v13"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
@@ -342,6 +349,9 @@ type candidate struct {
 	// already an ingest stamp).
 	cursorAt time.Time
 	sortKey  string
+	// memoVersion tells two reads of one row apart in the overlap memo when
+	// what the row projects changed without moving its keyset place.
+	memoVersion string
 	// passOver marks a page's last row whose key the cursor cannot carry; its
 	// cursor lands after the whole timestamp (cursorSentinelKey).
 	passOver bool
