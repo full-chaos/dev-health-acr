@@ -132,7 +132,11 @@ func (g priorsOrgGuard) run(ctx context.Context, command, orgID string, write fu
 	}
 	outcome := priorsOutcomeFailed
 	defer func() {
-		logger.InfoContext(ctx, "acr-projector priors command finished", "command", command, "org_id", contextfabric.SanitizeLogAttr(orgID), "outcome", outcome)
+		attrs := []any{"command", command, "org_id", contextfabric.SanitizeLogAttr(orgID), "outcome", outcome}
+		if outcome == priorsOutcomeFailed && err != nil {
+			attrs = append(attrs, "failure_class", contextfabric.SanitizeLogAttr(projectionrun.ClassifyFailure(err)))
+		}
+		logger.InfoContext(ctx, "acr-projector priors command finished", attrs...)
 	}()
 	if g.Locker == nil || g.Markers == nil {
 		return errors.New("acr-projector priors: organization guard is not configured")
@@ -176,6 +180,11 @@ func (g priorsOrgGuard) run(ctx context.Context, command, orgID string, write fu
 	return nil
 }
 
+// errPriorsPoolTooSmall refuses a pool of one connection: a priors command
+// holds the organization lock on one connection while its write runs on
+// another, so with one connection the write would wait for itself.
+var errPriorsPoolTooSmall = errors.New("acr-projector priors requires ACR_POSTGRES_MAX_OPEN_CONNS of at least 2 (or unset): it holds the organization lock on one connection while it writes on another")
+
 // openPriorsDB opens a Postgres-only connection -- CHAOS-3977 P5's own
 // store needs no ClickHouse or graph backend, unlike openRuntime's full
 // stack (rebuild/rollback, main.go), so this is a deliberately lighter
@@ -193,6 +202,9 @@ func openPriorsDB(ctx context.Context) (*sql.DB, error) {
 	}
 	if strings.TrimSpace(cfg.PostgresDSN) == "" {
 		return nil, errors.New("acr-projector priors requires ACR_POSTGRES_DSN")
+	}
+	if cfg.PostgresMaxOpenConns == 1 {
+		return nil, errPriorsPoolTooSmall
 	}
 	db, err := hosted.OpenPostgresWithRetry(ctx, runtimepostgres.Config{
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
@@ -404,7 +416,8 @@ func priorsFlip(args []string, open priorsOpener) error {
 			return false, fmt.Errorf("flip: %w", err)
 		}
 		_, err := fmt.Printf("org %s: active version is now %d (ratified by %s)\n", *org, target, *by)
-		return true, err
+		alreadyActive := expectedPtr != nil && *expectedPtr == target
+		return !alreadyActive, err
 	})
 }
 

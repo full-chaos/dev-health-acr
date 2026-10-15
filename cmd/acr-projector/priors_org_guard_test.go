@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var errNotWritten = errors.New("nothing written")
+
 type recordingOrgLocker struct {
 	steps *[]string
 	err   error
@@ -57,6 +59,7 @@ func TestPriorsOrgGuardOrder(t *testing.T) {
 		{name: "purged marker", purged: true, steps: []string{"lock", "marker", "unlock"}, outcome: priorsOutcomePurged, is: storage.ErrOrgPurged},
 		{name: "refused by the write fence", writeErr: storage.ErrOrgPurged, steps: []string{"lock", "marker", "write", "unlock"}, outcome: priorsOutcomePurged, is: storage.ErrOrgPurged},
 		{name: "write failed", writeErr: contextfabric.ErrUnavailable, steps: []string{"lock", "marker", "write", "unlock"}, outcome: priorsOutcomeFailed, is: contextfabric.ErrUnavailable},
+		{name: "unchanged", writeErr: errNotWritten, steps: []string{"lock", "marker", "write", "unlock"}, outcome: priorsOutcomeUnchanged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var steps []string
@@ -68,6 +71,9 @@ func TestPriorsOrgGuardOrder(t *testing.T) {
 			}
 			err := guard.run(context.Background(), "flip", "org-1", func(context.Context) (bool, error) {
 				steps = append(steps, "write")
+				if errors.Is(tc.writeErr, errNotWritten) {
+					return false, nil
+				}
 				return tc.writeErr == nil, tc.writeErr
 			})
 			require.Equal(t, tc.steps, steps)
@@ -78,6 +84,7 @@ func TestPriorsOrgGuardOrder(t *testing.T) {
 			}
 			require.Contains(t, logs.String(), "command=flip")
 			require.Contains(t, logs.String(), "outcome="+tc.outcome)
+			require.Equal(t, tc.outcome == priorsOutcomeFailed, strings.Contains(logs.String(), "failure_class=dependency_unavailable"), "a failed write logs its failure class:\n%s", logs.String())
 		})
 	}
 }
@@ -151,7 +158,8 @@ func TestPriorsControlWithoutTheOrganizationLockAWriteLandsWhileTheLockIsHeld(t 
 
 // Control: without the organization lock, a purge runs while a priors write
 // is in flight, which is what TestPriorsCommandHoldsTheOrganizationLockUntilItsWriteCommits
-// catches. The write fence still refuses the write once the purge committed.
+// catches. Curate has already read the selections and waits to insert its
+// version; the write fence refuses that insert once the purge committed.
 func TestPriorsControlWithoutTheOrganizationLockAPurgeRunsDuringAPriorsWrite(t *testing.T) {
 	r := newPriorsFenceRig(t)
 	org := uuid.NewString()
@@ -160,9 +168,9 @@ func TestPriorsControlWithoutTheOrganizationLockAPurgeRunsDuringAPriorsWrite(t *
 	release := r.blockPointerLock(t, org)
 	done := make(chan error, 1)
 	go func() {
-		done <- runPriors("flip", []string{"--org", org, "--version", "1", "--expect-current", "2", "--by", "operator"}, r.opener(projectionrun.NoopOrgLocker{}, nil))
+		done <- runPriors("curate", []string{"--org", org, "--attest-no-frozen-corpus"}, r.opener(projectionrun.NoopOrgLocker{}, nil))
 	}()
-	waitFor(t, "the flip waiting inside its write transaction", func() bool { return r.waitingOnAdvisoryLock(t) })
+	waitFor(t, "the curate waiting inside its write transaction", func() bool { return r.waitingOnAdvisoryLock(t) })
 	require.NoError(t, r.purge(context.Background(), t, org))
 	require.Equal(t, 1, r.markers(t, org))
 	release()
