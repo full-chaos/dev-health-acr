@@ -157,10 +157,10 @@ func TestAssembler_rows_without_a_focus_key_are_allocated_as_before(t *testing.T
 	}
 }
 
-func TestAssembler_output_budget_keeps_one_slot_per_subject_before_a_second(t *testing.T) {
+func budgetFixture(tokens, bytes int) (contractsv1.ContextPacketRequest, testStore) {
 	request := fixtureRequest("req-slots-budget", "main", "")
 	request.Goal = "saved payment methods checkout"
-	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 50, 500, 200000
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 50, tokens, bytes
 	observed := time.Date(2026, 1, 15, 11, 0, 0, 0, time.UTC)
 	path := "saved-payment-methods-at-checkout.go"
 	var evidence []contractsv1.EvidenceRef
@@ -171,25 +171,45 @@ func TestAssembler_output_budget_keeps_one_slot_per_subject_before_a_second(t *t
 		evidence = append(evidence, ref)
 	}
 	for i := 0; i < 5; i++ {
-		ref := testEvidence(fmt.Sprintf("ev-other-%d", i), "git", observed.Add(-48*time.Hour))
-		evidence = append(evidence, ref)
+		evidence = append(evidence, testEvidence(fmt.Sprintf("ev-other-%d", i), "git", observed.Add(-48*time.Hour)))
 	}
-	store := testStore{bundle: storage.EvidenceBundle{
+	return request, testStore{bundle: storage.EvidenceBundle{
 		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
 		Evidence:      evidence, QueryVersion: contextpacket.QueryVersionV1,
 	}}
+}
+
+func assertOtherSubjectsSurvive(t *testing.T, request contractsv1.ContextPacketRequest, store testStore) {
+	t.Helper()
 	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
-	others := 0
-	for _, id := range itemEvidenceIDs(packet) {
+	ids, others := itemEvidenceIDs(packet), 0
+	for _, id := range ids {
 		if strings.HasPrefix(id, "ev-other-") {
 			others++
 		}
 	}
-	t.Logf("items=%d others=%d", len(packet.Items), others)
-	if others != 5 {
-		t.Fatalf("other subjects served = %d of 5; the token budget let one file's rows crowd them out (%v)", others, itemEvidenceIDs(packet))
+	if others != 5 || len(ids) >= 35 {
+		t.Fatalf("items=%d others=%d of 5 (%v): later rows of one file must be dropped before another subject's row", len(ids), others, ids)
 	}
+	if ids[0] != "ev-file-00" {
+		t.Fatalf("first served = %s, want the best row first: kept rows stay in rank order", ids[0])
+	}
+	for i, item := range packet.Items {
+		if item.Rank != i+1 {
+			t.Fatalf("item %d has rank %d, want rank to be the served position", i, item.Rank)
+		}
+	}
+}
+
+func TestAssembler_token_budget_keeps_one_slot_per_subject_before_a_second(t *testing.T) {
+	request, store := budgetFixture(500, 200000)
+	assertOtherSubjectsSurvive(t, request, store)
+}
+
+func TestAssembler_byte_budget_keeps_one_slot_per_subject_before_a_second(t *testing.T) {
+	request, store := budgetFixture(8000, 12000)
+	assertOtherSubjectsSurvive(t, request, store)
 }

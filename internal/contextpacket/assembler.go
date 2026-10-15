@@ -129,19 +129,19 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
 	rankingContext, completeRankingTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRanking})
-	ranked, quotaTruncated := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
+	ranked, quotaTruncated, laterRows := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
 	items := requestedCategories(ranked, request.Options.RequestedCategories)
 	completeRankingTrace(OperationSuccess)
 	a.observeRanking(rankingContext, packet.QueryVersion, packet.RankingVersion, a.options.Now().Sub(rankingStarted))
 	packet.Budget.Truncated = quotaTruncated
-	if err := applyBudget(&packet, items); err != nil {
+	if err := applyBudget(&packet, items, laterRows); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
-	if err := finalizePacket(&packet); err != nil {
+	if err := finalizePacket(&packet, laterRows); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	setStatus(&packet, len(ranked))
-	if err := finalizePacket(&packet); err != nil {
+	if err := finalizePacket(&packet, laterRows); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	if err := validatePacket(packet); err != nil {
@@ -190,7 +190,7 @@ func (a *Assembler) degraded(ctx context.Context, packet contractsv1.ContextPack
 		summary = "Evidence was retrieved but failed validation for the requested goal."
 	}
 	packet.Coverage.DegradedReasons, packet.Warnings, packet.Summary = []string{reason}, []string{reason}, summary
-	if err := finalizePacket(&packet); err != nil {
+	if err := finalizePacket(&packet, nil); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	if err := validatePacket(packet); err != nil {

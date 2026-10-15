@@ -19,7 +19,7 @@ const (
 	minimumEvidenceConfidence = 0.5
 )
 
-func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool) {
+func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool, map[string]bool) {
 	roles := newRoleResolver(evidence)
 	refs := make([]contractsv1.EvidenceRef, 0, len(evidence))
 	for _, ref := range evidence {
@@ -53,16 +53,18 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
 	refs = requestedEvidenceCategories(refs, requested, roles)
 	candidates := len(refs)
-	refs, truncated := allocateCategories(refs, scores, maxItems, roles)
+	refs, truncated, laterRows := allocateCategories(refs, scores, maxItems, roles)
 	slog.Debug("context packet ranking", "event", "ranking_decided", "evidence_in", beforeDedupe, "duplicates_dropped", beforeDedupe-candidates, "kept", len(refs), "max_items", maxItems, "truncated", truncated, "goal_words", len(goalWords(goal)))
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
 	for _, ref := range refs {
 		items = append(items, evidenceItemWithRoles(ref, scope, roles))
 	}
+	deferred := make(map[string]bool, len(laterRows))
 	for i := range items {
 		items[i].Rank = i + 1
+		deferred[items[i].PacketItemID] = laterRows[refs[i].EvidenceRefID]
 	}
-	return items, truncated
+	return items, truncated, deferred
 }
 
 func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []contractsv1.PacketCategory, roles roleResolver) []contractsv1.EvidenceRef {
@@ -202,17 +204,17 @@ func evidenceTieKey(ref contractsv1.EvidenceRef) string {
 // allocateCategories gives one slot to each focus (the entity a row is about,
 // such as one file) before a focus takes a second. Category quotas still come
 // first: a second row of a focus takes a slot only when no first row can fill
-// the quota or the slots that remain.
-func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
+// the quota or the slots that remain. Kept rows stay in rank order; the later
+// rows of a focus are returned as a set so the output budgets drop them before
+// another subject's row.
+func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool, map[string]bool) {
 	primary, secondary := splitByFocus(refs)
-	// Later rows of a focus sit behind every first row, so the token and byte
-	// budgets after this stage drop them before another subject's row.
-	if len(refs) <= maxItems {
-		return append(primary, secondary...), false
-	}
-	isSecondary := make(map[string]bool, len(secondary))
+	later := make(map[string]bool, len(secondary))
 	for _, ref := range secondary {
-		isSecondary[ref.EvidenceRefID] = true
+		later[ref.EvidenceRefID] = true
+	}
+	if len(refs) <= maxItems {
+		return refs, false, later
 	}
 	ordered := append(append(make([]contractsv1.EvidenceRef, 0, len(refs)), primary...), secondary...)
 	categories := []contractsv1.PacketCategory{contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryCause, contractsv1.CategoryEvidence, contractsv1.CategoryAction}
@@ -251,14 +253,9 @@ func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, m
 			selected, selectedIDs[ref.EvidenceRefID] = append(selected, ref), true
 		}
 	}
-	sort.Slice(selected, func(i, j int) bool {
-		if left, right := isSecondary[selected[i].EvidenceRefID], isSecondary[selected[j].EvidenceRefID]; left != right {
-			return right
-		}
-		return evidenceBefore(selected[i], selected[j], scores, roles)
-	})
+	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
 	slog.Debug("context packet focus cap", "event", "focus_cap_applied", "deferred", len(secondary), "kept", len(selected), "max_items", maxItems)
-	return selected, true
+	return selected, true, later
 }
 
 func splitByFocus(refs []contractsv1.EvidenceRef) (primary, secondary []contractsv1.EvidenceRef) {
