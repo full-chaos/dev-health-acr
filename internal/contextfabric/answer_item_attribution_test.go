@@ -1122,8 +1122,29 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 				if counted := contractsv1.CountContextFabricResultItems(result).Budgeted(); measured != counted || sum != measured {
 					t.Errorf("measured_items = %d, split sums to %d, served document counts %d: all three must agree\nline: %s", measured, sum, counted, line)
 				}
-				if fields["group"] != 0 || fields["multi_group"] != 0 || fields["member"] < len(result.Cohort.Members) {
-					t.Errorf("attribution = %v for a flat cohort of %d members\nline: %s", fields, len(result.Cohort.Members), line)
+				// Per bucket, from the served document alone: the cohort rows and
+				// the claims about a member are member items, every other claim is
+				// global, and the composer writes no driver, finding or path.
+				if len(result.Drivers)+len(result.Paths)+len(result.RemainingWork)+len(result.ReadinessGaps)+len(result.Conflicts) != 0 {
+					t.Fatalf("a facts-only document carries model-shaped items: drivers=%d paths=%d", len(result.Drivers), len(result.Paths))
+				}
+				isMember := map[string]bool{}
+				for _, member := range result.Cohort.Members {
+					isMember[member.Subject.CanonicalID] = true
+				}
+				wantMember, wantGlobal := len(result.Cohort.Members), 0
+				for _, claim := range result.ClaimedFacts {
+					if isMember[claim.Subject.CanonicalID] {
+						wantMember++
+					} else {
+						wantGlobal++
+					}
+				}
+				if wantMember == len(result.Cohort.Members) {
+					t.Fatalf("the served document has no claim about a member, so the member bucket cannot tell claims from rows")
+				}
+				if fields["member"] != wantMember || fields["global"] != wantGlobal || fields["group"] != 0 || fields["multi_group"] != 0 {
+					t.Errorf("attribution = %v, want member %d global %d group 0 multi_group 0 from the served document\nline: %s", fields, wantMember, wantGlobal, line)
 				}
 				return
 			}
