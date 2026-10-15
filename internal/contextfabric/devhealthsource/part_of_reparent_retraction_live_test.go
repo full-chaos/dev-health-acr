@@ -222,6 +222,7 @@ func partOfParentResolution(t *testing.T, adapter *falkorgraph.Adapter) {
 	line := logs.String()
 	for _, want := range []string{
 		"part_of_parent_key_not_unique", "part_of_parent_empty_key", "part_of_parent_not_in_own_repository",
+		"part_of_parent_unresolved", "part_of_parent_cleared",
 		"part_of parent id prefix is not mapped", "prefix=ghx:",
 	} {
 		if !strings.Contains(line, want) {
@@ -232,6 +233,30 @@ func partOfParentResolution(t *testing.T, adapter *falkorgraph.Adapter) {
 		if strings.Contains(line, secret) {
 			t.Errorf("the log names %q, which belongs to a repository the child cannot read: %q", secret, line)
 		}
+	}
+}
+
+// A parent key that was held once is held twice after the child was last
+// synced: the child is not read again by its own row, so the producer must
+// re-read it when the rows that name its parent change.
+func partOfParentKeyGainsASecondHolder(t *testing.T, adapter *falkorgraph.Adapter) {
+	const org = "97950000-0000-4000-8000-000000000005"
+	w := newEdgeWorld(t, adapter, org)
+	const repoA, repoB = "97950000-0000-4000-8000-0000000000f1", "97950000-0000-4000-8000-0000000000f2"
+	w.repo(repoA, "acme/a")
+	w.repo(repoB, "acme/b")
+	first := w.now.Add(-5 * time.Hour)
+	w.item(repoA, "jira:PAR-1", "", first)
+	w.item(repoA, "jira:CHD-1", "jira:PAR-1", first)
+	w.drain()
+	child := w.workItemID(repoA, "jira:CHD-1")
+	if got := w.edgesOut(child, contractsv1.ContextFabricRelationshipPartOf); len(got) != 1 {
+		t.Fatalf("before the second holder: PART_OF edges %v, want one", got)
+	}
+	w.item(repoB, "jira:PAR-1", "", time.Now().UTC().Add(time.Second))
+	w.drain()
+	if got := w.edgesOut(child, contractsv1.ContextFabricRelationshipPartOf); len(got) != 0 {
+		t.Fatalf("the qualified parent key is now held under two repositories and an unchanged child holds %d PART_OF edges, want none: %v", len(got), got)
 	}
 }
 
@@ -267,5 +292,6 @@ func TestEdgeRetractionOnRealStores(t *testing.T) {
 	adapter := chaos7074FalkorAdapter(t, context.Background())
 	t.Run("a re-parent and a cleared parent", func(t *testing.T) { partOfReparentLeavesOneOpenEdge(t, adapter) })
 	t.Run("parent id resolution", func(t *testing.T) { partOfParentResolution(t, adapter) })
+	t.Run("a parent key that gains a second holder", func(t *testing.T) { partOfParentKeyGainsASecondHolder(t, adapter) })
 	t.Run("a removed blocks link", func(t *testing.T) { removedBlockerLinkLeavesNoOpenEdgeInTheGraph(t, adapter) })
 }
