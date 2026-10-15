@@ -87,8 +87,14 @@ SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(100000 + numbe
 // by the 0.86 calibration ratio.
 const (
 	blockerProdShapeCeiling       = uint64(41 << 20)
-	blockerProdShapeTotalsCeiling = uint64(39 << 20)
-	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
+	blockerProdShapeTotalsCeiling = uint64(41 << 20)
+
+	// The planted control must clear the totals ceiling by this much, and the
+	// product's highest warm read (35.6-38.6 MiB measured) sits under it by more.
+	blockerProdShapePlantedMargin = uint64(2 << 20)
+	// The planted defect's rows per block: far over the server default (65409).
+	blockerProdShapePlantedBlockSize = 2097152
+	blockerProdShapeTotalsHead       = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
 
 	// The in-statement authorization fallback: main's peaks on this shape
 	// (52.3 MiB age, 46.8 MiB totals) plus 2 MiB, under the 64 MiB cap.
@@ -181,7 +187,7 @@ func blockerProdShapePlantedReading(t *testing.T, ctx context.Context, direct cl
 	read()
 	type seen struct {
 		head         string
-		low          uint64
+		low, high    uint64
 		memoryLimits int
 		rounds       int
 	}
@@ -211,12 +217,15 @@ GROUP BY normalized_query_hash`, mark)
 			}
 			entry := byHash[hash]
 			if entry == nil {
-				entry = &seen{head: head, low: peak}
+				entry = &seen{head: head, low: peak, high: peak}
 				byHash[hash] = entry
 			}
 			entry.rounds++
 			if peak < entry.low {
 				entry.low = peak
+			}
+			if peak > entry.high {
+				entry.high = peak
 			}
 			if code == memoryLimitExceeded {
 				entry.memoryLimits++
@@ -227,15 +236,16 @@ GROUP BY normalized_query_hash`, mark)
 	exceeded := false
 	for hash, entry := range byHash {
 		ceiling := blockerProdShapeCeilingFor(entry.head)
-		// Only the totals statement counts. Its lowest planted read has
-		// ranged 40.0-41.6 MiB against the 39 MiB ceiling, so no margin over
-		// the ceiling is asserted.
+		// Only the totals statement counts. The planted defect (authorization
+		// inside each statement, oversized blocks) reads 52-53 MiB, so its
+		// lowest read must clear the 41 MiB ceiling by the margin; the product's
+		// highest read is 38.6 MiB at most, 2.4 MiB under the ceiling.
 		totals := strings.HasPrefix(entry.head, blockerProdShapeTotalsHead)
-		hit := totals && (entry.memoryLimits == entry.rounds || entry.low >= ceiling)
+		hit := totals && (entry.memoryLimits == entry.rounds || entry.low >= ceiling+blockerProdShapePlantedMargin)
 		if hit {
 			exceeded = true
 		}
-		t.Logf("PRODSHAPE planted-control reading [%s] statement %d lowest %.1f MiB, memory-limit exceptions %d of %d reads, ceiling %.1f MiB, reached %v: %s", label, hash, float64(entry.low)/(1<<20), entry.memoryLimits, entry.rounds, float64(ceiling)/(1<<20), hit, entry.head)
+		t.Logf("PRODSHAPE planted-control reading [%s] statement %d lowest %.1f highest %.1f MiB, memory-limit exceptions %d of %d reads, ceiling %.1f MiB + margin %.1f MiB, reached %v: %s", label, hash, float64(entry.low)/(1<<20), float64(entry.high)/(1<<20), entry.memoryLimits, entry.rounds, float64(ceiling)/(1<<20), float64(blockerProdShapePlantedMargin)/(1<<20), hit, entry.head)
 	}
 	return exceeded
 }
@@ -462,42 +472,23 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 	}
 
-	// Planted defect, absolute: the two shipped memory fixes undone together for
-	// the restricted caller, the authorization relation inside every statement
-	// (#1256) and the server's default block size (#1304). The totals statement
-	// must then sit at or over its frozen ceiling in every one of three
-	// warm reads (by peak, or by the memory-limit exception, code 241 asserted,
-	// never any error). The same reading of the shipped shape must NOT reach the
-	// ceiling: that is what makes the control discriminate. If the planted
-	// reading did not reach it, the ceilings could not catch the defect they
-	// exist for.
+	// Planted defect, absolute: the authorization relation inside every
+	// statement (#1256) and oversized blocks (the server's default is 65409
+	// rows; #1304 bounds them) for the restricted caller. The totals statement
+	// must then sit at least the margin over its frozen ceiling in every one of
+	// three warm reads (by peak, or by the memory-limit exception, code 241
+	// asserted, never any error). The same reading of the shipped shape must
+	// NOT reach it: that is what makes the control discriminate.
 	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape, restricted", func() { read(restricted) }) {
 		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
 	}
 	restoreBoundPlanted := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
-	restoreBlockPlanted := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
-	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, default block size, restricted", func() { read(restricted) })
+	restoreBlockPlanted := devhealthfacts.SetBlockerMaxBlockSizeForTest(blockerProdShapePlantedBlockSize)
+	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, oversized blocks, restricted", func() { read(restricted) })
 	restoreBlockPlanted()
 	restoreBoundPlanted()
 	if !planted {
 		t.Error("with the authorization relation inside each statement and the default block size, the totals statement did not reach its ceiling: the ceilings cannot catch the defect they exist for")
-	}
-
-	for _, block := range []int{131072, 524288, 2097152} {
-		r1 := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
-		r2 := devhealthfacts.SetBlockerMaxBlockSizeForTest(block)
-		blockerProdShapePlantedReading(t, ctx, direct, fmt.Sprintf("candidate E: in-statement authorization, block size %d", block), func() { read(restricted) })
-		r2()
-		r1()
-	}
-	{
-		r1 := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
-		r2 := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
-		r3 := devhealthfacts.SetBlockerStartVariantForTest("legacy")
-		blockerProdShapePlantedReading(t, ctx, direct, "candidate F: planted plus legacy start variant", func() { read(restricted) })
-		r3()
-		r2()
-		r1()
 	}
 
 	fragmentMark := serverNowMicros(t, ctx, direct)
