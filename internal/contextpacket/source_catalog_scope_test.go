@@ -19,6 +19,10 @@ func (e *catalogScopeExecutor) QueryEvidence(_ context.Context, query SourceQuer
 	return e.evidenceBySource[query.ID], nil
 }
 
+func (e *catalogScopeExecutor) QueryLatestIngested(context.Context, SourceQuery, []ClickHouseBinding) (time.Time, bool, error) {
+	return time.Now().UTC(), true, nil
+}
+
 func TestExecuteCatalog_labels_repository_wide_evidence_when_branch_is_requested(t *testing.T) {
 	// Given
 	executor := &catalogScopeExecutor{evidenceBySource: map[string][]contractsv1.EvidenceRef{

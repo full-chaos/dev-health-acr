@@ -143,7 +143,7 @@ func coverage(b storage.EvidenceBundle) contractsv1.Coverage {
 	for _, w := range b.Watermarks {
 		considered = append(considered, w.Source)
 		switch w.Status {
-		case contractsv1.SourceWatermarkStatusFresh, contractsv1.SourceWatermarkStatusStale:
+		case contractsv1.SourceWatermarkStatusFresh, contractsv1.SourceWatermarkStatusStale, contractsv1.SourceWatermarkStatusUnknown:
 			available = append(available, w.Source)
 		case contractsv1.SourceWatermarkStatusMissing, contractsv1.SourceWatermarkStatusUnavailable:
 			unavailable = appendUnavailable(unavailable, w.Source, w.Status)

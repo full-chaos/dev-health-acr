@@ -395,8 +395,8 @@ func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles role
 		}
 	}
 	scores := make(map[string]int, len(refs))
-	// A goal that names a failure is about the rows whose stored role is a
-	// failure (pressure) or what caused one (cause); a goal that names code
+	// A goal that names a failure is about the rows that persist a failure
+	// (failurePressure; blocked work is not one) or what caused one (cause); a goal that names code
 	// health is about the hotspot and complexity rows. That fit outranks any
 	// word score, which is at most 2*words+1.
 	fit, failureGoal, codeHealthGoal := 2*len(goalWords(goal))+2, goalNamesFailure(goal), goalNamesCodeHealth(goal)
@@ -412,7 +412,7 @@ func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles role
 			scores[ref.EvidenceRefID]++
 		}
 		category := roles.rule(ref).category
-		if (failureGoal && (category == contractsv1.CategoryPressure || category == contractsv1.CategoryCause)) ||
+		if (failureGoal && (category == contractsv1.CategoryCause || failurePressure(ref))) ||
 			(codeHealthGoal && codeHealthEntityTypes[ref.Source.EntityType]) {
 			scores[ref.EvidenceRefID] += fit
 		}
