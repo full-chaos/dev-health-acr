@@ -222,8 +222,8 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 				highestRows = r.readRows
 			}
 		}
-		fmt.Fprintf(&report, "  %-30s peak lowest %7.2f MiB, highest %7.2f MiB, bound %6.1f MiB; rows read highest %d, bound %d\n",
-			c.Name, lowest, highest, bound.memoryMiB, highestRows, bound.readRows)
+		fmt.Fprintf(&report, "  %-30s cold %7.2f MiB, peak lowest %7.2f MiB, highest %7.2f MiB, bound %6.1f MiB; rows read highest %d, bound %d\n",
+			c.Name, cold.mib, lowest, highest, bound.memoryMiB, highestRows, bound.readRows)
 		if highest > bound.memoryMiB {
 			t.Errorf("%s: highest warm peak %.2f MiB is over the frozen bound %.1f MiB", c.Name, highest, bound.memoryMiB)
 		}
@@ -232,4 +232,5 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 		}
 	}
 	t.Log(report.String())
+	t.Fail() // throwaway: print the passing report in CI
 }
