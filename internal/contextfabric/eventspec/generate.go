@@ -218,6 +218,10 @@ func goVarName(e Event) string {
 		return "FactScopeExpansionGap"
 	case FactScopeExpansionDecision.ID:
 		return "FactScopeExpansionDecision"
+	case CohortRanked.ID:
+		return "CohortRanked"
+	case CohortDriverNarration.ID:
+		return "CohortDriverNarration"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:

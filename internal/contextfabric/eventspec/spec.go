@@ -1598,6 +1598,61 @@ var FactScopeExpansionDecision = Event{
 	},
 }
 
+// CohortRanked is the Info line SlogEngineTelemetry.RecordCohortRanked writes
+// once per ranking of a served cohort (CHAOS-4398): counts and closed
+// vocabularies only, never a team name or a score. Its three count maps are
+// closed: the key sets are the producer's own constants.
+var CohortRanked = Event{
+	ID:                 "contextfabric.cohort_ranked",
+	Msg:                "context fabric cohort ranked",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call that ranks a cohort.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cohort_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "formula_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "score_meaning", Type: FieldString, Presence: PresenceRequired},
+		{Key: "judgment_mismatch", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "requested_judgment_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "degraded_member_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "signals_available", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("signals_available")},
+		{Key: "outcome_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("outcome_counts")},
+		{Key: "investment_mix_source_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("investment_mix_source_counts")},
+		{Key: "read_attribution_carried", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "deficiency_zero_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// CohortDriverNarration is the Info line
+// SlogEngineTelemetry.RecordCohortDriverNarration writes once per narration
+// pass, whatever its outcome (CHAOS-4398 PR3b). drivers_skipped is closed and
+// nullable: the early outcomes (no drivers, budget exhausted) leave the map nil.
+var CohortDriverNarration = Event{
+	ID:                 "contextfabric.cohort_driver_narration",
+	Msg:                "context fabric cohort driver narration",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call that narrates cohort drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("outcome")},
+		{Key: "judgments_emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_minted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_narrated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_skipped_no_evidence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "drivers_skipped", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("drivers_skipped")},
+		{Key: "answer_narrative_recomposed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "narration_allocator", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("narration_allocator")},
+		{Key: "narration_allocated_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -3550,6 +3605,8 @@ var All = []Event{
 	ModelPhraseDecision,
 	FactScopeExpansionGap,
 	FactScopeExpansionDecision,
+	CohortRanked,
+	CohortDriverNarration,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"math"
 	"sort"
 )
@@ -175,6 +176,26 @@ func investmentMixSource(facts []CanonicalFact) string {
 		return InvestmentMixSourceUnlabeled
 	}
 	return ""
+}
+
+// CohortRankedLineVocabulary is the closed key set of each count map on the
+// cohort ranked line, read from the producer's own constants: the signal
+// families RankCohort scores (signals_available), the cohort member outcomes
+// (outcome_counts) and the investment mix source labels
+// (investment_mix_source_counts; unlabeled counts a mix fact with no label).
+func CohortRankedLineVocabulary(key string) []string {
+	switch key {
+	case "signals_available":
+		return []string{RankingSignalInvestmentMix, RankingSignalHealthRisk, RankingSignalDeficiencySeverity, RankingSignalReadinessGap, RankingSignalWorkloadPressure}
+	case "outcome_counts":
+		return []string{
+			string(contractsv1.ContextFabricCohortOutcomeQualified), string(contractsv1.ContextFabricCohortOutcomeProvisional),
+			string(contractsv1.ContextFabricCohortOutcomeInsufficientEvidence), string(contractsv1.ContextFabricCohortOutcomeNotApplicable),
+		}
+	case "investment_mix_source_counts":
+		return []string{InvestmentMixSourceProjectNative, InvestmentMixSourceOwningTeamRollup, InvestmentMixSourceUnlabeled}
+	}
+	panic("contextfabric: CohortRankedLineVocabulary has no key " + key)
 }
 
 // RankCohort computes a deterministic attention score for every member of
