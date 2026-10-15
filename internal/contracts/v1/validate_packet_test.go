@@ -42,7 +42,7 @@ func TestContextPacketValidate_matches_v1_boundaries(t *testing.T) {
 		{name: "freshness_as_of_zero", mutate: func(v *ContextPacket) { v.Freshness.AsOf = time.Time{} }},
 		{name: "freshness_stale_after_seconds_negative", mutate: func(v *ContextPacket) { v.Freshness.StaleAfterSeconds = -1 }},
 		{name: "freshness_watermarks_nil", mutate: func(v *ContextPacket) { v.Freshness.Watermarks = nil }},
-		{name: "freshness_watermarks_status_invalid", mutate: func(v *ContextPacket) { v.Freshness.Watermarks[0].Status = "unknown" }},
+		{name: "freshness_watermarks_status_invalid", mutate: func(v *ContextPacket) { v.Freshness.Watermarks[0].Status = "not-a-status" }},
 		{name: "coverage_sources_considered_nil", mutate: func(v *ContextPacket) { v.Coverage.SourcesConsidered = nil }},
 		{name: "coverage_sources_available_nil", mutate: func(v *ContextPacket) { v.Coverage.SourcesAvailable = nil }},
 		{name: "coverage_sources_unavailable_nil", mutate: func(v *ContextPacket) { v.Coverage.SourcesUnavailable = nil }},

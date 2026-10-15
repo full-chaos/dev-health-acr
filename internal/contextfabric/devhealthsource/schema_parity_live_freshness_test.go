@@ -3,7 +3,6 @@ package devhealthsource_test
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -113,11 +112,9 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 			// part of the production contract (the version a FINAL read
 			// picks), so it is compared. Type, order, engine and Enum
 			// values stay hard failures.
-			if kind == "MATERIALIZED" {
-				got := liveDefaults[table][column.Name]
-				if got[0] != kind || strings.ReplaceAll(got[1], " ", "") != strings.ReplaceAll(expression, " ", "") {
-					t.Errorf("live %s.%s is %s %q but devhealthschema declares %s %q -- regenerate the snapshot", table, column.Name, got[0], got[1], kind, expression)
-				}
+			got := liveDefaults[table][column.Name]
+			if drift := defaultClauseDrift(kind, expression, got[0], got[1]); drift != "" {
+				t.Errorf("live %s.%s %s -- regenerate the snapshot", table, column.Name, drift)
 			}
 		}
 		// CHAOS-3781 round-3 F3: POSITION as well as type. The
@@ -130,17 +127,6 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 
 	assertEngineAndSortingKeyAreFresh(t, ctx, query)
 	assertDeclaredProjectionsAreFresh(t, ctx, query)
-}
-
-// splitDeclaredType separates a declared type from its trailing DEFAULT or
-// MATERIALIZED clause.
-func splitDeclaredType(declared string) (base, kind, expression string) {
-	for _, marker := range []string{" MATERIALIZED ", " DEFAULT "} {
-		if i := strings.Index(declared, marker); i >= 0 {
-			return declared[:i], strings.TrimSpace(marker), declared[i+len(marker):]
-		}
-	}
-	return declared, "", ""
 }
 
 // assertDeclaredProjectionsAreFresh compares each projection devhealthschema

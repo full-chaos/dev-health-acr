@@ -450,3 +450,34 @@ func LegacyProjectTeamsGroupSQLForTest(ingest bool) string { return legacyProjec
 func ProjectTeamsPagedBindingsForTest(orgID string, limit int) []contextpacket.ClickHouseBinding {
 	return rowLimitBindings(orgID, cursorState{}, limit)
 }
+
+// IncidentPagesForTest reads queryIncidents from the start, limit rows a page,
+// and returns the incident ids each page projects, in read order.
+func IncidentPagesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, limit int) ([][]string, error) {
+	var pages [][]string
+	cursor := cursorState{}
+	for range 100 {
+		page, truncated, err := queryIncidents(ctx, client, orgID, cursor, limit)
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]bool{}
+		var ids []string
+		for _, c := range page {
+			if c.entity != nil && !seen[c.sortKey] {
+				seen[c.sortKey] = true
+				ids = append(ids, c.sortKey)
+			}
+		}
+		pages = append(pages, ids)
+		if !truncated {
+			return pages, nil
+		}
+		if len(page) == 0 {
+			return nil, fmt.Errorf("a truncated incident page kept no row")
+		}
+		last := page[len(page)-1]
+		cursor = cursorState{Since: last.position(), After: last.sortKey}
+	}
+	return nil, fmt.Errorf("incident pages did not end")
+}

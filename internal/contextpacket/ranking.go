@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v7"
+	RankingVersionV1          = "ranker.v8"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -138,8 +138,13 @@ func goalWords(goal string) []string {
 	return kept
 }
 
+// citationKeyPattern matches the field name of a "name=value" pair a producer
+// writes into a citation (release_ref=, status=). Only the value and the label
+// say what a row is about; a field name never fits a goal word.
+var citationKeyPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*=`)
+
 func goalScore(ref contractsv1.EvidenceRef, goal string) int {
-	haystack := strings.FieldsFunc(strings.ToLower(ref.Citation+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	haystack := strings.FieldsFunc(strings.ToLower(citationKeyPattern.ReplaceAllString(ref.Citation, " ")+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	score := 0
 	for _, word := range goalWords(goal) {
 		for _, token := range haystack {
@@ -346,6 +351,11 @@ func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles role
 		}
 	}
 	scores := make(map[string]int, len(refs))
+	// A goal that names a failure is about the rows whose stored role is a
+	// failure (pressure) or what caused one (cause); a goal that names code
+	// health is about the hotspot and complexity rows. That fit outranks any
+	// word score, which is at most 2*words+1.
+	fit, failureGoal, codeHealthGoal := 2*len(goalWords(goal))+2, goalNamesFailure(goal), goalNamesCodeHealth(goal)
 	for _, ref := range refs {
 		effective, mine := own[ref.EvidenceRefID], own[ref.EvidenceRefID]
 		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
@@ -356,6 +366,11 @@ func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles role
 		scores[ref.EvidenceRefID] = effective * 2
 		if effective > 0 && effective == mine {
 			scores[ref.EvidenceRefID]++
+		}
+		category := roles.rule(ref).category
+		if (failureGoal && (category == contractsv1.CategoryPressure || category == contractsv1.CategoryCause)) ||
+			(codeHealthGoal && codeHealthEntityTypes[ref.Source.EntityType]) {
+			scores[ref.EvidenceRefID] += fit
 		}
 	}
 	return scores
