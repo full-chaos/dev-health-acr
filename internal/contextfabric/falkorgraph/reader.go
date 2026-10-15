@@ -844,10 +844,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if !seenEdge[e.UUID] {
 				seenEdge[e.UUID] = true
 				resolvedEdges = append(resolvedEdges, e)
-				resolvedEdgeOrigin[e.UUID] = subject.CanonicalID
+				resolvedEdgeOrigin[e.UUID] = graphrank.SubjectKey(subject)
 			}
 		}
-		edgeOrigins = append(edgeOrigins, subject.CanonicalID)
+		edgeOrigins = append(edgeOrigins, graphrank.SubjectKey(subject))
 	}
 
 	if teamWalkTally.ran && a.config.Telemetry != nil {
@@ -1003,6 +1003,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// across all three emit sites, which is what makes the site value the only
 	// thing a reader has to compare.
 	textCandidateOrigin := make(map[string]string, len(textNodes))
+	// The same edge-to-subject record, keyed by kind and id, for the budget
+	// split; textCandidateOrigin keeps the canonical id the failure log reports.
+	textCandidateOriginKey := make(map[string]string, len(textNodes))
 	// The matched subjects in match order (the full-text query's own
 	// deterministic order): the order their edges take turns in the budget.
 	var textOrigins []string
@@ -1050,12 +1053,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 			seenEdge[ce.UUID] = true
 			textCandidateOrigin[ce.UUID] = subject.CanonicalID
+			textCandidateOriginKey[ce.UUID] = graphrank.SubjectKey(subject)
 			textCandidates = append(textCandidates, ce)
 		}
-		textOrigins = append(textOrigins, subject.CanonicalID)
+		textOrigins = append(textOrigins, graphrank.SubjectKey(subject))
 	}
 	textAdmitted := 0
-	for _, ce := range graphrank.RankEdgesByOrigin(textCandidates, textCandidateOrigin, textOrigins) {
+	for _, ce := range graphrank.RankEdgesByOrigin(textCandidates, textCandidateOriginKey, textOrigins) {
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
@@ -1081,7 +1085,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			continue
 		}
 		resolvedEdges = append(resolvedEdges, resolved)
-		resolvedEdgeOrigin[resolved.UUID] = textCandidateOrigin[ce.UUID]
+		resolvedEdgeOrigin[resolved.UUID] = textCandidateOriginKey[ce.UUID]
 		textAdmitted++
 	}
 	edgeOrigins = append(edgeOrigins, textOrigins...)
@@ -2106,14 +2110,14 @@ func exactHintCandidate(ctx context.Context, rows []row) (graphrank.CandidateNod
 }
 
 // attributeEdgesByFewestHops gives each resolved edge to the origin that
-// reaches it in the fewest hops. An edge with an origin's subject at one end is
+// reaches it in the fewest hops; origins are keyed by subject kind and id. An edge with an origin's subject at one end is
 // that subject's own (one hop), whichever walk read it first; an edge touching
 // two origins goes to the earlier one in origins' order. Any other edge keeps
 // the origin that first reached it at its second hop.
 func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[string]string, origins []string) {
 	for _, e := range edges {
 		for _, candidate := range origins {
-			if e.From.CanonicalID == candidate || e.To.CanonicalID == candidate {
+			if graphrank.SubjectKey(e.From) == candidate || graphrank.SubjectKey(e.To) == candidate {
 				origin[e.UUID] = candidate
 				break
 			}
@@ -2125,9 +2129,13 @@ func attributeEdgesByFewestHops(edges []graphrank.ResolvedEdge, origin map[strin
 // subjects the edges were read for (GraphWalkVersion), counts only: the
 // subjects, how many of them got at least one admitted path, and the
 // full-text arm's candidates against what it kept. One origin needs no
-// split, so it logs nothing.
+// split, so it logs nothing; a subject in both arms is one origin.
 func logSharedEdgeBudget(ctx context.Context, orgID string, ordered []graphrank.ResolvedEdge, origin map[string]string, origins []string, paths []contextfabric.RelationshipPath, textCandidates, textAdmitted int) {
-	if len(origins) < 2 {
+	distinct := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		distinct[o] = struct{}{}
+	}
+	if len(distinct) < 2 {
 		return
 	}
 	originOfPath := make(map[string]string, len(ordered))
@@ -2143,7 +2151,7 @@ func logSharedEdgeBudget(ctx context.Context, orgID string, ordered []graphrank.
 	slog.Default().InfoContext(ctx, "context_fabric: shared edge budget",
 		"org_id", contextfabric.SanitizeLogAttr(orgID),
 		"graph_walk_version", contextfabric.GraphWalkVersion,
-		"origins", len(origins),
+		"origins", len(distinct),
 		"origins_with_admitted_paths", len(served),
 		"paths_admitted", len(paths),
 		"edges_ranked", len(ordered),

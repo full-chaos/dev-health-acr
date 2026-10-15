@@ -84,12 +84,19 @@ type AdmitEdgesResult struct {
 // AdmitEdges applies the evidence-budget-bounded admission decision to an
 // already-endpoint-resolved candidate edge list, building
 // RelationshipPaths and DriverJudgments. edges must already be in the
-// backend's intended admission order (typically descending relevance,
-// stable-tie-broken by edge UUID -- see ResultConfidence) since admission
-// order determines which edges win a scarce evidence budget (Codex N2);
-// AdmitEdges does not re-sort, so a backend that skips sorting gets
-// backend-order-dependent admission, exactly as it would have before this
-// extraction.
+// backend's intended admission order, since admission order determines which
+// edges win the scarce path and evidence budgets (Codex N2); AdmitEdges does
+// not re-sort.
+//
+// The order (RankEdgesByOrigin, GraphWalkVersion): descending confidence;
+// within one confidence level, the subjects the edges were read for take turns
+// in a fixed order (committed subjects in resolution order, then full-text
+// matches in match order), each subject's edges in ascending edge id, and a
+// subject with no edges left gives its turns to the others. Each edge belongs
+// to the subject that reaches it in the fewest hops: an edge with a subject at
+// one end is that subject's own; an edge touching two subjects, or reached by
+// several only at a second hop, goes to the earliest of them. An edge's id
+// spelling therefore orders it only among one subject's edges.
 //
 // Self-loop and internal-bookkeeping-endpoint exclusion happen here (pure,
 // no I/O) rather than trusting the caller to have filtered them, since both
