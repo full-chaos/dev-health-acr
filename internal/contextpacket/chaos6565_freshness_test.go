@@ -21,6 +21,9 @@ type lowConfidenceNewestClient struct {
 }
 
 func (c lowConfidenceNewestClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.HasPrefix(statement, "SELECT max(") && !strings.HasPrefix(statement, "SELECT max(observed_at)") && strings.Contains(statement, "last_synced") {
+		return &rowScanner{rows: [][]any{{c.newest, uint64(48)}}}, nil
+	}
 	if strings.HasPrefix(statement, "SELECT max(observed_at)") {
 		return &rowScanner{rows: [][]any{{c.newest, uint64(48)}}}, nil
 	}
@@ -43,8 +46,8 @@ func TestWatermarkUsesSourceLatestNotConfidenceFilteredEvidence(t *testing.T) {
 		if w.Source != "deployments.v1" {
 			continue
 		}
-		if w.Status != "fresh" || w.LastIngestedAt == nil || !w.LastIngestedAt.Equal(client.newest) {
-			t.Fatalf("deployments watermark = %+v, want fresh at the source's newest row %v", w, client.newest)
+		if w.Status != "fresh" || w.LastEventAt == nil || !w.LastEventAt.Equal(client.newest) {
+			t.Fatalf("deployments watermark = %+v, want event time at the source's newest row %v", w, client.newest)
 		}
 		return
 	}
@@ -55,6 +58,9 @@ func TestWatermarkUsesSourceLatestNotConfidenceFilteredEvidence(t *testing.T) {
 type failingFreshnessClient struct{ old time.Time }
 
 func (c failingFreshnessClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.HasPrefix(statement, "SELECT max(") && !strings.HasPrefix(statement, "SELECT max(observed_at)") && strings.Contains(statement, "last_synced") {
+		return &rowScanner{rows: [][]any{{c.old, uint64(1)}}}, nil
+	}
 	if strings.HasPrefix(statement, "SELECT max(observed_at)") {
 		return nil, errors.New("freshness boom")
 	}
@@ -89,6 +95,9 @@ func TestFreshnessFallbackIsLoud(t *testing.T) {
 type emptyFreshnessClient struct{ old time.Time }
 
 func (c emptyFreshnessClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.HasPrefix(statement, "SELECT max(") && !strings.HasPrefix(statement, "SELECT max(observed_at)") && strings.Contains(statement, "last_synced") {
+		return &rowScanner{rows: [][]any{{c.old, uint64(1)}}}, nil
+	}
 	if strings.HasPrefix(statement, "SELECT max(observed_at)") {
 		return &rowScanner{rows: [][]any{{time.Time{}, uint64(0)}}}, nil
 	}

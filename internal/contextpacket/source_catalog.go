@@ -88,6 +88,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 	}
 	result := CatalogResult{Evidence: []contractsv1.EvidenceRef{}, Unavailable: []contractsv1.UnavailableSource{}}
 	latestObserved := map[string]time.Time{}
+	ingest := newIngestReads(executor, plan)
 	freshness, _ := executor.(SourceFreshnessExecutor)
 	for _, query := range SourceQueryCatalogV1 {
 		if err := ctx.Err(); err != nil {
@@ -153,6 +154,11 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 				result.Warnings = append(result.Warnings, "freshness_from_evidence:"+query.ID)
 			}
 		}
+		if len(rows) > 0 || latestObserved[query.ID] != (time.Time{}) {
+			if warning := ingest.read(ctx, query); warning != "" {
+				result.Warnings = append(result.Warnings, warning)
+			}
+		}
 		for index := range rows {
 			rows[index].SourceVersion = query.ID
 			readsRepositoryWide := query.Scope == EvidenceScopeRepo ||
@@ -165,7 +171,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		result.Evidence = append(result.Evidence, rows...)
 	}
 	result.Unavailable = appendMissingCatalogSources(result.Unavailable, result.Evidence, plan.TaskRef)
-	result.Watermarks = catalogWatermarks(plan, result.Evidence, result.Unavailable, latestObserved)
+	result.Watermarks = catalogWatermarks(plan, result.Evidence, result.Unavailable, latestObserved, ingest)
 	return result, nil
 }
 
@@ -215,7 +221,7 @@ func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, ev
 	return unavailable
 }
 
-func catalogWatermarks(plan ReadPlan, evidence []contractsv1.EvidenceRef, unavailable []contractsv1.UnavailableSource, sourceLatest map[string]time.Time) []contractsv1.SourceWatermark {
+func catalogWatermarks(plan ReadPlan, evidence []contractsv1.EvidenceRef, unavailable []contractsv1.UnavailableSource, sourceLatest map[string]time.Time, ingest *ingestReads) []contractsv1.SourceWatermark {
 	latest := map[string]time.Time{}
 	for _, ref := range evidence {
 		if observed, found := latest[ref.SourceVersion]; !found || ref.ObservedAt.After(observed) {
@@ -241,20 +247,85 @@ func catalogWatermarks(plan ReadPlan, evidence []contractsv1.EvidenceRef, unavai
 	}
 	watermarks := make([]contractsv1.SourceWatermark, 0, len(SourceQueryCatalogV1))
 	for _, query := range SourceQueryCatalogV1 {
-		observed, found := latest[query.ID]
-		status := contractsv1.SourceWatermarkStatusMissing
-		if failed[query.ID] {
-			status = contractsv1.SourceWatermarkStatusUnavailable
-		} else if found {
-			status = contractsv1.SourceWatermarkStatusFresh
-			if observed.Before(asOf.Add(-24 * time.Hour)) {
-				status = contractsv1.SourceWatermarkStatusStale
+		event, found := latest[query.ID]
+		watermark := contractsv1.SourceWatermark{Source: query.ID, Status: contractsv1.SourceWatermarkStatusMissing}
+		switch {
+		case failed[query.ID]:
+			watermark.Status = contractsv1.SourceWatermarkStatusUnavailable
+		case found:
+			watermark.LastEventAt = watermarkTime(true, event)
+			watermark.Status = contractsv1.SourceWatermarkStatusUnknown
+			if ingested, known := ingest.ingestedAt(query.ID); known {
+				watermark.LastIngestedAt = watermarkTime(true, ingested)
+				watermark.Status = contractsv1.SourceWatermarkStatusFresh
+				if ingested.Before(asOf.Add(-24 * time.Hour)) {
+					// Only a run stamp can say a source went unsynced; an old row
+					// write is also what a quiet repository looks like.
+					watermark.Status = contractsv1.SourceWatermarkStatusUnknown
+					if IngestBasisOf(query.ID) == IngestBasisRunStamp {
+						watermark.Status = contractsv1.SourceWatermarkStatusStale
+					}
+				}
 			}
 		}
-		watermarks = append(watermarks, contractsv1.SourceWatermark{Source: query.ID, LastIngestedAt: watermarkTime(found, observed), Status: status})
+		watermarks = append(watermarks, watermark)
 	}
 	sort.Slice(watermarks, func(i, j int) bool { return watermarks[i].Source < watermarks[j].Source })
 	return watermarks
+}
+
+// ingestReads reads, once per request, the stored sync time of each catalog
+// source.
+type ingestReads struct {
+	executor SourceIngestExecutor
+	plan     ReadPlan
+	own      map[string]time.Time
+}
+
+func newIngestReads(executor SourceQueryExecutor, plan ReadPlan) *ingestReads {
+	reader, _ := executor.(SourceIngestExecutor)
+	return &ingestReads{executor: reader, plan: plan, own: map[string]time.Time{}}
+}
+
+// read stores the sync time of one source and returns a warning code when the
+// source has a sync time that could not be read. A source without a stored
+// sync time is not a failure: its watermark is "unknown" by design.
+func (r *ingestReads) read(ctx context.Context, query SourceQuery) string {
+	if r == nil || r.executor == nil || IngestBasisOf(query.ID) == IngestBasisNone {
+		return ""
+	}
+	value, found, err := r.executor.QueryLatestIngested(ctx, query, r.plan.Bindings())
+	if err != nil {
+		return r.unreadable(ctx, query.ID, err)
+	}
+	if found {
+		r.own[query.ID] = value
+	}
+	return ""
+}
+
+func (r *ingestReads) unreadable(ctx context.Context, source string, err error) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	cause := err
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		cause = unwrapped
+	}
+	attrs := []any{"source", source, "phase", string(sourceQueryFailurePhase(err)), "error", cause.Error()}
+	if r.plan.RequestID != "" {
+		attrs = append(attrs, "request_id", r.plan.RequestID)
+	}
+	slog.WarnContext(ctx, "context packet source sync time unreadable; last_ingested_at omitted and status unknown", attrs...)
+	return "ingest_time_unreadable:" + source
+}
+
+func (r *ingestReads) ingestedAt(source string) (time.Time, bool) {
+	if r == nil {
+		return time.Time{}, false
+	}
+	value, found := r.own[source]
+	return value, found
 }
 
 func isCatalogUnavailableReason(reason string) bool {
