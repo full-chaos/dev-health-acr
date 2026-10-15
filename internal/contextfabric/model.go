@@ -1081,4 +1081,7 @@ type SynthesisInput struct {
 	// confirmed receipt, a remembered or carried window, a period) and a
 	// stated one are false, so their bounds stay facts.
 	EvidenceWindowFromClock bool `json:"-"`
+	// withheldScores are the declared scores taken out of Facts before the model or a client saw them (decision K7).
+	// Bookkeeping for the disclosure; it never reaches the model.
+	withheldScores []withheldScore
 }

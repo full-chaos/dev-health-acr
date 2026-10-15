@@ -31,6 +31,7 @@ var synthesisInputRefRoots = map[string]string{
 	"EvidenceWindow":          "the effective window's bounds, no refs",
 	"ReadTimeClamp":           "the read-time clamp, no refs",
 	"EvidenceWindowFromClock": "a flag",
+	"withheldScores":          "withheld score field names, no refs",
 }
 
 // narrowedInputRefExclusions are the SynthesisInput fields that can carry a

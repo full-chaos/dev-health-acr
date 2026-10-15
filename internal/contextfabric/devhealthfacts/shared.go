@@ -1204,7 +1204,11 @@ import (
 // version is part of the answer reuse key, so an answer saved under v234 is not
 // reused as one produced with the old digest rule; the digest itself is on the
 // reply and the read log, not in a saved answer.
-const QueryVersion = "devhealthfacts.clickhouse.v235"
+//
+// v235 -> v236: the team metrics fact and the project rollup fact carry
+// commit_counts_basis beside the commit counts (owner_share_weighted_latest_day);
+// an answer saved under v235 lacks it.
+const QueryVersion = "devhealthfacts.clickhouse.v236"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
