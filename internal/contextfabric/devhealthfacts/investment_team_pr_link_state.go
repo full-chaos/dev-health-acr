@@ -25,7 +25,7 @@ const investmentTeamPRsWithoutLinkedWork = "investment_team_prs_without_linked_w
 // type of the linked work item is not read: a work item id is not unique across
 // repositories, and a link to an item typed pr or merge_request still counts as
 // a link here, so the token is given less often, never wrongly.
-const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier for the pull request)"
+const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier for the pull request, where a text or heuristic row counts only if no native link covers its pull request or its issue)"
 
 // teamNoLinkedWork is a team with pull requests in the window and none linked.
 type teamNoLinkedWork struct {
@@ -55,7 +55,7 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 		SELECT l.repo_id, l.pr_number
 		FROM work_graph_issue_pr AS l FINAL
 		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
-			AND `+linkTierRankSQL+` > 0
+			AND `+linkTierRankSQL+` > 0 AND `+nativeFirstLinkSQL(`repo_id IN `+teamPRLinkRepositorySet)+`
 	)) AS linked
 FROM git_pull_requests AS pr FINAL
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+

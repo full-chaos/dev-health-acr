@@ -136,7 +136,7 @@
   "request_notes": [
     {
       "kind": "operational_deficiencies",
-      "note": "1 of 2 requested teams own no repository in synced ownership, so no rollup applies to them; this is not a measured zero"
+      "note": "1 of 2 requested teams own no repository in synced ownership (a repository reached only through an owned project's native issue links is not owned), so no rollup applies to them; this is not a measured zero"
     }
   ],
   "versions": {
