@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
@@ -1122,11 +1123,10 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 // work_items.parent_id -- a distinct column from work_item_dependencies,
 // carrying real hierarchy data (verified live: 2082 of 3282 work_items
 // rows have a non-empty parent_id, and every one of those resolves to a
-// real work_items row in the same organization). The INNER JOIN to a
-// second work_items instance for the parent enforces that resolvability at
-// query time: a child row whose parent_id names a work item that does not
-// exist (a different organization, or a row deleted out from under it) is
-// never projected as a dangling PART_OF edge.
+// real work_items row in the same organization). A child row whose
+// parent_id names a work item that does not exist (a different organization,
+// or a row deleted out from under it) is never projected as a dangling
+// PART_OF edge: it retracts the edges it holds instead.
 //
 // c.parent_id != c.work_item_id (CHAOS-3779 codex round-1 finding M3) is a
 // SELF-reference filter, not cycle detection. A multi-node cycle (A part_of
@@ -1144,26 +1144,42 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 // one bad row. Filtering it at the SQL boundary, before it ever becomes a
 // candidate, is cheap and permanent; live ClickHouse holds zero such rows
 // today (verified), but the filter guards against a future one.
-// The INNER JOIN to the parent work_items row stays INNER (CHAOS-3785 does
-// not touch it): it is the resolvability guarantee the doc comment above
-// describes, unrelated to which table owns the repo attribute. Only the
-// repos join relaxes to LEFT, for the same zero-UUID reason queryWorkItems
-// does -- a Linear-sourced child work item's repo_id is the zero UUID.
+// The parent join is LEFT: a child whose parent_id is empty, names no work
+// item, or names several without one in the child's own repository is read
+// too, and emits a part_of_edges tombstone instead of an edge, so a changed
+// parent never leaves the old edge open. The repos join is LEFT for the
+// zero-UUID reason queryWorkItems has -- a Linear-sourced child work item's
+// repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(c.repo_id), ':', c.work_item_id)"
+	// parent_id names its parent by work item id alone. pa counts the work item
+	// rows that id names (one per repository that holds it); p2 is the one in
+	// the child's own repository, if any. A child gets one row: its parent
+	// (the only candidate, or the one in its own repository), a row that
+	// retracts its PART_OF edges (no parent, none found, or several candidates
+	// none in its own repository), never several parents.
 	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
-       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id), c.last_synced
+       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id),
+       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p2.work_item_id, '') != ''), c.last_synced
 FROM work_items AS c FINAL
-INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
+LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
+LEFT JOIN work_items AS p2 FINAL ON p2.org_id = c.org_id AND p2.work_item_id = c.parent_id AND p2.repo_id = c.repo_id
+LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, min(toString(repo_id)) AS first_repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
-WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
-	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + `
+  AND (c.parent_id = ''
+    OR (c.parent_id = c.work_item_id AND p.repo_id = c.repo_id)
+    OR (c.parent_id != c.work_item_id AND (ifNull(pa.candidates, 0) <= 1
+      OR if(p2.work_item_id != '', p.repo_id = c.repo_id, toString(p.repo_id) = pa.first_repo))))` + orderBy("c.last_synced", rowKey)
+	ambiguous := 0
+	items, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var childID, parentID, repoID, repoSlug, parentRepoID string
 		var observedAt, childCreatedAt, childEndedAt, parentCreatedAt, parentEndedAt time.Time
-		var childHasEnded, parentHasEnded uint8
+		var childHasEnded, parentHasEnded, ownRepoCandidate uint8
+		var candidates uint32
 		if err := r.Scan(&childID, &parentID, &repoID, &repoSlug, &observedAt,
-			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt, &parentRepoID); err != nil {
+			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt, &parentRepoID, &candidates, &ownRepoCandidate); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -1172,11 +1188,34 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		if err != nil {
 			return nil, err
 		}
+		if childOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		// No parent now (cleared, a self-reference, none found) or one the id
+		// cannot name (several candidates, none in the child's repository):
+		// the edges the child still holds are retracted, and none is asserted.
+		retract := ""
+		switch {
+		case parentID == "" || parentID == childID:
+			retract = "part_of_parent_cleared"
+		case candidates == 0:
+			retract = "part_of_parent_unresolved"
+		case candidates > 1 && ownRepoCandidate == 0:
+			retract = "part_of_parent_ambiguous"
+			ambiguous++
+		}
+		if retract != "" {
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind: contextfabric.TombstoneKindPartOfEdges, CanonicalID: childCanonicalID,
+				Reason: retract, EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			}
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
+		}
 		parentCanonicalID, parentOmitted, err := identity.Derive(identity.KindWorkItem, []string{parentRepoID, parentID}, nil)
 		if err != nil {
 			return nil, err
 		}
-		if childOmitted || parentOmitted {
+		if parentOmitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// Both endpoints are joined here, so the PART_OF edge gets the
@@ -1185,15 +1224,11 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		validFrom, validTo := edgeValidity(
 			requiredTime(childCreatedAt), optionalTime(childHasEnded, childEndedAt),
 			requiredTime(parentCreatedAt), optionalTime(parentHasEnded, parentEndedAt))
-		// CHAOS-3898 §1.5 P1-2 fix-forward (codex retroactive review of
-		// #151/#152, chris-verified): this producer was left on the OLD
-		// endpoint-independent id scheme when S2b converted
-		// queryWorkItemDependencies -- RelationshipFamilyWorkItemHierarchy
-		// was defined (identity/relationship.go) but never actually
-		// consumed anywhere. Unlike the dependency edge, hierarchy's INNER
-		// JOIN to the parent guarantees BOTH endpoints are always resolved
-		// real work_item.v2 nodes here (no unresolved-ref stub case), so
-		// this needs only the id-scheme conversion, no tombstone healing.
+		// CHAOS-3898 §1.5 P1-2 fix-forward: the endpoint-derived id scheme
+		// (RelationshipFamilyWorkItemHierarchy). The parent is a resolved
+		// real work_item.v2 node, so there is no unresolved-ref stub case.
+		// The id names the parent, so a re-parent mints a new id; the sink
+		// keeps one PART_OF edge per child (falkorgraph retractOpenEdges).
 		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, childCanonicalID, parentCanonicalID, string(contractsv1.ContextFabricRelationshipPartOf))
 		// CHAOS-7252: the child row's key (repo, work item) and the parent
 		// it names, each escaped.
@@ -1208,6 +1243,12 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
+	if ambiguous > 0 {
+		startLogger(ctx).WarnContext(ctx, "devhealthsource part_of parent ambiguous",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "children", ambiguous,
+			"reason", "the parent id is held under several repositories and none is the child's own; no PART_OF edge is asserted")
+	}
+	return items, truncated, err
 }
 
 // queryDeploymentIncidentEdges derives its validity window from its two

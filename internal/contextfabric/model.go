@@ -347,6 +347,11 @@ type ProjectionTombstone = contractsv1.ContextFabricProjectionTombstone
 // canonical id), whatever project each names.
 const TombstoneKindColumnProjectEdges = "column_project_edges"
 
+// TombstoneKindPartOfEdges retracts every PART_OF edge of one work item
+// (CanonicalID = the work item's canonical id), whatever parent each names: the
+// work item has no parent now, or its parent id names none or several.
+const TombstoneKindPartOfEdges = "part_of_edges"
+
 type ProjectionReceipt = contractsv1.ContextFabricProjectionReceipt
 type ProjectionWatermark = contractsv1.ContextFabricProjectionWatermark
 type ProjectionCheckpoint = contractsv1.ContextFabricProjectionCheckpoint

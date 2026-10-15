@@ -157,23 +157,41 @@ func TestPartOfReparentLeavesOneOpenEdge(t *testing.T) {
 	})
 }
 
-// The parent join names the parent by work item id alone. An id held under two
-// repositories is two parent nodes, so one child gets two parents; a child of
-// repository A prefers its own repository's parent only if the producer says so.
-func TestPartOfChildHasOneParentWhenTheParentIdIsHeldUnderTwoRepositories(t *testing.T) {
+// parent_id names a parent by work item id alone, and an id can be held under
+// several repositories. One candidate (qualified by being the only holder of
+// the id) is the parent; one candidate in the child's own repository is the
+// parent; several candidates none in the child's repository name no parent, so
+// no PART_OF edge stands.
+func TestPartOfParentResolutionWhenTheIdIsHeldUnderSeveralRepositories(t *testing.T) {
 	const org = "97950000-0000-4000-8000-000000000002"
 	w := newEdgeWorld(t, org)
-	const repoA, repoB = "97950000-0000-4000-8000-0000000000b1", "97950000-0000-4000-8000-0000000000b2"
+	const repoA, repoB, repoC = "97950000-0000-4000-8000-0000000000b1", "97950000-0000-4000-8000-0000000000b2", "97950000-0000-4000-8000-0000000000b3"
 	w.repo(repoA, "acme/a")
 	w.repo(repoB, "acme/b")
+	w.repo(repoC, "acme/c")
 	synced := w.now.Add(-time.Hour)
-	w.item(repoA, "jira:PAR-1", "", synced)
-	w.item(repoB, "jira:PAR-1", "", synced)
-	w.item(repoA, "jira:CHD-1", "jira:PAR-1", synced)
+	// SOLO-1 is held once (repository B); SHARED-1 under A and B.
+	w.item(repoB, "jira:SOLO-1", "", synced)
+	w.item(repoA, "jira:SHARED-1", "", synced)
+	w.item(repoB, "jira:SHARED-1", "", synced)
+	w.item(repoC, "jira:ONLY", "jira:SOLO-1", synced)
+	w.item(repoA, "jira:OWN", "jira:SHARED-1", synced)
+	w.item(repoC, "jira:LOST", "jira:SHARED-1", synced)
 	w.drain()
-	child := w.workItemID(repoA, "jira:CHD-1")
-	if got := w.edgesOut(child, contractsv1.ContextFabricRelationshipPartOf); len(got) != 1 {
-		t.Fatalf("the child holds %d PART_OF edges, want 1 (one parent): %v", len(got), got)
+
+	edges := func(repo, id string) []string {
+		return w.edgesOut(w.workItemID(repo, id), contractsv1.ContextFabricRelationshipPartOf)
+	}
+	only := w.workItemID(repoC, "jira:ONLY")
+	if got, want := edges(repoC, "jira:ONLY"), []string{only + " -> " + w.workItemID(repoB, "jira:SOLO-1")}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("a parent id held once: PART_OF edges %v, want %v", got, want)
+	}
+	own := w.workItemID(repoA, "jira:OWN")
+	if got, want := edges(repoA, "jira:OWN"), []string{own + " -> " + w.workItemID(repoA, "jira:SHARED-1")}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("a parent id held under two repositories, one the child's own: PART_OF edges %v, want %v", got, want)
+	}
+	if got := edges(repoC, "jira:LOST"); len(got) != 0 {
+		t.Fatalf("a parent id held under two repositories, neither the child's own: %d PART_OF edges, want none: %v", len(got), got)
 	}
 }
 
