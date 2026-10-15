@@ -43,6 +43,7 @@ type Level string
 
 const (
 	LevelInfo  Level = "info"
+	LevelWarn  Level = "warn"
 	LevelError Level = "error"
 	LevelDebug Level = "debug"
 )
@@ -184,6 +185,17 @@ const (
 	// presence and closed vocabulary, and an undeclared member key inside the
 	// group fails certification like an undeclared top-level key.
 	FieldObject FieldType = "object"
+	// FieldCountMap (CHAOS-5520): a JSON object whose every value is a whole
+	// number count and whose KEYS are data (a signal family, an outcome, an
+	// attribution source), rendered from a Go map[string]int. FieldObject
+	// cannot describe it: an object field declares each member, and a
+	// count-by-key map has no fixed member list. ClosedVocabulary, when set,
+	// lists the only keys the map may carry (an empty map carries none);
+	// when nil the key set is open and is owned by the producer's own tests.
+	// Nullable says the producer leaves the Go map nil when nothing was
+	// counted, which slog renders as JSON null; a Nullable field accepts null
+	// and a field that is not Nullable refuses it.
+	FieldCountMap FieldType = "count_map"
 )
 
 // Field is one key on one event variant's emitted line.
@@ -206,6 +218,9 @@ type Field struct {
 	// object field's own MEMBER shape (one level, never recursive). Empty for
 	// every other Type.
 	Fields []Field
+	// Nullable (FieldCountMap only) says the field may carry JSON null: the
+	// producer leaves the map nil when nothing was counted.
+	Nullable bool
 }
 
 // semanticStateGroupFields is the MEMBER shape of a persisted-reading group.
@@ -277,6 +292,11 @@ type Event struct {
 	// per pass", etc.) -- the aggregation clause 1 requires this
 	// specification to own.
 	BoundedAggregation string
+	// RequiredOnlyConstruction makes the generated New<Name>Fields and SlogArgs
+	// cover this event's required fields only; the producer appends each
+	// conditional field itself, when its Applicability holds. Left false, the
+	// constructor takes every declared field.
+	RequiredOnlyConstruction bool
 }
 
 // DeclaredKindRescue* are the FIVE values chaos5388_declared_kind_rescue.go's
@@ -1209,6 +1229,427 @@ var RememberedWindowAxis = Event{
 		{Key: "decided_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("decided_axis")},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("outcome")},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+func planCarryFamilyTokens() []string {
+	vocab := contextfabric.QuestionFamilyVocabulary()
+	tokens := make([]string, 0, len(vocab))
+	for _, family := range vocab {
+		tokens = append(tokens, string(family))
+	}
+	return tokens
+}
+
+// PlanCarry is the Info line (telemetry.go,
+// SlogEngineTelemetry.RecordPlanCarry, CHAOS-4736 seam 7) reporting one
+// APPLIED plan carry. It fires only on a hit; PlanCarryOutcome below is the
+// separate ATTEMPT line, and the two are never folded (folding would make the
+// applied counter and the attempt counter the same number).
+var PlanCarry = Event{
+	ID:                 "contextfabric.plan_carry",
+	Msg:                "context fabric plan carry",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call, emitted only when resolveCarriedPlan applied a prior turn's question family; every attempt, hit or miss, is counted on plan_carry_outcome.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_replaced", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, planCarryFamilyTokens()...)},
+		{Key: "source_replaced", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_carried", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: planCarryFamilyTokens()},
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_source", Type: FieldString, Presence: PresenceRequired},
+		{Key: "route_class", Type: FieldString, Presence: PresenceRequired},
+		{Key: "route_disposition", Type: FieldString, Presence: PresenceRequired},
+		{Key: "route_switched", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// PlanCarryOutcome is the Info line (telemetry.go,
+// SlogEngineTelemetry.RecordPlanCarryOutcome, CHAOS-5003) reporting the
+// ATTEMPT of a plan carry, hit or miss. source_result_id is empty on every
+// miss and is the origin on a hit.
+var PlanCarryOutcome = Event{
+	ID:                 "contextfabric.plan_carry_outcome",
+	Msg:                "context fabric plan carry outcome",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call, emitted whenever this turn resolved no family of its own and a carry was attempted (the not-attempted zero value emits none).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{
+			string(contextfabric.PlanCarryHit),
+			string(contextfabric.PlanCarryMissNoReference),
+			string(contextfabric.PlanCarryMissUnloadable),
+			string(contextfabric.PlanCarryMissStaleGraphEpoch),
+			string(contextfabric.PlanCarryMissNoPlan),
+			string(contextfabric.PlanCarryMissConflictingPlans),
+			string(contextfabric.PlanCarryMissQuestionDrift),
+			string(contextfabric.PlanCarryMissQuestionIndeterminate),
+			string(contextfabric.PlanCarryMissContinuationWithheld),
+		}},
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{
+			string(contextfabric.CarrySeedNone),
+			string(contextfabric.CarrySeedReceipt),
+			string(contextfabric.CarrySeedParentField),
+			string(contextfabric.CarrySeedBoth),
+		}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// The three model decision variants (genkitruntime Runtime.logInterpretDecision,
+// logSynthesizeDecision, logPhraseDecision) share ONE msg and are told apart by
+// their `operation` field, which is why `operation` is part of Attribution: a
+// certificate scoped to one variant never counts or validates another's line.
+//
+// ANSWER IDENTITY AND ATTEMPT IDENTITY ARE SEPARATE FIELDS: model_id,
+// model_version and the receipt provider are the identity of whichever leg
+// produced the served answer (the fallback's, after a fallback success), and
+// primary_provider, primary_model_id and primary_model_version are the primary
+// leg's own identity, which attempt_outcomes and attempt_elapsed_ms describe.
+
+const modelDecisionMsg = "context fabric model decision"
+
+// modelDecisionIdentityFields: operation is empty on a call that returned
+// before a receipt was built (an unauthenticated principal, an invalid request
+// or an oversized payload). That empty operation, together with an empty
+// attempt list, is the ruled NOT-REACHED sentinel (dictation 378 and the C3
+// ruling, pinned by chaos5380_attempt_sequence_pins_test.go): the line still
+// fires, because an observable that only fires on the paths that got far
+// enough cannot tell "not reached" from "reached and fine". It is declared
+// here because it is a ruled value of the line, not a defect.
+func modelDecisionIdentityFields(operation string) []Field {
+	return []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{operation, ""}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+		{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
+	}
+}
+
+func modelDecisionAttemptFields() []Field {
+	return []Field{
+		{Key: "attempts_total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attempts_retried", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attempt_outcomes", Type: FieldString, Presence: PresenceRequired},
+		{Key: "attempt_elapsed_ms", Type: FieldString, Presence: PresenceRequired},
+	}
+}
+
+func modelDecisionPrimaryFields() []Field {
+	return []Field{
+		{Key: "fallback_attempts_total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "primary_provider", Type: FieldString, Presence: PresenceRequired},
+		{Key: "primary_model_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "primary_model_version", Type: FieldString, Presence: PresenceRequired},
+	}
+}
+
+func concatFields(groups ...[]Field) []Field {
+	var out []Field
+	for _, group := range groups {
+		out = append(out, group...)
+	}
+	return out
+}
+
+// ModelInterpretDecision is the Info line Runtime.logInterpretDecision writes
+// once per InterpretQuestion call, whatever its outcome.
+var ModelInterpretDecision = Event{
+	RequiredOnlyConstruction: true,
+	ID:                       "genkitruntime.model_interpret_decision",
+	Msg:                      modelDecisionMsg,
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityExactlyOnePerRequest,
+	Attribution:              []string{"request_id", "operation"},
+	BoundedAggregation:       "exactly one line per InterpretQuestion call, written from the call's deferred exit so a failure at any step still reports.",
+	Fields: concatFields(
+		modelDecisionIdentityFields("interpret"),
+		[]Field{
+			{Key: "fallback_used", Type: FieldBool, Presence: PresenceRequired},
+			{Key: "primary_failure_classification", Type: FieldString, Presence: PresenceRequired},
+			{Key: "axis_source", Type: FieldString, Presence: PresenceRequired},
+			{Key: "decoding_seed", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "sample", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "initial_sample", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "redraws", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "interpretation_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"server"}},
+		},
+		modelDecisionAttemptFields(),
+		modelDecisionPrimaryFields(),
+		[]Field{
+			{Key: "rejection_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ended in a rejection of the model's interpretation"},
+			{Key: "rejected_fact_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written alongside rejection_reason when the rejecting rule was fact_requirement_kind_invalid; the one model-authored value on the line, sanitised and bounded"},
+		},
+	),
+}
+
+// ModelSynthesizeDecision is the Info line Runtime.logSynthesizeDecision
+// writes once per SynthesizeAnswer call.
+var ModelSynthesizeDecision = Event{
+	RequiredOnlyConstruction: true,
+	ID:                       "genkitruntime.model_synthesize_decision",
+	Msg:                      modelDecisionMsg,
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityExactlyOnePerRequest,
+	Attribution:              []string{"request_id", "operation"},
+	BoundedAggregation:       "exactly one line per SynthesizeAnswer call, written from the call's deferred exit so a failure at any step still reports.",
+	Fields: concatFields(
+		modelDecisionIdentityFields("synthesize"),
+		[]Field{
+			{Key: "fallback_used", Type: FieldBool, Presence: PresenceRequired},
+			{Key: "primary_failure_classification", Type: FieldString, Presence: PresenceRequired},
+			{Key: "drivers", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "findings", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "claims", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		},
+		modelDecisionAttemptFields(),
+		modelDecisionPrimaryFields(),
+		[]Field{
+			{Key: "draws_total", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the draw loop judged at least one draft; a pure transport failure carries no draw fields"},
+			{Key: "draws_retried", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_outcomes", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_output_digests", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_rejected_clauses", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "draw_rejected_reasons", Type: FieldString, Presence: PresenceConditional, Applicability: "written with draws_total"},
+			{Key: "resynthesis_deadline_remaining_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the loop consulted the caller's remaining request deadline"},
+			{Key: "resynthesis_deadline_reserved_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with resynthesis_deadline_remaining_ms"},
+			{Key: "resynthesis_stopped_for_deadline", Type: FieldBool, Presence: PresenceConditional, Applicability: "written with resynthesis_deadline_remaining_ms"},
+			{Key: "rejection_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ended in a rejection of the model's draft"},
+			{Key: "fact_group_size", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the accepted or rejected draft carried a fact group"},
+			{Key: "grounded_beyond_first", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with fact_group_size, including a measured zero"},
+		},
+	),
+}
+
+// ModelPhraseDecision is the Info line Runtime.logPhraseDecision writes once
+// per PhraseOffers call. Its operation is empty when the call returned before a
+// receipt was built, which is why the empty value is declared.
+var ModelPhraseDecision = Event{
+	ID:                 "genkitruntime.model_phrase_decision",
+	Msg:                modelDecisionMsg,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id", "operation"},
+	BoundedAggregation: "exactly one line per PhraseOffers call, including a call that returned before the model was reached.",
+	Fields: concatFields(
+		[]Field{
+			{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+			{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"phrase_offers", ""}},
+			{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+			{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		},
+		modelDecisionAttemptFields(),
+	),
+}
+
+// factScopeExpansionDegradedOutcomes and factScopeExpansionServedOutcomes
+// split the outcome vocabulary exactly as factScopeGapDegrades does: a degraded
+// outcome writes the Warn line, every other writes the Info line.
+var factScopeExpansionDegradedOutcomes = []string{
+	string(contextfabric.FactScopePolicyUnavailable), string(contextfabric.FactScopeExpandedPartial),
+	string(contextfabric.FactScopeFailed), string(contextfabric.FactScopeTargetKindMismatch),
+	string(contextfabric.FactScopeMatchedUnauthorized),
+}
+
+var factScopeExpansionServedOutcomes = []string{
+	string(contextfabric.FactScopeNotNeeded), string(contextfabric.FactScopeExpanded), string(contextfabric.FactScopeAttemptedEmpty),
+}
+
+// FactScopeExpansionGap is the Warn line SlogEngineTelemetry.RecordFactScopeExpansion
+// writes when a fact family could not be fully reached from the resolved subjects
+// (the answer has a hole), once per (requirement, origin kind, policy).
+var FactScopeExpansionGap = Event{
+	ID:                 "contextfabric.fact_scope_expansion_gap",
+	Msg:                "context fabric fact scope expansion left a gap",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "requirement_kind", "origin_kind", "policy"},
+	BoundedAggregation: "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "origin_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "target_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "policy", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "axis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: factScopeExpansionDegradedOutcomes},
+		{Key: "origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "temporal_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unbounded_validity_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "malformed_touch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "duplicate_add_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_next_hop_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "target_kind_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "failure_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeFailureClassLineVocabulary()},
+		// Open keys: the expander owns the source vocabulary (team attribution sources, link tiers, team_repo_ownership); nil when nothing was counted, which slog writes as null.
+		{Key: "attribution_source_counts", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true},
+		{Key: "target_limit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_grant_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "direct_repo_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_explicit_text_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_heuristic_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_measured", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_organization_wide", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_exact_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_owner_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "orphaned_repository_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ambiguous_origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unknown_attribution_source_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_query_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_rows_returned", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "roots_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shared_target_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeDecisionReasonLineVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactScopeExpansionDecision is the Info line for the same decision when the
+// answer was not degraded (the system working).
+var FactScopeExpansionDecision = Event{
+	ID:                 "contextfabric.fact_scope_expansion_decision",
+	Msg:                "context fabric fact scope expansion outcome",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "requirement_kind", "origin_kind", "policy"},
+	BoundedAggregation: "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "origin_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "target_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "policy", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "axis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: factScopeExpansionServedOutcomes},
+		{Key: "origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "temporal_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unbounded_validity_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "malformed_touch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "duplicate_add_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_next_hop_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "target_kind_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "failure_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeFailureClassLineVocabulary()},
+		// Open keys: the expander owns the source vocabulary (team attribution sources, link tiers, team_repo_ownership); nil when nothing was counted, which slog writes as null.
+		{Key: "attribution_source_counts", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true},
+		{Key: "target_limit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_grant_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "direct_repo_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_explicit_text_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_heuristic_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_measured", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_organization_wide", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_exact_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_owner_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "orphaned_repository_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ambiguous_origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unknown_attribution_source_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_query_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_rows_returned", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "roots_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shared_target_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeDecisionReasonLineVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// CohortRanked is the Info line SlogEngineTelemetry.RecordCohortRanked writes
+// once per ranking of a served cohort (CHAOS-4398): counts and closed
+// vocabularies only, never a team name or a score. Its three count maps are
+// closed: the key sets are the producer's own constants.
+var CohortRanked = Event{
+	ID:                 "contextfabric.cohort_ranked",
+	Msg:                "context fabric cohort ranked",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call that ranks a cohort.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cohort_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "formula_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "score_meaning", Type: FieldString, Presence: PresenceRequired},
+		{Key: "judgment_mismatch", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "requested_judgment_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "degraded_member_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "signals_available", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("signals_available")},
+		{Key: "outcome_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("outcome_counts")},
+		{Key: "investment_mix_source_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("investment_mix_source_counts")},
+		{Key: "read_attribution_carried", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "deficiency_zero_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// CohortDriverNarration is the Info line
+// SlogEngineTelemetry.RecordCohortDriverNarration writes once per narration
+// pass, whatever its outcome (CHAOS-4398 PR3b). drivers_skipped is closed and
+// nullable: the early outcomes (no drivers, budget exhausted) leave the map nil.
+var CohortDriverNarration = Event{
+	ID:                 "contextfabric.cohort_driver_narration",
+	Msg:                "context fabric cohort driver narration",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call that narrates cohort drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("outcome")},
+		{Key: "judgments_emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_minted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_narrated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_skipped_no_evidence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "drivers_skipped", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("drivers_skipped")},
+		{Key: "answer_narrative_recomposed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "narration_allocator", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("narration_allocator")},
+		{Key: "narration_allocated_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
 
@@ -3159,6 +3600,15 @@ var All = []Event{
 	EvidenceExpansion,
 	CountPopulationScope,
 	FrameValidation,
+	PlanCarry,
+	PlanCarryOutcome,
+	ModelInterpretDecision,
+	ModelSynthesizeDecision,
+	ModelPhraseDecision,
+	FactScopeExpansionGap,
+	FactScopeExpansionDecision,
+	CohortRanked,
+	CohortDriverNarration,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

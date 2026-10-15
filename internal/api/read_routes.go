@@ -198,7 +198,7 @@ func packetWithinRequestLimits(packet contractsv1.ContextPacket, request contrac
 func (a *App) allowReadEntitlement(w http.ResponseWriter, r *http.Request, principal storage.Principal) bool {
 	enabled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, agentContextRuntimeEntitlement)
 	if err != nil {
-		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)
+		a.writeEntitlementLookupError(w, r, err)
 		return false
 	}
 	if enabled {

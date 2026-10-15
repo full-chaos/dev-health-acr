@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -158,7 +159,7 @@ FROM (
 ) AS e
 INNER JOIN (
 	SELECT id, started_at, observed_at, resolved_at
-	FROM operational_incidents FINAL
+	FROM ` + devhealthschema.CurrentOperationalIncidents + `
 	WHERE org_id = {org_id:String} AND is_deleted = 0
 ) AS i ON i.id = e.incident_id
 WHERE ` + window.timestampExpr(incidentTime) + `
@@ -185,7 +186,7 @@ ORDER BY e.repo_id`
 	var notAttributable int64
 	if len(owned) > 0 && orgWide {
 		statement := `SELECT toInt64(count())
-FROM operational_incidents FINAL
+FROM ` + devhealthschema.CurrentOperationalIncidents + `
 WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("ifNull(started_at, observed_at)") + `
 	AND id NOT IN (SELECT incident_id FROM work_graph_deployment_incident_edges WHERE toString(org_id) = {org_id:String} AND repo_id IS NOT NULL)`
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamIncidentNotAttributable", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
@@ -293,7 +294,7 @@ FROM (
 ) AS e
 INNER JOIN (
 	SELECT id, started_at, observed_at, resolved_at
-	FROM operational_incidents FINAL
+	FROM ` + devhealthschema.CurrentOperationalIncidents + `
 	WHERE org_id = {org_id:String} AND is_deleted = 0
 ) AS i ON i.id = e.incident_id
 WHERE ` + window.timestampExpr("ifNull(i.started_at, i.observed_at)")
