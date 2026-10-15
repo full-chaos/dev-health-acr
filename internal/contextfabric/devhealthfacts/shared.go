@@ -1192,10 +1192,22 @@ import (
 // deleted, or a mapping deactivated, in its latest revision still counted
 // through an earlier one; an answer saved under v232 is not reused.
 //
+// v233 -> v234: every served failed-deployment count names its basis. The
+// deployments fact carries failed_deployments_basis (deployment_status); the
+// metrics fact carries change_failure_incident_linked_failed_deployments_count
+// and change_failure_status_failed_deployments_basis
+// (status_failed_not_incident_linked). An answer saved under v233 lacks them.
+//
+// v234 -> v235: a refused run_operation or graphql_query reply, and the read
+// log of every call, report the same stamped schema digest a served call
+// reports, read when the reply is built, not the pinned digest. The query
+// version is part of the answer reuse key, so an answer saved under v234 is not
+// reused as one produced with the old digest rule; the digest itself is on the
+// reply and the read log, not in a saved answer.
+//
 // v235 -> v236: the team metrics fact and the project rollup fact carry
 // commit_counts_basis beside the commit counts (owner_share_weighted_latest_day);
-// an answer saved under v235 lacks it. (v234 and v235 are held by CHAOS-9752 and
-// CHAOS-9757; the number is re-checked against main at merge.)
+// an answer saved under v235 lacks it.
 const QueryVersion = "devhealthfacts.clickhouse.v236"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
