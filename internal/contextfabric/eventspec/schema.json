@@ -4033,6 +4033,143 @@
     ]
   },
   {
+    "id": "contextfabric.plan_carry",
+    "msg": "context fabric plan carry",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call, emitted only when resolveCarriedPlan applied a prior turn's question family; every attempt, hit or miss, is counted on plan_carry_outcome.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family_replaced",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "source_replaced",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family_carried",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "source_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family_source",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "route_class",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "route_disposition",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "route_switched",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.plan_carry_outcome",
+    "msg": "context fabric plan carry outcome",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call, emitted whenever this turn resolved no family of its own and a carry was attempted (the not-attempted zero value emits none).",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "hit",
+          "miss_no_reference",
+          "miss_unloadable",
+          "miss_stale_graph_epoch",
+          "miss_no_plan",
+          "miss_conflicting_plans",
+          "miss_question_drift",
+          "miss_question_indeterminate",
+          "miss_continuation_withheld"
+        ]
+      },
+      {
+        "key": "source_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "seed_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "receipt",
+          "parent_field",
+          "both"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.project_deployment_walk",
     "msg": "context_fabric: project deployment walk",
     "level": "info",

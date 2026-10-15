@@ -1,0 +1,10 @@
+# factoracle race job 2 (heavy half): tests run only in race-factoracle-heavy.
+# Names are exact top-level test names of internal/contextfabric/factoracle, one per line.
+# Cut by measured seconds (race job with -v, PR run of CHAOS-9730; package 616s of tests):
+# TestOracleOnTheSeededStore 186s, TestTemporaryAllowanceIsMeasuredNotAssumed 102s,
+# TestARootMustBeMeasuredOnEveryPathTheVenueServes 63s, so this half is ~350s and the
+# rest half, which skips every listed name (a test absent from the list runs there), ~265s.
+# A name here that no longer exists fails scripts/ci/race-split.sh (verify, partition).
+TestARootMustBeMeasuredOnEveryPathTheVenueServes
+TestOracleOnTheSeededStore
+TestTemporaryAllowanceIsMeasuredNotAssumed

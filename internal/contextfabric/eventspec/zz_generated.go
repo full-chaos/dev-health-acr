@@ -35,6 +35,8 @@ var ByID = map[string]Event{
 	"contextfabric.graphql_query":                    GraphQLQuery,
 	"contextfabric.operation_read":                   OperationRead,
 	"contextfabric.ownership_routing":                OwnershipRouting,
+	"contextfabric.plan_carry":                       PlanCarry,
+	"contextfabric.plan_carry_outcome":               PlanCarryOutcome,
 	"contextfabric.project_deployment_walk":          ProjectDeploymentWalk,
 	"contextfabric.pull_request_status_filter":       PullRequestStatusFilter,
 	"contextfabric.remembered_window_axis":           RememberedWindowAxis,
@@ -2175,6 +2177,127 @@ func (f OwnershipRoutingFields) SlogArgs() []any {
 		"owners", f.Owners,
 		"truncated", f.Truncated,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// PlanCarryFields is contextfabric.plan_carry's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanCarry.Fields declares in spec.go.
+type PlanCarryFields struct {
+	OrgID            string
+	FamilyReplaced   string
+	SourceReplaced   string
+	FamilyCarried    string
+	SourceResultID   string
+	FamilySource     string
+	RouteClass       string
+	RouteDisposition string
+	RouteSwitched    bool
+	RequestID        string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanCarryFields uniformly, set ONLY by NewPlanCarryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanCarryFields is the generated constructor for PlanCarryFields -- every
+// field PlanCarry.Fields declares is a required parameter.
+func NewPlanCarryFields(orgID string, familyReplaced string, sourceReplaced string, familyCarried string, sourceResultID string, familySource string, routeClass string, routeDisposition string, routeSwitched bool, requestID string) PlanCarryFields {
+	return PlanCarryFields{
+		OrgID:            orgID,
+		FamilyReplaced:   familyReplaced,
+		SourceReplaced:   sourceReplaced,
+		FamilyCarried:    familyCarried,
+		SourceResultID:   sourceResultID,
+		FamilySource:     familySource,
+		RouteClass:       routeClass,
+		RouteDisposition: routeDisposition,
+		RouteSwitched:    routeSwitched,
+		RequestID:        requestID,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanCarryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanCarryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanCarry's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanCarryFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family_replaced", contextfabric.SanitizeLogAttr(f.FamilyReplaced),
+		"source_replaced", contextfabric.SanitizeLogAttr(f.SourceReplaced),
+		"family_carried", contextfabric.SanitizeLogAttr(f.FamilyCarried),
+		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
+		"family_source", contextfabric.SanitizeLogAttr(f.FamilySource),
+		"route_class", contextfabric.SanitizeLogAttr(f.RouteClass),
+		"route_disposition", contextfabric.SanitizeLogAttr(f.RouteDisposition),
+		"route_switched", f.RouteSwitched,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// PlanCarryOutcomeFields is contextfabric.plan_carry_outcome's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanCarryOutcome.Fields declares in spec.go.
+type PlanCarryOutcomeFields struct {
+	OrgID          string
+	Outcome        string
+	SourceResultID string
+	SeedSource     string
+	RequestID      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanCarryOutcomeFields uniformly, set ONLY by NewPlanCarryOutcomeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanCarryOutcomeFields is the generated constructor for PlanCarryOutcomeFields -- every
+// field PlanCarryOutcome.Fields declares is a required parameter.
+func NewPlanCarryOutcomeFields(orgID string, outcome string, sourceResultID string, seedSource string, requestID string) PlanCarryOutcomeFields {
+	return PlanCarryOutcomeFields{
+		OrgID:          orgID,
+		Outcome:        outcome,
+		SourceResultID: sourceResultID,
+		SeedSource:     seedSource,
+		RequestID:      requestID,
+		constructed:    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanCarryOutcomeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanCarryOutcomeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanCarryOutcome's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanCarryOutcomeFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
+		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

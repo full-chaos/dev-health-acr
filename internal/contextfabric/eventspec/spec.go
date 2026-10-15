@@ -1212,6 +1212,76 @@ var RememberedWindowAxis = Event{
 	},
 }
 
+func planCarryFamilyTokens() []string {
+	vocab := contextfabric.QuestionFamilyVocabulary()
+	tokens := make([]string, 0, len(vocab))
+	for _, family := range vocab {
+		tokens = append(tokens, string(family))
+	}
+	return tokens
+}
+
+// PlanCarry is the Info line (telemetry.go,
+// SlogEngineTelemetry.RecordPlanCarry, CHAOS-4736 seam 7) reporting one
+// APPLIED plan carry. It fires only on a hit; PlanCarryOutcome below is the
+// separate ATTEMPT line, and the two are never folded (folding would make the
+// applied counter and the attempt counter the same number).
+var PlanCarry = Event{
+	ID:                 "contextfabric.plan_carry",
+	Msg:                "context fabric plan carry",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call, emitted only when resolveCarriedPlan applied a prior turn's question family; every attempt, hit or miss, is counted on plan_carry_outcome.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_replaced", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, planCarryFamilyTokens()...)},
+		{Key: "source_replaced", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_carried", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: planCarryFamilyTokens()},
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_source", Type: FieldString, Presence: PresenceRequired},
+		{Key: "route_class", Type: FieldString, Presence: PresenceRequired},
+		{Key: "route_disposition", Type: FieldString, Presence: PresenceRequired},
+		{Key: "route_switched", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// PlanCarryOutcome is the Info line (telemetry.go,
+// SlogEngineTelemetry.RecordPlanCarryOutcome, CHAOS-5003) reporting the
+// ATTEMPT of a plan carry, hit or miss. source_result_id is empty on every
+// miss and is the origin on a hit.
+var PlanCarryOutcome = Event{
+	ID:                 "contextfabric.plan_carry_outcome",
+	Msg:                "context fabric plan carry outcome",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call, emitted whenever this turn resolved no family of its own and a carry was attempted (the not-attempted zero value emits none).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{
+			string(contextfabric.PlanCarryHit),
+			string(contextfabric.PlanCarryMissNoReference),
+			string(contextfabric.PlanCarryMissUnloadable),
+			string(contextfabric.PlanCarryMissStaleGraphEpoch),
+			string(contextfabric.PlanCarryMissNoPlan),
+			string(contextfabric.PlanCarryMissConflictingPlans),
+			string(contextfabric.PlanCarryMissQuestionDrift),
+			string(contextfabric.PlanCarryMissQuestionIndeterminate),
+			string(contextfabric.PlanCarryMissContinuationWithheld),
+		}},
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{
+			string(contextfabric.CarrySeedNone),
+			string(contextfabric.CarrySeedReceipt),
+			string(contextfabric.CarrySeedParentField),
+			string(contextfabric.CarrySeedBoth),
+		}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -3157,6 +3227,8 @@ var All = []Event{
 	EvidenceExpansion,
 	CountPopulationScope,
 	FrameValidation,
+	PlanCarry,
+	PlanCarryOutcome,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
