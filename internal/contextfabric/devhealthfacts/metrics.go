@@ -616,6 +616,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 		}
 		fields := map[string]contextfabric.FactValue{
 			"day":                       contextfabric.StringFactValue(r.Day),
+			"commit_counts_basis":       contextfabric.StringFactValue(commitCountsBasis),
 			"commits_count":             contextfabric.NumberFactValue(r.CommitsCount),
 			"after_hours_commits_count": contextfabric.NumberFactValue(r.AfterHoursCommitsCount),
 			"weekend_commits_count":     contextfabric.NumberFactValue(r.WeekendCommitsCount),
@@ -720,6 +721,7 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 				// project-native metrics table the way team/repository
 				// facts are.
 				"rollup_basis":              contextfabric.StringFactValue("team_project_ownership_sum"),
+				"commit_counts_basis":       contextfabric.StringFactValue(commitCountsBasis),
 				"team_count":                contextfabric.IntegerFactValue(int64(rollup.TeamCount)),
 				"commits_count":             contextfabric.NumberFactValue(rollup.CommitsCount),
 				"after_hours_commits_count": contextfabric.NumberFactValue(rollup.AfterHoursCommitsCount),
