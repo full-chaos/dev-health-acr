@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,5 +154,42 @@ func TestAssembler_rows_without_a_focus_key_are_allocated_as_before(t *testing.T
 	want := []string{"ev-commit_file", "ev-file_complexity", "ev-file_hotspot", "ev-commit-0", "ev-commit-1", "ev-commit-2", "ev-commit-3", "ev-commit-4", "ev-commit-5", "ev-state", "ev-pressure", "ev-action"}
 	if got := itemEvidenceIDs(packet); !slices.Equal(got, want) {
 		t.Fatalf("served = %v, want the main order %v: rows without a focus key keep their old allocation", got, want)
+	}
+}
+
+func TestAssembler_output_budget_keeps_one_slot_per_subject_before_a_second(t *testing.T) {
+	request := fixtureRequest("req-slots-budget", "main", "")
+	request.Goal = "saved payment methods checkout"
+	request.Options.MaxItems, request.Options.MaxOutputTokens, request.Options.MaxSerializedBytes = 50, 500, 200000
+	observed := time.Date(2026, 1, 15, 11, 0, 0, 0, time.UTC)
+	path := "saved-payment-methods-at-checkout.go"
+	var evidence []contractsv1.EvidenceRef
+	for i := 0; i < 30; i++ {
+		ref := testEvidence(fmt.Sprintf("ev-file-%02d", i), "dev_health", observed.Add(-time.Duration(i)*time.Minute))
+		ref.Source.EntityType, ref.Source.DisplayLabel = "commit_file", path
+		ref.Metadata = map[string]any{"focus_key": "file:repo:" + path}
+		evidence = append(evidence, ref)
+	}
+	for i := 0; i < 5; i++ {
+		ref := testEvidence(fmt.Sprintf("ev-other-%d", i), "git", observed.Add(-48*time.Hour))
+		evidence = append(evidence, ref)
+	}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence, QueryVersion: contextpacket.QueryVersionV1,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	others := 0
+	for _, id := range itemEvidenceIDs(packet) {
+		if strings.HasPrefix(id, "ev-other-") {
+			others++
+		}
+	}
+	t.Logf("items=%d others=%d", len(packet.Items), others)
+	if others != 5 {
+		t.Fatalf("other subjects served = %d of 5; the token budget let one file's rows crowd them out (%v)", others, itemEvidenceIDs(packet))
 	}
 }
