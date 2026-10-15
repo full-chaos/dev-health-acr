@@ -320,6 +320,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, ErrClientSynthesisUnavailable
 	}
 	assembly := r.ClientSynthesis
+	input = r.withholdBareScores(ctx, principal, input)
 	budget := effectiveCallerBudget(input.Request.Options)
 	maxBytes, err := assembly.inputBoundWithin(budget)
 	measure.MaxBytes = maxBytes

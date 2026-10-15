@@ -28,6 +28,27 @@ func evidenceRule(ref contractsv1.EvidenceRef) rule {
 	return base
 }
 
+// failurePressure is true for a row that persists a failure: a failed CI run,
+// a failed deployment or an open incident of this repository. It is the one
+// definition of failure pressure; blocked work is pressure too (see
+// activeBlockerRefs) but is not a failure.
+func failurePressure(ref contractsv1.EvidenceRef) bool {
+	if ref.SourceVersion == aiArtifactSourceVersion {
+		return false
+	}
+	switch strings.ToLower(ref.Source.EntityType) {
+	case "ci_pipeline_run", "check", "check_run", "workflow_run", "build", "alert":
+		return citationShowsFailure(ref.Citation)
+	case "deployment":
+		return deploymentFailed(ref)
+	case "incident":
+		// An incident reached through a heuristic repository mapping does not
+		// establish that the incident belongs to this repository.
+		return incidentIsOpen(ref.Citation) && ref.Provenance != contractsv1.EvidenceProvenanceHeuristic
+	}
+	return false
+}
+
 // evidenceCategoryRule assigns a role from the persisted state of one row.
 // Pressure needs a persisted failure or open state; a commit is never a cause
 // by its type alone (see linkedCauseRefs).
@@ -37,22 +58,12 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	if ref.SourceVersion == aiArtifactSourceVersion {
 		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0}
 	}
+	if failurePressure(ref) {
+		return pressureRule()
+	}
 	switch strings.ToLower(ref.Source.EntityType) {
-	case "ci_pipeline_run", "check", "check_run", "workflow_run", "build", "alert":
-		if citationShowsFailure(ref.Citation) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0}
-		}
 	case "deployment":
-		if deploymentFailed(ref) {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0}
-		}
 		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0}
-	case "incident":
-		// An incident reached through a heuristic repository mapping does not
-		// establish that the incident belongs to this repository.
-		if incidentIsOpen(ref.Citation) && ref.Provenance != contractsv1.EvidenceProvenanceHeuristic {
-			return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0}
-		}
 	case "recommendation", "review_action", "task":
 		if ref.SourceVersion != storedFindingsSourceVersion {
 			break
