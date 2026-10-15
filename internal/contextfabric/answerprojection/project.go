@@ -171,6 +171,15 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// this projection still lets its reader check every number it plots.
 	renderShapes, renderShapesOmitted := projectRenderShapes(result, cohort, facts)
 	evidence := index.ids()
+	{
+		kept := evidence[:0:0]
+		for _, ref := range evidence {
+			if !strings.Contains(ref, ":team:") && !strings.Contains(ref, ":pull_request:") {
+				kept = append(kept, ref)
+			}
+		}
+		evidence = kept
+	}
 	evidenceOmitted := countUnindexedEvidence(result, index)
 	// CHAOS-4690: EvidenceRefLabels is filtered to EXACTLY the refs this
 	// projection retained (evidence, above) -- never the full canonical
