@@ -110,12 +110,13 @@ func TestAssembler_excludes_quarantined_rows_from_watermarks(t *testing.T) {
 	badOnly.SourceVersion = "ai_review_outcomes.v1"
 	badOnly.Provenance = "unmapped"
 	badLatestObserved, badOnlyObserved := badLatest.ObservedAt, badOnly.ObservedAt
+	syncedAt := time.Date(2026, 1, 15, 13, 0, 0, 0, time.UTC)
 	store := testStore{bundle: storage.EvidenceBundle{
 		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
 		Evidence:      []contractsv1.EvidenceRef{valid, badLatest, badOnly},
 		Watermarks: []contractsv1.SourceWatermark{
-			{Source: "ai_workflow_artifacts.v1", LastIngestedAt: &badLatestObserved, Status: "fresh"},
-			{Source: "ai_review_outcomes.v1", LastIngestedAt: &badOnlyObserved, Status: "fresh"},
+			{Source: "ai_workflow_artifacts.v1", LastIngestedAt: &syncedAt, LastEventAt: &badLatestObserved, Status: "fresh"},
+			{Source: "ai_review_outcomes.v1", LastIngestedAt: &syncedAt, LastEventAt: &badOnlyObserved, Status: "fresh"},
 		},
 		QueryVersion: contextpacket.QueryVersionV1,
 	}}
@@ -132,12 +133,15 @@ func TestAssembler_excludes_quarantined_rows_from_watermarks(t *testing.T) {
 		switch watermark.Source {
 		case "ai_workflow_artifacts.v1":
 			foundValidSource = true
-			if watermark.LastIngestedAt == nil || !watermark.LastIngestedAt.Equal(validObserved) || watermark.Status != "fresh" {
-				t.Fatalf("valid-row watermark = %#v, want %s fresh", watermark, validObserved)
+			if watermark.LastEventAt == nil || !watermark.LastEventAt.Equal(validObserved) {
+				t.Fatalf("valid-row watermark event time = %#v, want %s (quarantined newer row excluded)", watermark, validObserved)
+			}
+			if watermark.LastIngestedAt == nil || !watermark.LastIngestedAt.Equal(syncedAt) || watermark.Status != "fresh" {
+				t.Fatalf("quarantine moved the sync time or status: %#v, want sync time %s fresh", watermark, syncedAt)
 			}
 		case "ai_review_outcomes.v1":
 			foundQuarantinedSource = true
-			if watermark.LastIngestedAt != nil || watermark.Status != "missing" {
+			if watermark.LastIngestedAt != nil || watermark.LastEventAt != nil || watermark.Status != "missing" {
 				t.Fatalf("all-quarantined watermark retained dropped data: %#v", watermark)
 			}
 		}

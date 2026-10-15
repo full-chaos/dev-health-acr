@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -504,6 +505,9 @@ type SynthesisDraft struct {
 	ClaimedFacts        []ClaimedFact       `json:"claimed_facts"`
 	DeterministicAnswer string              `json:"deterministic_answer"`
 	Warnings            []string            `json:"warnings"`
+	// scoresWithheld are the claims of a declared score the draft carried without its drivers table; vetSynthesisDraft
+	// removes them (decision K7). Bookkeeping for the disclosure.
+	scoresWithheld []withheldScore
 	// CoverageDisclosures (CHAOS-4690 Commit F, design §4.1) is the
 	// LENIENTLY-decoded model-authored coverage_disclosures subdocument --
 	// the ONE new model-authorable surface this commit adds. It is nil
@@ -2421,6 +2425,9 @@ type RuntimeAnswerSynthesizer struct {
 	// ClientSynthesis lets a turn that asks to write its own answer be served.
 	// Nil refuses such a turn with ErrClientSynthesisUnavailable.
 	ClientSynthesis *ClientSynthesisAssembly
+	// FactCapabilities are the field declarations the degraded composition reads to keep decision K7: a declared score is
+	// never claimed beside no drivers table. Empty claims every scalar.
+	FactCapabilities []FactCapability
 }
 
 // StaticResultVersions implements ResultVersionProvider (CHAOS-3810), so a
@@ -2448,6 +2455,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	}
 	started := time.Now()
 	callCtx, releaseCall, reserveApplied := boundSynthesisCallContext(ctx)
+	input = r.withholdBareScores(ctx, principal, input)
 	input, draft, receipt, bound, err := r.synthesizeWithinInputBound(callCtx, principal, input)
 	reserveFired := reserveApplied && err != nil && callCtx.Err() != nil && ctx.Err() == nil
 	releaseCall()
@@ -2532,6 +2540,7 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 	if r.Telemetry != nil {
 		r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
 	}
+	draft = r.withholdBareScoreClaims(ctx, principal, input, draft)
 	if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 		return draft, ClassifySynthesisRejection(draft, input, validateErr)
 	}
@@ -2649,7 +2658,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 	}
 	if failure != nil {
 		result.Coverage.Partial = true
-		result.CurrentState = composeFailedSynthesisCurrentState(claimedFacts)
+		result.CurrentState = composeFailureCurrentState(claimedFacts, failure.Class)
 	}
 	modelFacingCoverageDetailIDs := coverageDetailIDSet(result.Coverage.Details)
 	outcome, violation := classifyCoverageDisclosures(draft, &result, modelFacingCoverageDetailIDs)
@@ -2676,6 +2685,18 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 			return InvestigationResult{}, err
 		}
 		serverDetails = append(serverDetails, detail)
+		for _, kind := range failure.withheldScoreKinds {
+			serverDetails = append(serverDetails, newFactScoreWithheldDetail(kind))
+		}
+	}
+	var alreadyDisclosed []FactKind
+	if failure != nil {
+		alreadyDisclosed = failure.withheldScoreKinds
+	}
+	for _, kind := range withheldKinds(append(slices.Clone(input.withheldScores), draft.scoresWithheld...)) {
+		if !slices.Contains(alreadyDisclosed, kind) {
+			serverDetails = append(serverDetails, newFactScoreWithheldDetail(kind))
+		}
 	}
 	if !appendServerCoverageDetails(&result, serverDetails, principal.OrgID) && failure != nil {
 		slog.Default().Error("context_fabric: model failure coverage detail not filed, the answer is recognised by its warning",

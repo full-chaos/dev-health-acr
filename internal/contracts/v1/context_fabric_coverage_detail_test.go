@@ -89,8 +89,12 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectProject
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		d.Source, d.Degrading, d.FactKind, d.Declared, d.Served = "context-fabric:synthesis", false, ContextFabricFactWork, intPtr(200), intPtr(90)
+	case ContextFabricCoverageDetailFactScoreWithheld:
+		d.Source, d.FactKind = "context-fabric:synthesis", ContextFabricFactHealth
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		d.Source, d.FailureClass, d.RetryHint = "context-fabric:synthesis", ContextFabricSynthesisFailureRejected, ContextFabricRetryUnlikelyToHelp
+	case ContextFabricCoverageDetailSynthesisNotRun:
+		d.Source, d.FailureClass, d.RetryHint = "context-fabric:synthesis", ContextFabricSynthesisFailureDeadline, ContextFabricRetryMaySucceed
 	case ContextFabricCoverageDetailKindCensusTruncated:
 		// Kind, Declared and Served, all required together, nothing else:
 		// the census figure this call observed, and how many of that kind
@@ -334,5 +338,20 @@ func TestCoverageValidateAppliesDetailChecksOnWriteOnly(t *testing.T) {
 	}
 	if err := coverage.validateStored(); err != nil {
 		t.Fatalf("stored read rejected an immutable legacy row: %v", err)
+	}
+}
+
+func TestTheFactsOnlyClassesCarryTheirRetryHints(t *testing.T) {
+	t.Parallel()
+	for class, want := range map[ContextFabricSynthesisFailureClass]ContextFabricRetryHint{
+		ContextFabricSynthesisFailureDeadline:        ContextFabricRetryMaySucceed,
+		ContextFabricSynthesisFailureNotNarrowable:   ContextFabricRetryUnlikelyToHelp,
+		ContextFabricSynthesisFailureRowsOverBudget:  ContextFabricRetryUnlikelyToHelp,
+		ContextFabricSynthesisFailureRetryOverBudget: ContextFabricRetryUnlikelyToHelp,
+	} {
+		got, err := ContextFabricRetryHintFor(class)
+		if err != nil || got != want {
+			t.Fatalf("retry hint for %s = %q (err %v), want %q", class, got, err, want)
+		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -42,10 +43,14 @@ func newSynthesisModelFailureDetail(class SynthesisFailureClass) (CoverageDetail
 	if err != nil {
 		return CoverageDetail{}, err
 	}
+	code := contractsv1.ContextFabricCoverageDetailSynthesisModelFailed
+	if _, notRun := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(class); notRun {
+		code = contractsv1.ContextFabricCoverageDetailSynthesisNotRun
+	}
 	detail := CoverageDetail{
-		Source: synthesisModelFailureSource, Code: contractsv1.ContextFabricCoverageDetailSynthesisModelFailed,
+		Source: synthesisModelFailureSource, Code: code,
 		FailureClass: class, RetryHint: hint,
-		Raw: string(contractsv1.ContextFabricCoverageDetailSynthesisModelFailed) + ":" + string(class),
+		Raw: string(code) + ":" + string(class),
 	}
 	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
 	return detail, nil
@@ -59,6 +64,16 @@ const synthesisFailureCurrentState = "The model call that writes the answer fail
 // synthesisFailureWarning is the fixed, content-safe sentence a degraded
 // answer carries instead of model prose. It names the class only.
 func synthesisFailureWarning(class SynthesisFailureClass) string {
+	switch class {
+	case contractsv1.ContextFabricSynthesisFailureDeadline:
+		return "answer text unavailable: facts only; no second synthesis was started because the time budget was spent (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
+		return "answer text unavailable: facts only; the written answer was over the response budget and the cohort could not be narrowed further (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureRowsOverBudget:
+		return "answer text unavailable: facts only; the written answer was over the response budget because of the rows it carried; a smaller cohort would not have made it fit (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureRetryOverBudget:
+		return "answer text unavailable: facts only; a narrower retry also ran and did not fit the response budget; the facts shown are from the first pass (class: " + string(class) + "); the sources that were read are listed in coverage"
+	}
 	return "answer text unavailable: the model call failed (class: " + string(class) + "); the sources that were read are listed in coverage"
 }
 
@@ -157,7 +172,7 @@ func IsSynthesisModelFailureAnswer(result InvestigationResult) bool {
 		return false
 	}
 	for _, detail := range result.Coverage.Details {
-		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed || detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisNotRun {
 			return true
 		}
 	}
@@ -215,6 +230,9 @@ type SynthesisFailure struct {
 	// bounded it.
 	CallDeadline time.Time
 	cause        error
+	// withheldScoreKinds are the fact kinds whose declared scores the degraded composition did not claim; the composition
+	// files one fact_score_withheld detail for each.
+	withheldScoreKinds []FactKind
 }
 
 func (f *SynthesisFailure) Error() string { return f.cause.Error() }
@@ -234,8 +252,16 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 		r.recordSynthesisModelFailure(ctx, principal, SynthesisModelFailureEvent{Class: failure.Class, Attempts: failure.Attempts, ElapsedMS: failure.Elapsed.Milliseconds(), Rule: failure.Rule, Stage: failure.Stage, ReserveFired: failure.ReserveFired, CallDeadline: failure.CallDeadline})
 	}
 	draft := degradedSynthesisDraft(failure.Class)
-	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts, degradedClaimLimit(input))
-	if len(claims) > 0 {
+	claims, evidence, truncated, withheld := mintDegradedFactClaimsWithholding(input.Facts.Facts, degradedClaimLimit(input), scoreLookup(r.FactCapabilities))
+	r.recordWithheldScores(ctx, principal, failure.Class, withheld)
+	failure.withheldScoreKinds = withheldKinds(withheld)
+	if limitation, factsOnlyClass := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(failure.Class); factsOnlyClass {
+		draft.ClaimedFacts, draft.EvidenceRefIDs = claims, evidence
+		if len(claims) == 0 {
+			draft.ClaimedFacts, draft.EvidenceRefIDs = []ClaimedFact{}, []string{}
+		}
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, []string{limitation})
+	} else if len(claims) > 0 {
 		draft.ClaimedFacts = claims
 		draft.EvidenceRefIDs = evidence
 		additions := []string{contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation}
@@ -282,4 +308,41 @@ func (r RuntimeAnswerSynthesizer) recordSynthesisModelFailure(ctx context.Contex
 		return
 	}
 	NewSlogEngineTelemetry(slog.Default()).RecordSynthesisModelFailure(ctx, principal, event)
+}
+
+// recordWithheldScores logs the score fields a degraded answer did not claim and the drivers table each one needed, at
+// Info: the response names the fact kinds (a coverage detail), the trace names the fields and tables.
+func (r RuntimeAnswerSynthesizer) recordWithheldScores(ctx context.Context, principal storage.Principal, class SynthesisFailureClass, withheld []withheldScore) {
+	if len(withheld) == 0 {
+		return
+	}
+	attrs := []any{"org_id", SanitizeLogAttr(principal.OrgID), "class", SanitizeLogAttr(string(class)), "withheld", len(withheld), "reason", "drivers_not_served"}
+	for index, item := range withheld {
+		if index >= 8 {
+			break
+		}
+		attrs = append(attrs, "field_"+strconv.Itoa(index), SanitizeLogAttr(string(item.Kind)+"."+item.Field+"@"+string(item.SubjectKind)), "drivers_table_"+strconv.Itoa(index), SanitizeLogAttr(item.DriversTable))
+	}
+	slog.Default().InfoContext(ctx, "context fabric degraded answer withheld scores without their drivers", attrs...)
+}
+
+func withheldKinds(withheld []withheldScore) []FactKind {
+	kinds := []FactKind{}
+	for _, item := range withheld {
+		if !slices.Contains(kinds, item.Kind) {
+			kinds = append(kinds, item.Kind)
+		}
+	}
+	return kinds
+}
+
+// newFactScoreWithheldDetail is the coverage detail of a fact kind whose declared scores a degraded answer did not
+// claim. A disclosure: the answer's status already says degraded.
+func newFactScoreWithheldDetail(kind FactKind) CoverageDetail {
+	detail := CoverageDetail{
+		Source: synthesisModelFailureSource, Code: contractsv1.ContextFabricCoverageDetailFactScoreWithheld, FactKind: kind,
+		Raw: string(contractsv1.ContextFabricCoverageDetailFactScoreWithheld) + ":" + string(kind),
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	return detail
 }

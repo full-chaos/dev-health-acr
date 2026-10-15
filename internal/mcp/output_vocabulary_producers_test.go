@@ -47,7 +47,7 @@ var producerSets = []producerSet{
 		"internal/contextpacket/read_adapter.go", "internal/contextpacket/evidence_quarantine.go", "internal/contextpacket/source_catalog.go",
 		"internal/contextpacket/packet_state.go", "internal/contextpacket/observation.go", "internal/contextpacket/packet_output_validation.go",
 		"internal/contracts/v1/validate_packet_nested.go",
-	}, []string{"SourceWatermarkStatusFresh", "SourceWatermarkStatusStale", "SourceWatermarkStatusMissing", "SourceWatermarkStatusUnavailable", "SourceWatermarkStatusVocabulary"}},
+	}, []string{"SourceWatermarkStatusFresh", "SourceWatermarkStatusStale", "SourceWatermarkStatusMissing", "SourceWatermarkStatusUnavailable", "SourceWatermarkStatusUnknown", "SourceWatermarkStatusVocabulary"}},
 	{"evidence.provenance", []string{"native", "explicit_text", "heuristic", "derived"}, []string{
 		"internal/contextpacket/read_adapter.go", "internal/contextpacket/evidence_validation.go", "internal/contextpacket/ranking.go",
 		"internal/mcp/federation.go", "internal/contextfabric/evidence_expansion.go", "internal/contracts/v1/validate_evidence.go",

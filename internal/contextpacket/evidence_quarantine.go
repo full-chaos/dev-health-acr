@@ -7,7 +7,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-func validatedEvidenceWatermarks(in []contractsv1.SourceWatermark, validation evidenceValidation, asOf time.Time) []contractsv1.SourceWatermark {
+func validatedEvidenceWatermarks(in []contractsv1.SourceWatermark, validation evidenceValidation) []contractsv1.SourceWatermark {
 	latest := make(map[string]time.Time)
 	for _, ref := range validation.valid {
 		recordLatestEvidence(latest, ref.Source.System, ref.ObservedAt)
@@ -28,16 +28,16 @@ func validatedEvidenceWatermarks(in []contractsv1.SourceWatermark, validation ev
 		observed, found := latest[out[index].Source]
 		if !found {
 			out[index].LastIngestedAt = nil
-			if out[index].Status == contractsv1.SourceWatermarkStatusFresh || out[index].Status == contractsv1.SourceWatermarkStatusStale {
+			out[index].LastEventAt = nil
+			switch out[index].Status {
+			case contractsv1.SourceWatermarkStatusFresh, contractsv1.SourceWatermarkStatusStale, contractsv1.SourceWatermarkStatusUnknown:
 				out[index].Status = contractsv1.SourceWatermarkStatusMissing
 			}
 			continue
 		}
-		out[index].LastIngestedAt = &observed
-		out[index].Status = contractsv1.SourceWatermarkStatusFresh
-		if observed.Before(asOf.Add(-staleAfterSeconds * time.Second)) {
-			out[index].Status = contractsv1.SourceWatermarkStatusStale
-		}
+		// Quarantine changes which rows are valid, never when the source was
+		// synced: only the event time follows the valid rows.
+		out[index].LastEventAt = &observed
 	}
 	return out
 }

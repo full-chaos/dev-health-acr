@@ -10,6 +10,44 @@ import (
 
 var failureTokens = map[string]bool{"failed": true, "failure": true, "error": true, "errored": true, "timed_out": true}
 
+// failureGoalWords are the goal words that name a failure. A goal containing
+// one is about failure rows and their causes (see effectiveGoalScores). Each
+// stored failure status above has a word here (the census test pins it).
+var failureGoalWords = map[string]bool{
+	"fail": true, "fails": true, "failed": true, "failing": true, "failure": true, "failures": true,
+	"error": true, "errors": true, "errored": true, "timed": true, "timeout": true, "timeouts": true,
+	"broken": true, "flaky": true, "incident": true, "incidents": true, "outage": true, "outages": true,
+	"regression": true, "regressions": true, "rollback": true, "rollbacks": true, "revert": true, "reverts": true, "reverted": true,
+}
+
+// codeHealthGoalWords are the goal words that name code health; a goal
+// containing one is about the rows of codeHealthEntityTypes.
+var codeHealthGoalWords = map[string]bool{
+	"churn": true, "hotspot": true, "hotspots": true, "complexity": true, "complex": true, "refactor": true, "refactoring": true,
+}
+
+// codeHealthEntityTypes are the entity types of the hotspot and complexity
+// catalog sources (the census test pins them to the catalog statements).
+var codeHealthEntityTypes = map[string]bool{"file_hotspot": true, "file_complexity": true}
+
+func goalNamesCodeHealth(goal string) bool {
+	for _, word := range goalWords(goal) {
+		if codeHealthGoalWords[word] {
+			return true
+		}
+	}
+	return false
+}
+
+func goalNamesFailure(goal string) bool {
+	for _, word := range goalWords(goal) {
+		if failureGoalWords[word] {
+			return true
+		}
+	}
+	return false
+}
+
 var openIncidentStatuses = map[string]bool{"open": true, "triggered": true, "acknowledged": true, "investigating": true, "identified": true, "active": true, "ongoing": true}
 
 // citationShowsFailure reads only the persisted status the source row carries.

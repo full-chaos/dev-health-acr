@@ -353,8 +353,21 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = fmt.Sprintf("At least %d %s found; %d included", coverageDetailIntOrZero(d.Declared), humanizeVocabularyToken(string(d.Kind)), coverageDetailIntOrZero(d.Served))
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		label = fmt.Sprintf("%d of %d %s facts read were given to answer synthesis", coverageDetailIntOrZero(d.Served), coverageDetailIntOrZero(d.Declared), kind)
+	case ContextFabricCoverageDetailFactScoreWithheld:
+		label = fmt.Sprintf(ContextFabricFactScoreWithheldLabel, kindClause(kind))
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
+	case ContextFabricCoverageDetailSynthesisNotRun:
+		switch d.FailureClass {
+		case ContextFabricSynthesisFailureDeadline:
+			label = "Facts only; no second synthesis was started because the time budget was spent; " + humanizeVocabularyToken(string(d.RetryHint))
+		case ContextFabricSynthesisFailureRowsOverBudget:
+			label = "Facts only; the written answer was over the response budget because of the rows it carried; " + humanizeVocabularyToken(string(d.RetryHint))
+		case ContextFabricSynthesisFailureRetryOverBudget:
+			label = "Facts only; a narrower retry also ran and did not fit the response budget; " + humanizeVocabularyToken(string(d.RetryHint))
+		default:
+			label = "Facts only; the written answer was over the response budget and could not be narrowed; " + humanizeVocabularyToken(string(d.RetryHint))
+		}
 	default:
 		label = "Coverage was limited"
 	}
@@ -397,3 +410,7 @@ func clampLabel(label string) string {
 	}
 	return strings.TrimSpace(string(runes[:ContextFabricCoverageDetailLabelMaxLength]))
 }
+
+// ContextFabricFactScoreWithheldLabel is the label of a fact_score_withheld detail: the fact kind, capitalized, then the
+// reason. The one place the sentence is written.
+const ContextFabricFactScoreWithheldLabel = "%s scores withheld: their drivers were not served"

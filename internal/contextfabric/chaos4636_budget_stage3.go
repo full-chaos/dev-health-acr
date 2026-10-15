@@ -537,6 +537,19 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		} else if ok {
 			return served, firstPass, nil
 		}
+		// A model-written first answer the deadline or the cohort leaves no second synthesis for is served as its
+		// facts when they fit, before any refusal below.
+		refuse := func() (InvestigationResult, assemblyTelemetry, error) {
+			var tried factsOnlyTry
+			if factsOnlyDeclinedReason(declined) && e.factsOnlyEligible(ctx, params, result) {
+				served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, declined, before)
+				if notServed == FactsOnlyServedOrUntried {
+					return served, pending, nil
+				}
+				tried = factsOnlyTry{attempted: true, declined: notServed}
+			}
+			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever), tried)
+		}
 		firstPass.discardObservationCoverFrom(mark)
 		// MEMBER CUT: the retry is the only other lever that removes members
 		// and it did not run. The cut keeps every member the answer names and
@@ -544,16 +557,16 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// path the first pass took, in the retry tail below. It does not run
 		// when an items cut already left a document over bytes only.
 		if overrun != contractsv1.ContextFabricBudgetOverrunItems || budget.MaxItems <= 0 || trim.Reduced.Status != "" {
-			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+			return refuse()
 		}
 		cut := e.planMemberCut(ctx, params, firstPass, result, measured.Measurement.Items.Budgeted(), budget.MaxItems)
 		if cut.Declined != MemberCutNotApplicable {
 			e.recordMemberCut(ctx, principal, plan, measured, cut, budget)
-			return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+			return refuse()
 		}
 		cutMeasured := measured
 		cutRefusal = func() error {
-			return e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+			return e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever), factsOnlyTry{})
 		}
 		cutRemoved = cut.Cut
 		defer func() {
@@ -969,7 +982,18 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return served, retryPending, nil
 	}
 	retryPending.discardObservationCoverFrom(ceilingMark)
+	// The retry ran and its answer is still over: the facts the first pass read are served instead of a refusal, when
+	// they fit. Before the refusal event, for the same reason as the ceiling fit above.
+	var retryFactsOnly factsOnlyTry
+	if retryOverrun != contractsv1.ContextFabricBudgetFits && len(cutRemoved) == 0 && e.factsOnlyEligible(ctx, params, result) {
+		served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, RetryDeclinedNotApplicable, before)
+		if notServed == FactsOnlyServedOrUntried {
+			return served, pending, nil
+		}
+		retryFactsOnly = factsOnlyTry{attempted: true, declined: notServed}
+	}
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryMeasured.Overrun, narrowed.Basis)
+	event.FactsOnlyAttempted, event.FactsOnlyDeclined = retryFactsOnly.attempted, retryFactsOnly.declined
 	event.recordMeasurement(retryMeasured)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
 	// which ran against the narrowed cohort. Predicting from `before` would
@@ -1215,7 +1239,7 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // family's declared axis, except that a byte overrun the fact rows account
 // for is narrowed by less TIME, not by fewer members -- see
 // continuationAxisForOverrun.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined, axis NarrowingContinuationAxis) error {
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined, axis NarrowingContinuationAxis, factsOnly factsOnlyTry) error {
 	// THE AXIS COMES FROM THE MEASURED ATTEMPT, not from a parameter.
 	//
 	// This function used to take `overrun` separately while taking the
@@ -1249,6 +1273,7 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	// undifferentiated absence.
 	event.OutcomeReductionDeclined = reductionDeclined
 	event.NarrowerContinuationAxis = axis
+	event.FactsOnlyAttempted, event.FactsOnlyDeclined = factsOnly.attempted, factsOnly.declined
 	e.recordPlanNarrowing(ctx, principal, event)
 	return e.refusalFromAxis(plan, measured.Measurement, overrun, retryAttempted, axis)
 }
