@@ -114,7 +114,7 @@
         "omit",
         "only"
       ],
-      "description": "include (default) returns fields and tables; omit returns fields only; only returns tables only."
+      "description": "include (default) returns fields and tables; omit returns fields only, except the drivers table of a scored fact (a score is never served without it); only returns tables only."
     },
     "max_bytes": {
       "type": "integer",
