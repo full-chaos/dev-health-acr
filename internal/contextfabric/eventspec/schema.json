@@ -5343,12 +5343,23 @@
       {
         "key": "question_shape",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open"
+        ]
       },
       {
         "key": "render_shape_rule",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "cohort_attention_score",
+          "cohort_driver_contribution",
+          "dated_fact_trend"
+        ]
       },
       {
         "key": "render_shape_skip_reason",
@@ -5394,7 +5405,13 @@
       {
         "key": "question_shape",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open"
+        ]
       },
       {
         "key": "render_shapes_selected",
@@ -6185,17 +6202,46 @@
       {
         "key": "model_status",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
       },
       {
         "key": "server_status",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
       },
       {
         "key": "basis",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_plan",
+          "no_frame",
+          "unobservable_obligation",
+          "no_claimed_facts",
+          "required_drivers_absent",
+          "required_ranking_absent",
+          "required_remaining_work_absent",
+          "required_readiness_absent",
+          "required_count_absent",
+          "coverage_degraded",
+          "limitation_disclosed",
+          "served"
+        ]
       },
       {
         "key": "derived",

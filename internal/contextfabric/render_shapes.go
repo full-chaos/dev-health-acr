@@ -943,3 +943,13 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipNoPlottableMeasure), string(RenderShapeSkipShapeBudgetSpent), string(RenderShapeSkipNotPlanAuthorized),
 	}
 }
+
+// RenderShapeRuleLineVocabulary is every rule the selector evaluates, read from
+// the selector's own rule list: the values render_shape_rule can carry.
+func RenderShapeRuleLineVocabulary() []string {
+	out := make([]string, 0, len(renderShapeRules))
+	for _, rule := range renderShapeRules {
+		out = append(out, string(rule))
+	}
+	return out
+}

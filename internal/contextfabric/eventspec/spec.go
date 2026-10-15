@@ -1653,6 +1653,35 @@ var CohortDriverNarration = Event{
 	},
 }
 
+// investigationShapeLineTokens, investigationStatusLineTokens and
+// serverStatusBasisLineTokens read the closed vocabularies of the engine lines
+// from the producers' own definitions, never from a copy.
+func investigationShapeLineTokens() []string {
+	vocab := contractsv1.ContextFabricInvestigationShapeVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
+func investigationStatusLineTokens() []string {
+	return []string{
+		string(contractsv1.ContextFabricInvestigationComplete), string(contractsv1.ContextFabricInvestigationPartial),
+		string(contractsv1.ContextFabricInvestigationDegraded), string(contractsv1.ContextFabricInvestigationClarificationRequired),
+		string(contractsv1.ContextFabricInvestigationNoMatch),
+	}
+}
+
+func serverStatusBasisLineTokens() []string {
+	vocab := contextfabric.ServerStatusBasisVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
 // RenderShapeSelectionSummary is the Info summary line of the render shape selector (CHAOS-4415): counts and an accounting verdict. The selected-shape line shares the selector but is not declared here: one rule may select several shapes and the line carries no index or total, so its multiplicity needs a ruling.
 var RenderShapeSelectionSummary = Event{
 	ID:                 "contextfabric.render_shape_selection_summary",
@@ -1663,7 +1692,7 @@ var RenderShapeSelectionSummary = Event{
 	BoundedAggregation: "exactly one line per render shape selection pass, written even when nothing was selected so a zero is a statement and not an absent line.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "question_shape", Type: FieldString, Presence: PresenceRequired},
+		{Key: "question_shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: investigationShapeLineTokens()},
 		{Key: "render_shapes_selected", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_rules_skipped", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
@@ -1683,8 +1712,8 @@ var RenderShapeRuleSkipped = Event{
 	BoundedAggregation: "at most one line per render shape rule per selection pass: the selector accounts every rule exactly once, selected or skipped.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "question_shape", Type: FieldString, Presence: PresenceRequired},
-		{Key: "render_shape_rule", Type: FieldString, Presence: PresenceRequired},
+		{Key: "question_shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: investigationShapeLineTokens()},
+		{Key: "render_shape_rule", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RenderShapeRuleLineVocabulary()},
 		{Key: "render_shape_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RenderShapeSkipReasonLineVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
@@ -1738,9 +1767,10 @@ var ServerStatusShadowLine = Event{
 	BoundedAggregation: "at most one line per investigation that reaches assembly with a plan.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "model_status", Type: FieldString, Presence: PresenceRequired},
-		{Key: "server_status", Type: FieldString, Presence: PresenceRequired},
-		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: investigationStatusLineTokens()},
+		// Empty when the derivation declined to give a verdict (no plan, no frame, unobservable): DECLINED, not a status.
+		{Key: "server_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, investigationStatusLineTokens()...)},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: serverStatusBasisLineTokens()},
 		{Key: "derived", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "disagreed", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "version", Type: FieldString, Presence: PresenceRequired},

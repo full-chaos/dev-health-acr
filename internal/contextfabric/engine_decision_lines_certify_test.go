@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -132,4 +133,68 @@ func TestServerStatusShadowLineCertifies(t *testing.T) {
 		"org_id": "org_1", "model_status": "complete", "server_status": "partial",
 		"basis": string(contextfabric.ServerStatusBasisCoverageDegraded), "derived": true, "disagreed": true, "version": "shadow-v1",
 	})
+}
+
+func certifyRefused(t *testing.T, raw []byte, event eventspec.Event, what string, extra ...map[string]any) {
+	t.Helper()
+	log, err := certify.Parse(raw)
+	if err != nil {
+		t.Fatalf("certify.Parse: %v", err)
+	}
+	want := map[string]any{"request_id": factScopeCertifyRequestID}
+	for _, more := range extra {
+		for k, v := range more {
+			want[k] = v
+		}
+	}
+	if _, err := certify.Certify(log, certify.Assertion{Event: event, Want: want}); err == nil {
+		t.Errorf("%s was certified, want it refused: %s", what, raw)
+	}
+}
+
+// TestRenderShapeAndStatusLinesCertifyEveryProducerValueAndRefuseAnyOther
+// drives every value of the closed enums the engine lines carry, each read from
+// the producer's own vocabulary, through the real sink, and requires a value
+// outside the vocabulary to be refused.
+func TestRenderShapeAndStatusLinesCertifyEveryProducerValueAndRefuseAnyOther(t *testing.T) {
+	t.Parallel()
+	rules := contextfabric.RenderShapeRuleLineVocabulary()
+	reason := contextfabric.RenderShapeSkipReason(contextfabric.RenderShapeSkipReasonLineVocabulary()[0])
+	record := func(shape, rule string) []byte {
+		var buf bytes.Buffer
+		telemetry, ctx := cohortTelemetry(&buf)
+		telemetry.RecordRenderShapeSelection(ctx, storage.Principal{OrgID: "org_1"}, contextfabric.RenderShapeSelectionEvent{
+			Shape:   contractsv1.ContextFabricInvestigationShape(shape),
+			Skipped: []contextfabric.RenderShapeSkip{{Rule: contractsv1.ContextFabricRenderShapeRule(rule), Reason: reason}},
+		})
+		return buf.Bytes()
+	}
+	for _, shape := range contractsv1.ContextFabricInvestigationShapeVocabulary() {
+		for _, rule := range rules {
+			raw := record(string(shape), rule)
+			certifyRequestLine(t, raw, eventspec.RenderShapeSelectionSummary, map[string]any{"question_shape": string(shape)})
+			certifyRequestLine(t, raw, eventspec.RenderShapeRuleSkipped, map[string]any{"question_shape": string(shape), "render_shape_rule": rule})
+		}
+	}
+	certifyRefused(t, record("future_shape", rules[0]), eventspec.RenderShapeSelectionSummary, "an unknown question shape on the summary line")
+	certifyRefused(t, record(string(contractsv1.ContextFabricShapeOpen), "future_rule"), eventspec.RenderShapeRuleSkipped, "an unknown render shape rule", map[string]any{"render_shape_rule": "future_rule"})
+
+	statuses := []string{"complete", "partial", "degraded", "clarification_required", "no_match"}
+	shadow := func(model, server string, basis contextfabric.ServerStatusBasis) []byte {
+		var buf bytes.Buffer
+		telemetry, ctx := cohortTelemetry(&buf)
+		telemetry.RecordServerStatusShadow(ctx, storage.Principal{OrgID: "org_1"}, contextfabric.ServerStatusShadow{
+			ModelStatus: contextfabric.InvestigationStatus(model), ServerStatus: contextfabric.InvestigationStatus(server), Basis: basis, Version: "shadow-v1",
+		})
+		return buf.Bytes()
+	}
+	for _, status := range statuses {
+		for _, basis := range contextfabric.ServerStatusBasisVocabulary() {
+			certifyRequestLine(t, shadow(status, status, basis), eventspec.ServerStatusShadowLine, map[string]any{"model_status": status, "server_status": status, "basis": string(basis)})
+		}
+	}
+	certifyRequestLine(t, shadow("complete", "", contextfabric.ServerStatusBasisNoPlan), eventspec.ServerStatusShadowLine, map[string]any{"server_status": ""})
+	certifyRefused(t, shadow("future_status", "complete", contextfabric.ServerStatusBasisServed), eventspec.ServerStatusShadowLine, "an unknown model status")
+	certifyRefused(t, shadow("complete", "future_status", contextfabric.ServerStatusBasisServed), eventspec.ServerStatusShadowLine, "an unknown server status")
+	certifyRefused(t, shadow("complete", "complete", contextfabric.ServerStatusBasis("future_basis")), eventspec.ServerStatusShadowLine, "an unknown basis")
 }
