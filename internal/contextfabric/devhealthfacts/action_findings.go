@@ -107,9 +107,20 @@ func (s *ActionFindingsSource) ActionFindings(ctx context.Context, principal sto
 			Title: factString(fact, "title"), SuccessCriterion: factString(fact, "success_criterion"),
 		})
 	}
+	// EvaluatedSubjects lists only the teams evaluated with no fired rule; a
+	// team whose rule fired is evaluated too and is carried by its facts.
+	evaluated := make(map[string]struct{}, len(subjects))
+	for _, subject := range result.EvaluatedSubjects {
+		evaluated[subject.CanonicalID] = struct{}{}
+	}
+	for teamID := range byTeam {
+		evaluated[teamPrefix+teamID] = struct{}{}
+	}
 	out := contextpacket.ActionFindingsResult{WithheldTeams: len(requested) - len(subjects)}
-	if notEvaluated := len(subjects) - len(result.EvaluatedSubjects); notEvaluated > 0 {
-		out.NotEvaluatedTeams = notEvaluated
+	for _, subject := range subjects {
+		if _, ok := evaluated[subject.CanonicalID]; !ok {
+			out.NotEvaluatedTeams++
+		}
 	}
 	ids := make([]string, 0, len(byTeam))
 	for id := range byTeam {
