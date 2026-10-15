@@ -73,6 +73,9 @@ type synthesisAssemblyParams struct {
 	// cohort and every cohort-derived field comes from one assembly over it,
 	// never from patching the document a wider cohort produced.
 	Draft *InvestigationResult
+	// Degrade, when set, makes the pass compose its answer with the degraded
+	// composer over its own input and call no model.
+	Degrade *SynthesisFailure
 	// ReadRequirements is the requirement list the fact read ran with: what
 	// the planner read for this question. Read-only; the status floor's
 	// asked-kind set includes it.
@@ -372,6 +375,12 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	var err error
 	if params.Draft != nil {
 		result = copyResultDeep(*params.Draft)
+	} else if params.Degrade != nil && !clientSynthesisRequested(request) {
+		degraded, ok := e.synthesizer.(DegradedSynthesizer)
+		if !ok {
+			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, errors.New("degrade: the synthesizer composes no degraded answer"))
+		}
+		result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, params.Degrade)
 	} else if clientSynthesisRequested(request) {
 		result, pending.ClientSynthesisInput, pending.ClientSynthesisMeasure, err = e.runClientSynthesis(ctx, principal, synthesisInput)
 		pending.SuppliedSynthesisServed = err == nil && request.SuppliedSynthesis != nil

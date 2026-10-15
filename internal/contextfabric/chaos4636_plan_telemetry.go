@@ -162,6 +162,11 @@ type PlanNarrowingEvent struct {
 	// refusal rather than an unexplained 413. Counting it is how "how often
 	// does the terminal case actually fire" stops being a guess.
 	RefusalPlanned bool
+	// FactsOnlyAttempted: the retry was declined for want of deadline or of
+	// members to cut, and a facts-only composition was assembled and measured
+	// in place of the refusal. FactsOnlyServed: it fit and was served.
+	FactsOnlyAttempted bool
+	FactsOnlyServed    bool
 	// DeadlineReserved reports whether a synthesis deadline was reserved.
 	// D5 calls the reservation non-negotiable, so an event saying it was
 	// absent is the signal that a deployment is one slow synthesis away

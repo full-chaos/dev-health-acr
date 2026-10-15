@@ -518,7 +518,15 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		} else if ok {
 			return served, firstPass, nil
 		}
-		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
+		factsOnlyAttempted := false
+		if factsOnlyDeclinedReason(declined) && e.factsOnlyEligible(ctx, params, result) {
+			factsOnlyAttempted = true
+			served, pending, ok := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, declined, before)
+			if ok {
+				return served, pending, nil
+			}
+		}
+		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, e.refusalPlan(plan, measured.Measurement, budget.MaxSerializedBytes), measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever), factsOnlyAttempted)
 	}
 
 	// Selection records the first attempt's measured trigger. The retry has
@@ -1124,7 +1132,7 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // family's declared axis, except that a byte overrun the fact rows account
 // for is narrowed by less TIME, not by fewer members -- see
 // continuationAxisForOverrun.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined, axis NarrowingContinuationAxis) error {
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined, axis NarrowingContinuationAxis, factsOnlyAttempted bool) error {
 	// THE AXIS COMES FROM THE MEASURED ATTEMPT, not from a parameter.
 	//
 	// This function used to take `overrun` separately while taking the
@@ -1158,6 +1166,7 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	// undifferentiated absence.
 	event.OutcomeReductionDeclined = reductionDeclined
 	event.NarrowerContinuationAxis = axis
+	event.FactsOnlyAttempted = factsOnlyAttempted
 	e.recordPlanNarrowing(ctx, principal, event)
 	return e.refusalFromAxis(plan, measured.Measurement, overrun, retryAttempted, axis)
 }
