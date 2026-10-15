@@ -344,8 +344,10 @@ func TestCoverageValidateAppliesDetailChecksOnWriteOnly(t *testing.T) {
 func TestTheFactsOnlyClassesCarryTheirRetryHints(t *testing.T) {
 	t.Parallel()
 	for class, want := range map[ContextFabricSynthesisFailureClass]ContextFabricRetryHint{
-		ContextFabricSynthesisFailureDeadline:      ContextFabricRetryMaySucceed,
-		ContextFabricSynthesisFailureNotNarrowable: ContextFabricRetryUnlikelyToHelp,
+		ContextFabricSynthesisFailureDeadline:        ContextFabricRetryMaySucceed,
+		ContextFabricSynthesisFailureNotNarrowable:   ContextFabricRetryUnlikelyToHelp,
+		ContextFabricSynthesisFailureRowsOverBudget:  ContextFabricRetryUnlikelyToHelp,
+		ContextFabricSynthesisFailureRetryOverBudget: ContextFabricRetryUnlikelyToHelp,
 	} {
 		got, err := ContextFabricRetryHintFor(class)
 		if err != nil || got != want {

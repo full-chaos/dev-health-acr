@@ -107,7 +107,7 @@ func init() {
 			clientValidate: "none: CoverageDetail is checked on the write path only; a stored or served read never checks it",
 			sites:          []string{"CoverageDetail.failure_class"},
 			// schema: "model_output_invalid", "synthesis_rejected", "model_receipt_unrecorded", "model_call_not_completed"
-			goSet:      []string{string(contractsv1.ContextFabricSynthesisFailureModelOutputInvalid), string(contractsv1.ContextFabricSynthesisFailureRejected), string(contractsv1.ContextFabricSynthesisFailureReceiptUnrecorded), string(contractsv1.ContextFabricSynthesisFailureCallNotCompleted), string(contractsv1.ContextFabricSynthesisFailureDeadline), string(contractsv1.ContextFabricSynthesisFailureNotNarrowable)},
+			goSet:      []string{string(contractsv1.ContextFabricSynthesisFailureModelOutputInvalid), string(contractsv1.ContextFabricSynthesisFailureRejected), string(contractsv1.ContextFabricSynthesisFailureReceiptUnrecorded), string(contractsv1.ContextFabricSynthesisFailureCallNotCompleted), string(contractsv1.ContextFabricSynthesisFailureDeadline), string(contractsv1.ContextFabricSynthesisFailureNotNarrowable), string(contractsv1.ContextFabricSynthesisFailureRowsOverBudget), string(contractsv1.ContextFabricSynthesisFailureRetryOverBudget)},
 			exhaustive: true,
 		},
 		outputVocabulary{

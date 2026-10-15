@@ -19,14 +19,18 @@ var errFactsOnlyNoSynthesisRoom = errors.New("no second synthesis could run; the
 // overran: RetryDeclinedNotApplicable at the post-retry refusal).
 func factsOnlyFailureClass(declined RetryDeclinedReason) SynthesisFailureClass {
 	switch declined {
-	case RetryDeclinedNothingToNarrow, RetryDeclinedCannotReduceAxis, RetryDeclinedNotApplicable:
+	case RetryDeclinedNothingToNarrow:
 		return contractsv1.ContextFabricSynthesisFailureNotNarrowable
+	case RetryDeclinedCannotReduceAxis:
+		return contractsv1.ContextFabricSynthesisFailureRowsOverBudget
+	case RetryDeclinedNotApplicable:
+		return contractsv1.ContextFabricSynthesisFailureRetryOverBudget
 	}
 	return contractsv1.ContextFabricSynthesisFailureDeadline
 }
 
 func factsOnlyFailure(declined RetryDeclinedReason) *SynthesisFailure {
-	return &SynthesisFailure{Class: factsOnlyFailureClass(declined), DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom, retryRan: declined == RetryDeclinedNotApplicable}
+	return &SynthesisFailure{Class: factsOnlyFailureClass(declined), DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom}
 }
 
 // factsOnlyDeclinedReason: the retry reasons after which a facts-only answer
@@ -53,7 +57,9 @@ func (e *Engine) factsOnlyEligible(ctx context.Context, params synthesisAssembly
 	}
 	return !slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) &&
 		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisDeadlineLimitation) &&
-		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisNotNarrowableLimitation)
+		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisNotNarrowableLimitation) &&
+		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisRowsOverBudgetLimitation) &&
+		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisRetryRanLimitation)
 }
 
 // FactsOnlyDeclined is the CLOSED vocabulary of why a facts-only answer that was tried did not serve, on the plan

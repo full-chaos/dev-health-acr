@@ -172,6 +172,10 @@ func composeFailureCurrentState(claims []ClaimedFact, class SynthesisFailureClas
 		return "No second synthesis was started because the time budget was spent, so no current state is written here; the sources that were read are listed in coverage."
 	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
 		return "The written answer was over the response budget and the cohort could not be narrowed further, so no current state is written here; the sources that were read are listed in coverage."
+	case contractsv1.ContextFabricSynthesisFailureRowsOverBudget:
+		return "The written answer was over the response budget because of the rows it carried, so no current state is written here; the sources that were read are listed in coverage."
+	case contractsv1.ContextFabricSynthesisFailureRetryOverBudget:
+		return "A narrower retry also ran and did not fit the response budget, so no current state is written here; the sources that were read are listed in coverage."
 	}
 	return state
 }

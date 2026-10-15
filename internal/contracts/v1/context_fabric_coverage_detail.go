@@ -1019,6 +1019,17 @@ const (
 	// at its smallest, so a second synthesis could not shrink it; the facts
 	// are served without model prose. No model call failed.
 	ContextFabricSynthesisFailureNotNarrowable ContextFabricSynthesisFailureClass = "synthesis_not_narrowable"
+	// ContextFabricSynthesisFailureRowsOverBudget: the model wrote a first
+	// answer that did not fit the response budget because of the rows it
+	// carried; the cohort could still be narrowed, but a smaller cohort would
+	// not have made the rows fit, so the facts are served without model prose.
+	// No model call failed.
+	ContextFabricSynthesisFailureRowsOverBudget ContextFabricSynthesisFailureClass = "synthesis_rows_over_budget"
+	// ContextFabricSynthesisFailureRetryOverBudget: a narrower second
+	// synthesis ran and its answer still did not fit the response budget, so
+	// the facts of the first pass are served without model prose. No model
+	// call failed.
+	ContextFabricSynthesisFailureRetryOverBudget ContextFabricSynthesisFailureClass = "synthesis_retry_over_budget"
 )
 
 // ContextFabricRetryHint is the closed vocabulary of what a caller may expect
@@ -1042,6 +1053,8 @@ var contextFabricSynthesisFailureClasses = [...]ContextFabricSynthesisFailureCla
 	ContextFabricSynthesisFailureCallNotCompleted,
 	ContextFabricSynthesisFailureDeadline,
 	ContextFabricSynthesisFailureNotNarrowable,
+	ContextFabricSynthesisFailureRowsOverBudget,
+	ContextFabricSynthesisFailureRetryOverBudget,
 }
 
 var contextFabricRetryHints = [...]ContextFabricRetryHint{
@@ -1080,7 +1093,7 @@ func ContextFabricRetryHintFor(class ContextFabricSynthesisFailureClass) (Contex
 	switch class {
 	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded, ContextFabricSynthesisFailureCallNotCompleted, ContextFabricSynthesisFailureDeadline:
 		return ContextFabricRetryMaySucceed, nil
-	case ContextFabricSynthesisFailureRejected, ContextFabricSynthesisFailureNotNarrowable:
+	case ContextFabricSynthesisFailureRejected, ContextFabricSynthesisFailureNotNarrowable, ContextFabricSynthesisFailureRowsOverBudget, ContextFabricSynthesisFailureRetryOverBudget:
 		return ContextFabricRetryUnlikelyToHelp, nil
 	}
 	return "", fmt.Errorf("synthesis failure class %q has no retry hint", class)

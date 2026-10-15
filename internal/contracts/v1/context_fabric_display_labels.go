@@ -361,6 +361,10 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		switch d.FailureClass {
 		case ContextFabricSynthesisFailureDeadline:
 			label = "Facts only; no second synthesis was started because the time budget was spent; " + humanizeVocabularyToken(string(d.RetryHint))
+		case ContextFabricSynthesisFailureRowsOverBudget:
+			label = "Facts only; the written answer was over the response budget because of the rows it carried; " + humanizeVocabularyToken(string(d.RetryHint))
+		case ContextFabricSynthesisFailureRetryOverBudget:
+			label = "Facts only; a narrower retry also ran and did not fit the response budget; " + humanizeVocabularyToken(string(d.RetryHint))
 		default:
 			label = "Facts only; the written answer was over the response budget and could not be narrowed; " + humanizeVocabularyToken(string(d.RetryHint))
 		}

@@ -69,6 +69,10 @@ func synthesisFailureWarning(class SynthesisFailureClass) string {
 		return "answer text unavailable: facts only; no second synthesis was started because the time budget was spent (class: " + string(class) + "); the sources that were read are listed in coverage"
 	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
 		return "answer text unavailable: facts only; the written answer was over the response budget and the cohort could not be narrowed further (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureRowsOverBudget:
+		return "answer text unavailable: facts only; the written answer was over the response budget because of the rows it carried; a smaller cohort would not have made it fit (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureRetryOverBudget:
+		return "answer text unavailable: facts only; a narrower retry also ran and did not fit the response budget; the facts shown are from the first pass (class: " + string(class) + "); the sources that were read are listed in coverage"
 	}
 	return "answer text unavailable: the model call failed (class: " + string(class) + "); the sources that were read are listed in coverage"
 }
@@ -226,9 +230,6 @@ type SynthesisFailure struct {
 	// bounded it.
 	CallDeadline time.Time
 	cause        error
-	// retryRan is set on a facts-only answer served after a narrower retry ran and did not fit: its facts are the first
-	// pass's, and the answer says a retry ran.
-	retryRan bool
 	// withheldScoreKinds are the fact kinds whose declared scores the degraded composition did not claim; the composition
 	// files one fact_score_withheld detail for each.
 	withheldScoreKinds []FactKind
@@ -259,11 +260,7 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 		if len(claims) == 0 {
 			draft.ClaimedFacts, draft.EvidenceRefIDs = []ClaimedFact{}, []string{}
 		}
-		additions := []string{limitation}
-		if failure.retryRan {
-			additions = append(additions, contractsv1.ContextFabricSynthesisRetryRanLimitation)
-		}
-		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, additions)
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, []string{limitation})
 	} else if len(claims) > 0 {
 		draft.ClaimedFacts = claims
 		draft.EvidenceRefIDs = evidence

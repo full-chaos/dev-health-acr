@@ -720,8 +720,12 @@ const ContextFabricSynthesisDeadlineLimitation = "Facts only; no second synthesi
 // cohort could not be narrowed further.
 const ContextFabricSynthesisNotNarrowableLimitation = "Facts only; the written answer was over the response budget and the cohort could not be narrowed further. The canonical values shown are those read, with no judgment applied, and more may have been read than one answer can carry."
 
-// ContextFabricSynthesisRetryRanLimitation is the sentence a facts-only answer carries, beside its class sentence, when a
-// narrower retry already ran and did not fit: the facts are from the first pass.
+// ContextFabricSynthesisRowsOverBudgetLimitation is the sentence a facts-only answer carries when the rows it carried
+// put the written answer over the response budget and a smaller cohort would not have made it fit.
+const ContextFabricSynthesisRowsOverBudgetLimitation = "Facts only; the written answer was over the response budget because of the rows it carried; a smaller cohort would not have made it fit."
+
+// ContextFabricSynthesisRetryRanLimitation is the sentence a facts-only answer carries when a narrower retry already
+// ran and did not fit: the facts are from the first pass.
 const ContextFabricSynthesisRetryRanLimitation = "A narrower retry also ran and did not fit the response budget; the facts shown are from the first pass."
 
 // ContextFabricSynthesisFactsOnlyLimitationFor is the limitation of a class
@@ -732,6 +736,10 @@ func ContextFabricSynthesisFactsOnlyLimitationFor(class ContextFabricSynthesisFa
 		return ContextFabricSynthesisDeadlineLimitation, true
 	case ContextFabricSynthesisFailureNotNarrowable:
 		return ContextFabricSynthesisNotNarrowableLimitation, true
+	case ContextFabricSynthesisFailureRowsOverBudget:
+		return ContextFabricSynthesisRowsOverBudgetLimitation, true
+	case ContextFabricSynthesisFailureRetryOverBudget:
+		return ContextFabricSynthesisRetryRanLimitation, true
 	}
 	return "", false
 }
@@ -834,6 +842,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisFailedNoFactsLimitation,
 		ContextFabricSynthesisDeadlineLimitation,
 		ContextFabricSynthesisNotNarrowableLimitation,
+		ContextFabricSynthesisRowsOverBudgetLimitation,
 		ContextFabricSynthesisRetryRanLimitation,
 	}
 }

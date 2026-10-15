@@ -171,6 +171,8 @@ The fix, concretely:
    | `synthesis_rejected` | `retry_unlikely_to_help` | every draft broke the service's bounds over these facts |
    | `synthesis_deadline` | `retry_may_succeed` | no call failed: the first written answer was over the response budget and the time budget left no room for a second synthesis, so the facts are served |
    | `synthesis_not_narrowable` | `retry_unlikely_to_help` | no call failed: the first written answer was over the response budget and the cohort was already at its smallest, so the facts are served |
+   | `synthesis_rows_over_budget` | `retry_unlikely_to_help` | no call failed: the first written answer was over the response budget because of the rows it carried, and a smaller cohort would not have made it fit, so the facts are served |
+   | `synthesis_retry_over_budget` | `retry_unlikely_to_help` | no call failed: a narrower second synthesis ran and still did not fit the response budget, so the facts of the first pass are served |
 
    No model-authored field is served. Instead each scalar canonical field that
    was read is minted as a claimed fact (claim id `server:fact:<n>`), grounded

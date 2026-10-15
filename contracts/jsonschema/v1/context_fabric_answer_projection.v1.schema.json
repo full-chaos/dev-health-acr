@@ -2945,14 +2945,16 @@
         },
         "failure_class": {
           "type": "string",
-          "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed, synthesis_deadline, synthesis_not_narrowable. A client must tolerate values it does not know.",
+          "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed, synthesis_deadline, synthesis_not_narrowable, synthesis_rows_over_budget, synthesis_retry_over_budget. A client must tolerate values it does not know.",
           "x-documented-values": [
             "model_output_invalid",
             "synthesis_rejected",
             "model_receipt_unrecorded",
             "model_call_not_completed",
             "synthesis_deadline",
-            "synthesis_not_narrowable"
+            "synthesis_not_narrowable",
+            "synthesis_rows_over_budget",
+            "synthesis_retry_over_budget"
           ]
         },
         "retry_hint": {

@@ -261,7 +261,7 @@ func TestAFactsOnlyAnswerOverAGroupedCohortKeepsEveryGroupAndMemberAndNarrowsNot
 func TestAFactsOnlyAnswerWithNoScalarFactNeverSaysAModelCallFailed(t *testing.T) {
 	t.Parallel()
 	facts := []CanonicalFact{degradedClaimFact(1, 1, map[string]FactValue{"rows": {Rows: []FactValueRow{{Fields: map[string]FactValue{"x": StringFactValue("y")}}}}})}
-	for _, class := range []SynthesisFailureClass{contractsv1.ContextFabricSynthesisFailureDeadline, contractsv1.ContextFabricSynthesisFailureNotNarrowable} {
+	for _, class := range []SynthesisFailureClass{contractsv1.ContextFabricSynthesisFailureDeadline, contractsv1.ContextFabricSynthesisFailureNotNarrowable, contractsv1.ContextFabricSynthesisFailureRowsOverBudget, contractsv1.ContextFabricSynthesisFailureRetryOverBudget} {
 		failure := &SynthesisFailure{Class: class, DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom}
 
 		result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, SynthesisInput{Facts: CanonicalFactBundle{Facts: facts}}, failure)
@@ -482,10 +482,58 @@ func TestAByteOverrunTheRowsAloneCauseServesTheFactsLabelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v, want the facts-only answer", err)
 	}
-	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureNotNarrowable)
+	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureRowsOverBudget)
 	assertRetryRanSentence(t, result, false)
 	if served := factsOnlyServedEvent(telemetry); served == nil || served.RetryDeclined != RetryDeclinedCannotReduceAxis {
 		t.Fatalf("served event %+v, want facts_only_served with retry_declined cannot_reduce_axis", served)
+	}
+}
+
+// The rows were the blocker and the cohort could still be narrowed: the answer says the rows put it over the budget and
+// never says the cohort could not be narrowed, in its limitation, warning, current state or coverage label.
+func TestAFactsOnlyAnswerOverRowsNamesTheRowsNotTheCohort(t *testing.T) {
+	var calls int
+	telemetry := &recordingTelemetry{}
+	engine := chaos6558Engine(t, &calls, telemetry, chaos6558Shape{rowPadding: 2000, maxBytes: 40000})
+	engine.synthesizer = memberCutDegradeCapable{engine.synthesizer}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
+
+	if err != nil {
+		t.Fatalf("error = %v, want the facts-only answer", err)
+	}
+	if cohortMemberCount(result.Cohort) < 2 {
+		t.Fatalf("cohort has %d members, want a narrowable cohort", cohortMemberCount(result.Cohort))
+	}
+	assertServedTexts(t, result, contractsv1.ContextFabricSynthesisRowsOverBudgetLimitation,
+		"because of the rows it carried", "narrowed")
+}
+
+// assertServedTexts checks every served text of a facts-only answer: the limitation list is exactly the given sentence,
+// and the warning, current state and coverage label carry the stated phrase and never the forbidden one.
+func assertServedTexts(t *testing.T, result InvestigationResult, limitation, mustSay, mustNotSay string) {
+	t.Helper()
+	if !slices.Equal(result.Limitations, []string{limitation}) {
+		t.Fatalf("limitations = %q, want exactly %q", result.Limitations, limitation)
+	}
+	texts := append([]string{}, result.Warnings...)
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisNotRun {
+			texts = append(texts, detail.Label)
+		}
+	}
+	if len(texts) < 2 {
+		t.Fatalf("served texts %q, want a warning and a label", texts)
+	}
+	for _, text := range append(texts, limitation, result.CurrentState) {
+		if strings.Contains(text, mustNotSay) {
+			t.Errorf("text %q says %q", text, mustNotSay)
+		}
+	}
+	for _, text := range texts {
+		if !strings.Contains(strings.ToLower(text), strings.ToLower(mustSay)) {
+			t.Errorf("text %q does not say %q", text, mustSay)
+		}
 	}
 }
 
@@ -501,8 +549,9 @@ func TestARetryThatStillOverranServesTheFactsLabelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v, want the facts-only answer", err)
 	}
-	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureNotNarrowable)
+	assertFactsOnlyLabelled(t, result, contractsv1.ContextFabricSynthesisFailureRetryOverBudget)
 	assertRetryRanSentence(t, result, true)
+	assertServedTexts(t, result, contractsv1.ContextFabricSynthesisRetryRanLimitation, "narrower retry also ran", "could not be narrowed")
 	served := factsOnlyServedEvent(telemetry)
 	if calls != 2 || served == nil || !served.RetryAttempted {
 		t.Fatalf("model calls %d served event %+v, want the retry to have run and the served event to say so", calls, served)
