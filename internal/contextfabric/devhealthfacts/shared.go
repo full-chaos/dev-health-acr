@@ -1197,7 +1197,14 @@ import (
 // metrics fact carries change_failure_incident_linked_failed_deployments_count
 // and change_failure_status_failed_deployments_basis
 // (status_failed_not_incident_linked). An answer saved under v233 lacks them.
-const QueryVersion = "devhealthfacts.clickhouse.v234"
+//
+// v234 -> v235: a refused run_operation or graphql_query reply, and the read
+// log of every call, report the same stamped schema digest a served call
+// reports, read when the reply is built, not the pinned digest. The query
+// version is part of the answer reuse key, so an answer saved under v234 is not
+// reused as one produced with the old digest rule; the digest itself is on the
+// reply and the read log, not in a saved answer.
+const QueryVersion = "devhealthfacts.clickhouse.v235"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
