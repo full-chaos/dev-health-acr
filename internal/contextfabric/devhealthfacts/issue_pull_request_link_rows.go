@@ -2,7 +2,9 @@ package devhealthfacts
 
 // The issue <> pull request link of record is work_graph_issue_pr, one row per
 // (pull request repository, issue, pull request number) carrying a provenance
-// tier: native 3 > explicit_text 2 > heuristic 1. Every reader of the link in
+// tier: native 3 > explicit_text 2 > heuristic 1; a lower tier counts only
+// where no native row covers its pull request or its issue (nativeFirstLinkSQL).
+// Every reader of the link in
 // this package reads it through issueLinkRowsSQL (or its admitted subset), so
 // one rule decides whether a row counts:
 //
@@ -16,6 +18,16 @@ package devhealthfacts
 // linkTierRankSQL ranks the three provenance tiers of the link of record,
 // ops' spelling; any other value ranks 0. l is the work_graph_issue_pr alias.
 const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0)`
+
+// nativeFirstLinkSQL is the fallback-only rule of the link of record (ops
+// issueprlinks.NativeLinks.Outranks): an explicit_text or heuristic row counts
+// only when no native row covers its pull request (repo_id, pr_number) or its
+// issue. A native row always counts. l is the work_graph_issue_pr alias. Ops
+// retracts the covered rows at the source; this keeps a read right before that
+// build has run for an organization.
+const nativeFirstLinkSQL = `(l.provenance = 'native' OR (
+    l.work_item_id NOT IN (SELECT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND provenance = 'native')
+    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND provenance = 'native')))`
 
 // linkedPullRequestOnSQL joins a link row (l) to the pull request (pr) it names.
 const linkedPullRequestOnSQL = `pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number`
@@ -51,7 +63,7 @@ func issueLinkRowsAmongSQL(candidates string) string {
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
   LEFT JOIN ` + workItems + ` ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
-  WHERE l.org_id = {org_id:String}` + among + ` AND ` + workItemIsIssueSQL("wi") + `
+  WHERE l.org_id = {org_id:String}` + among + ` AND ` + nativeFirstLinkSQL + ` AND ` + workItemIsIssueSQL("wi") + `
 )`
 }
 
@@ -83,5 +95,5 @@ const admittedLinkedPullRequestRowsSQL = `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0 AND ` + nativeFirstLinkSQL + `
 )`

@@ -1208,7 +1208,13 @@ import (
 // v235 -> v236: the team metrics fact and the project rollup fact carry
 // commit_counts_basis beside the commit counts (owner_share_weighted_latest_day);
 // an answer saved under v235 lacks it.
-const QueryVersion = "devhealthfacts.clickhouse.v236"
+//
+// v236 -> v237: an explicit_text or heuristic issue <> pull request link counts
+// only where no native link covers its pull request or its issue, so a
+// project-reached repository, a rollup or a scope walk no longer admits a
+// fallback link next to a native one; the team no-repository note names the
+// project reach. An answer saved under v236 can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v237"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

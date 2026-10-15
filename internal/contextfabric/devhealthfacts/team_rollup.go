@@ -42,7 +42,7 @@ const commitCountsBasis = "owner_share_weighted_latest_day"
 // teamNoOwnedRepositoriesReason is the not_applicable reason when every
 // requested team owns no resolvable repository: the kind cannot be rolled up
 // for it, which is distinct from a measured zero.
-const teamNoOwnedRepositoriesReason = "devhealthfacts: the team owns no repository in synced ownership, so no rollup applies; this is not a measured zero"
+const teamNoOwnedRepositoriesReason = "devhealthfacts: the team owns no repository in synced ownership and reaches none through the native-first issue links of an owned project, so no rollup applies; this is not a measured zero"
 
 // teamOwnedRepositoriesOverflowReason is the failure reason when the ownership
 // read hit its bound: a rollup over a partial repository set would be a wrong
@@ -505,7 +505,7 @@ func ownedNameByKey(repos []teamOwnedRepo) map[string]string {
 // of the requested teams own no repository: the teams that own one keep their
 // own state.
 func teamsOwningNoRepositoriesReason(without, requested int) string {
-	return fmt.Sprintf("devhealthfacts: %d of %d requested teams own no repository in synced ownership, so no rollup applies to them; this is not a measured zero", without, requested)
+	return fmt.Sprintf("devhealthfacts: %d of %d requested teams own no repository in synced ownership and reach none through the native-first issue links of an owned project, so no rollup applies to them; this is not a measured zero", without, requested)
 }
 
 // teamsOwningNothingWithoutData counts the requested teams that own no
