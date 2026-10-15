@@ -169,3 +169,28 @@ func TestAssembler_dedupes_one_pull_request_served_as_pull_request_and_work_item
 		})
 	}
 }
+
+func TestAssembler_pull_request_row_wins_over_a_better_scored_work_item_with_the_same_subject(t *testing.T) {
+	observed := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	request := fixtureRequest("req-pr-wins", "main", "")
+	request.Goal = "checkout payments"
+	pr := testEvidence("ev2_prod1_pr_a", "dev_health", observed)
+	pr.Source.EntityType, pr.Source.EntityID = "pull_request", "2"
+	pr.Metadata = map[string]any{"subject_key": "pull_request:repo:2"}
+	workItem := testEvidence("ev2_prod1_work_b", "dev_health", observed)
+	workItem.Source.EntityType, workItem.Source.EntityID = "work_item", "ghpr:o/r#2"
+	workItem.Source.DisplayLabel, workItem.Citation = "checkout payments", "checkout payments"
+	workItem.Metadata = map[string]any{"subject_key": "pull_request:repo:2"}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      []contractsv1.EvidenceRef{workItem, pr},
+		QueryVersion:  contextpacket.QueryVersionV1,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if len(packet.Items) != 1 || packet.Items[0].EvidenceRefIDs[0] != "ev2_prod1_pr_a" {
+		t.Fatalf("items = %#v, want only the pull_request row", packet.Items)
+	}
+}

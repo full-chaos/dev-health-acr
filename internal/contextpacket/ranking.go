@@ -150,8 +150,23 @@ func goalScore(ref contractsv1.EvidenceRef, goal string) int {
 	return score
 }
 func deduplicateEvidence(refs []contractsv1.EvidenceRef) []contractsv1.EvidenceRef {
+	// A pull request served as pull_request and as a projected work item keeps
+	// the pull_request row whatever order scoring put them in.
+	pullRequestOf := map[string]string{}
+	for _, ref := range refs {
+		if subject, _ := ref.Metadata[metadataSubjectKey].(string); subject != "" && ref.Source.EntityType == "pull_request" {
+			if _, ok := pullRequestOf[subject]; !ok {
+				pullRequestOf[subject] = ref.EvidenceRefID
+			}
+		}
+	}
 	seen, unique := map[string]bool{}, make([]contractsv1.EvidenceRef, 0, len(refs))
 	for _, ref := range refs {
+		if subject, _ := ref.Metadata[metadataSubjectKey].(string); subject != "" {
+			if winner, ok := pullRequestOf[subject]; ok && winner != ref.EvidenceRefID {
+				continue
+			}
+		}
 		keys := canonicalEvidenceKeys(ref)
 		duplicate := false
 		for _, key := range keys {

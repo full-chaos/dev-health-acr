@@ -30,7 +30,7 @@ const typedSubjectColumns = `SELECT evidence_ref_id, system, entity_type, entity
 // pull request projected as a work item ("ghpr:<repo>#N", "gitlab:<repo>!N"),
 // and ” for any other work item. The repo segment must equal this packet
 // repository's own slug, so a reference to another repository never matches.
-const workItemSubjectKeySQL = `if(repo.repo != '' AND (w.work_item_id = concat('ghpr:', repo.repo, '#', extract(w.work_item_id, '[0-9]+$')) OR w.work_item_id = concat('gitlab:', repo.repo, '!', extract(w.work_item_id, '[0-9]+$'))), concat('pull_request:', toString(w.repo_id), ':', extract(w.work_item_id, '[0-9]+$')), '')`
+const workItemSubjectKeySQL = `if(repo.repo != '' AND ((repo.provider = 'github' AND w.work_item_id = concat('ghpr:', repo.repo, '#', extract(w.work_item_id, '[0-9]+$'))) OR (repo.provider = 'gitlab' AND w.work_item_id = concat('gitlab:', repo.repo, '!', extract(w.work_item_id, '[0-9]+$')))), concat('pull_request:', toString(w.repo_id), ':', extract(w.work_item_id, '[0-9]+$')), '')`
 
 const typedDeploymentColumns = `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, toFloat64(confidence) confidence, citation, observed_at, deployment_status, pull_request_number, pull_request_tier FROM (`
 
