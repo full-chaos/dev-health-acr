@@ -245,3 +245,38 @@ func TestADriverWhoseOnlyClaimWasAWithheldScoreIsLeftOutAndTheAnswerIsServed(t *
 		t.Fatalf("drivers %d details %d, want the driver left out and the score disclosed", len(result.Drivers), len(scoreWithheldDetails(result)))
 	}
 }
+
+// Only an item left with no claim, of a category that must cite one, is dropped. An item that keeps another claim, or
+// whose category needs none, stays with its other grounds.
+func TestOnlyAnItemLeftWithoutItsRequiredClaimIsDropped(t *testing.T) {
+	input, team := k7Input(false)
+	draft := k7Draft(input, team, "compounding_risk")
+	severity := "high"
+	draft.ClaimedFacts = append(draft.ClaimedFacts, ClaimedFact{ClaimID: "claim_sev_1", Kind: FactHealth, Subject: team, Field: "severity", Value: ScalarValue{String: &severity}})
+	only, both, plain := draft.Drivers[0], draft.Drivers[0], draft.Drivers[0]
+	only.DriverID, only.Category, only.ClaimedFactIDs = "driver_only_01", "health", []string{"claim_risk_1"}
+	both.DriverID, both.Category, both.ClaimedFactIDs = "driver_both_01", "health", []string{"claim_risk_1", "claim_sev_1"}
+	plain.DriverID, plain.Category, plain.ClaimedFactIDs = "driver_plain_01", "relationship", []string{"claim_risk_1"}
+	draft.Drivers = []DriverJudgment{only, both, plain}
+	draft.ReadinessGaps = []Finding{
+		{FindingID: "finding_only_01", Kind: "health", Summary: "s", Subjects: []SubjectRef{team}, EvidenceRefIDs: []string{"evidence_release_1234"}, ClaimedFactIDs: []string{"claim_risk_1"}},
+		{FindingID: "finding_both_01", Kind: "health", Summary: "s", Subjects: []SubjectRef{team}, EvidenceRefIDs: []string{"evidence_release_1234"}, ClaimedFactIDs: []string{"claim_risk_1", "claim_sev_1"}},
+	}
+	synthesizer := RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}
+
+	got := synthesizer.withholdBareScoreClaims(context.Background(), storage.Principal{OrgID: "org_1"}, input, draft)
+
+	ids := []string{}
+	for _, driver := range got.Drivers {
+		ids = append(ids, driver.DriverID)
+	}
+	if strings.Join(ids, ",") != "driver_both_01,driver_plain_01" {
+		t.Fatalf("drivers kept %v, want the one that keeps another claim and the one whose category needs none", ids)
+	}
+	if len(got.Drivers[0].ClaimedFactIDs) != 1 || got.Drivers[0].ClaimedFactIDs[0] != "claim_sev_1" || len(got.Drivers[1].ClaimedFactIDs) != 0 {
+		t.Fatalf("citations %v / %v, want the removed claim gone from each", got.Drivers[0].ClaimedFactIDs, got.Drivers[1].ClaimedFactIDs)
+	}
+	if len(got.ReadinessGaps) != 1 || got.ReadinessGaps[0].FindingID != "finding_both_01" {
+		t.Fatalf("findings kept %+v, want only the one that keeps another claim", got.ReadinessGaps)
+	}
+}
