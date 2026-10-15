@@ -128,7 +128,7 @@ func TestSharedDeploymentIDAcrossReposDoesNotWedgeTheProjection(t *testing.T) {
 		t.Fatalf("%d graphs, want 1", len(keys))
 	}
 	for key := range keys {
-		reply, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, "MATCH ()-[r:CORRELATED_WITH_INCIDENT]->() RETURN count(r)").Slice()
+		reply, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, "MATCH ()-[r:Relates {relation_type: 'CORRELATED_WITH_INCIDENT'}]->() RETURN count(r)").Slice()
 		if err != nil || len(reply) < 2 {
 			t.Fatalf("count edges: reply of %d parts, err=%v", len(reply), err)
 		}
@@ -165,5 +165,33 @@ func TestNativeAndHeuristicDeploymentIncidentRowsAreOneRelationship(t *testing.T
 	wantRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, f.repoA, "deploy-shared-1", f.incidentID, "native")
 	if len(edges[0].EvidenceRefIDs) != 1 || edges[0].EvidenceRefIDs[0] != wantRef {
 		t.Errorf("evidence refs %v, want the native row's %s (the higher tier wins although the heuristic row is newer)", edges[0].EvidenceRefIDs, wantRef)
+	}
+}
+
+// ops' edge_id names (deployment, incident) and is shared by every repository that runs one deployment id. More rows
+// than a page holds can share (computed_at, edge_id); the cursor must order them by the row's own key, or the source
+// stops with "more rows share one cursor position than one page holds".
+func TestManyRepositoriesSharingOneEdgeIDPageThroughTheSource(t *testing.T) {
+	ctx := context.Background()
+	query, direct := orgIsolationClickHouseFixture(t)
+	const orgID = "93000000-0000-4000-8000-000000000003"
+	const repos = 250
+	uuidOf := "toUUID(concat('93000000-0000-4000-8000-', leftPad(toString(number), 12, '0')))"
+	mustExec(t, ctx, direct, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider)
+SELECT `+uuidOf+`, concat('acme/r', toString(number)), NULL, now(), NULL, now(), '`+orgID+`', 'github' FROM numbers(`+fmt.Sprint(repos)+`)`)
+	mustExec(t, ctx, direct, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at)
+SELECT 'edge-shared', '`+orgID+`', 'deploy-shared-1', 'inc-shared', `+uuidOf+`, 0.3, 'heuristic', '', toDateTime64('2026-10-01 00:00:00', 3, 'UTC'), toDateTime64('2026-10-01 00:00:00', 3, 'UTC') FROM numbers(`+fmt.Sprint(repos)+`)`)
+
+	src, err := devhealthsource.NewClickHouseProjectionSource(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &ingestHarness{t: t, ctx: ctx, direct: direct, src: src, source: devhealthsource.SourceName, orgID: orgID, repo: o3UUID(orgID)}
+	ids := map[string]bool{}
+	for _, r := range h.drain("").relationships["CORRELATED_WITH_INCIDENT"] {
+		ids[r.RelationshipID] = true
+	}
+	if len(ids) != repos {
+		t.Errorf("%d distinct CORRELATED_WITH_INCIDENT relationships, want %d (one for each repository)", len(ids), repos)
 	}
 }

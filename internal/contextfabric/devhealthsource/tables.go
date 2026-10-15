@@ -1367,6 +1367,9 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 // join is unaffected -- this fix is scoped exactly to the join the design
 // brief's defect inventory (v4.1 §0, D-7) names.
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	// The cursor position is the row's own key (repository, deployment, incident), length-prefixed so two keys never
+	// spell one string: ops' edge_id is shared by every repository that runs one deployment id, so it cannot order a page.
+	const rowKey = "concat(toString(e.repo_id), ':', toString(length(e.deployment_id)), ':', e.deployment_id, ':', e.incident_id)"
 	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
        ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `, toString(e.repo_id), toString(e.source), e.computed_at
@@ -1374,7 +1377,7 @@ FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
 LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id AND d.repo_id = e.repo_id
 LEFT JOIN ` + devhealthschema.CurrentOperationalIncidents + ` AS i ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
-WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.computed_at", "e.edge_id") + orderBy("e.computed_at", "e.edge_id")
+WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.computed_at", rowKey) + orderBy("e.computed_at", rowKey)
 	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var edgeID, deploymentID, incidentID, repoSlug, repoID, source string
 		var observedAt, deployStartedAt, deployFinishedAt, incidentStartedAt, incidentEndedAt time.Time
@@ -1385,6 +1388,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
+		rowSortKey := fmt.Sprintf("%s:%d:%s:%s", repoID, len(deploymentID), deploymentID, incidentID)
 		// The correlation is valid only while BOTH ends are -- the same
 		// endpoint-intersection rule every other edge here uses.
 		validFrom, validTo := edgeValidity(
@@ -1402,7 +1406,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			return nil, err
 		}
 		if omitted {
-			return []candidate{progressCandidate(observedAt, edgeID)}, nil
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// CHAOS-7252: the ref carries the row's full key (deployment,
 		// incident, source) and the repository the row names. edge_id is
@@ -1417,7 +1421,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{deploymentIncidentRef},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
-		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
 }
 
