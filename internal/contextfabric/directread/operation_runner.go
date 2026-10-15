@@ -456,6 +456,7 @@ func (r *OperationRunner) Run(ctx context.Context, principal storage.Principal, 
 		if errors.Is(err, ErrOperationAuthorizationUnavailable) {
 			x.read.Decision = OperationDecisionAuthorizationUnavailable
 		}
+		x.read.SchemaDigest = r.catalogue.StampedSchemaDigest()
 		r.recorder.RecordOperationRead(ctx, principal, x.read)
 		return OperationResponse{}, err
 	}

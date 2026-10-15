@@ -1,7 +1,9 @@
 package directread_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 const watchRefreshedDigest = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
@@ -168,4 +172,95 @@ func TestRefusalBeforeAnyWatchSucceededReportsThePinnedDigest(t *testing.T) {
 	if last := rec.reads[len(rec.reads)-1]; last.SchemaDigest != watchServedDigest {
 		t.Fatalf("read log carries %s, want %s", last.SchemaDigest, watchServedDigest)
 	}
+}
+
+// refreshingFailingGraph lets a refresh land inside the subject gate and then
+// makes the gate's decision unavailable, so the call ends in an error return.
+type refreshingFailingGraph struct {
+	*opGraph
+	refresh func()
+}
+
+func (g *refreshingFailingGraph) AuthorizeStoredSubjects(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, _ []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	g.refresh()
+	return nil, errors.New("graph unavailable")
+}
+
+// A call that ends in an error return records its read with the digest the
+// watch holds when it ends, not the one read at entry: a refresh that landed
+// during the call shows in the read log of an error return too.
+func TestErrorReturnReadLogReportsADigestRefreshedDuringTheCall(t *testing.T) {
+	t.Run("run_operation", func(t *testing.T) {
+		cat, err := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := newSwappableRegistry(t, watchServedDigest)
+		watch := reg.watch(t, cat)
+		watch.Start()
+		watch.Wait()
+		graph := &refreshingFailingGraph{opGraph: newOpGraph(), refresh: func() { reg.landRefresh(cat, watch, watchRefreshedDigest) }}
+		upstream := httptest.NewServer(http.NotFoundHandler())
+		t.Cleanup(upstream.Close)
+		client, err := directread.NewHTTPQueryClient(upstream.URL, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := &opDigestRecorder{}
+		runner, err := directread.NewOperationRunner(directread.OperationRunnerConfig{
+			Catalogue: cat, Gate: directread.NewSubjectGate(graph, nil), Client: client, Recorder: rec, Grants: opDefaultGrants(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, _ := cat.Lookup("hotspots")
+		vars := opMerge(opMinimalVariables(t, op), op.Scope(directread.CallerRestricted).ForcedVariablePath, []any{opRepo(opRepoA)})
+		raw, _ := json.Marshal(vars)
+		_, err = runner.Run(context.Background(), opRestrictedA(), directread.OperationRequest{Operation: op.Name, Variables: raw})
+		if !errors.Is(err, directread.ErrOperationAuthorizationUnavailable) {
+			t.Fatalf("want the gate decision unavailable, got %v", err)
+		}
+		if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != watchRefreshedDigest {
+			t.Fatalf("error read log %+v, want the refreshed digest %s", rec.reads, watchRefreshedDigest)
+		}
+	})
+	t.Run("graphql_query", func(t *testing.T) {
+		cat, err := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err := directread.NewGraphQLPolicy(cat, directread.EmbeddedOpsSchema(), directread.DefaultGraphQLLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := newSwappableRegistry(t, watchServedDigest)
+		watch := reg.watch(t, cat)
+		watch.Start()
+		watch.Wait()
+		graph := &refreshingFailingGraph{opGraph: newOpGraph(), refresh: func() { reg.landRefresh(cat, watch, watchRefreshedDigest) }}
+		listener := httptest.NewServer(http.NotFoundHandler())
+		t.Cleanup(listener.Close)
+		client, err := directread.NewHTTPGraphQLClient(listener.URL, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := &digestRecorder{}
+		runner, err := directread.NewGraphQLRunner(directread.GraphQLRunnerConfig{
+			Policy: policy, Gate: directread.NewSubjectGate(graph, nil), Client: client, Recorder: rec, Grants: opDefaultGrants(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, _ := cat.Lookup("hotspots")
+		vars := opMerge(opMinimalVariables(t, op), op.Scope(directread.CallerRestricted).ForcedVariablePath, []any{opRepo(opRepoA)})
+		q := gqlQueryFor(t, op, vars, nil, "")
+		raw, _ := json.Marshal(q.vars)
+		_, err = runner.Run(context.Background(), opRestrictedA(), directread.GraphQLRequest{Query: q.text, Variables: raw})
+		if !errors.Is(err, directread.ErrOperationAuthorizationUnavailable) {
+			t.Fatalf("want the gate decision unavailable, got %v", err)
+		}
+		if len(rec.reads) != 1 || rec.reads[0].SchemaDigest != watchRefreshedDigest {
+			t.Fatalf("error read log %+v, want the refreshed digest %s", rec.reads, watchRefreshedDigest)
+		}
+	})
 }
