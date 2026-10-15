@@ -283,8 +283,8 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 //
 // v21 -> v22 (CHAOS-9794): a work item -> team edge is retracted by a
 // relationship tombstone when its attribution stops qualifying (the row leaves
-// is_primary 1/2, or its team is deactivated). Edges that went stale before v22
-// are only cleared by the rebuild.
+// is_primary 1/2). A deactivated team still leaves its edges open (v20). Edges
+// that went stale before v22 are only cleared by the rebuild.
 const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v22"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were

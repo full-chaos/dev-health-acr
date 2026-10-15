@@ -784,16 +784,15 @@ var workItemTeamsGroupColumns = []string{"toString(w.repo_id)", "ifNull(r.repo, 
 var workItemTeamsRowKey = rowKeySQL("toString(w.repo_id)", "a.work_item_id", "ifNull(a.team_id, '')")
 
 // workItemTeamsQualifies is the row-level rule for an edge: a primary or
-// co-owner attribution of an active team. A pair with no qualifying row is not
-// dropped from the read: it is read to be retracted (CHAOS-9794).
-var workItemTeamsQualifies = "(" + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + " AND " + devhealthschema.ActiveTeamPredicate("t") + ")"
+// co-owner attribution. A pair of an active team with no qualifying row is
+// not dropped from the read: it is read to be retracted (CHAOS-9794). A pair
+// of an inactive team is not read at all, so a team that is deactivated and
+// comes back leaves its edges as they were.
+var workItemTeamsQualifies = "(" + devhealthschema.TeamAttributionPredicate("a", devhealthschema.AttributionScopeTeam) + ")"
 
 // workItemTeamsWatermark is the page position: the newest computed_at of the
-// group, so a later row of the pair moves the edge past the cursor. A pair
-// whose team is inactive also carries the team's change time: the attribution
-// row does not change when its team is deactivated, so without it the
-// retraction would be older than the edge it retracts.
-const workItemTeamsWatermark = "greatest(max(a.computed_at), maxIf(t.updated_at, t.is_active = 0))"
+// group, so a later row of the pair moves the edge past the cursor.
+const workItemTeamsWatermark = "max(a.computed_at)"
 
 // workItemTeamsCurrentOrder picks the row that represents one (work item,
 // team): the primary row before a co-owner row (the is_primary meaning
@@ -822,7 +821,7 @@ func workItemTeamsStatement(cursor cursorState) string {
        countIf(` + workItemTeamsQualifies + `) AS group_rows
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
-LEFT JOIN (SELECT id, is_active, updated_at FROM teams FINAL WHERE org_id = {org_id:String} AND (` + devhealthschema.ActiveTeamPredicate("") + ` OR ` + devhealthschema.InactiveTeamPredicate("") + `)) AS t ON t.id = ifNull(a.team_id, '')
+INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE a.org_id = {org_id:String} AND ifNull(a.team_id, '') != ''
 GROUP BY ` + strings.Join(workItemTeamsGroupColumns, ", ") + havingSincePredicate(cursor, workItemTeamsWatermark, workItemTeamsRowKey) + orderBy(workItemTeamsWatermark, workItemTeamsRowKey)
@@ -846,19 +845,20 @@ func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQuer
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// RETRACTION (CHAOS-9794). The pair has attribution rows but none
-		// qualifies (the row left is_primary 1/2, or its team is inactive), so
+		// qualifies (the row left is_primary 1/2), so
 		// an edge projected on an EARLIER tick would stay open: incremental
 		// application never deletes an absent relationship. The tombstone is
 		// the retraction. It is idempotent (a never-projected id matches zero
 		// rows) and cannot delete an edge this batch asserts, because a pair
 		// emits an edge or a tombstone, never both. Its EffectiveAt is the
-		// pair's watermark, which is not older than the edge it retracts.
+		// pair's watermark (the newest computed_at), which is the stamp of the
+		// row that demoted it and not older than the edge it retracts.
 		if groupRows == 0 {
 			ledger.recordWorkItemTeamRetracted()
 			tombstone := contractsv1.ContextFabricProjectionTombstone{
 				Kind:          "relationship",
 				CanonicalID:   workItemTeamRelationshipID(workItemCanonicalID, teamID),
-				Reason:        "work item team attribution no longer qualifies: not a primary or co-owner row of an active team",
+				Reason:        "work item team attribution no longer qualifies: not a primary or co-owner row",
 				EffectiveAt:   observedAt,
 				SourceVersion: TeamsProjectsSourceVersion,
 			}
