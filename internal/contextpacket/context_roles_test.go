@@ -776,3 +776,32 @@ func TestAnUnrelatedExactCauseNeverDropsOrdinaryGoalMatches(t *testing.T) {
 		t.Fatalf("kept %v, want both goal-matching pull requests", got)
 	}
 }
+
+func TestADroppedDuplicateCauseDoesNotLiftAnExactCauseItsGoalScore(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	twin := roleRow("ev-twin-a", "commit", "8888888aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout cart", "checkout cart", at)
+	twin.ContentDigest = "sha256:shared"
+	pushed := roleRow("ev-pr-pushed", "pull_request", "2", "checkout", "merged", at)
+	pushed.ContentDigest = "sha256:shared"
+	evidence := []contractsv1.EvidenceRef{
+		twin, pushed,
+		roleRow("ev-pr-exact", "pull_request", "1", "Unrelated title", "merged", at),
+		roleRow("ev-ordinary", "commit", "9999999aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "checkout flow", "checkout", at),
+		tieredDeploymentRow("ev-d-exact", "d1", "failure", "1", "exact_merge_sha", at),
+		tieredDeploymentRow("ev-d-pushed", "d2", "failure", "2", "pushed", at),
+	}
+	request := fixtureRequest("req-dup-lift", "main", "")
+	request.Goal = "checkout cart"
+	request.Options.RequestedCategories = []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryEvidence}
+	store := testStore{bundle: storage.EvidenceBundle{
+		ResolvedScope: contractsv1.ResolvedScope{RepoID: "repo", RepoSlug: request.Repository.Slug, Resolution: contractsv1.ScopeBranchFiltered},
+		Evidence:      evidence,
+	}}
+	packet, err := contextpacket.NewAssembler(store, fixedOptions()).Assemble(context.Background(), fixturePrincipal(), request)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if got, want := itemEvidenceIDs(packet), []string{"ev-twin-a", "ev-ordinary", "ev-pr-exact"}; !equalStrings(got, want) {
+		t.Fatalf("ranked %v, want %v", got, want)
+	}
+}

@@ -27,9 +27,19 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 		}
 		refs = append(refs, ref)
 	}
+	ownScores := make(map[string]int, len(refs))
+	for _, ref := range refs {
+		ownScores[ref.EvidenceRefID] = max(ownScores[ref.EvidenceRefID], goalScore(ref, goal))
+	}
+	sort.SliceStable(refs, func(i, j int) bool {
+		if l, r := goalScore(refs[i], goal), goalScore(refs[j], goal); l != r {
+			return l > r
+		}
+		return evidenceBefore(refs[i], refs[j], ownScores, roles)
+	})
+	refs = deduplicateEvidence(refs)
 	scores := effectiveGoalScores(refs, goal, roles)
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
-	refs = deduplicateEvidence(refs)
 	refs = requestedEvidenceCategories(refs, requested, roles)
 	refs, truncated := allocateCategories(refs, scores, maxItems, roles)
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
