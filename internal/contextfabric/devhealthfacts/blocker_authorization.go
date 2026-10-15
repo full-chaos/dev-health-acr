@@ -16,7 +16,7 @@ const blockerAuthorizedIDsBinding = "blocker_authorized_ids"
 // blockerAuthorizedIDsBound is the most authorized blocker endpoints that ride
 // as one Array binding; it stays under the statement text limit the endpoint
 // subqueries exist to avoid (about 12,000 ids).
-var blockerAuthorizedIDsBound = 5000
+var blockerAuthorizedIDsBound = 0
 
 // blockerAuthorization is the SQL set the blocker statements test both ends of
 // an edge against. An organization-wide caller is authorized by the work item
