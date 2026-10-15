@@ -126,7 +126,7 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 		repoIDs = append(repoIDs, repoUUID(fmt.Sprintf("shape-r-%d", i)))
 	}
 	for i := 0; i < linkedWideIDProdShape.teamProjects; i++ {
-		projectIDs = append(projectIDs, fmt.Sprintf("P-%d", i))
+		projectIDs = append(projectIDs, fmt.Sprintf("linear:P-%d", i))
 	}
 	cases, err := devhealthfacts.ScopeLiteralCasesForTest(ctx, provider, orgID, scopeIDs, repoIDs, projectIDs)
 	if err != nil {
