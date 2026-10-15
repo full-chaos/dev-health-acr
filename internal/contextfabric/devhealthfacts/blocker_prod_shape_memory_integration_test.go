@@ -431,7 +431,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		} {
 			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, caller.read)
 			for key := range low {
-				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB, bound %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), float64(blockerProdShapeCeilingFor(key))/(1<<20), key)
 				if ceiling := blockerProdShapeCeilingFor(key); high[key] >= ceiling {
 					t.Errorf("%s, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, high[key], ceiling)
 				}
@@ -482,11 +482,11 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape, restricted", func() { read(restricted) }) {
 		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
 	}
-	restoreBoundPlanted := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
-	restoreBlockPlanted := devhealthfacts.SetBlockerMaxBlockSizeForTest(blockerProdShapePlantedBlockSize)
-	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, oversized blocks, restricted", func() { read(restricted) })
-	restoreBlockPlanted()
-	restoreBoundPlanted()
+	planted := func() bool {
+		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
+		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(blockerProdShapePlantedBlockSize)()
+		return blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, oversized blocks, restricted", func() { read(restricted) })
+	}()
 	if !planted {
 		t.Error("with the authorization relation inside each statement and the default block size, the totals statement did not reach its ceiling: the ceilings cannot catch the defect they exist for")
 	}
