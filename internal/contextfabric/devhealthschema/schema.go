@@ -211,11 +211,11 @@ var ProductionColumns = map[string][]Column{
 		{Name: "source_event_at", Type: "Nullable(DateTime64(6, 'UTC'))"},
 		{Name: "observed_at", Type: "DateTime64(6, 'UTC')"},
 		{Name: "last_synced", Type: "DateTime64(6, 'UTC')"},
-		{Name: "relationship_confidence", Type: "Nullable(Float64)"},
 		{Name: "raw_status", Type: "Nullable(String)"},
 		{Name: "raw_severity", Type: "Nullable(String)"},
 		{Name: "normalized_status", Type: "Nullable(String)"},
 		{Name: "normalized_severity", Type: "Nullable(String)"},
+		{Name: "relationship_confidence", Type: "Nullable(Float64)"},
 		{Name: "service_id", Type: "Nullable(String)"},
 		{Name: "title", Type: "String"},
 		// CHAOS-3833: description is production position 26, between
@@ -260,21 +260,21 @@ var ProductionColumns = map[string][]Column{
 		{Name: "commits_count", Type: "UInt32"},
 		{Name: "prs_merged", Type: "UInt32"},
 		{Name: "median_pr_cycle_hours", Type: "Float64"},
+		// CHAOS-4364: FlowProvider's readRepositoryFlow (flow.go) reads
+		// these five PR pickup/review-timing columns off the SAME table
+		// metrics.go already declared above -- a distinct column set, no
+		// conflict. Positions 11-15 on a migrated ClickHouse.
+		{Name: "prs_with_first_review", Type: "UInt32"},
+		{Name: "pr_first_review_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "pr_first_review_p90_hours", Type: "Nullable(Float64)"},
+		{Name: "pr_review_time_p50_hours", Type: "Nullable(Float64)"},
+		{Name: "pr_pickup_time_p50_hours", Type: "Nullable(Float64)"},
 		{Name: "mttr_hours", Type: "Nullable(Float64)"},
 		{Name: "change_failure_rate", Type: "Float64", AlsoAccepts: []string{"Nullable(Float64)"}},
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "bus_factor", Type: "UInt32"},
 		{Name: "code_ownership_gini", Type: "Float64"},
 		{Name: "org_id", Type: "String"},
-		// CHAOS-4364: FlowProvider's readRepositoryFlow (flow.go) reads
-		// these five PR pickup/review-timing columns off the SAME table
-		// metrics.go already declared above -- a distinct column set, no
-		// conflict. Positions 11-15 live (system.columns, 2026-08-27).
-		{Name: "prs_with_first_review", Type: "UInt32"},
-		{Name: "pr_first_review_p50_hours", Type: "Nullable(Float64)"},
-		{Name: "pr_first_review_p90_hours", Type: "Nullable(Float64)"},
-		{Name: "pr_review_time_p50_hours", Type: "Nullable(Float64)"},
-		{Name: "pr_pickup_time_p50_hours", Type: "Nullable(Float64)"},
 		// ops migration 112: revert_rate is reverted / merged pull requests,
 		// NULL where nothing was measured. change_failure_rate above is the
 		// deprecated revert ratio with a forced denominator; no reader reads
@@ -476,6 +476,14 @@ var ProductionColumns = map[string][]Column{
 		{Name: "name", Type: "String"},
 		{Name: "description", Type: "Nullable(String)"},
 		{Name: "updated_at", Type: "DateTime64(6)"},
+		// CHAOS-7263: the INGEST stamp the projection cursor keys on
+		// (ops 011_ensure_teams.sql: DEFAULT now(), server insert time);
+		// updated_at can be provider-stamped (atlassianteams/write.go).
+		// This mirror is TEST DDL: it defaults last_synced to updated_at (not
+		// now()) so a fixture that only sets updated_at keeps its declared
+		// relative order across tables. Positional INSERT ... VALUES in
+		// fixtures must name their columns.
+		{Name: "last_synced", Type: "DateTime64(6) DEFAULT updated_at"},
 		{Name: "org_id", Type: "String"},
 		{Name: "provider", Type: "String"},
 		{Name: "native_team_key", Type: "Nullable(String)"},
@@ -485,14 +493,6 @@ var ProductionColumns = map[string][]Column{
 		// []string.
 		{Name: "project_keys", Type: "Array(String)"},
 		{Name: "is_active", Type: "UInt8"},
-		// CHAOS-7263: the INGEST stamp the projection cursor keys on
-		// (ops 011_ensure_teams.sql: DEFAULT now(), server insert time);
-		// updated_at can be provider-stamped (atlassianteams/write.go).
-		// This mirror is TEST DDL: it defaults last_synced to updated_at (not
-		// now()) so a fixture that only sets updated_at keeps its declared
-		// relative order across tables. Positional INSERT ... VALUES in
-		// fixtures must name their columns.
-		{Name: "last_synced", Type: "DateTime64(6) DEFAULT updated_at"},
 	},
 	// project_membership_transitions is ops migration 077 (CHAOS-4193/4194).
 	// The FULL declared column set, not a reader-scoped subset: acr's own
@@ -611,7 +611,7 @@ var ProductionColumns = map[string][]Column{
 		// (5) and source (7). Read by readTeamThemeMix's majority-vote
 		// label (devhealthfacts/investment.go).
 		{Name: "team_name", Type: "Nullable(String)"},
-		{Name: "source", Type: "Enum8('native_team' = 1, 'linked_issue' = 2, 'project_ownership' = 3, 'repo_ownership' = 4, 'assignee_membership' = 5, 'unassigned' = 6, 'issue_project' = 7, 'manual_fallback' = 8)"},
+		{Name: "source", Type: "Enum8('native_team' = 1, 'linked_issue' = 2, 'project_ownership' = 3, 'repo_ownership' = 4, 'assignee_membership' = 5, 'unassigned' = 6, 'issue_project' = 7, 'manual_fallback' = 8, 'author_membership' = 9)"},
 		{Name: "is_primary", Type: "UInt8"},
 		{Name: "confidence", Type: "Enum8('high' = 1, 'medium' = 2, 'low' = 3, 'manual' = 4, 'none' = 5)"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
@@ -765,9 +765,9 @@ var ProductionColumns = map[string][]Column{
 var EngineFull = map[string]string{
 	"capacity_forecasts":                      "ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192",
 	"ci_pipeline_runs":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id) SETTINGS index_granularity = 8192",
-	"cicd_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
-	"compounding_risk_daily":                  "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day, computed_at) SETTINGS index_granularity = 8192",
-	"deploy_metrics_daily":                    "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
+	"cicd_metrics_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
+	"compounding_risk_daily":                  "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day) SETTINGS index_granularity = 8192",
+	"deploy_metrics_daily":                    "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"deployments":                             "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id) SETTINGS index_granularity = 8192",
 	"estimate_coverage_metrics_daily":         "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, '')) SETTINGS index_granularity = 8192",
 	"git_pull_request_reviews":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id) SETTINGS index_granularity = 8192",
@@ -779,10 +779,10 @@ var EngineFull = map[string]string{
 	"operational_service_repository_mappings": "ReplacingMergeTree(source_version_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"recommendations_daily":                   "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(window_end) ORDER BY (org_id, team_id, rule_id, window_end) SETTINGS index_granularity = 8192",
 	"repo_change_failure_daily":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
-	"repo_metrics_daily":                      "MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
+	"repo_metrics_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
 	"repos":                                   "ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
-	"file_hotspot_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day, file_path) SETTINGS index_granularity = 8192",
-	"file_complexity_snapshots":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day) ORDER BY (org_id, repo_id, as_of_day, file_path) SETTINGS index_granularity = 8192",
+	"file_hotspot_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day, file_path) SETTINGS deduplicate_merge_projection_mode = 'rebuild', index_granularity = 8192",
+	"file_complexity_snapshots":               "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day) ORDER BY (org_id, repo_id, as_of_day, file_path) SETTINGS deduplicate_merge_projection_mode = 'rebuild', index_granularity = 8192",
 	"security_alerts":                         "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id) SETTINGS index_granularity = 8192",
 	"sprints":                                 "ReplacingMergeTree(last_synced) ORDER BY (org_id, provider, sprint_id) SETTINGS index_granularity = 8192",
 	// CHAOS-3802: valid_from is IN team_project_ownership's sorting key, so
