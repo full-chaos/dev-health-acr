@@ -353,6 +353,8 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = fmt.Sprintf("At least %d %s found; %d included", coverageDetailIntOrZero(d.Declared), humanizeVocabularyToken(string(d.Kind)), coverageDetailIntOrZero(d.Served))
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		label = fmt.Sprintf("%d of %d %s facts read were given to answer synthesis", coverageDetailIntOrZero(d.Served), coverageDetailIntOrZero(d.Declared), kind)
+	case ContextFabricCoverageDetailFactScoreWithheld:
+		label = fmt.Sprintf(ContextFabricFactScoreWithheldLabel, kindClause(kind))
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
 	default:
@@ -397,3 +399,7 @@ func clampLabel(label string) string {
 	}
 	return strings.TrimSpace(string(runes[:ContextFabricCoverageDetailLabelMaxLength]))
 }
+
+// ContextFabricFactScoreWithheldLabel is the label of a fact_score_withheld detail: the fact kind, capitalized, then the
+// reason. The one place the sentence is written.
+const ContextFabricFactScoreWithheldLabel = "%s scores withheld: their drivers were not served"
