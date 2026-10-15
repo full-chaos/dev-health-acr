@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v6"
+	RankingVersionV1          = "ranker.v8"
 	minimumEvidenceConfidence = 0.5
 )
 
-func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool) {
+func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool, map[string]bool) {
 	roles := newRoleResolver(evidence)
 	refs := make([]contractsv1.EvidenceRef, 0, len(evidence))
 	for _, ref := range evidence {
@@ -53,16 +53,18 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 	sort.Slice(refs, func(i, j int) bool { return evidenceBefore(refs[i], refs[j], scores, roles) })
 	refs = requestedEvidenceCategories(refs, requested, roles)
 	candidates := len(refs)
-	refs, truncated := allocateCategories(refs, scores, maxItems, roles)
+	refs, truncated, laterRows := allocateCategories(refs, scores, maxItems, roles)
 	slog.Debug("context packet ranking", "event", "ranking_decided", "evidence_in", beforeDedupe, "duplicates_dropped", beforeDedupe-candidates, "kept", len(refs), "max_items", maxItems, "truncated", truncated, "goal_words", len(goalWords(goal)))
 	items := make([]contractsv1.ContextPacketItem, 0, len(refs))
 	for _, ref := range refs {
 		items = append(items, evidenceItemWithRoles(ref, scope, roles))
 	}
+	deferred := make(map[string]bool, len(laterRows))
 	for i := range items {
 		items[i].Rank = i + 1
+		deferred[items[i].PacketItemID] = laterRows[refs[i].EvidenceRefID]
 	}
-	return items, truncated
+	return items, truncated, deferred
 }
 
 func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []contractsv1.PacketCategory, roles roleResolver) []contractsv1.EvidenceRef {
@@ -136,8 +138,13 @@ func goalWords(goal string) []string {
 	return kept
 }
 
+// citationKeyPattern matches the field name of a "name=value" pair a producer
+// writes into a citation (release_ref=, status=). Only the value and the label
+// say what a row is about; a field name never fits a goal word.
+var citationKeyPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*=`)
+
 func goalScore(ref contractsv1.EvidenceRef, goal string) int {
-	haystack := strings.FieldsFunc(strings.ToLower(ref.Citation+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	haystack := strings.FieldsFunc(strings.ToLower(citationKeyPattern.ReplaceAllString(ref.Citation, " ")+" "+ref.Source.DisplayLabel), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	score := 0
 	for _, word := range goalWords(goal) {
 		for _, token := range haystack {
@@ -199,10 +206,22 @@ func evidenceTieKey(ref contractsv1.EvidenceRef) string {
 	return strings.Join([]string{ref.EvidenceRefID, ref.Source.System, ref.Source.EntityType, ref.Source.EntityID, ref.ContentDigest, ref.Citation, ref.Source.DisplayLabel, ref.Source.SafeURI, ref.Provenance, string(ref.Availability), ref.SourceVersion, ref.SnapshotHash, string(metadata)}, "\000")
 }
 
-func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool) {
-	if len(refs) <= maxItems {
-		return refs, false
+// allocateCategories gives one slot to each focus (the entity a row is about,
+// such as one file) before a focus takes a second. Category quotas still come
+// first: a second row of a focus takes a slot only when no first row can fill
+// the quota or the slots that remain. Kept rows stay in rank order; the later
+// rows of a focus are returned as a set so the output budgets drop them before
+// another subject's row.
+func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, maxItems int, roles roleResolver) ([]contractsv1.EvidenceRef, bool, map[string]bool) {
+	primary, secondary := splitByFocus(refs)
+	later := make(map[string]bool, len(secondary))
+	for _, ref := range secondary {
+		later[ref.EvidenceRefID] = true
 	}
+	if len(refs) <= maxItems {
+		return refs, false, later
+	}
+	ordered := append(append(make([]contractsv1.EvidenceRef, 0, len(refs)), primary...), secondary...)
 	categories := []contractsv1.PacketCategory{contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryCause, contractsv1.CategoryEvidence, contractsv1.CategoryAction}
 	quotas, selected := map[contractsv1.PacketCategory]int{}, make([]contractsv1.EvidenceRef, 0, maxItems)
 	for index, category := range categories {
@@ -212,7 +231,7 @@ func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, m
 		}
 	}
 	selectedIDs := map[string]bool{}
-	for _, ref := range refs {
+	for _, ref := range primary {
 		if len(selected) >= (maxItems+1)/2 || scores[ref.EvidenceRefID] == 0 {
 			break
 		}
@@ -225,13 +244,13 @@ func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, m
 	// Causes fill their quota before state and pressure so goal matches plus
 	// state and pressure rows cannot spend the whole budget before a cause.
 	for _, category := range []contractsv1.PacketCategory{contractsv1.CategoryCause, contractsv1.CategoryState, contractsv1.CategoryPressure, contractsv1.CategoryEvidence, contractsv1.CategoryAction} {
-		for _, ref := range refs {
+		for _, ref := range ordered {
 			if roles.rule(ref).category == category && quotas[category] > 0 && len(selected) < maxItems && !selectedIDs[ref.EvidenceRefID] {
 				selected, selectedIDs[ref.EvidenceRefID], quotas[category] = append(selected, ref), true, quotas[category]-1
 			}
 		}
 	}
-	for _, ref := range refs {
+	for _, ref := range ordered {
 		if len(selected) == maxItems {
 			break
 		}
@@ -240,7 +259,23 @@ func allocateCategories(refs []contractsv1.EvidenceRef, scores map[string]int, m
 		}
 	}
 	sort.Slice(selected, func(i, j int) bool { return evidenceBefore(selected[i], selected[j], scores, roles) })
-	return selected, true
+	slog.Debug("context packet focus cap", "event", "focus_cap_applied", "deferred", len(secondary), "kept", len(selected), "max_items", maxItems)
+	return selected, true, later
+}
+
+func splitByFocus(refs []contractsv1.EvidenceRef) (primary, secondary []contractsv1.EvidenceRef) {
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if focus, _ := ref.Metadata[metadataFocusKey].(string); focus != "" {
+			if seen[focus] {
+				secondary = append(secondary, ref)
+				continue
+			}
+			seen[focus] = true
+		}
+		primary = append(primary, ref)
+	}
+	return primary, secondary
 }
 
 func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) contractsv1.ContextPacketItem {
@@ -316,6 +351,11 @@ func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles role
 		}
 	}
 	scores := make(map[string]int, len(refs))
+	// A goal that names a failure is about the rows whose stored role is a
+	// failure (pressure) or what caused one (cause); a goal that names code
+	// health is about the hotspot and complexity rows. That fit outranks any
+	// word score, which is at most 2*words+1.
+	fit, failureGoal, codeHealthGoal := 2*len(goalWords(goal))+2, goalNamesFailure(goal), goalNamesCodeHealth(goal)
 	for _, ref := range refs {
 		effective, mine := own[ref.EvidenceRefID], own[ref.EvidenceRefID]
 		if rule := roles.rule(ref); rule.category == contractsv1.CategoryCause && rule.subRank > 0 {
@@ -326,6 +366,11 @@ func effectiveGoalScores(refs []contractsv1.EvidenceRef, goal string, roles role
 		scores[ref.EvidenceRefID] = effective * 2
 		if effective > 0 && effective == mine {
 			scores[ref.EvidenceRefID]++
+		}
+		category := roles.rule(ref).category
+		if (failureGoal && (category == contractsv1.CategoryPressure || category == contractsv1.CategoryCause)) ||
+			(codeHealthGoal && codeHealthEntityTypes[ref.Source.EntityType]) {
+			scores[ref.EvidenceRefID] += fit
 		}
 	}
 	return scores
