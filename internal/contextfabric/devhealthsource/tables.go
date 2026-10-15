@@ -914,7 +914,8 @@ func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidat
 // edge per repository: an incident mapped to two repositories has two edges,
 // and an edge to a repository whose mapping ended is retracted by its own id.
 func incidentRepositoryRelationshipID(incidentCanonicalID, repoID string) string {
-	return identity.DeriveRelationship(identity.RelationshipFamilyIncidentRepository, incidentCanonicalID, "repository:"+repoID, "BELONGS_TO_REPOSITORY")
+	_ = repoID
+	return "relationship:belongs_to_repository:" + incidentCanonicalID
 }
 
 // readIncidentDescriptions reads the description of the page's incidents, a
