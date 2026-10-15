@@ -119,7 +119,7 @@ func driversTableServed(facts []CanonicalFact, claim ClaimedFact, table string) 
 // recordScoresWithheld logs, at Info, which score fields an answer was kept from and the drivers table each needed:
 // the response names the fact kinds, the trace names the fields and tables. stage is where it happened: input or claim.
 func recordScoresWithheld(ctx context.Context, principal storage.Principal, stage string, withheld []withheldScore) {
-	attrs := []any{"org_id", SanitizeLogAttr(principal.OrgID), "stage", stage, "withheld", len(withheld), "reason", "drivers_not_served"}
+	attrs := []any{"org_id", SanitizeLogAttr(principal.OrgID), "stage", SanitizeLogAttr(stage), "withheld", len(withheld), "reason", "drivers_not_served"}
 	for index, item := range withheld {
 		if index >= 8 {
 			break
