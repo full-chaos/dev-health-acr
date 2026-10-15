@@ -452,6 +452,33 @@ func TestPolicyTree_SupersededIncidentEdgeReadsAsTheLatest(t *testing.T) {
 	}
 }
 
+// An incident deleted in its latest revision is not a target, though an
+// earlier revision of it is a separate, undeleted row.
+func TestPolicyTree_IncidentDeletedInItsLatestRevisionIsNotATarget(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedEntityTree(t, ctx, direct, at)
+	for _, revision := range []struct {
+		version time.Time
+		deleted uint8
+	}{{at.Add(-time.Hour), 0}, {at, 1}} {
+		if err := direct.Exec(ctx, `INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, started_at, is_deleted) VALUES (?,?,?,?,?,?,?,?,?)`,
+			policyTreeOrgID, revision.version, "INC-GONE", at, revision.version, "svc", "Gone", at, revision.deleted); err != nil {
+			t.Fatalf("seed incident revision: %v", err)
+		}
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"e-gone", policyTreeOrgID, "dep-gone", "INC-GONE", policyTreeRepoA, float32(0.9), "native", "", at, at); err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+	expander := devhealthfacts.NewScopeExpander(query)
+	result := policyTreeExpand(t, ctx, expander, storage.Principal{OrgID: policyTreeOrgID, RepositoryScopes: []string{"*"}},
+		contextfabric.FactScopePolicyProjectIssuePullRequestIncidents, contextfabric.FactIncidents,
+		policyTreeProjectOrigin(t), contextfabric.SubjectIncident)
+	policyTreeAssertTargets(t, result.Targets, "incident:INC-X", "incident:INC-Y", "incident:INC-Z")
+}
+
 // The missing-hop count is the number of issues, not the number of groups.
 func TestPolicyTree_EveryUnlinkedIssueIsCounted(t *testing.T) {
 	ctx := context.Background()

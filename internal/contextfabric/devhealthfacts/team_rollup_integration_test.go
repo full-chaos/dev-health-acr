@@ -98,9 +98,12 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 	pr("repo-b", 1, ts(2026, 9, 20, 9, 0, 0), nil, nil)
 	pr("repo-c", 1, ts(2026, 9, 20, 9, 0, 0), nil, nil) // unowned
 
+	revision := func(id string, version, started time.Time, resolved any, deleted uint8) {
+		exec(`INSERT INTO operational_incidents (id, org_id, source_version_at, normalized_status, normalized_severity, is_deleted, started_at, resolved_at, observed_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, teamRollupOrg, version, "open", "sev2", deleted, started, resolved, started)
+	}
 	incident := func(id string, started time.Time, resolved any, deleted uint8) {
-		exec(`INSERT INTO operational_incidents (id, org_id, normalized_status, normalized_severity, is_deleted, started_at, resolved_at, observed_at) VALUES (?,?,?,?,?,?,?,?)`,
-			id, teamRollupOrg, "open", "sev2", deleted, started, resolved, started)
+		revision(id, at, started, resolved, deleted)
 	}
 	edge := func(deployment, incidentID, label string) {
 		exec(`INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
@@ -111,6 +114,11 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 	incident("inc-3", ts(2026, 9, 12, 0, 0, 0), nil, 0) // no edge: not attributable
 	incident("inc-4", ts(2026, 9, 13, 0, 0, 0), nil, 1) // soft-deleted
 	incident("inc-5", ts(2026, 8, 1, 0, 0, 0), nil, 0)  // outside the window
+	// Earlier revisions of three incidents: each is its own row under the
+	// ordering contract, and only the latest revision of an id counts.
+	revision("inc-1", at.Add(-48*time.Hour), ts(2026, 9, 5, 0, 0, 0), nil, 0)
+	revision("inc-3", at.Add(-48*time.Hour), ts(2026, 9, 12, 0, 0, 0), nil, 0)
+	revision("inc-4", at.Add(-48*time.Hour), ts(2026, 9, 13, 0, 0, 0), nil, 0) // deleted in its latest revision
 	edge("dep-1", "inc-1", "repo-a")
 	edge("dep-2", "inc-2", "repo-a")
 	edge("dep-3", "inc-2", "repo-b") // one incident linked to both owned repositories

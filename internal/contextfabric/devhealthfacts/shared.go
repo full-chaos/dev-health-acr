@@ -1185,7 +1185,13 @@ import (
 // statement, as one scalar subquery, instead of once at every reference. Their
 // rows are unchanged; the text changes so an answer saved under v231 is not
 // reused as one produced by this version.
-const QueryVersion = "devhealthfacts.clickhouse.v232"
+//
+// v232 -> v233: incidents and service-repository mappings are read one row per
+// id, the latest revision (devhealthschema.CurrentOperationalIncidents). An
+// incident stored at several revisions counted once per revision, and one
+// deleted, or a mapping deactivated, in its latest revision still counted
+// through an earlier one; an answer saved under v232 is not reused.
+const QueryVersion = "devhealthfacts.clickhouse.v233"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
