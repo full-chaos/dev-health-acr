@@ -48,6 +48,7 @@ ORDER BY p.name LIMIT 1`, org))
 			}
 		}
 	}
+	t.Errorf("DIAG9777 forced failure to dump logs; contains team=%v", strings.Contains(raw, team))
 	if !strings.Contains(raw, team) {
 		t.Fatalf("answer for project %q never names its owning team %q: status=%s\n%.3000s", project, team, str(structured(d), "status"), raw)
 	}
