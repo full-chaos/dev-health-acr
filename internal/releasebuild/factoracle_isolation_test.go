@@ -87,4 +87,29 @@ func TestFactoracleIsolation_ownRaceJobAndBudget(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^      - race-factoracle\s*$`).MatchString(ciSrc) {
 		t.Fatal("aggregate verify job must list race-factoracle in its needs")
 	}
+	if !strings.Contains(block, "race-split.sh factoracle rest)") {
+		t.Fatalf("race-factoracle job must run the rest half; block:\n%s", block)
+	}
+	heavyStart := strings.Index(ciSrc, "\n  race-factoracle-heavy:\n")
+	if heavyStart < 0 {
+		t.Fatal("ci.yml must define a race-factoracle-heavy job")
+	}
+	heavy := ciSrc[heavyStart+1:]
+	if next := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`).FindStringIndex(heavy[3:]); next != nil {
+		heavy = heavy[:next[0]+3]
+	}
+	for _, want := range []string{
+		"needs: mirror-preflight",
+		"isolated-dedicated factoracle",
+		"scripts/ci/run-isolated-budget.sh",
+		"race-split.sh factoracle heavy)",
+		"race-split.sh factoracle partition",
+	} {
+		if !strings.Contains(heavy, want) {
+			t.Fatalf("race-factoracle-heavy job must contain %q; block:\n%s", want, heavy)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^      - race-factoracle-heavy\s*$`).MatchString(ciSrc) {
+		t.Fatal("aggregate verify job must list race-factoracle-heavy in its needs")
+	}
 }
