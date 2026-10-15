@@ -31,6 +31,8 @@ var ByID = map[string]Event{
 	"contextfabric.direct_read_authorization":        DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":        DirectRelationshipsRead,
 	"contextfabric.evidence_expansion":               EvidenceExpansion,
+	"contextfabric.fact_scope_expansion_decision":    FactScopeExpansionDecision,
+	"contextfabric.fact_scope_expansion_gap":         FactScopeExpansionGap,
 	"contextfabric.frame_validation":                 FrameValidation,
 	"contextfabric.graphql_query":                    GraphQLQuery,
 	"contextfabric.operation_read":                   OperationRead,
@@ -1486,6 +1488,370 @@ func (f EvidenceExpansionFields) SlogArgs() []any {
 		"source_admitted", f.SourceAdmitted,
 		"source_rows", f.SourceRows,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// FactScopeExpansionDecisionFields is contextfabric.fact_scope_expansion_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactScopeExpansionDecision.Fields declares in spec.go.
+type FactScopeExpansionDecisionFields struct {
+	OrgID                              string
+	RequirementKind                    string
+	OriginKind                         string
+	TargetKind                         string
+	Policy                             string
+	Basis                              string
+	Axis                               string
+	Outcome                            string
+	OriginCount                        int
+	CandidateCount                     int
+	AdmittedCount                      int
+	AuthorizationDroppedCount          int
+	TemporalDroppedCount               int
+	UnboundedValidityCount             int
+	MalformedTouchCount                int
+	DuplicateAddCount                  int
+	MissingNextHopCount                int
+	TargetKindMismatchCount            int
+	Truncated                          bool
+	FailureClass                       string
+	AttributionSourceCounts            map[string]int
+	TargetLimit                        int
+	CensusComplete                     bool
+	AuthorizedCount                    int
+	RepoLessCandidateCount             int
+	RepoLessAdmittedCount              int
+	RepoLessAuthorizationDroppedCount  int
+	OrganizationGrantAuthorizedCount   int
+	DirectRepoAuthorizedCount          int
+	ProjectOwnershipAuthorizedCount    int
+	PrLinkAuthorizedCount              int
+	ProjectOwnershipAdmittedCount      int
+	PrLinkAdmittedCount                int
+	ExcludedExplicitTextLinkCount      int
+	ExcludedHeuristicLinkCount         int
+	AuthorizationGrantMeasured         bool
+	AuthorizationGrantOrganizationWide bool
+	AuthorizationGrantExactSelectors   int
+	AuthorizationGrantOwnerSelectors   int
+	OrphanedRepositoryCount            int
+	AmbiguousOriginCount               int
+	UnknownAttributionSourceCount      int
+	ScopeQueryCount                    int
+	ScopeRowsReturned                  int
+	RootsComplete                      bool
+	SharedTargetCount                  int
+	DecisionReason                     string
+	RequestID                          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactScopeExpansionDecisionFields uniformly, set ONLY by NewFactScopeExpansionDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactScopeExpansionDecisionFields is the generated constructor for FactScopeExpansionDecisionFields -- every
+// field FactScopeExpansionDecision.Fields declares is a required parameter.
+func NewFactScopeExpansionDecisionFields(orgID string, requirementKind string, originKind string, targetKind string, policy string, basis string, axis string, outcome string, originCount int, candidateCount int, admittedCount int, authorizationDroppedCount int, temporalDroppedCount int, unboundedValidityCount int, malformedTouchCount int, duplicateAddCount int, missingNextHopCount int, targetKindMismatchCount int, truncated bool, failureClass string, attributionSourceCounts map[string]int, targetLimit int, censusComplete bool, authorizedCount int, repoLessCandidateCount int, repoLessAdmittedCount int, repoLessAuthorizationDroppedCount int, organizationGrantAuthorizedCount int, directRepoAuthorizedCount int, projectOwnershipAuthorizedCount int, prLinkAuthorizedCount int, projectOwnershipAdmittedCount int, prLinkAdmittedCount int, excludedExplicitTextLinkCount int, excludedHeuristicLinkCount int, authorizationGrantMeasured bool, authorizationGrantOrganizationWide bool, authorizationGrantExactSelectors int, authorizationGrantOwnerSelectors int, orphanedRepositoryCount int, ambiguousOriginCount int, unknownAttributionSourceCount int, scopeQueryCount int, scopeRowsReturned int, rootsComplete bool, sharedTargetCount int, decisionReason string, requestID string) FactScopeExpansionDecisionFields {
+	return FactScopeExpansionDecisionFields{
+		OrgID:                              orgID,
+		RequirementKind:                    requirementKind,
+		OriginKind:                         originKind,
+		TargetKind:                         targetKind,
+		Policy:                             policy,
+		Basis:                              basis,
+		Axis:                               axis,
+		Outcome:                            outcome,
+		OriginCount:                        originCount,
+		CandidateCount:                     candidateCount,
+		AdmittedCount:                      admittedCount,
+		AuthorizationDroppedCount:          authorizationDroppedCount,
+		TemporalDroppedCount:               temporalDroppedCount,
+		UnboundedValidityCount:             unboundedValidityCount,
+		MalformedTouchCount:                malformedTouchCount,
+		DuplicateAddCount:                  duplicateAddCount,
+		MissingNextHopCount:                missingNextHopCount,
+		TargetKindMismatchCount:            targetKindMismatchCount,
+		Truncated:                          truncated,
+		FailureClass:                       failureClass,
+		AttributionSourceCounts:            attributionSourceCounts,
+		TargetLimit:                        targetLimit,
+		CensusComplete:                     censusComplete,
+		AuthorizedCount:                    authorizedCount,
+		RepoLessCandidateCount:             repoLessCandidateCount,
+		RepoLessAdmittedCount:              repoLessAdmittedCount,
+		RepoLessAuthorizationDroppedCount:  repoLessAuthorizationDroppedCount,
+		OrganizationGrantAuthorizedCount:   organizationGrantAuthorizedCount,
+		DirectRepoAuthorizedCount:          directRepoAuthorizedCount,
+		ProjectOwnershipAuthorizedCount:    projectOwnershipAuthorizedCount,
+		PrLinkAuthorizedCount:              prLinkAuthorizedCount,
+		ProjectOwnershipAdmittedCount:      projectOwnershipAdmittedCount,
+		PrLinkAdmittedCount:                prLinkAdmittedCount,
+		ExcludedExplicitTextLinkCount:      excludedExplicitTextLinkCount,
+		ExcludedHeuristicLinkCount:         excludedHeuristicLinkCount,
+		AuthorizationGrantMeasured:         authorizationGrantMeasured,
+		AuthorizationGrantOrganizationWide: authorizationGrantOrganizationWide,
+		AuthorizationGrantExactSelectors:   authorizationGrantExactSelectors,
+		AuthorizationGrantOwnerSelectors:   authorizationGrantOwnerSelectors,
+		OrphanedRepositoryCount:            orphanedRepositoryCount,
+		AmbiguousOriginCount:               ambiguousOriginCount,
+		UnknownAttributionSourceCount:      unknownAttributionSourceCount,
+		ScopeQueryCount:                    scopeQueryCount,
+		ScopeRowsReturned:                  scopeRowsReturned,
+		RootsComplete:                      rootsComplete,
+		SharedTargetCount:                  sharedTargetCount,
+		DecisionReason:                     decisionReason,
+		RequestID:                          requestID,
+		constructed:                        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactScopeExpansionDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactScopeExpansionDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactScopeExpansionDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactScopeExpansionDecisionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement_kind", contextfabric.SanitizeLogAttr(f.RequirementKind),
+		"origin_kind", contextfabric.SanitizeLogAttr(f.OriginKind),
+		"target_kind", contextfabric.SanitizeLogAttr(f.TargetKind),
+		"policy", contextfabric.SanitizeLogAttr(f.Policy),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"axis", contextfabric.SanitizeLogAttr(f.Axis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"origin_count", f.OriginCount,
+		"candidate_count", f.CandidateCount,
+		"admitted_count", f.AdmittedCount,
+		"authorization_dropped_count", f.AuthorizationDroppedCount,
+		"temporal_dropped_count", f.TemporalDroppedCount,
+		"unbounded_validity_count", f.UnboundedValidityCount,
+		"malformed_touch_count", f.MalformedTouchCount,
+		"duplicate_add_count", f.DuplicateAddCount,
+		"missing_next_hop_count", f.MissingNextHopCount,
+		"target_kind_mismatch_count", f.TargetKindMismatchCount,
+		"truncated", f.Truncated,
+		"failure_class", contextfabric.SanitizeLogAttr(f.FailureClass),
+		"attribution_source_counts", f.AttributionSourceCounts,
+		"target_limit", f.TargetLimit,
+		"census_complete", f.CensusComplete,
+		"authorized_count", f.AuthorizedCount,
+		"repo_less_candidate_count", f.RepoLessCandidateCount,
+		"repo_less_admitted_count", f.RepoLessAdmittedCount,
+		"repo_less_authorization_dropped_count", f.RepoLessAuthorizationDroppedCount,
+		"organization_grant_authorized_count", f.OrganizationGrantAuthorizedCount,
+		"direct_repo_authorized_count", f.DirectRepoAuthorizedCount,
+		"project_ownership_authorized_count", f.ProjectOwnershipAuthorizedCount,
+		"pr_link_authorized_count", f.PrLinkAuthorizedCount,
+		"project_ownership_admitted_count", f.ProjectOwnershipAdmittedCount,
+		"pr_link_admitted_count", f.PrLinkAdmittedCount,
+		"excluded_explicit_text_link_count", f.ExcludedExplicitTextLinkCount,
+		"excluded_heuristic_link_count", f.ExcludedHeuristicLinkCount,
+		"authorization_grant_measured", f.AuthorizationGrantMeasured,
+		"authorization_grant_organization_wide", f.AuthorizationGrantOrganizationWide,
+		"authorization_grant_exact_selectors", f.AuthorizationGrantExactSelectors,
+		"authorization_grant_owner_selectors", f.AuthorizationGrantOwnerSelectors,
+		"orphaned_repository_count", f.OrphanedRepositoryCount,
+		"ambiguous_origin_count", f.AmbiguousOriginCount,
+		"unknown_attribution_source_count", f.UnknownAttributionSourceCount,
+		"scope_query_count", f.ScopeQueryCount,
+		"scope_rows_returned", f.ScopeRowsReturned,
+		"roots_complete", f.RootsComplete,
+		"shared_target_count", f.SharedTargetCount,
+		"decision_reason", contextfabric.SanitizeLogAttr(f.DecisionReason),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// FactScopeExpansionGapFields is contextfabric.fact_scope_expansion_gap's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactScopeExpansionGap.Fields declares in spec.go.
+type FactScopeExpansionGapFields struct {
+	OrgID                              string
+	RequirementKind                    string
+	OriginKind                         string
+	TargetKind                         string
+	Policy                             string
+	Basis                              string
+	Axis                               string
+	Outcome                            string
+	OriginCount                        int
+	CandidateCount                     int
+	AdmittedCount                      int
+	AuthorizationDroppedCount          int
+	TemporalDroppedCount               int
+	UnboundedValidityCount             int
+	MalformedTouchCount                int
+	DuplicateAddCount                  int
+	MissingNextHopCount                int
+	TargetKindMismatchCount            int
+	Truncated                          bool
+	FailureClass                       string
+	AttributionSourceCounts            map[string]int
+	TargetLimit                        int
+	CensusComplete                     bool
+	AuthorizedCount                    int
+	RepoLessCandidateCount             int
+	RepoLessAdmittedCount              int
+	RepoLessAuthorizationDroppedCount  int
+	OrganizationGrantAuthorizedCount   int
+	DirectRepoAuthorizedCount          int
+	ProjectOwnershipAuthorizedCount    int
+	PrLinkAuthorizedCount              int
+	ProjectOwnershipAdmittedCount      int
+	PrLinkAdmittedCount                int
+	ExcludedExplicitTextLinkCount      int
+	ExcludedHeuristicLinkCount         int
+	AuthorizationGrantMeasured         bool
+	AuthorizationGrantOrganizationWide bool
+	AuthorizationGrantExactSelectors   int
+	AuthorizationGrantOwnerSelectors   int
+	OrphanedRepositoryCount            int
+	AmbiguousOriginCount               int
+	UnknownAttributionSourceCount      int
+	ScopeQueryCount                    int
+	ScopeRowsReturned                  int
+	RootsComplete                      bool
+	SharedTargetCount                  int
+	DecisionReason                     string
+	RequestID                          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactScopeExpansionGapFields uniformly, set ONLY by NewFactScopeExpansionGapFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactScopeExpansionGapFields is the generated constructor for FactScopeExpansionGapFields -- every
+// field FactScopeExpansionGap.Fields declares is a required parameter.
+func NewFactScopeExpansionGapFields(orgID string, requirementKind string, originKind string, targetKind string, policy string, basis string, axis string, outcome string, originCount int, candidateCount int, admittedCount int, authorizationDroppedCount int, temporalDroppedCount int, unboundedValidityCount int, malformedTouchCount int, duplicateAddCount int, missingNextHopCount int, targetKindMismatchCount int, truncated bool, failureClass string, attributionSourceCounts map[string]int, targetLimit int, censusComplete bool, authorizedCount int, repoLessCandidateCount int, repoLessAdmittedCount int, repoLessAuthorizationDroppedCount int, organizationGrantAuthorizedCount int, directRepoAuthorizedCount int, projectOwnershipAuthorizedCount int, prLinkAuthorizedCount int, projectOwnershipAdmittedCount int, prLinkAdmittedCount int, excludedExplicitTextLinkCount int, excludedHeuristicLinkCount int, authorizationGrantMeasured bool, authorizationGrantOrganizationWide bool, authorizationGrantExactSelectors int, authorizationGrantOwnerSelectors int, orphanedRepositoryCount int, ambiguousOriginCount int, unknownAttributionSourceCount int, scopeQueryCount int, scopeRowsReturned int, rootsComplete bool, sharedTargetCount int, decisionReason string, requestID string) FactScopeExpansionGapFields {
+	return FactScopeExpansionGapFields{
+		OrgID:                              orgID,
+		RequirementKind:                    requirementKind,
+		OriginKind:                         originKind,
+		TargetKind:                         targetKind,
+		Policy:                             policy,
+		Basis:                              basis,
+		Axis:                               axis,
+		Outcome:                            outcome,
+		OriginCount:                        originCount,
+		CandidateCount:                     candidateCount,
+		AdmittedCount:                      admittedCount,
+		AuthorizationDroppedCount:          authorizationDroppedCount,
+		TemporalDroppedCount:               temporalDroppedCount,
+		UnboundedValidityCount:             unboundedValidityCount,
+		MalformedTouchCount:                malformedTouchCount,
+		DuplicateAddCount:                  duplicateAddCount,
+		MissingNextHopCount:                missingNextHopCount,
+		TargetKindMismatchCount:            targetKindMismatchCount,
+		Truncated:                          truncated,
+		FailureClass:                       failureClass,
+		AttributionSourceCounts:            attributionSourceCounts,
+		TargetLimit:                        targetLimit,
+		CensusComplete:                     censusComplete,
+		AuthorizedCount:                    authorizedCount,
+		RepoLessCandidateCount:             repoLessCandidateCount,
+		RepoLessAdmittedCount:              repoLessAdmittedCount,
+		RepoLessAuthorizationDroppedCount:  repoLessAuthorizationDroppedCount,
+		OrganizationGrantAuthorizedCount:   organizationGrantAuthorizedCount,
+		DirectRepoAuthorizedCount:          directRepoAuthorizedCount,
+		ProjectOwnershipAuthorizedCount:    projectOwnershipAuthorizedCount,
+		PrLinkAuthorizedCount:              prLinkAuthorizedCount,
+		ProjectOwnershipAdmittedCount:      projectOwnershipAdmittedCount,
+		PrLinkAdmittedCount:                prLinkAdmittedCount,
+		ExcludedExplicitTextLinkCount:      excludedExplicitTextLinkCount,
+		ExcludedHeuristicLinkCount:         excludedHeuristicLinkCount,
+		AuthorizationGrantMeasured:         authorizationGrantMeasured,
+		AuthorizationGrantOrganizationWide: authorizationGrantOrganizationWide,
+		AuthorizationGrantExactSelectors:   authorizationGrantExactSelectors,
+		AuthorizationGrantOwnerSelectors:   authorizationGrantOwnerSelectors,
+		OrphanedRepositoryCount:            orphanedRepositoryCount,
+		AmbiguousOriginCount:               ambiguousOriginCount,
+		UnknownAttributionSourceCount:      unknownAttributionSourceCount,
+		ScopeQueryCount:                    scopeQueryCount,
+		ScopeRowsReturned:                  scopeRowsReturned,
+		RootsComplete:                      rootsComplete,
+		SharedTargetCount:                  sharedTargetCount,
+		DecisionReason:                     decisionReason,
+		RequestID:                          requestID,
+		constructed:                        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactScopeExpansionGapFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactScopeExpansionGapFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactScopeExpansionGap's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactScopeExpansionGapFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement_kind", contextfabric.SanitizeLogAttr(f.RequirementKind),
+		"origin_kind", contextfabric.SanitizeLogAttr(f.OriginKind),
+		"target_kind", contextfabric.SanitizeLogAttr(f.TargetKind),
+		"policy", contextfabric.SanitizeLogAttr(f.Policy),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"axis", contextfabric.SanitizeLogAttr(f.Axis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"origin_count", f.OriginCount,
+		"candidate_count", f.CandidateCount,
+		"admitted_count", f.AdmittedCount,
+		"authorization_dropped_count", f.AuthorizationDroppedCount,
+		"temporal_dropped_count", f.TemporalDroppedCount,
+		"unbounded_validity_count", f.UnboundedValidityCount,
+		"malformed_touch_count", f.MalformedTouchCount,
+		"duplicate_add_count", f.DuplicateAddCount,
+		"missing_next_hop_count", f.MissingNextHopCount,
+		"target_kind_mismatch_count", f.TargetKindMismatchCount,
+		"truncated", f.Truncated,
+		"failure_class", contextfabric.SanitizeLogAttr(f.FailureClass),
+		"attribution_source_counts", f.AttributionSourceCounts,
+		"target_limit", f.TargetLimit,
+		"census_complete", f.CensusComplete,
+		"authorized_count", f.AuthorizedCount,
+		"repo_less_candidate_count", f.RepoLessCandidateCount,
+		"repo_less_admitted_count", f.RepoLessAdmittedCount,
+		"repo_less_authorization_dropped_count", f.RepoLessAuthorizationDroppedCount,
+		"organization_grant_authorized_count", f.OrganizationGrantAuthorizedCount,
+		"direct_repo_authorized_count", f.DirectRepoAuthorizedCount,
+		"project_ownership_authorized_count", f.ProjectOwnershipAuthorizedCount,
+		"pr_link_authorized_count", f.PrLinkAuthorizedCount,
+		"project_ownership_admitted_count", f.ProjectOwnershipAdmittedCount,
+		"pr_link_admitted_count", f.PrLinkAdmittedCount,
+		"excluded_explicit_text_link_count", f.ExcludedExplicitTextLinkCount,
+		"excluded_heuristic_link_count", f.ExcludedHeuristicLinkCount,
+		"authorization_grant_measured", f.AuthorizationGrantMeasured,
+		"authorization_grant_organization_wide", f.AuthorizationGrantOrganizationWide,
+		"authorization_grant_exact_selectors", f.AuthorizationGrantExactSelectors,
+		"authorization_grant_owner_selectors", f.AuthorizationGrantOwnerSelectors,
+		"orphaned_repository_count", f.OrphanedRepositoryCount,
+		"ambiguous_origin_count", f.AmbiguousOriginCount,
+		"unknown_attribution_source_count", f.UnknownAttributionSourceCount,
+		"scope_query_count", f.ScopeQueryCount,
+		"scope_rows_returned", f.ScopeRowsReturned,
+		"roots_complete", f.RootsComplete,
+		"shared_target_count", f.SharedTargetCount,
+		"decision_reason", contextfabric.SanitizeLogAttr(f.DecisionReason),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

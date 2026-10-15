@@ -907,6 +907,25 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 					return fmt.Errorf("certify: %s: %q[%d] = %v is not in the declared closed vocabulary %v", eventID, field.Key, i, elemStr, field.ClosedVocabulary)
 				}
 			}
+		case eventspec.FieldCountMap:
+			if got == nil {
+				if !field.Nullable {
+					return fmt.Errorf("certify: %s: %q = null, declared type=count_map and not nullable", eventID, field.Key)
+				}
+				break
+			}
+			counts, ok := got.(map[string]any)
+			if !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=count_map", eventID, field.Key, got, got)
+			}
+			for key, value := range counts {
+				if len(field.ClosedVocabulary) > 0 && !contains(field.ClosedVocabulary, key) {
+					return fmt.Errorf("certify: %s: %q carries key %q outside the declared closed key set %v", eventID, field.Key, key, field.ClosedVocabulary)
+				}
+				if number, ok := value.(float64); !ok || !isWholeNumber(number) {
+					return fmt.Errorf("certify: %s: %q[%q] = %v (%T), declared a whole-number count", eventID, field.Key, key, value, value)
+				}
+			}
 		case eventspec.FieldObject:
 			// ONE nested object, walked with the same pass its parent got, so
 			// a member key is under exactly the guards a top-level key is.

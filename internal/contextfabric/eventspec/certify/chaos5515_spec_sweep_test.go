@@ -134,6 +134,12 @@ func canonicalValueFor(f eventspec.Field) any {
 			obj[nf.Key] = canonicalValueFor(nf)
 		}
 		return obj
+	case eventspec.FieldCountMap:
+		key := "sweep_key"
+		if len(f.ClosedVocabulary) > 0 {
+			key = f.ClosedVocabulary[0]
+		}
+		return map[string]any{key: 7}
 	case eventspec.FieldObjectSlice:
 		row := map[string]any{}
 		for _, nf := range f.Fields {
@@ -188,7 +194,7 @@ func wrongScalarTypeValueFor(f eventspec.Field) (val any, applicable bool) {
 // applicable only to the two container types.
 func wrongContainerTypeValue(f eventspec.Field) (val any, applicable bool) {
 	switch f.Type {
-	case eventspec.FieldStringSlice, eventspec.FieldObjectSlice, eventspec.FieldObject:
+	case eventspec.FieldStringSlice, eventspec.FieldObjectSlice, eventspec.FieldObject, eventspec.FieldCountMap:
 		return 12345, true
 	default:
 		return nil, false
@@ -404,7 +410,7 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, deleteField(), Assertion{Event: ev, Want: attribution})
 		row.gotAccept = err == nil
 	case "null":
-		row.applicable, row.wantAccept = true, false
+		row.applicable, row.wantAccept = true, f.Type == eventspec.FieldCountMap && f.Nullable
 		_, err := certifyRecovered(t, mutate(nil), Assertion{Event: ev, Want: wantFor(nil)})
 		row.gotAccept = err == nil
 	case "zero":
@@ -433,6 +439,12 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "empty_container":
+		if f.Type == eventspec.FieldCountMap {
+			row.applicable, row.wantAccept = true, true
+			_, err := certifyRecovered(t, mutate(map[string]any{}), Assertion{Event: ev, Want: wantFor(map[string]any{})})
+			row.gotAccept = err == nil
+			return row
+		}
 		if f.Type != eventspec.FieldStringSlice && f.Type != eventspec.FieldObjectSlice {
 			return row
 		}
@@ -474,6 +486,9 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		var badValue any = "sweep_undeclared_vocab_value"
 		if f.Type == eventspec.FieldStringSlice {
 			badValue = []string{"sweep_undeclared_vocab_value"}
+		}
+		if f.Type == eventspec.FieldCountMap {
+			badValue = map[string]any{"sweep_undeclared_vocab_value": 7}
 		}
 		_, err := certifyRecovered(t, mutate(badValue), Assertion{Event: ev, Want: wantFor(badValue)})
 		row.gotAccept = err == nil
