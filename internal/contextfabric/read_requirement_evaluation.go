@@ -1219,6 +1219,9 @@ func readRequirementOutcomeRow(
 // which is Go's process-wide fallback and not this service's own JSON stream
 // (see PlanTelemetry.RecordReadRequirementObservationCover).
 type ReadRequirementObservationCoverEvent struct {
+	// discarded marks the events of a candidate a lever built and did not
+	// serve: they are published, never as served.
+	discarded bool
 	// Requirement and Obligation and Subject are the row's own identity,
 	// copied from the requirement rather than re-derived, for the same
 	// reason every sibling event on this interface copies them.

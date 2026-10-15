@@ -2814,7 +2814,7 @@ func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal stora
 	t.logger.InfoContext(ctx, "context fabric path drop", args...)
 }
 
-// RecordMemberCut emits one member-cut application, at Info.
+// RecordMemberCut emits one member-cut decision, at Info.
 func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal storage.Principal, event MemberCutEvent) {
 	if t.logger == nil {
 		return
@@ -2829,7 +2829,12 @@ func (t SlogEngineTelemetry) RecordMemberCut(ctx context.Context, principal stor
 		"items_before", event.ItemsBefore,
 		"listed", event.Listed,
 		"uncited", event.Uncited,
+		"kept", event.Kept,
+		"need", event.Need,
+		"keep_by", string(event.KeepBy),
 		"basis", string(event.Basis),
+		"recomposed", event.Recomposed,
+		"served", event.Served,
 		"declined", string(event.Declined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
