@@ -117,7 +117,7 @@ func TestProducersEmitClosedValidityWindows(t *testing.T) {
 				"Typed session tokens", "merged", at, created, uint8(1), ended, "", ""}}
 		case incidentsPageMatch:
 			// A resolved incident.
-			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service",
+			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service", uint8(1), uint8(1), uint8(1),
 				"Widget incident", "resolved", "low", at, uint8(0), uint8(1), created, uint8(1), ended, ""}}
 		default:
 			tables[index].rows = nil

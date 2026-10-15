@@ -253,7 +253,7 @@ func TestNormalizationCoversEverySingleRowWindowSite(t *testing.T) {
 			{"repo-1", slug, "deploy-1", "success", "production", at, uint8(1), late, uint8(1), early, "v1"}}},
 		// operational_incidents: optionalTime(started_at) vs optionalTime(ended_at)
 		{match: incidentsPageMatch, rows: [][]any{
-			{"incident-1", "repo-1", slug, "incident", "open", "low", at, uint8(0), uint8(1), late, uint8(1), early, ""}}},
+			{"incident-1", "repo-1", slug, uint8(1), uint8(1), uint8(1), "incident", "open", "low", at, uint8(0), uint8(1), late, uint8(1), early, ""}}},
 		// ci_pipeline_runs: requiredTime(started_at) vs optionalTime(finished_at)
 		{match: "FROM ci_pipeline_runs AS c", rows: [][]any{
 			{"run-1", "repo-1", "main", "success", slug, at, late, uint8(1), early, "pipeline"}}},
@@ -341,7 +341,7 @@ func TestNormalizationCoversEveryUncappedPropertyWriteSite(t *testing.T) {
 			{"repo-1", slug, "deploy-1", big + "status", big + "env", at, uint8(1), created, uint8(0), zeroTime, big + "release"}}},
 		// operational_incidents: status, severity (both direct)
 		{match: incidentsPageMatch, rows: [][]any{
-			{"incident-1", "repo-1", slug, "incident", big + "status", big + "severity", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
+			{"incident-1", "repo-1", slug, uint8(1), uint8(1), uint8(1), "incident", big + "status", big + "severity", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
 		// git_pull_request_reviews: pr_title (setStringProperty) + state (direct)
 		{match: "FROM git_pull_request_reviews AS r", rows: [][]any{
 			{"review-1", "repo-1", uint32(1042), big + "state", at, slug, created, uint8(0), zeroTime, big + "prtitle"}}},
@@ -532,7 +532,7 @@ func TestNormalizationCoversEveryLabelFamily(t *testing.T) {
 		{match: "FROM git_pull_requests AS p", rows: [][]any{
 			{"repo-1", slug, uint32(1042), dirty("pr"), "open", at, created, uint8(0), zeroTime, "main", ""}}},
 		{match: incidentsPageMatch, rows: [][]any{
-			{"incident-1", "repo-1", slug, dirty("inc"), "open", "low", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
+			{"incident-1", "repo-1", slug, uint8(1), uint8(1), uint8(1), dirty("inc"), "open", "low", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
 		// The families the ticket does NOT name: the deployment label is built
 		// from the environment column, and the ref stub's label is the raw
 		// target id. These are the sites a three-site fix would have missed.
