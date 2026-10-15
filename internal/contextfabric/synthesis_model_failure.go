@@ -43,10 +43,14 @@ func newSynthesisModelFailureDetail(class SynthesisFailureClass) (CoverageDetail
 	if err != nil {
 		return CoverageDetail{}, err
 	}
+	code := contractsv1.ContextFabricCoverageDetailSynthesisModelFailed
+	if _, notRun := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(class); notRun {
+		code = contractsv1.ContextFabricCoverageDetailSynthesisNotRun
+	}
 	detail := CoverageDetail{
-		Source: synthesisModelFailureSource, Code: contractsv1.ContextFabricCoverageDetailSynthesisModelFailed,
+		Source: synthesisModelFailureSource, Code: code,
 		FailureClass: class, RetryHint: hint,
-		Raw: string(contractsv1.ContextFabricCoverageDetailSynthesisModelFailed) + ":" + string(class),
+		Raw: string(code) + ":" + string(class),
 	}
 	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
 	return detail, nil
@@ -60,6 +64,16 @@ const synthesisFailureCurrentState = "The model call that writes the answer fail
 // synthesisFailureWarning is the fixed, content-safe sentence a degraded
 // answer carries instead of model prose. It names the class only.
 func synthesisFailureWarning(class SynthesisFailureClass) string {
+	switch class {
+	case contractsv1.ContextFabricSynthesisFailureDeadline:
+		return "answer text unavailable: facts only; no second synthesis was started because the time budget was spent (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
+		return "answer text unavailable: facts only; the written answer was over the response budget and the cohort could not be narrowed further (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureRowsOverBudget:
+		return "answer text unavailable: facts only; the written answer was over the response budget because of the rows it carried; a smaller cohort would not have made it fit (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureRetryOverBudget:
+		return "answer text unavailable: facts only; a narrower retry also ran and did not fit the response budget; the facts shown are from the first pass (class: " + string(class) + "); the sources that were read are listed in coverage"
+	}
 	return "answer text unavailable: the model call failed (class: " + string(class) + "); the sources that were read are listed in coverage"
 }
 
@@ -158,7 +172,7 @@ func IsSynthesisModelFailureAnswer(result InvestigationResult) bool {
 		return false
 	}
 	for _, detail := range result.Coverage.Details {
-		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed || detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisNotRun {
 			return true
 		}
 	}
@@ -241,7 +255,13 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 	claims, evidence, truncated, withheld := mintDegradedFactClaimsWithholding(input.Facts.Facts, degradedClaimLimit(input), scoreLookup(r.FactCapabilities))
 	r.recordWithheldScores(ctx, principal, failure.Class, withheld)
 	failure.withheldScoreKinds = withheldKinds(withheld)
-	if len(claims) > 0 {
+	if limitation, factsOnlyClass := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(failure.Class); factsOnlyClass {
+		draft.ClaimedFacts, draft.EvidenceRefIDs = claims, evidence
+		if len(claims) == 0 {
+			draft.ClaimedFacts, draft.EvidenceRefIDs = []ClaimedFact{}, []string{}
+		}
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, []string{limitation})
+	} else if len(claims) > 0 {
 		draft.ClaimedFacts = claims
 		draft.EvidenceRefIDs = evidence
 		additions := []string{contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation}

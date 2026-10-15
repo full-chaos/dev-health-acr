@@ -111,5 +111,5 @@ func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 // model call, which the answer's own limitation or warning promises. Their
 // count is the number of fact kinds read plus one, a small closed set.
 func coverageDetailNeverYields(d CoverageDetail) bool {
-	return d.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded || d.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed || d.Code == contractsv1.ContextFabricCoverageDetailFactScoreWithheld
+	return d.Code == contractsv1.ContextFabricCoverageDetailSynthesisInputBounded || d.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed || d.Code == contractsv1.ContextFabricCoverageDetailSynthesisNotRun || d.Code == contractsv1.ContextFabricCoverageDetailFactScoreWithheld
 }
