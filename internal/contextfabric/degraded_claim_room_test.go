@@ -103,6 +103,8 @@ type degradedCohortFixture struct {
 	telemetry  *recordingTelemetry
 	// candidates are the subject candidates the resolution returns.
 	candidates []SubjectCandidate
+	// itemCeiling is the service item ceiling; zero is serverItemCeiling.
+	itemCeiling int
 }
 
 func (f *degradedCohortFixture) engine(t *testing.T, maxBytes int64, reserve time.Duration, synthesizer AnswerSynthesizer) *Engine {
@@ -140,7 +142,11 @@ func (f *degradedCohortFixture) engine(t *testing.T, maxBytes int64, reserve tim
 		Requirements: registryDeriver{},
 		Telemetry:    f.telemetry,
 	}, func() EngineOptions {
-		options := budgetStageOptions(serverItemCeiling, reserve)
+		ceiling := serverItemCeiling
+		if f.itemCeiling > 0 {
+			ceiling = f.itemCeiling
+		}
+		options := budgetStageOptions(ceiling, reserve)
 		options.MaxSerializedBytes = maxBytes
 		return options
 	}())
