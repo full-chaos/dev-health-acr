@@ -71,6 +71,19 @@ func TestIncidentRowCandidatesProjectWhatAFromZeroReadProjects(t *testing.T) {
 		t.Fatalf("no active mapping names a known repository: %+v (counted %d), want the incident retracted as unmapped", out, stats.unmapped)
 	}
 
+	late := unmapped
+	late.observedAt = changed.Add(time.Hour)
+	if out := incidentRowCandidates(late, &stats); len(out) != 1 || out[0].tombstone == nil || !out[0].tombstone.EffectiveAt.Equal(late.observedAt) {
+		t.Fatalf("an incident observed after the change: %+v, want the retraction effective at its observed time, so the backend does not refuse it", out)
+	}
+	lateEdge := two
+	lateEdge.observedAt = changed.Add(time.Hour)
+	for _, c := range incidentRowCandidates(lateEdge, &stats) {
+		if c.tombstone != nil && !c.tombstone.EffectiveAt.Equal(lateEdge.observedAt) {
+			t.Fatalf("edge retraction effective %v, want the incident's later observed time %v", c.tombstone.EffectiveAt, lateEdge.observedAt)
+		}
+	}
+
 	deleted := two
 	deleted.deleted = true
 	if out := incidentRowCandidates(deleted, &stats); len(out) != 1 || out[0].tombstone == nil || out[0].tombstone.Reason != "source_deleted" {

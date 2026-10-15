@@ -3,7 +3,6 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -773,7 +772,7 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, incidentCursorExpr, "
 		return nil, false, err
 	}
 	if stats != (incidentPageStats{}) {
-		slog.DebugContext(ctx, "incident page read",
+		startLogger(ctx).DebugContext(ctx, "incident page read",
 			"org_id", contextfabric.SanitizeLogAttr(orgID),
 			"incidents_reread_for_mapping_change", stats.mappingRereads,
 			"repository_edges_retracted", stats.edgesRetracted,
@@ -839,6 +838,13 @@ func parseIncidentRepos(entries []string) []incidentRepo {
 // incidentRowCandidates is what one incident row of queryIncidents projects.
 func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidate {
 	canonicalID := "incident:" + row.id
+	// A retraction must not be older than what it retracts: the backend
+	// deletes only rows observed at or before it, and the incident's node and
+	// edges carry its own observed time.
+	retractAt := row.cursorAt
+	if row.observedAt.After(retractAt) {
+		retractAt = row.observedAt
+	}
 	tombstone := func(kind, id, reason string, effectiveAt time.Time) candidate {
 		t := contractsv1.ContextFabricProjectionTombstone{Kind: kind, CanonicalID: id, Reason: reason, EffectiveAt: effectiveAt, SourceVersion: ClickHouseSourceVersion}
 		return candidate{observedAt: row.observedAt, sortKey: row.id, tombstone: &t}
@@ -853,7 +859,7 @@ func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidat
 		// no repository (fail closed). So it is retracted, with its own reason,
 		// told apart from a deleted one.
 		stats.unmapped++
-		return []candidate{tombstone("incident", canonicalID, incidentUnmappedReason, row.cursorAt)}
+		return []candidate{tombstone("incident", canonicalID, incidentUnmappedReason, retractAt)}
 	}
 	// Raw title, trimmed and counted by item_normalization.go -- see
 	// queryWorkItems' note on why the trim does not happen here.
@@ -899,7 +905,7 @@ func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidat
 			continue
 		}
 		stats.edgesRetracted++
-		out = append(out, tombstone("relationship", incidentRepositoryRelationshipID(canonicalID, repoID), "the service mapping to the repository ended", row.cursorAt))
+		out = append(out, tombstone("relationship", incidentRepositoryRelationshipID(canonicalID, repoID), "the service mapping to the repository ended", retractAt))
 	}
 	return out
 }
