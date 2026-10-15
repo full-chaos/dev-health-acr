@@ -21,7 +21,29 @@ const degradedFactClaimIDPrefix = "server:fact:"
 // and the evidence count at the evidence bound; truncated reports that facts
 // were left out: for the bound, or because a value could not be carried as a claim.
 func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []ClaimedFact, evidence []string, truncated bool) {
+	claims, evidence, truncated, _ = mintDegradedFactClaimsWithholding(facts, claimLimit, nil)
+	return claims, evidence, truncated
+}
+
+// withheldScore is a declared score field the degraded answer did not claim, and the drivers table whose absence
+// withheld it.
+type withheldScore struct {
+	Kind FactKind
+	// SubjectKind is the subject kind of the fact: a field can declare a different drivers table per subject kind.
+	SubjectKind  SubjectKind
+	Field        string
+	DriversTable string
+}
+
+// mintDegradedFactClaimsWithholding is mintDegradedFactClaims with decision K7 applied: a field the lookup says is a
+// score is never claimed, because this composition serves no drivers table beside it. withheld lists each such field once
+// per fact kind. A nil lookup claims every scalar, as before.
+func mintDegradedFactClaimsWithholding(facts []CanonicalFact, claimLimit int, scoreOf func(CanonicalFact, string) (driversTable string, isScore bool)) (claims []ClaimedFact, evidence []string, truncated bool, withheld []withheldScore) {
 	omitted := false
+	// full is set when the claim limit or the evidence bound is reached: from then on no field is claimed, and the scan
+	// goes on only to find every declared score the answer withheld, so the trace names all of them.
+	full := false
+	seenWithheld := map[string]struct{}{}
 	claims = []ClaimedFact{}
 	evidence = []string{}
 	seenEvidence := map[string]struct{}{}
@@ -36,12 +58,25 @@ func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []Cla
 			if !ok {
 				continue
 			}
+			if scoreOf != nil {
+				if table, isScore := scoreOf(fact, field); isScore {
+					key := string(fact.Kind) + "/" + string(fact.Subject.Kind) + "/" + field
+					if _, seen := seenWithheld[key]; !seen {
+						seenWithheld[key] = struct{}{}
+						withheld = append(withheld, withheldScore{Kind: fact.Kind, SubjectKind: fact.Subject.Kind, Field: field, DriversTable: table})
+					}
+					continue
+				}
+			}
 			claim := ClaimedFact{
 				ClaimID: fmt.Sprintf("%s%d", degradedFactClaimIDPrefix, len(claims)),
 				Kind:    fact.Kind,
 				Subject: fact.Subject,
 				Field:   field,
 				Value:   value,
+			}
+			if full {
+				continue
 			}
 			if claim.Validate() != nil {
 				// A value the contract cannot carry as a claim is left out,
@@ -57,7 +92,8 @@ func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []Cla
 			}
 			if len(claims) >= claimLimit ||
 				len(evidence)+len(added) > contractsv1.ContextFabricEvidenceRefIDsMaxCount {
-				return claims, evidence, true
+				full = true
+				continue
 			}
 			for _, ref := range added {
 				seenEvidence[ref] = struct{}{}
@@ -66,7 +102,7 @@ func mintDegradedFactClaims(facts []CanonicalFact, claimLimit int) (claims []Cla
 			claims = append(claims, claim)
 		}
 	}
-	return claims, evidence, omitted
+	return claims, evidence, omitted || full, withheld
 }
 
 // degradedClaimLimit is how many claims a degraded answer may carry: the
@@ -121,4 +157,27 @@ func composeFailedSynthesisCurrentState(claims []ClaimedFact) string {
 		return synthesisFailureCurrentState
 	}
 	return truncateAtSentenceBoundary("Canonical values read: "+strings.Join(sentences, "; ")+".", currentStateMaxLength)
+}
+
+// scoreLookup is the K7 lookup of a synthesizer given the fact capabilities: whether a field of a fact is a declared
+// score, and the drivers table it needs. Nil when it was given none, so a hand-built synthesizer claims every scalar.
+func scoreLookup(capabilities []FactCapability) func(CanonicalFact, string) (string, bool) {
+	if len(capabilities) == 0 {
+		return nil
+	}
+	byKind := make(map[FactKind]FactCapability, len(capabilities))
+	for _, capability := range capabilities {
+		byKind[capability.Kind] = capability
+	}
+	return func(fact CanonicalFact, field string) (string, bool) {
+		capability, ok := byKind[fact.Kind]
+		if !ok {
+			return "", false
+		}
+		declaration, declared := capability.FieldDeclaration(field, fact.Subject.Kind)
+		if !declared || !declaration.Score {
+			return "", false
+		}
+		return declaration.DriversTable, true
+	}
 }
