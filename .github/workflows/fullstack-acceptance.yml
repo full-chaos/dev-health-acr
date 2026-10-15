@@ -423,6 +423,10 @@ jobs:
           ch_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${net}-ch")"
           test -n "$ch_ip"
           echo "ACR_CLICKHOUSE_INTEGRATION_DSN=clickhouse://default:ch@${ch_ip}:9000/default" >> "$GITHUB_ENV"
+      - name: DUMP
+        run: |
+          net="acr-lsp-${GITHUB_RUN_ID}"
+          docker exec "${net}-ch" clickhouse-client --user default --password ch --query "SELECT table, name, position, type, default_kind FROM system.columns WHERE database='default' AND table IN ('teams','operational_incidents','repo_metrics_daily') ORDER BY table, position FORMAT TSV" | sed 's/^/DUMPCOL /'
       - name: Run the live schema parity test
         working-directory: dev-health-acr
         env:
