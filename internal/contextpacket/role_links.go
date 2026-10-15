@@ -300,6 +300,7 @@ const (
 	metadataDeploymentStatus  = "deployment_status"
 	metadataPullRequestNumber = "pull_request_number"
 	metadataSubjectKey        = "subject_key"
+	metadataFocusKey          = "focus_key"
 	metadataDeploymentID      = "deployment_id"
 	metadataIncidentID        = "incident_id"
 	metadataPullRequestTier   = "pull_request_tier"
