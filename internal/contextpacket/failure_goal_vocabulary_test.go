@@ -3,6 +3,9 @@ package contextpacket
 import (
 	"strings"
 	"testing"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // Every stored failure status has a goal word that names it, so the two
@@ -71,5 +74,46 @@ func TestGoalNamesCodeHealthOnlyForACodeHealthWord(t *testing.T) {
 		if got := goalNamesCodeHealth(goal); got != want {
 			t.Errorf("goalNamesCodeHealth(%q) = %v, want %v", goal, got, want)
 		}
+	}
+}
+
+func internalRow(id, entityType, citation string, metadata map[string]any) contractsv1.EvidenceRef {
+	return contractsv1.EvidenceRef{
+		SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id,
+		Source:     contractsv1.EvidenceSource{System: "dev_health", EntityType: entityType, EntityID: id, DisplayLabel: id},
+		Provenance: contractsv1.EvidenceProvenanceNative, Confidence: 1, Citation: citation,
+		ObservedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Availability: contractsv1.EvidenceAvailable, Metadata: metadata,
+	}
+}
+
+// Failure pressure is the one definition of a failure row: every row it
+// accepts is served as pressure, and blocked work (also pressure) is not one.
+func TestFailurePressureIsTheFailureSubsetOfPressure(t *testing.T) {
+	failures := []contractsv1.EvidenceRef{
+		internalRow("ci", "ci_pipeline_run", "failed", nil),
+		internalRow("check", "check", "failed", nil),
+		internalRow("deploy", "deployment", "status=failed", map[string]any{metadataDeploymentStatus: "failed"}),
+		internalRow("incident", "incident", "status=open", nil),
+	}
+	for _, ref := range failures {
+		if !failurePressure(ref) || evidenceCategoryRule(ref).category != contractsv1.CategoryPressure {
+			t.Errorf("%s: failurePressure=%v category=%s, want a failure served as pressure", ref.EvidenceRefID, failurePressure(ref), evidenceCategoryRule(ref).category)
+		}
+	}
+	for _, ref := range []contractsv1.EvidenceRef{
+		internalRow("ci-ok", "ci_pipeline_run", "success", nil),
+		internalRow("deploy-ok", "deployment", "status=success", map[string]any{metadataDeploymentStatus: "success"}),
+		internalRow("incident-closed", "incident", "status=resolved", nil),
+	} {
+		if failurePressure(ref) || evidenceCategoryRule(ref).category == contractsv1.CategoryPressure {
+			t.Errorf("%s is not a failure but is served as pressure or failure pressure", ref.EvidenceRefID)
+		}
+	}
+	blocker := internalRow("blocker", "work_item_dependency", "BLOCKS", map[string]any{metadataRelationKey: "blocks:fwd", metadataBlockerID: "PAY-1", metadataBlockerStatus: "in_progress"})
+	if got := newRoleResolver([]contractsv1.EvidenceRef{blocker}).rule(blocker).category; got != contractsv1.CategoryPressure {
+		t.Fatalf("active blocker category = %s, want pressure (role and quota unchanged)", got)
+	}
+	if failurePressure(blocker) {
+		t.Fatal("an active blocker is blocked work, not a failure")
 	}
 }
