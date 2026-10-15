@@ -99,3 +99,60 @@ func TestIncidentProjectionServesTheLatestRevision(t *testing.T) {
 		t.Errorf("incident source count = %d, want 1", counts[contractsv1.ContextFabricSubjectIncident])
 	}
 }
+
+// A mapping deactivated with no new incident revision changes no row the
+// incremental cursor reads, so the incident's BELONGS_TO_REPOSITORY edge to
+// that repository stays until a rebuild. The rebuild resets the checkpoint and
+// reads from an empty cursor: from there the edge is gone.
+func TestDeactivatedMappingLeavesNoRepositoryEdgeAfterTheRebuild(t *testing.T) {
+	ctx := context.Background()
+	query, direct := orgIsolationClickHouseFixture(t)
+	const (
+		orgID      = "5b7e2c40-91d3-4f6a-8e25-3c0d9a7f1b71"
+		repoID     = "5b7e2c40-91d3-4f6a-8e25-3c0d9a7f1b72"
+		incidentID = "7d1c9e4a-2b6f-4a83-9e51-0c4f8a2d6b27"
+		serviceID  = "pagerduty:PX7Q2LM:service:PS4K9D3"
+	)
+	now := time.Now().UTC().Truncate(time.Second)
+	earlier, later := now.Add(-2*time.Hour), now.Add(-time.Hour)
+
+	mustExec(t, ctx, direct, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`, repoID, "acme/payments", nil, now, nil, earlier, orgID, "github")
+	mapping := func(version time.Time, active uint8) {
+		mustExec(t, ctx, direct, `INSERT INTO operational_service_repository_mappings (org_id, source_version_at, id, service_id, repo_id, is_active) VALUES (?, ?, ?, ?, ?, ?)`,
+			orgID, version, "mapping-payments", serviceID, repoID, active)
+	}
+	mapping(earlier, 1)
+	mustExec(t, ctx, direct, `INSERT INTO operational_incidents (id, org_id, source_version_at, service_id, title, normalized_status, raw_status, normalized_severity, raw_severity, started_at, source_event_at, observed_at, is_deleted, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		incidentID, orgID, earlier, serviceID, "payments timeouts", "triggered", "triggered", "sev2", "sev2", earlier, earlier, earlier, uint8(0), earlier)
+
+	src, err := devhealthsource.NewClickHouseProjectionSource(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &ingestHarness{t: t, ctx: ctx, direct: direct, src: src, source: devhealthsource.SourceName, orgID: orgID, repo: repoID}
+	edgesTo := func(d drained) []string {
+		var out []string
+		for _, relationship := range d.relationships["BELONGS_TO_REPOSITORY"] {
+			if relationship.From.CanonicalID == "incident:"+incidentID {
+				out = append(out, relationship.To.CanonicalID)
+			}
+		}
+		return out
+	}
+	first := h.drain("")
+	if got := edgesTo(first); len(got) != 1 || got[0] != "repository:"+repoID {
+		t.Fatalf("first projection: incident edges %v, want repository:%s", got, repoID)
+	}
+
+	mapping(later, 0)
+	if got := edgesTo(h.drain(first.cursor)); len(got) != 0 {
+		t.Fatalf("incremental read after the deactivation: incident edges %v; the residual this test covers is that it emits nothing", got)
+	}
+	rebuilt := h.drain("")
+	if got := edgesTo(rebuilt); len(got) != 0 {
+		t.Errorf("after the rebuild the incident still belongs to %v through a mapping inactive in its latest revision", got)
+	}
+	if _, ok := rebuilt.all["incident:"+incidentID]; ok {
+		t.Errorf("after the rebuild the incident is still projected, though no mapping is current")
+	}
+}
