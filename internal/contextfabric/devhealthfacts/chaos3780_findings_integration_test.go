@@ -378,6 +378,14 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		// the tiebreaker this is flaky (some repos land on "low", others
 		// on "elevated", nondeterministically); with it, all 40 agree.
 		const repoCount = 40
+		// compounding_risk_daily is ReplacingMergeTree(computed_at) as in
+		// production: a merge folds two rows with the same key and the same
+		// computed_at into one, so the tie this test exercises exists only
+		// while both rows are unmerged.
+		if err := direct.Exec(ctx, `SYSTEM STOP MERGES compounding_risk_daily`); err != nil {
+			t.Fatalf("stop merges on compounding_risk_daily: %v", err)
+		}
+		t.Cleanup(func() { _ = direct.Exec(ctx, `SYSTEM START MERGES compounding_risk_daily`) })
 		subjects := make([]contextfabric.SubjectRef, 0, repoCount)
 		tiedAt := ts(2026, 8, 12, 12, 0, 0)
 		for i := 0; i < repoCount; i++ {
