@@ -43,6 +43,7 @@ type Level string
 
 const (
 	LevelInfo  Level = "info"
+	LevelWarn  Level = "warn"
 	LevelError Level = "error"
 	LevelDebug Level = "debug"
 )
@@ -184,6 +185,17 @@ const (
 	// presence and closed vocabulary, and an undeclared member key inside the
 	// group fails certification like an undeclared top-level key.
 	FieldObject FieldType = "object"
+	// FieldCountMap (CHAOS-5520): a JSON object whose every value is a whole
+	// number count and whose KEYS are data (a signal family, an outcome, an
+	// attribution source), rendered from a Go map[string]int. FieldObject
+	// cannot describe it: an object field declares each member, and a
+	// count-by-key map has no fixed member list. ClosedVocabulary, when set,
+	// lists the only keys the map may carry (an empty map carries none);
+	// when nil the key set is open and is owned by the producer's own tests.
+	// Nullable says the producer leaves the Go map nil when nothing was
+	// counted, which slog renders as JSON null; a Nullable field accepts null
+	// and a field that is not Nullable refuses it.
+	FieldCountMap FieldType = "count_map"
 )
 
 // Field is one key on one event variant's emitted line.
@@ -206,6 +218,9 @@ type Field struct {
 	// object field's own MEMBER shape (one level, never recursive). Empty for
 	// every other Type.
 	Fields []Field
+	// Nullable (FieldCountMap only) says the field may carry JSON null: the
+	// producer leaves the map nil when nothing was counted.
+	Nullable bool
 }
 
 // semanticStateGroupFields is the MEMBER shape of a persisted-reading group.
@@ -1443,6 +1458,199 @@ var ModelPhraseDecision = Event{
 		},
 		modelDecisionAttemptFields(),
 	),
+}
+
+// factScopeExpansionDegradedOutcomes and factScopeExpansionServedOutcomes
+// split the outcome vocabulary exactly as factScopeGapDegrades does: a degraded
+// outcome writes the Warn line, every other writes the Info line.
+var factScopeExpansionDegradedOutcomes = []string{
+	string(contextfabric.FactScopePolicyUnavailable), string(contextfabric.FactScopeExpandedPartial),
+	string(contextfabric.FactScopeFailed), string(contextfabric.FactScopeTargetKindMismatch),
+	string(contextfabric.FactScopeMatchedUnauthorized),
+}
+
+var factScopeExpansionServedOutcomes = []string{
+	string(contextfabric.FactScopeNotNeeded), string(contextfabric.FactScopeExpanded), string(contextfabric.FactScopeAttemptedEmpty),
+}
+
+// FactScopeExpansionGap is the Warn line SlogEngineTelemetry.RecordFactScopeExpansion
+// writes when a fact family could not be fully reached from the resolved subjects
+// (the answer has a hole), once per (requirement, origin kind, policy).
+var FactScopeExpansionGap = Event{
+	ID:                 "contextfabric.fact_scope_expansion_gap",
+	Msg:                "context fabric fact scope expansion left a gap",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "requirement_kind", "origin_kind", "policy"},
+	BoundedAggregation: "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "origin_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "target_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "policy", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "axis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: factScopeExpansionDegradedOutcomes},
+		{Key: "origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "temporal_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unbounded_validity_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "malformed_touch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "duplicate_add_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_next_hop_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "target_kind_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "failure_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeFailureClassLineVocabulary()},
+		// Open keys: the expander owns the source vocabulary (team attribution sources, link tiers, team_repo_ownership); nil when nothing was counted, which slog writes as null.
+		{Key: "attribution_source_counts", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true},
+		{Key: "target_limit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_grant_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "direct_repo_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_explicit_text_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_heuristic_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_measured", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_organization_wide", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_exact_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_owner_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "orphaned_repository_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ambiguous_origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unknown_attribution_source_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_query_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_rows_returned", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "roots_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shared_target_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeDecisionReasonLineVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactScopeExpansionDecision is the Info line for the same decision when the
+// answer was not degraded (the system working).
+var FactScopeExpansionDecision = Event{
+	ID:                 "contextfabric.fact_scope_expansion_decision",
+	Msg:                "context fabric fact scope expansion outcome",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "requirement_kind", "origin_kind", "policy"},
+	BoundedAggregation: "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "origin_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "target_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "policy", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "axis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: factScopeExpansionServedOutcomes},
+		{Key: "origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "temporal_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unbounded_validity_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "malformed_touch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "duplicate_add_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_next_hop_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "target_kind_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "failure_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeFailureClassLineVocabulary()},
+		// Open keys: the expander owns the source vocabulary (team attribution sources, link tiers, team_repo_ownership); nil when nothing was counted, which slog writes as null.
+		{Key: "attribution_source_counts", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true},
+		{Key: "target_limit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "repo_less_authorization_dropped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_grant_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "direct_repo_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_authorized_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_ownership_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pr_link_admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_explicit_text_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded_heuristic_link_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_measured", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_organization_wide", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authorization_grant_exact_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorization_grant_owner_selectors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "orphaned_repository_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ambiguous_origin_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unknown_attribution_source_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_query_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_rows_returned", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "roots_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shared_target_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactScopeDecisionReasonLineVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// CohortRanked is the Info line SlogEngineTelemetry.RecordCohortRanked writes
+// once per ranking of a served cohort (CHAOS-4398): counts and closed
+// vocabularies only, never a team name or a score. Its three count maps are
+// closed: the key sets are the producer's own constants.
+var CohortRanked = Event{
+	ID:                 "contextfabric.cohort_ranked",
+	Msg:                "context fabric cohort ranked",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call that ranks a cohort.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cohort_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "formula_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "score_meaning", Type: FieldString, Presence: PresenceRequired},
+		{Key: "judgment_mismatch", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "requested_judgment_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "degraded_member_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "signals_available", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("signals_available")},
+		{Key: "outcome_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("outcome_counts")},
+		{Key: "investment_mix_source_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortRankedLineVocabulary("investment_mix_source_counts")},
+		{Key: "read_attribution_carried", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "deficiency_zero_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// CohortDriverNarration is the Info line
+// SlogEngineTelemetry.RecordCohortDriverNarration writes once per narration
+// pass, whatever its outcome (CHAOS-4398 PR3b). drivers_skipped is closed and
+// nullable: the early outcomes (no drivers, budget exhausted) leave the map nil.
+var CohortDriverNarration = Event{
+	ID:                 "contextfabric.cohort_driver_narration",
+	Msg:                "context fabric cohort driver narration",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call that narrates cohort drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("outcome")},
+		{Key: "judgments_emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_minted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_narrated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_skipped_no_evidence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "drivers_skipped", Type: FieldCountMap, Presence: PresenceRequired, Nullable: true, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("drivers_skipped")},
+		{Key: "answer_narrative_recomposed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "narration_allocator", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortDriverNarrationLineVocabulary("narration_allocator")},
+		{Key: "narration_allocated_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
 }
 
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
@@ -3395,6 +3603,10 @@ var All = []Event{
 	ModelInterpretDecision,
 	ModelSynthesizeDecision,
 	ModelPhraseDecision,
+	FactScopeExpansionGap,
+	FactScopeExpansionDecision,
+	CohortRanked,
+	CohortDriverNarration,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

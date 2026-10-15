@@ -87,8 +87,14 @@ SELECT ?, concat('linear:7a1e4b0c-5d2f-4c8a-9e31-', lpad(toString(100000 + numbe
 // by the 0.86 calibration ratio.
 const (
 	blockerProdShapeCeiling       = uint64(41 << 20)
-	blockerProdShapeTotalsCeiling = uint64(39 << 20)
-	blockerProdShapeTotalsHead    = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
+	blockerProdShapeTotalsCeiling = uint64(41 << 20)
+
+	// The planted control must clear the totals ceiling by this much, and the
+	// product's highest warm read (35.6-38.6 MiB measured) sits under it by more.
+	blockerProdShapePlantedMargin = uint64(2 << 20)
+	// The planted defect's rows per block: far over the server default (65409).
+	blockerProdShapePlantedBlockSize = 2097152
+	blockerProdShapeTotalsHead       = "SELECT team_id, toInt64(uniqExactIf(tgt, is_open))"
 
 	// The in-statement authorization fallback: main's peaks on this shape
 	// (52.3 MiB age, 46.8 MiB totals) plus 2 MiB, under the 64 MiB cap.
@@ -158,6 +164,54 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	return out
 }
 
+// blockerProdShapeBlockSizeOffenders reads the max_block_size each blocker
+// statement EXECUTED with from system.query_log (its Settings map, not the
+// statement text or the Go source), and returns the statements that did not run
+// with want rows per block (the blocker statements aggregate with uniqExactIf;
+// the authorization read that precedes them is a different statement). A wrapper or session default that drops the
+// setting leaves it out of the map, so it is reported here.
+// blockerProdShapeBlockerStatements is the number of blocker statements over
+// work_item_dependencies (the two team statements and the repository one); a new,
+// renamed or dropped statement changes it and fails the read-back.
+const blockerProdShapeBlockerStatements = 3
+
+// blockerProdShapeAuthorizationRead is the head of the one other statement over
+// that table, the authorization read that precedes them.
+const blockerProdShapeAuthorizationRead = "SELECT work_item_id FROM ("
+
+func blockerProdShapeBlockSizeOffenders(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64, want string) (offenders []string, statements int, others []string) {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, any(Settings['max_block_size']), position(any(query), 'uniqExactIf') > 0, any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) 
+GROUP BY normalized_query_hash`, mark)
+	if err != nil {
+		t.Fatalf("read executed settings: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash uint64
+		var blockSize, head string
+		var aggregates bool
+		if err := rows.Scan(&hash, &blockSize, &aggregates, &head); err != nil {
+			t.Fatal(err)
+		}
+		if !aggregates {
+			others = append(others, head)
+			continue
+		}
+		statements++
+		t.Logf("PRODSHAPE executed max_block_size %q (want %q) statement %d: %s", blockSize, want, hash, head)
+		if blockSize != want {
+			offenders = append(offenders, fmt.Sprintf("%d max_block_size=%q: %s", hash, blockSize, head))
+		}
+	}
+	return offenders, statements, others
+}
+
 func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string, mark int64) []blockerProdShapeStatement {
 	t.Helper()
 	out := blockerProdShapeQueryLog(t, ctx, direct, mark)
@@ -181,7 +235,7 @@ func blockerProdShapePlantedReading(t *testing.T, ctx context.Context, direct cl
 	read()
 	type seen struct {
 		head         string
-		low          uint64
+		low, high    uint64
 		memoryLimits int
 		rounds       int
 	}
@@ -211,12 +265,15 @@ GROUP BY normalized_query_hash`, mark)
 			}
 			entry := byHash[hash]
 			if entry == nil {
-				entry = &seen{head: head, low: peak}
+				entry = &seen{head: head, low: peak, high: peak}
 				byHash[hash] = entry
 			}
 			entry.rounds++
 			if peak < entry.low {
 				entry.low = peak
+			}
+			if peak > entry.high {
+				entry.high = peak
 			}
 			if code == memoryLimitExceeded {
 				entry.memoryLimits++
@@ -227,15 +284,16 @@ GROUP BY normalized_query_hash`, mark)
 	exceeded := false
 	for hash, entry := range byHash {
 		ceiling := blockerProdShapeCeilingFor(entry.head)
-		// Only the totals statement counts. Its lowest planted read has
-		// ranged 40.0-41.6 MiB against the 39 MiB ceiling, so no margin over
-		// the ceiling is asserted.
+		// Only the totals statement counts. The planted defect (authorization
+		// inside each statement, oversized blocks) reads 52-53 MiB, so its
+		// lowest read must clear the 41 MiB ceiling by the margin; the product's
+		// highest read is 38.6 MiB at most, 2.4 MiB under the ceiling.
 		totals := strings.HasPrefix(entry.head, blockerProdShapeTotalsHead)
-		hit := totals && (entry.memoryLimits == entry.rounds || entry.low >= ceiling)
+		hit := totals && (entry.memoryLimits == entry.rounds || entry.low >= ceiling+blockerProdShapePlantedMargin)
 		if hit {
 			exceeded = true
 		}
-		t.Logf("PRODSHAPE planted-control reading [%s] statement %d lowest %.1f MiB, memory-limit exceptions %d of %d reads, ceiling %.1f MiB, reached %v: %s", label, hash, float64(entry.low)/(1<<20), entry.memoryLimits, entry.rounds, float64(ceiling)/(1<<20), hit, entry.head)
+		t.Logf("PRODSHAPE planted-control reading [%s] statement %d lowest %.1f highest %.1f MiB, memory-limit exceptions %d of %d reads, ceiling %.1f MiB + margin %.1f MiB, reached %v: %s", label, hash, float64(entry.low)/(1<<20), float64(entry.high)/(1<<20), entry.memoryLimits, entry.rounds, float64(ceiling)/(1<<20), float64(blockerProdShapePlantedMargin)/(1<<20), hit, entry.head)
 	}
 	return exceeded
 }
@@ -421,7 +479,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		} {
 			low, high := blockerProdShapeMinOfWarmReads(t, ctx, direct, caller.read)
 			for key := range low {
-				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), key)
+				t.Logf("PRODSHAPE spread [%s, %s] min %.1f max %.1f MiB, bound %.1f MiB: %s", caller.label, state, float64(low[key])/(1<<20), float64(high[key])/(1<<20), float64(blockerProdShapeCeilingFor(key))/(1<<20), key)
 				if ceiling := blockerProdShapeCeilingFor(key); high[key] >= ceiling {
 					t.Errorf("%s, %s: the highest of three warm reads of %q peaked at %d bytes, want under %d (the 48 MiB production target scaled by the statement's calibration ratio)", caller.label, state, key, high[key], ceiling)
 				}
@@ -462,23 +520,53 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		}
 	}
 
-	// Planted defect, absolute: the two shipped memory fixes undone together for
-	// the restricted caller, the authorization relation inside every statement
-	// (#1256) and the server's default block size (#1304). The totals statement
-	// must then sit at or over its frozen ceiling in every one of three
-	// warm reads (by peak, or by the memory-limit exception, code 241 asserted,
-	// never any error). The same reading of the shipped shape must NOT reach the
-	// ceiling: that is what makes the control discriminate. If the planted
-	// reading did not reach it, the ceilings could not catch the defect they
-	// exist for.
+	// Structural guard on the cause of the #1304 fix: the executed blocker
+	// statements carry the 8192-row block size. Memory alone cannot separate
+	// the real rollback (#1256 and #1304 undone together reads 39-42 MiB
+	// against a 37-39 MiB product), so the setting is checked directly. The
+	// same read-back under the rollback must find offenders, or it guards
+	// nothing.
+	shippedMark := serverNowMicros(t, ctx, direct)
+	read(restricted)
+	offenders, statements, others := blockerProdShapeBlockSizeOffenders(t, ctx, direct, shippedMark, "8192")
+	if statements != blockerProdShapeBlockerStatements || len(others) != 1 || !strings.HasPrefix(others[0], blockerProdShapeAuthorizationRead) {
+		t.Errorf("the read-back saw %d blocker statements (want %d) and other statements %q (want exactly the authorization read): a statement was added, renamed or dropped", statements, blockerProdShapeBlockerStatements, others)
+	}
+	if len(offenders) > 0 {
+		t.Errorf("blocker statements executed without max_block_size = 8192 (the #1304 fix): %v", offenders)
+	}
+	rollbackOffenders, rollbackStatements, rollbackOthers := func() ([]string, int, []string) {
+		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
+		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(0)()
+		rollbackMark := serverNowMicros(t, ctx, direct)
+		read(restricted)
+		return blockerProdShapeBlockSizeOffenders(t, ctx, direct, rollbackMark, "8192")
+	}()
+	if rollbackStatements != blockerProdShapeBlockerStatements || len(rollbackOthers) != 1 || len(rollbackOffenders) != rollbackStatements {
+		t.Errorf("with #1256 and #1304 undone, %d of %d blocker statements lacked max_block_size = 8192: the read-back cannot catch the rollback", len(rollbackOffenders), rollbackStatements)
+	}
+	// Advisory, not a guard: the real rollback's memory reading is logged only.
+	func() {
+		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
+		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(0)()
+		blockerProdShapePlantedReading(t, ctx, direct, "advisory only, not a guard: real rollback (#1256 and #1304 undone), restricted", func() { read(restricted) })
+	}()
+
+	// Planted defect, absolute: the authorization relation inside every
+	// statement (#1256) and oversized blocks (the server's default is 65409
+	// rows; #1304 bounds them) for the restricted caller. The totals statement
+	// must then sit at least the margin over its frozen ceiling in every one of
+	// three warm reads (by peak, or by the memory-limit exception, code 241
+	// asserted, never any error). The same reading of the shipped shape must
+	// NOT reach it: that is what makes the control discriminate.
 	if blockerProdShapePlantedReading(t, ctx, direct, "shipped shape, restricted", func() { read(restricted) }) {
 		t.Error("the planted-defect control flags the shipped shape: it would flag anything, so it proves nothing")
 	}
-	restoreBoundPlanted := devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)
-	restoreBlockPlanted := devhealthfacts.SetBlockerMaxBlockSizeForTest(0)
-	planted := blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, default block size, restricted", func() { read(restricted) })
-	restoreBlockPlanted()
-	restoreBoundPlanted()
+	planted := func() bool {
+		defer devhealthfacts.SetBlockerAuthorizedIDsBoundForTest(0)()
+		defer devhealthfacts.SetBlockerMaxBlockSizeForTest(blockerProdShapePlantedBlockSize)()
+		return blockerProdShapePlantedReading(t, ctx, direct, "planted: authorization inside each statement, oversized blocks, restricted", func() { read(restricted) })
+	}()
 	if !planted {
 		t.Error("with the authorization relation inside each statement and the default block size, the totals statement did not reach its ceiling: the ceilings cannot catch the defect they exist for")
 	}

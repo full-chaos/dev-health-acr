@@ -17,18 +17,18 @@ import (
 
 const (
 	blockerStatusSlopeFactor = 1.15
-	blockerStatusSlopeFloor  = uint64(2 << 20)
-	blockerStatusCeiling     = uint64(24 << 20)
+	blockerStatusSlopeFloor  = uint64(8 << 20)
+	blockerStatusCeiling     = uint64(32 << 20)
 	blockerStatusFillerItems = 150000
 )
 
-func blockerStatusPeakMin(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) uint64 {
+func blockerStatusPeaks(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) []uint64 {
 	t.Helper()
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
 	if _, err := executor.QueryEvidence(ctx, statement, plan.Bindings()); err != nil {
 		t.Fatalf("warm-up: %v", err)
 	}
-	best := uint64(0)
+	peaks := make([]uint64, 0, runs)
 	for run := 0; run < runs; run++ {
 		mark := serverNowMicros(t, ctx, direct)
 		rows, err := executor.QueryEvidence(ctx, statement, plan.Bindings())
@@ -46,11 +46,10 @@ func blockerStatusPeakMin(t *testing.T, ctx context.Context, query *runtimeclick
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'blocker_status') > 0`, mark).Scan(&peak); err != nil || peak == 0 {
 			t.Fatalf("run %d: statement not found in query_log (measurement did not happen): %v", run, err)
 		}
-		if best == 0 || peak < best {
-			best = peak
-		}
+		peaks = append(peaks, peak)
 	}
-	return best
+	slices.Sort(peaks)
+	return peaks
 }
 
 func blockerStatusSlopeViolated(small, large uint64) bool {
@@ -60,7 +59,7 @@ func blockerStatusSlopeViolated(small, large uint64) bool {
 // The blocker status of work_item_dependencies.v1 is read for the blocking ids
 // of one repository's dependency rows only. Its peak memory must follow those
 // rows, not the organization's work items: unrelated organization rows may not
-// grow it past 1.15x + 2 MiB (minimum of three warm runs). The same guard is
+// grow it past 1.15x + 8 MiB (lowest of three warm reads per size; one read swings between 16.9 and 23.9 MB with no size effect, while the organization-wide form grows 20 -> 167 MB). The same guard is
 // applied to the organization-wide form and must flag it.
 func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRealClickHouse(t *testing.T) {
 	if raceDetectorEnabled {
@@ -108,8 +107,9 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 	orgWide.Statement = orgWideStatement
 	plan := contextpacket.ReadPlan{OrgID: blockerProdShapeOrg, RepoID: "00000000-0000-4000-8000-000000000000", RepoSlug: "acme/repo-0"}
 
-	smallScoped := blockerStatusPeakMin(t, ctx, query, direct, catalog, plan, 3)
-	smallOrgWide := blockerStatusPeakMin(t, ctx, query, direct, orgWide, plan, 3)
+	smallScopedReads := blockerStatusPeaks(t, ctx, query, direct, catalog, plan, 3)
+	smallOrgWideReads := blockerStatusPeaks(t, ctx, query, direct, orgWide, plan, 3)
+	smallScoped, smallOrgWide := smallScopedReads[0], smallOrgWideReads[0]
 
 	for part := 0; part < 3; part++ {
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, updated_at, created_at, parent_id, provider, project_id, completed_at, last_synced)
@@ -117,17 +117,19 @@ SELECT concat('unrelated-%d-', lpad(toString(number), 12, '0')), toUUID('0000000
 			t.Fatalf("seed unrelated rows: %v", err)
 		}
 	}
-	largeScoped := blockerStatusPeakMin(t, ctx, query, direct, catalog, plan, 3)
-	largeOrgWide := blockerStatusPeakMin(t, ctx, query, direct, orgWide, plan, 3)
+	largeScopedReads := blockerStatusPeaks(t, ctx, query, direct, catalog, plan, 3)
+	largeOrgWideReads := blockerStatusPeaks(t, ctx, query, direct, orgWide, plan, 3)
+	largeScoped, largeOrgWide := largeScopedReads[0], largeOrgWideReads[0]
+	t.Logf("BLOCKERSTATUS reads (bytes, sorted; lowest first, highest last) scoped small %v large %v; organization-wide small %v large %v; slope bound on the lowest scoped small read %.0f bytes; ceiling %d bytes on the highest", smallScopedReads, largeScopedReads, smallOrgWideReads, largeOrgWideReads, blockerStatusSlopeFactor*float64(smallScoped)+float64(blockerStatusSlopeFloor), blockerStatusCeiling)
 
 	t.Logf("BLOCKERSTATUS scoped: %d bytes (%.1f MiB) at 17k items, %d bytes (%.1f MiB) at +%d unrelated; organization-wide form: %d (%.1f MiB) and %d (%.1f MiB)",
 		smallScoped, float64(smallScoped)/(1<<20), largeScoped, float64(largeScoped)/(1<<20), blockerStatusFillerItems,
 		smallOrgWide, float64(smallOrgWide)/(1<<20), largeOrgWide, float64(largeOrgWide)/(1<<20))
 	if blockerStatusSlopeViolated(smallScoped, largeScoped) {
-		t.Errorf("the scoped statement grew with unrelated organization rows: %d -> %d bytes, over 1.15x + 2 MiB", smallScoped, largeScoped)
+		t.Errorf("the scoped statement grew with unrelated organization rows: %d -> %d bytes, over 1.15x + 8 MiB (lowest reads; all reads small %v large %v)", smallScoped, largeScoped, smallScopedReads, largeScopedReads)
 	}
-	if largeScoped >= blockerStatusCeiling || smallScoped >= blockerStatusCeiling {
-		t.Errorf("the scoped statement peaked at %d bytes, want under %d", slices.Max([]uint64{smallScoped, largeScoped}), blockerStatusCeiling)
+	if highest := slices.Max([]uint64{smallScopedReads[len(smallScopedReads)-1], largeScopedReads[len(largeScopedReads)-1]}); highest >= blockerStatusCeiling {
+		t.Errorf("the scoped statement peaked at %d bytes (highest read), want under %d", highest, blockerStatusCeiling)
 	}
 	if !blockerStatusSlopeViolated(smallOrgWide, largeOrgWide) {
 		t.Errorf("the guard did not flag the organization-wide form (%d -> %d bytes): the guard cannot fail", smallOrgWide, largeOrgWide)
