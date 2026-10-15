@@ -1302,9 +1302,12 @@ const modelDecisionMsg = "context fabric model decision"
 
 // modelDecisionIdentityFields: operation is empty on a call that returned
 // before a receipt was built (an unauthenticated principal, an invalid request
-// or an oversized payload); the line still fires, because an observable that
-// only fires on the paths that got far enough cannot tell "not reached" from
-// "reached and fine".
+// or an oversized payload). That empty operation, together with an empty
+// attempt list, is the ruled NOT-REACHED sentinel (dictation 378 and the C3
+// ruling, pinned by chaos5380_attempt_sequence_pins_test.go): the line still
+// fires, because an observable that only fires on the paths that got far
+// enough cannot tell "not reached" from "reached and fine". It is declared
+// here because it is a ruled value of the line, not a defect.
 func modelDecisionIdentityFields(operation string) []Field {
 	return []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
