@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -36,6 +37,37 @@ var scopeLiteralBounds = map[string]scopeLiteralBound{
 	"project_native_placement":     {memoryMiB: 240, readRows: 1 << 40},
 	"project_native_theme_values":  {memoryMiB: 240, readRows: 1 << 40},
 	"project_native_bugfix_values": {memoryMiB: 240, readRows: 1 << 40},
+}
+
+const scopeLiteralRepoUnits = 500
+
+// seedRepositoryUnits adds wide-id units that carry an owned repository id and
+// sit in the membership run: the shape's own units carry none, so the owned
+// unit count and the project roll-up's repository arm would otherwise return
+// no row. It returns the new scope ids.
+func seedRepositoryUnits(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, s linkedProdShape) []string {
+	t.Helper()
+	at := "toDateTime64('2026-09-18 00:00:00', 3, 'UTC')"
+	owned := make([]string, 0, s.ownedRepos)
+	for i := 0; i < s.ownedRepos; i++ {
+		owned = append(owned, "'"+repoUUID(fmt.Sprintf("shape-r-%d", i))+"'")
+	}
+	unit := "concat('wu-repo-', toString(number), '-', lower(hex(SHA256(concat('repo', toString(number))))))"
+	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
+SELECT %s, %s, %s, toUUID([%s][1 + number %% %d]), 1.0, map('feature_delivery', 0.6, 'operational', 0.4), map(), '{}', %s, '%s' FROM numbers(%d)`,
+		unit, at, at, strings.Join(owned, ","), s.ownedRepos, at, orgID, scopeLiteralRepoUnits)); err != nil {
+		t.Fatalf("seed repository units: %v", err)
+	}
+	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id)
+SELECT '%s', 'issue', concat('n-repo-', toString(number)), %s, 'theme', 'feature_delivery', toDateTime64('2026-09-19 00:00:00', 3, 'UTC'), 'run-1' FROM numbers(%d)`,
+		orgID, unit, scopeLiteralRepoUnits)); err != nil {
+		t.Fatalf("seed repository unit membership: %v", err)
+	}
+	ids := make([]string, 0, scopeLiteralRepoUnits)
+	for i := 0; i < scopeLiteralRepoUnits; i++ {
+		ids = append(ids, fmt.Sprintf("wu-repo-%d-%x", i, sha256.Sum256([]byte(fmt.Sprintf("repo%d", i)))))
+	}
+	return ids
 }
 
 type scopeLiteralRun struct {
@@ -78,6 +110,7 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 	ctx := context.Background()
 	const orgID = "org-scope-literal-wide-ids"
 	query, direct, _, scopeIDs := newLinkedProdShapeStore(t, ctx, orgID, linkedWideIDProdShape)
+	scopeIDs = append(scopeIDs, seedRepositoryUnits(t, ctx, direct, orgID, linkedWideIDProdShape)...)
 	capped := contextpacket.NewMemoryCappedQueryClient(readonlyQueryClient{inner: query}, contextpacket.APIStatementMaxMemoryUsage)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 	assertReadonlyInForce(t, ctx, capped, orgID)
