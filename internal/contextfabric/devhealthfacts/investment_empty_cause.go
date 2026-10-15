@@ -34,7 +34,7 @@ FROM (
 		argMax(to_ts, computed_at) AS to_ts,
 		toFloat64(1) AS effort_value
 	FROM work_unit_investments
-	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
+	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + `
 	GROUP BY work_unit_id
 )
 WHERE repo_id IS NOT NULL AND toString(repo_id) IN {ids:Array(String)} AND ` + mixWindowPredicate(0, bound) + `
