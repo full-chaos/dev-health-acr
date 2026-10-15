@@ -115,7 +115,7 @@ func TestProducersEmitClosedValidityWindows(t *testing.T) {
 			// A merged pull request.
 			tables[index].rows = [][]any{{"repo-1", "example-org/widget-service", uint32(1042),
 				"Typed session tokens", "merged", at, created, uint8(1), ended, "", ""}}
-		case "FROM operational_incidents AS i":
+		case incidentsPageMatch:
 			// A resolved incident.
 			tables[index].rows = [][]any{{"incident-1", "repo-1", "example-org/widget-service",
 				"Widget incident", "resolved", "low", at, uint8(0), uint8(1), created, uint8(1), ended, ""}}

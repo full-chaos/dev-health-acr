@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"log/slog"
 	"os"
 	"strings"
@@ -14,9 +13,13 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructurepriors"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/structurepriorcuration"
+	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 const priorsUsage = `Usage: acr-projector priors <curate|flip|rollback|revoke> [flags]
@@ -40,6 +43,11 @@ automatically.
                                        CURRENT active version you observed
   revoke --org ID --entry ID --by WHO kill one entry, in every version that
                                        ever proposes it, present or future
+
+Every command holds the organization's projection lock until its write has
+committed. While a projector pass or a purge holds that lock the command
+writes nothing and says the organization is locked: run it again. A purged
+organization is refused until it returns to discovery.
 `
 
 func priorsCommand(args []string) error {
@@ -47,20 +55,135 @@ func priorsCommand(args []string) error {
 		_, err := fmt.Print(priorsUsage)
 		return err
 	}
-	sub, rest := args[0], args[1:]
+	return runPriors(args[0], args[1:], openPriors)
+}
+
+func runPriors(sub string, rest []string, open priorsOpener) error {
 	switch sub {
 	case "curate":
-		return priorsCurate(rest)
+		return priorsCurate(rest, open)
 	case "flip":
-		return priorsFlip(rest)
+		return priorsFlip(rest, open)
 	case "rollback":
-		return priorsRollback(rest)
+		return priorsRollback(rest, open)
 	case "revoke":
-		return priorsRevoke(rest)
+		return priorsRevoke(rest, open)
 	default:
 		return fmt.Errorf("unknown priors subcommand %q; use curate, flip, rollback, or revoke", sub)
 	}
 }
+
+// priorsOpener opens the database of one priors command and the guard its
+// write runs under.
+type priorsOpener func(ctx context.Context) (*sql.DB, priorsOrgGuard, error)
+
+func openPriors(ctx context.Context) (*sql.DB, priorsOrgGuard, error) {
+	db, err := openPriorsDB(ctx)
+	if err != nil {
+		return nil, priorsOrgGuard{}, err
+	}
+	locker, err := projectionrun.NewPostgresOrgLocker(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, priorsOrgGuard{}, err
+	}
+	markers, err := pgprojection.NewOrgPurgeMarkerStore(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, priorsOrgGuard{}, err
+	}
+	return db, priorsOrgGuard{Locker: locker, Markers: markers, Logger: slog.Default()}, nil
+}
+
+// priorsPurgeMarkers reads the organization's purge marker.
+type priorsPurgeMarkers interface {
+	IsPurged(ctx context.Context, orgID string) (bool, error)
+}
+
+// Outcomes of one priors command, as its Info line reports them.
+const (
+	priorsOutcomeWritten   = "written"
+	priorsOutcomeUnchanged = "unchanged"
+	priorsOutcomePurged    = "purged"
+	priorsOutcomeLocked    = "locked"
+	priorsOutcomeFailed    = "failed"
+)
+
+// priorsOrgGuard runs one priors write in the purge's lock order: the
+// organization lock, then the purge marker read, then the write, whose own
+// transaction takes the write fence lock through the trigger of migration
+// 0052. The organization lock is held from before the marker read until the
+// write has committed or failed. The purge takes the same lock before it
+// deletes anything, so it can never run between the marker read and the write.
+type priorsOrgGuard struct {
+	Locker  projectionrun.OrgLocker
+	Markers priorsPurgeMarkers
+	Logger  *slog.Logger
+}
+
+// run returns an error that wraps projectionrun.ErrOrgLocked when another
+// projector pass or a purge holds the organization lock, and one that wraps
+// storage.ErrOrgPurged when the organization was purged. In both cases
+// nothing was written. write reports whether it wrote a row.
+func (g priorsOrgGuard) run(ctx context.Context, command, orgID string, write func(context.Context) (bool, error)) (err error) {
+	logger := g.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	outcome := priorsOutcomeFailed
+	defer func() {
+		attrs := []any{"command", command, "org_id", contextfabric.SanitizeLogAttr(orgID), "outcome", outcome}
+		if outcome == priorsOutcomeFailed && err != nil {
+			attrs = append(attrs, "failure_class", contextfabric.SanitizeLogAttr(projectionrun.ClassifyFailure(err)))
+		}
+		logger.InfoContext(ctx, "acr-projector priors command finished", attrs...)
+	}()
+	if g.Locker == nil || g.Markers == nil {
+		return errors.New("acr-projector priors: organization guard is not configured")
+	}
+
+	unlock, err := g.Locker.Lock(ctx, orgID)
+	if errors.Is(err, projectionrun.ErrOrgLocked) {
+		outcome = priorsOutcomeLocked
+		logger.WarnContext(ctx, "acr-projector priors refused: organization is locked by a projector pass or a purge", "command", command, "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", "org_locked")
+		return fmt.Errorf("acr-projector priors %s: organization %s is locked by a projector pass or a purge; nothing was written, run the command again: %w", command, orgID, err)
+	}
+	if err != nil {
+		return fmt.Errorf("acr-projector priors %s: take the organization lock: %w", command, err)
+	}
+	defer func() {
+		if unlockErr := unlock(); unlockErr != nil {
+			logger.WarnContext(ctx, "acr-projector priors: releasing the organization lock failed", "command", command, "failure_class", contextfabric.SanitizeLogAttr(projectionrun.ClassifyFailure(unlockErr)))
+		}
+	}()
+
+	purged, err := g.Markers.IsPurged(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("acr-projector priors %s: read the purge marker: %w", command, err)
+	}
+	written := false
+	if !purged {
+		written, err = write(ctx)
+	}
+	if purged || errors.Is(err, storage.ErrOrgPurged) {
+		outcome = priorsOutcomePurged
+		logger.WarnContext(ctx, "acr-projector priors refused: organization was purged", "command", command, "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", "org_purged")
+		return fmt.Errorf("acr-projector priors %s: organization %s was purged; nothing is written for it until it returns to discovery: %w", command, orgID, storage.ErrOrgPurged)
+	}
+	if err != nil {
+		return err
+	}
+	outcome = priorsOutcomeUnchanged
+	if written {
+		outcome = priorsOutcomeWritten
+	}
+	return nil
+}
+
+// errPriorsPoolTooSmall refuses a pool of one connection: a priors command
+// holds the organization lock on one connection while its write runs on
+// another, so with one connection the write would wait for itself.
+var errPriorsPoolTooSmall = errors.New("acr-projector priors requires ACR_POSTGRES_MAX_OPEN_CONNS of at least 2 (or unset): it holds the organization lock on one connection while it writes on another")
 
 // openPriorsDB opens a Postgres-only connection -- CHAOS-3977 P5's own
 // store needs no ClickHouse or graph backend, unlike openRuntime's full
@@ -79,6 +202,9 @@ func openPriorsDB(ctx context.Context) (*sql.DB, error) {
 	}
 	if strings.TrimSpace(cfg.PostgresDSN) == "" {
 		return nil, errors.New("acr-projector priors requires ACR_POSTGRES_DSN")
+	}
+	if cfg.PostgresMaxOpenConns == 1 {
+		return nil, errPriorsPoolTooSmall
 	}
 	db, err := hosted.OpenPostgresWithRetry(ctx, runtimepostgres.Config{
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
@@ -182,7 +308,7 @@ func isLowercaseSHA256Hex(s string) bool {
 	return true
 }
 
-func priorsCurate(args []string) error {
+func priorsCurate(args []string, open priorsOpener) error {
 	flags := flag.NewFlagSet("acr-projector priors curate", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID to curate (required)")
@@ -212,7 +338,7 @@ func priorsCurate(args []string) error {
 	}
 
 	ctx := context.Background()
-	db, err := openPriorsDB(ctx)
+	db, guard, err := open(ctx)
 	if err != nil {
 		return err
 	}
@@ -221,15 +347,20 @@ func priorsCurate(args []string) error {
 	if err != nil {
 		return err
 	}
+	return guard.run(ctx, "curate", *org, func(ctx context.Context) (bool, error) {
+		return curateOrg(ctx, db, store, *org, frozenHashes)
+	})
+}
 
-	events, err := structurepriorcuration.ReadSelections(ctx, db, *org)
+func curateOrg(ctx context.Context, db *sql.DB, store *pgstructurepriors.Store, org string, frozenHashes map[string]bool) (bool, error) {
+	events, err := structurepriorcuration.ReadSelections(ctx, db, org)
 	if err != nil {
-		return err
+		return false, err
 	}
 	entries := structurepriorcuration.Curate(events, frozenHashes)
 	if len(entries) == 0 {
-		_, err := fmt.Printf("org %s: curation found nothing promotable (0 candidate selections met the promotion rule)\n", *org)
-		return err
+		_, err := fmt.Printf("org %s: curation found nothing promotable (0 candidate selections met the promotion rule)\n", org)
+		return false, err
 	}
 	// watermark (codex adversarial review round 2, medium finding, repro-
 	// confirmed and fixed): v1 still reads the org's FULL selection
@@ -243,15 +374,15 @@ func priorsCurate(args []string) error {
 	// events THIS run actually curated from -- a real, checkable value,
 	// even though it does not yet gate what a future run reads.
 	watermark := latestCapturedAt(events)
-	version, err := store.PublishVersion(ctx, *org, entries, watermark, contextfabric.CurationRuleVersionV1)
+	version, err := store.PublishVersion(ctx, org, entries, watermark, contextfabric.CurationRuleVersionV1)
 	if err != nil {
-		return fmt.Errorf("publish version: %w", err)
+		return false, fmt.Errorf("publish version: %w", err)
 	}
-	_, err = fmt.Printf("org %s: published version %d with %d entries, watermark=%s (NOT active -- run `priors flip --org %s --version %d --by <you>` to promote it)\n", *org, version, len(entries), watermark, *org, version)
-	return err
+	_, err = fmt.Printf("org %s: published version %d with %d entries, watermark=%s (NOT active -- run `priors flip --org %s --version %d --by <you>` to promote it)\n", org, version, len(entries), watermark, org, version)
+	return true, err
 }
 
-func priorsFlip(args []string) error {
+func priorsFlip(args []string, open priorsOpener) error {
 	flags := flag.NewFlagSet("acr-projector priors flip", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID (required)")
@@ -265,7 +396,7 @@ func priorsFlip(args []string) error {
 		return errors.New("acr-projector priors flip requires --org, --version, and --by")
 	}
 	ctx := context.Background()
-	db, err := openPriorsDB(ctx)
+	db, guard, err := open(ctx)
 	if err != nil {
 		return err
 	}
@@ -280,14 +411,17 @@ func priorsFlip(args []string) error {
 		expectedPtr = expected
 	}
 	target := *version
-	if err := store.FlipActiveVersion(ctx, *org, expectedPtr, &target, *by); err != nil {
-		return fmt.Errorf("flip: %w", err)
-	}
-	_, err = fmt.Printf("org %s: active version is now %d (ratified by %s)\n", *org, target, *by)
-	return err
+	return guard.run(ctx, "flip", *org, func(ctx context.Context) (bool, error) {
+		if err := store.FlipActiveVersion(ctx, *org, expectedPtr, &target, *by); err != nil {
+			return false, fmt.Errorf("flip: %w", err)
+		}
+		_, err := fmt.Printf("org %s: active version is now %d (ratified by %s)\n", *org, target, *by)
+		alreadyActive := expectedPtr != nil && *expectedPtr == target
+		return !alreadyActive, err
+	})
 }
 
-func priorsRollback(args []string) error {
+func priorsRollback(args []string, open priorsOpener) error {
 	flags := flag.NewFlagSet("acr-projector priors rollback", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID (required)")
@@ -300,7 +434,7 @@ func priorsRollback(args []string) error {
 		return errors.New("acr-projector priors rollback requires --org, --expect-current, and --by")
 	}
 	ctx := context.Background()
-	db, err := openPriorsDB(ctx)
+	db, guard, err := open(ctx)
 	if err != nil {
 		return err
 	}
@@ -311,14 +445,16 @@ func priorsRollback(args []string) error {
 	}
 
 	expected := *expectCurrent
-	if err := store.RollbackActiveVersion(ctx, *org, &expected, *by); err != nil {
-		return fmt.Errorf("rollback: %w", err)
-	}
-	_, err = fmt.Printf("org %s: active version rolled back from %d (ratified by %s)\n", *org, expected, *by)
-	return err
+	return guard.run(ctx, "rollback", *org, func(ctx context.Context) (bool, error) {
+		if err := store.RollbackActiveVersion(ctx, *org, &expected, *by); err != nil {
+			return false, fmt.Errorf("rollback: %w", err)
+		}
+		_, err := fmt.Printf("org %s: active version rolled back from %d (ratified by %s)\n", *org, expected, *by)
+		return true, err
+	})
 }
 
-func priorsRevoke(args []string) error {
+func priorsRevoke(args []string, open priorsOpener) error {
 	flags := flag.NewFlagSet("acr-projector priors revoke", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	org := flags.String("org", "", "organization ID (required)")
@@ -331,7 +467,7 @@ func priorsRevoke(args []string) error {
 		return errors.New("acr-projector priors revoke requires --org, --entry, and --by")
 	}
 	ctx := context.Background()
-	db, err := openPriorsDB(ctx)
+	db, guard, err := open(ctx)
 	if err != nil {
 		return err
 	}
@@ -341,9 +477,11 @@ func priorsRevoke(args []string) error {
 		return err
 	}
 
-	if err := store.RevokeEntry(ctx, *org, *entry, *by); err != nil {
-		return fmt.Errorf("revoke: %w", err)
-	}
-	_, err = fmt.Printf("org %s: entry %s revoked (by %s)\n", *org, *entry, *by)
-	return err
+	return guard.run(ctx, "revoke", *org, func(ctx context.Context) (bool, error) {
+		if err := store.RevokeEntry(ctx, *org, *entry, *by); err != nil {
+			return false, fmt.Errorf("revoke: %w", err)
+		}
+		_, err := fmt.Printf("org %s: entry %s revoked (by %s)\n", *org, *entry, *by)
+		return true, err
+	})
 }
