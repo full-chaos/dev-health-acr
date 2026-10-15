@@ -7,9 +7,9 @@ import (
 
 // outsideQuotes reports, for every byte of text, whether it lies outside a
 // quoted literal or identifier. A quote opens at ', " or ` and closes at the
-// same character; inside a single-quoted literal a doubled quote and a
-// backslash escape stay inside it. The quote characters themselves count as
-// inside.
+// same character; inside any of them a doubled quote and a backslash escape
+// stay inside it (ClickHouse accepts both in string literals and in quoted
+// identifiers). The quote characters themselves count as inside.
 func outsideQuotes(text string) []bool {
 	outside := make([]bool, len(text))
 	var open byte
@@ -24,7 +24,7 @@ func outsideQuotes(text string) []bool {
 			continue
 		}
 		switch {
-		case c == '\\' && open == '\'' && i+1 < len(text):
+		case c == '\\' && i+1 < len(text):
 			i++
 		case c == open && i+1 < len(text) && text[i+1] == open:
 			i++

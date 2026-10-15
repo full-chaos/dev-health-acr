@@ -80,6 +80,19 @@ QEMU image caching and Buildx binary caching are disabled. CI downloads the
 Buildx release asset itself and verifies its recorded SHA-256 before the pinned
 setup action creates a builder with the digest-pinned BuildKit driver.
 
+ClickHouse is one build everywhere a ClickHouse image is pinned by digest: the
+build prod runs (`clickhouse/clickhouse-server` index digest
+`sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5`,
+server 26.7.1.1315, read from prod on 2026-10-15). It is the compose E2E helper
+(`scripts/e2e/compose.sh`), the kind fixture (`ACR_E2E_IMG_CLICKHOUSE` in
+`scripts/e2e/pins.env`), the CI full-stack compose
+(`.github/fullstack/compose.ci.yml`) and the live schema parity job. Two
+exceptions stay, each for its own reason: the testcontainers fixture
+`internal/chfixture.Image` floats the `26.7` minor line (chris, 2026-09-05;
+`VersionFloor` keeps CI from sitting behind what prod runs), and
+`deploy/local/trial-data.sh` keeps the build its seed baseline was captured
+under (26.7.3.19).
+
 To refresh a container input, inspect the selected tag's OCI **index** digest
 with `docker buildx imagetools inspect <image:tag>`, verify its amd64 and arm64
 manifests, change the tag and digest together, and record upstream review in

@@ -1,6 +1,7 @@
 package devhealthsource_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
@@ -18,6 +19,8 @@ func TestSplitDeclaredTypeIgnoresClauseWordsInsideQuotes(t *testing.T) {
 		{"clause word in a quoted expression", "String MATERIALIZED concat('a MATERIALIZED b', x)", "String", "MATERIALIZED", "concat('a MATERIALIZED b', x)"},
 		{"doubled quote in a label", "Enum8('it''s DEFAULT' = 1) DEFAULT 'a'", "Enum8('it''s DEFAULT' = 1)", "DEFAULT", "'a'"},
 		{"backslash quote in a label", `Enum8('it\'s DEFAULT' = 1) DEFAULT 'a'`, `Enum8('it\'s DEFAULT' = 1)`, "DEFAULT", "'a'"},
+		{"backslash quote in a double-quoted identifier", `Enum8("it\" DEFAULT" = 1) DEFAULT 'a'`, `Enum8("it\" DEFAULT" = 1)`, "DEFAULT", "'a'"},
+		{"backslash quote in a backtick identifier", "Nullable(String) MATERIALIZED concat(`a\\` DEFAULT b`, x)", "Nullable(String)", "MATERIALIZED", "concat(`a\\` DEFAULT b`, x)"},
 		{"clause word in a backtick identifier", "Nullable(String) MATERIALIZED `a DEFAULT b`", "Nullable(String)", "MATERIALIZED", "`a DEFAULT b`"},
 	}
 	for _, c := range cases {
@@ -40,6 +43,12 @@ func TestDefaultExpressionNormalizationKeepsQuotedSpaces(t *testing.T) {
 	}
 	if normalizeDefaultExpression(`concat('it\'s a b')`) == normalizeDefaultExpression(`concat('it\'s ab')`) {
 		t.Error("a space after a backslash quote was dropped")
+	}
+	if normalizeDefaultExpression(`concat("a\" b", x)`) == normalizeDefaultExpression(`concat("a\"b", x)`) {
+		t.Error("a space after a backslash quote inside a double-quoted identifier was dropped")
+	}
+	if normalizeDefaultExpression("concat(`a\\` b`, x)") == normalizeDefaultExpression("concat(`a\\`b`, x)") {
+		t.Error("a space after a backslash quote inside a backtick identifier was dropped")
 	}
 }
 
@@ -73,7 +82,7 @@ func TestDefaultClauseDriftNamesEveryKindOfDisagreement(t *testing.T) {
 // Every declared production type splits and joins back to itself, and carries a
 // clause only when its text has one outside quotes.
 func TestSplitDeclaredTypeRoundTripsEveryDeclaredColumn(t *testing.T) {
-	seen := 0
+	seen, clauses := 0, 0
 	for table, columns := range devhealthschema.ProductionColumns {
 		for _, column := range columns {
 			seen++
@@ -88,9 +97,19 @@ func TestSplitDeclaredTypeRoundTripsEveryDeclaredColumn(t *testing.T) {
 			if kind != "" && kind != "DEFAULT" && kind != "MATERIALIZED" {
 				t.Errorf("%s.%s: kind %q", table, column.Name, kind)
 			}
+			// Independent of the splitter: a type with no quote character at
+			// all and a clause word in it must split there, and its base must
+			// hold no clause word.
+			if !strings.ContainsAny(column.Type, "'\"`") &&
+				(strings.Contains(column.Type, " DEFAULT ") || strings.Contains(column.Type, " MATERIALIZED ")) {
+				if kind == "" || strings.Contains(base, " DEFAULT ") || strings.Contains(base, " MATERIALIZED ") {
+					t.Errorf("%s.%s: %q carries a clause outside quotes but splits to base %q kind %q", table, column.Name, column.Type, base, kind)
+				}
+				clauses++
+			}
 		}
 	}
-	if seen == 0 {
-		t.Fatal("no declared column was checked")
+	if seen == 0 || clauses == 0 {
+		t.Fatalf("checked %d declared columns, %d with a clause: the round trip proves nothing", seen, clauses)
 	}
 }
