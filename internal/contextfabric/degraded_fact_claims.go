@@ -122,3 +122,20 @@ func composeFailedSynthesisCurrentState(claims []ClaimedFact) string {
 	}
 	return truncateAtSentenceBoundary("Canonical values read: "+strings.Join(sentences, "; ")+".", currentStateMaxLength)
 }
+
+// composeFailureCurrentState is composeFailedSynthesisCurrentState for a class:
+// a facts-only class with no value to carry says why no current state is
+// written, and never says a model call failed.
+func composeFailureCurrentState(claims []ClaimedFact, class SynthesisFailureClass) string {
+	state := composeFailedSynthesisCurrentState(claims)
+	if state != synthesisFailureCurrentState {
+		return state
+	}
+	switch class {
+	case contractsv1.ContextFabricSynthesisFailureDeadline:
+		return "No second synthesis was started because the time budget was spent, so no current state is written here; the sources that were read are listed in coverage."
+	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
+		return "The written answer was over the response budget and the cohort could not be narrowed further, so no current state is written here; the sources that were read are listed in coverage."
+	}
+	return state
+}

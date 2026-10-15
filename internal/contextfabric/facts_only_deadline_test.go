@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func (s factsOnlySynth) ComposeDegraded(ctx context.Context, principal storage.P
 	return RuntimeAnswerSynthesizer{}.ComposeDegraded(ctx, principal, input, failure)
 }
 
-func factsOnlyEngine(t *testing.T, cohort *Cohort, options EngineOptions, modelCalls, degraded *int, claims int, telemetry *recordingTelemetry) *Engine {
+func factsOnlyEngine(t *testing.T, cohort *Cohort, options EngineOptions, modelCalls, degraded *int, claims int, telemetry EngineTelemetry) *Engine {
 	t.Helper()
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
@@ -230,5 +231,25 @@ func TestAFactsOnlyAnswerOverAGroupedCohortKeepsEveryGroupAndMemberAndNarrowsNot
 	}
 	if served == nil || served.Before != len(cohort.Members) || served.After != len(cohort.Members) || served.Groups {
 		t.Fatalf("served event = %+v, want before == after == %d and no group narrowing", served, len(cohort.Members))
+	}
+}
+
+func TestAFactsOnlyAnswerWithNoScalarFactNeverSaysAModelCallFailed(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{degradedClaimFact(1, 1, map[string]FactValue{"rows": {Rows: []FactValueRow{{Fields: map[string]FactValue{"x": StringFactValue("y")}}}}})}
+	for _, class := range []SynthesisFailureClass{contractsv1.ContextFabricSynthesisFailureDeadline, contractsv1.ContextFabricSynthesisFailureNotNarrowable} {
+		failure := &SynthesisFailure{Class: class, DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom}
+
+		result, err := RuntimeAnswerSynthesizer{}.ComposeDegraded(context.Background(), storage.Principal{OrgID: "org_1"}, SynthesisInput{Facts: CanonicalFactBundle{Facts: facts}}, failure)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(result.CurrentState, "model call") || result.CurrentState == "" {
+			t.Fatalf("class %s: current_state = %q, want a sentence that does not say a model call failed", class, result.CurrentState)
+		}
+		if len(result.ClaimedFacts) != 0 || !slices.Contains(result.Warnings, synthesisFailureWarning(class)) {
+			t.Fatalf("class %s: claims = %d warnings = %q, want no claims and the class warning", class, len(result.ClaimedFacts), result.Warnings)
+		}
 	}
 }
