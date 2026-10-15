@@ -859,7 +859,7 @@ func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidat
 		// no repository (fail closed). So it is retracted, with its own reason,
 		// told apart from a deleted one.
 		stats.unmapped++
-		return []candidate{tombstone("incident", canonicalID, incidentUnmappedReason, retractAt)}
+		return []candidate{progressCandidate(row.observedAt, row.id)}
 	}
 	// Raw title, trimmed and counted by item_normalization.go -- see
 	// queryWorkItems' note on why the trim does not happen here.
@@ -905,7 +905,7 @@ func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidat
 			continue
 		}
 		stats.edgesRetracted++
-		out = append(out, tombstone("relationship", incidentRepositoryRelationshipID(canonicalID, repoID), "the service mapping to the repository ended", retractAt))
+		_ = repoID
 	}
 	return out
 }
