@@ -222,6 +222,16 @@ func goVarName(e Event) string {
 		return "CohortRanked"
 	case CohortDriverNarration.ID:
 		return "CohortDriverNarration"
+	case RenderShapeSelectionSummary.ID:
+		return "RenderShapeSelectionSummary"
+	case RenderShapeRuleSkipped.ID:
+		return "RenderShapeRuleSkipped"
+	case InterpretationEnsembleGap.ID:
+		return "InterpretationEnsembleGap"
+	case InterpretationEnsembleResolved.ID:
+		return "InterpretationEnsembleResolved"
+	case ServerStatusShadowLine.ID:
+		return "ServerStatusShadowLine"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:

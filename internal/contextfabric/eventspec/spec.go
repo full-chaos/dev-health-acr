@@ -1653,6 +1653,101 @@ var CohortDriverNarration = Event{
 	},
 }
 
+// RenderShapeSelectionSummary is the Info summary line of the render shape selector (CHAOS-4415): counts and an accounting verdict. The selected-shape line shares the selector but is not declared here: one rule may select several shapes and the line carries no index or total, so its multiplicity needs a ruling.
+var RenderShapeSelectionSummary = Event{
+	ID:                 "contextfabric.render_shape_selection_summary",
+	Msg:                "context fabric render shape selection",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per render shape selection pass, written even when nothing was selected so a zero is a statement and not an absent line.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "question_shape", Type: FieldString, Presence: PresenceRequired},
+		{Key: "render_shapes_selected", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_rules_skipped", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_trends_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// RenderShapeRuleSkipped is the Info line for a render shape rule that chose nothing, with the closed reason it chose nothing.
+var RenderShapeRuleSkipped = Event{
+	ID:                 "contextfabric.render_shape_rule_skipped",
+	Msg:                "context fabric render shape rule skipped",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "render_shape_rule"},
+	BoundedAggregation: "at most one line per render shape rule per selection pass: the selector accounts every rule exactly once, selected or skipped.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "question_shape", Type: FieldString, Presence: PresenceRequired},
+		{Key: "render_shape_rule", Type: FieldString, Presence: PresenceRequired},
+		{Key: "render_shape_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RenderShapeSkipReasonLineVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// InterpretationEnsembleGap is the Warn line for an interpretation ensemble that did not reach quorum (CHAOS-5638): the turn was configured to measure agreement and did not.
+var InterpretationEnsembleGap = Event{
+	ID:                 "contextfabric.interpretation_ensemble_gap",
+	Msg:                "context fabric interpretation ensemble did not reach quorum",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per interpretation ensemble, written at Warn when quorum was not met.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requested", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "primary_succeeded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fallback_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "failed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "quorum_met", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// InterpretationEnsembleResolved is the Info line for an interpretation ensemble that reached quorum.
+var InterpretationEnsembleResolved = Event{
+	ID:                 "contextfabric.interpretation_ensemble_resolved",
+	Msg:                "context fabric interpretation ensemble resolved",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per interpretation ensemble, written at Info when quorum was met.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requested", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "primary_succeeded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fallback_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "failed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "quorum_met", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// ServerStatusShadowLine is the Info line comparing the model-reported status with the server-derived one (CHAOS-4452 stage 2).
+var ServerStatusShadowLine = Event{
+	ID:                 "contextfabric.server_status_shadow",
+	Msg:                "context fabric server status shadow",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that reaches assembly with a plan.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_status", Type: FieldString, Presence: PresenceRequired},
+		{Key: "server_status", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "derived", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "disagreed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -3607,6 +3702,11 @@ var All = []Event{
 	FactScopeExpansionDecision,
 	CohortRanked,
 	CohortDriverNarration,
+	RenderShapeSelectionSummary,
+	RenderShapeRuleSkipped,
+	InterpretationEnsembleGap,
+	InterpretationEnsembleResolved,
+	ServerStatusShadowLine,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
