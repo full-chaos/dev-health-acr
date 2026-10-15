@@ -204,16 +204,14 @@ func rowCases() []rowCase {
 		{hierarchy, []string{grantedID, "jira:P:Q", "jira:R"}, true, true, "child=jira:P:Q, parent=jira:R", ""},
 		{hierarchy, []string{grantedID, "jira:P", "Q:jira:R"}, true, true, "child=jira:P, parent=Q:jira:R", ""},
 		{hierarchy, []string{grantedID, "jira:U", "V:jira:W"}, true, true, "child=jira:U, parent=V:jira:W", ""},
-		// A parent in two repositories: the child's own repository's row.
-		{hierarchy, []string{grantedID, "jira:K", "jira:PARENT2"}, true, true, "child=jira:K", ""},
-		// A parent only in other-org/secret (CHAOS-7252 asserted a ref minted
-		// here, refused to a granted-only caller). CHAOS-9795 ruling (MCP): a
-		// bare parent id resolves in the child's own repository only, so jira:S1
-		// has no PART_OF edge and no producer mints a ref: asserted below.
-		// The hierarchy gate-refusal cell: child and parent both in the secret
-		// repository (a bare parent id has no cross-repository form), so a
-		// granted-only caller is refused and an unrestricted caller is served.
-		{hierarchy, []string{secretID, "jira:S2", "jira:SP2"}, false, true, "child=jira:S2", ""},
+		// A parent in two repositories (CHAOS-7252: one row, no fan-out join).
+		// CHAOS-9795 ruling (MCP): "jira:PARENT2" is a qualified key, held
+		// twice, so it names no parent and no producer mints a ref: asserted
+		// below.
+		// A parent only in other-org/secret: a qualified key held once names
+		// its parent org-wide, so the ref is minted and the gate refuses a
+		// granted-only caller (parent in the secret repository).
+		{hierarchy, []string{grantedID, "jira:S1", "jira:SP"}, false, true, "child=jira:S1", ""},
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
 		// The resolver here has no subject gate, so a restricted caller is
@@ -288,9 +286,9 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 			t.Errorf("no producer minted %s %q (%q)", row.kind, row.values, ref)
 		}
 	}
-	foreignParent, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, grantedID, "jira:S1", "jira:SP")
-	if minted[foreignParent] {
-		t.Errorf("a bare parent id held only in another repository minted a hierarchy ref %q; it must name no parent (CHAOS-9795)", foreignParent)
+	twiceHeldParent, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, grantedID, "jira:K", "jira:PARENT2")
+	if minted[twiceHeldParent] {
+		t.Errorf("a qualified parent key held under two repositories minted a hierarchy ref %q; it must name no parent (CHAOS-9795)", twiceHeldParent)
 	}
 	if groups["edge-1"] != 1 {
 		t.Errorf("the two rows under edge-1 minted %d refs, want exactly the one edge the projector keeps", groups["edge-1"])

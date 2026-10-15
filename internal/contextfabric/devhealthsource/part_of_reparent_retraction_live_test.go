@@ -157,11 +157,12 @@ func partOfReparentLeavesOneOpenEdge(t *testing.T, adapter *falkorgraph.Adapter)
 	})
 }
 
-// parent_id is a bare work item id, not a qualified key, and an id can be held
-// under several repositories. The parent is the work item of that id in the
-// child's own repository; held only elsewhere, or under other repositories but
-// not the child's own, it names no parent and no PART_OF edge stands.
-func partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T, adapter *falkorgraph.Adapter) {
+// A qualified parent id (a known integration prefix and a key, parent_key.go)
+// names its parent org-wide: one holder is the parent, several are no parent,
+// and an empty key is no parent. Any other id is a per-container number: its
+// parent is the work item of that id in the child's own repository, and
+// nothing else.
+func partOfParentResolution(t *testing.T, adapter *falkorgraph.Adapter) {
 	const org = "97950000-0000-4000-8000-000000000002"
 	w := newEdgeWorld(t, adapter, org)
 	var logs bytes.Buffer
@@ -171,35 +172,63 @@ func partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t *testing.T, adapte
 	w.repo(repoB, "acme/b")
 	w.repo(repoC, "acme/c")
 	synced := w.now.Add(-time.Hour)
-	// SOLO-1 is held once (repository B); SHARED-1 under A and B.
+	// Qualified: SOLO-1 is held once (repository B), SHARED-1 under A and B.
 	w.item(repoB, "jira:SOLO-1", "", synced)
 	w.item(repoA, "jira:SHARED-1", "", synced)
 	w.item(repoB, "jira:SHARED-1", "", synced)
-	w.item(repoC, "jira:FOREIGN", "jira:SOLO-1", synced)
-	w.item(repoA, "jira:OWN", "jira:SHARED-1", synced)
-	w.item(repoC, "jira:LOST", "jira:SHARED-1", synced)
+	w.item(repoC, "jira:QONCE", "jira:SOLO-1", synced)
+	w.item(repoC, "jira:QMANY", "jira:SHARED-1", synced)
+	w.item(repoC, "jira:QEMPTY", "jira:", synced)
+	w.item(repoC, "jira:QNONE", "jira:MISSING-1", synced)
+	// Per-container numbers: 7 is held in B only, 8 in A and B.
+	w.item(repoB, "7", "", synced)
+	w.item(repoA, "8", "", synced)
+	w.item(repoB, "8", "", synced)
+	w.item(repoC, "NFOREIGN", "7", synced)
+	w.item(repoA, "NOWN", "8", synced)
+	w.item(repoC, "NLOST", "8", synced)
+	// An integration prefix the map does not know takes the own-repository rule.
+	w.item(repoA, "ghx:1", "", synced)
+	w.item(repoC, "UNMAPPED", "ghx:1", synced)
 	w.drain()
 
 	edges := func(repo, id string) []string {
 		return w.edgesOut(w.workItemID(repo, id), contractsv1.ContextFabricRelationshipPartOf)
 	}
-	own := w.workItemID(repoA, "jira:OWN")
-	if got, want := edges(repoA, "jira:OWN"), []string{own + " -> " + w.workItemID(repoA, "jira:SHARED-1")}; fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("a parent id held under two repositories, one the child's own: PART_OF edges %v, want %v", got, want)
+	edgeTo := func(childRepo, child, parentRepo, parent string) []string {
+		return []string{w.workItemID(childRepo, child) + " -> " + w.workItemID(parentRepo, parent)}
 	}
-	if got := edges(repoC, "jira:FOREIGN"); len(got) != 0 {
-		t.Fatalf("a parent id held once, in another repository: %d PART_OF edges, want none: %v", len(got), got)
+	for _, c := range []struct {
+		name             string
+		childRepo, child string
+		want             []string
+	}{
+		{"a qualified key held once, in another repository, is the parent", repoC, "jira:QONCE", edgeTo(repoC, "jira:QONCE", repoB, "jira:SOLO-1")},
+		{"a qualified key held under two repositories names no parent", repoC, "jira:QMANY", nil},
+		{"a qualified prefix with an empty key names no parent", repoC, "jira:QEMPTY", nil},
+		{"a qualified key held nowhere names no parent", repoC, "jira:QNONE", nil},
+		{"a number held under two repositories, one the child's own, is the own one", repoA, "NOWN", edgeTo(repoA, "NOWN", repoA, "8")},
+		{"a number held only in another repository names no parent", repoC, "NFOREIGN", nil},
+		{"a number held under two repositories, neither the child's own, names no parent", repoC, "NLOST", nil},
+		{"an unmapped prefix held only in another repository names no parent", repoC, "UNMAPPED", nil},
+	} {
+		if got := edges(c.childRepo, c.child); fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s: PART_OF edges %v, want %v", c.name, got, c.want)
+		}
 	}
-	if got := edges(repoC, "jira:LOST"); len(got) != 0 {
-		t.Fatalf("a parent id held under two repositories, neither the child's own: %d PART_OF edges, want none: %v", len(got), got)
-	}
+
 	line := logs.String()
-	if !strings.Contains(line, "part_of parent ambiguous") || !strings.Contains(line, "children=2") {
-		t.Fatalf("the children left without a parent were not counted in the log: %q", line)
+	for _, want := range []string{
+		"part_of_parent_key_not_unique", "part_of_parent_empty_key", "part_of_parent_not_in_own_repository",
+		"part_of parent id prefix is not mapped", "prefix=ghx:",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the log does not say %q: %q", want, line)
+		}
 	}
-	for _, secret := range []string{repoA, repoB, "acme/a", "acme/b", "SOLO-1", "SHARED-1"} {
+	for _, secret := range []string{repoA, repoB, repoC, "acme/a", "acme/b", "acme/c", "SOLO-1", "SHARED-1", "MISSING-1"} {
 		if strings.Contains(line, secret) {
-			t.Fatalf("the log names %q, which belongs to a repository the child cannot read: %q", secret, line)
+			t.Errorf("the log names %q, which belongs to a repository the child cannot read: %q", secret, line)
 		}
 	}
 }
@@ -235,6 +264,6 @@ func removedBlockerLinkLeavesNoOpenEdgeInTheGraph(t *testing.T, adapter *falkorg
 func TestEdgeRetractionOnRealStores(t *testing.T) {
 	adapter := chaos7074FalkorAdapter(t, context.Background())
 	t.Run("a re-parent and a cleared parent", func(t *testing.T) { partOfReparentLeavesOneOpenEdge(t, adapter) })
-	t.Run("a bare parent id", func(t *testing.T) { partOfBareParentIdResolvesInTheChildsOwnRepositoryOnly(t, adapter) })
+	t.Run("parent id resolution", func(t *testing.T) { partOfParentResolution(t, adapter) })
 	t.Run("a removed blocks link", func(t *testing.T) { removedBlockerLinkLeavesNoOpenEdgeInTheGraph(t, adapter) })
 }
