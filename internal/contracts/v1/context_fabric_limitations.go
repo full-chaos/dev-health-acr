@@ -711,6 +711,27 @@ const ContextFabricSynthesisFailedFactsTruncatedLimitation = "Synthesis failed a
 // shown in its place: none was read, or none fit the answer.
 const ContextFabricSynthesisFailedNoFactsLimitation = "Synthesis failed and no canonical values could be shown in its place."
 
+// ContextFabricSynthesisDeadlineLimitation is the sentence a facts-only answer
+// carries when the time budget was spent before a second synthesis could run.
+const ContextFabricSynthesisDeadlineLimitation = "Facts only; no second synthesis was started because the time budget was spent. The canonical values shown are those read, with no judgment applied, and more may have been read than one answer can carry."
+
+// ContextFabricSynthesisNotNarrowableLimitation is the sentence a facts-only
+// answer carries when the written answer was over the response budget and the
+// cohort could not be narrowed further.
+const ContextFabricSynthesisNotNarrowableLimitation = "Facts only; the written answer was over the response budget and the cohort could not be narrowed further. The canonical values shown are those read, with no judgment applied, and more may have been read than one answer can carry."
+
+// ContextFabricSynthesisFactsOnlyLimitationFor is the limitation of a class
+// that serves the facts without a model call having failed.
+func ContextFabricSynthesisFactsOnlyLimitationFor(class ContextFabricSynthesisFailureClass) (string, bool) {
+	switch class {
+	case ContextFabricSynthesisFailureDeadline:
+		return ContextFabricSynthesisDeadlineLimitation, true
+	case ContextFabricSynthesisFailureNotNarrowable:
+		return ContextFabricSynthesisNotNarrowableLimitation, true
+	}
+	return "", false
+}
+
 // ContextFabricSynthesisInputBoundedLimitation is the sentence an answer
 // carries when the facts read for it did not fit the model input and only
 // part of them was given to answer synthesis. It states the consequence for
@@ -807,6 +828,8 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisFailedFactsOnlyLimitation,
 		ContextFabricSynthesisFailedFactsTruncatedLimitation,
 		ContextFabricSynthesisFailedNoFactsLimitation,
+		ContextFabricSynthesisDeadlineLimitation,
+		ContextFabricSynthesisNotNarrowableLimitation,
 	}
 }
 

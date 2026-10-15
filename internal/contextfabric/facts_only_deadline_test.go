@@ -92,9 +92,11 @@ func TestAModelAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T
 		reserve   time.Duration
 		claims    int
 		declined  RetryDeclinedReason
+		class     SynthesisFailureClass
+		limit     string
 	}{
-		{"insufficient deadline", budgetStageCohort(6), 12, 10 * time.Second, reserve, 2, RetryDeclinedInsufficientDeadline},
-		{"nothing to narrow", budgetStageCohort(1), 4, time.Minute, time.Second, 20, RetryDeclinedNothingToNarrow},
+		{"insufficient deadline", budgetStageCohort(6), 12, 10 * time.Second, reserve, 2, RetryDeclinedInsufficientDeadline, contractsv1.ContextFabricSynthesisFailureDeadline, contractsv1.ContextFabricSynthesisDeadlineLimitation},
+		{"nothing to narrow", budgetStageCohort(1), 4, time.Minute, time.Second, 20, RetryDeclinedNothingToNarrow, contractsv1.ContextFabricSynthesisFailureNotNarrowable, contractsv1.ContextFabricSynthesisNotNarrowableLimitation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,8 +115,20 @@ func TestAModelAnswerOverBudgetWithNoRoomToRetryIsServedAsFactsOnly(t *testing.T
 			if modelCalls != 1 || degraded != 1 {
 				t.Fatalf("model calls = %d, degraded compositions = %d, want the one model pass and one composition", modelCalls, degraded)
 			}
-			if result.Status != InvestigationDegraded || !slices.Contains(result.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) {
+			if result.Status != InvestigationDegraded || !slices.Contains(result.Limitations, tc.limit) {
 				t.Fatalf("status = %q limitations = %q, want degraded and facts only", result.Status, result.Limitations)
+			}
+			if !slices.Contains(result.Warnings, synthesisFailureWarning(tc.class)) {
+				t.Fatalf("warnings = %q, want the %s warning", result.Warnings, tc.class)
+			}
+			classes := []SynthesisFailureClass{}
+			for _, detail := range result.Coverage.Details {
+				if detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed {
+					classes = append(classes, detail.FailureClass)
+				}
+			}
+			if !slices.Equal(classes, []SynthesisFailureClass{tc.class}) {
+				t.Fatalf("coverage failure classes = %q, want [%s]", classes, tc.class)
 			}
 			if result.DirectJudgment == "Model prose." || result.DeterministicAnswer == "Model prose." {
 				t.Fatalf("served model prose: %q / %q", result.DirectJudgment, result.DeterministicAnswer)

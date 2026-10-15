@@ -5670,6 +5670,16 @@
         "presence": "required"
       },
       {
+        "key": "facts_only_attempted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "facts_only_served",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "deadline_reserved",
         "type": "bool",
         "presence": "required"

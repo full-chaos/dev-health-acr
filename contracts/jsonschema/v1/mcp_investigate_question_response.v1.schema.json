@@ -763,12 +763,14 @@
             },
             "failure_class": {
               "type": "string",
-              "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed, synthesis_deadline, synthesis_not_narrowable. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "model_output_invalid",
                 "synthesis_rejected",
                 "model_receipt_unrecorded",
-                "model_call_not_completed"
+                "model_call_not_completed",
+                "synthesis_deadline",
+                "synthesis_not_narrowable"
               ]
             },
             "retry_hint": {
@@ -6189,12 +6191,14 @@
             },
             "failure_class": {
               "type": "string",
-              "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: model_output_invalid, synthesis_rejected, model_receipt_unrecorded, model_call_not_completed, synthesis_deadline, synthesis_not_narrowable. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "model_output_invalid",
                 "synthesis_rejected",
                 "model_receipt_unrecorded",
-                "model_call_not_completed"
+                "model_call_not_completed",
+                "synthesis_deadline",
+                "synthesis_not_narrowable"
               ]
             },
             "retry_hint": {

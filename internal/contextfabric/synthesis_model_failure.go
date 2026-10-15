@@ -59,6 +59,12 @@ const synthesisFailureCurrentState = "The model call that writes the answer fail
 // synthesisFailureWarning is the fixed, content-safe sentence a degraded
 // answer carries instead of model prose. It names the class only.
 func synthesisFailureWarning(class SynthesisFailureClass) string {
+	switch class {
+	case contractsv1.ContextFabricSynthesisFailureDeadline:
+		return "answer text unavailable: facts only; no second synthesis was started because the time budget was spent (class: " + string(class) + "); the sources that were read are listed in coverage"
+	case contractsv1.ContextFabricSynthesisFailureNotNarrowable:
+		return "answer text unavailable: facts only; the written answer was over the response budget and the cohort could not be narrowed further (class: " + string(class) + "); the sources that were read are listed in coverage"
+	}
 	return "answer text unavailable: the model call failed (class: " + string(class) + "); the sources that were read are listed in coverage"
 }
 
@@ -235,7 +241,13 @@ func (r RuntimeAnswerSynthesizer) ComposeDegraded(ctx context.Context, principal
 	}
 	draft := degradedSynthesisDraft(failure.Class)
 	claims, evidence, truncated := mintDegradedFactClaims(input.Facts.Facts, degradedClaimLimit(input))
-	if len(claims) > 0 {
+	if limitation, factsOnlyClass := contractsv1.ContextFabricSynthesisFactsOnlyLimitationFor(failure.Class); factsOnlyClass {
+		draft.ClaimedFacts, draft.EvidenceRefIDs = claims, evidence
+		if len(claims) == 0 {
+			draft.ClaimedFacts, draft.EvidenceRefIDs = []ClaimedFact{}, []string{}
+		}
+		draft.Limitations, _ = appendBoundedLimitations(draft.Limitations, []string{limitation})
+	} else if len(claims) > 0 {
 		draft.ClaimedFacts = claims
 		draft.EvidenceRefIDs = evidence
 		additions := []string{contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation}

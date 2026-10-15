@@ -9,15 +9,19 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-var errFactsOnlyNoSynthesisRoom = errors.New("the deadline or the cohort left no room for a second synthesis; the facts are served without model prose")
+var errFactsOnlyNoSynthesisRoom = errors.New("no second synthesis could run; the facts are served without model prose")
 
 // factsOnlyFailureClass is the ONE place that chooses the failure class a
-// deadline-forced facts-only answer is composed under. Swapping it is this
-// line.
-const factsOnlyFailureClass = SynthesisFailureCallNotCompleted
+// facts-only answer is composed under, from why the retry was declined.
+func factsOnlyFailureClass(declined RetryDeclinedReason) SynthesisFailureClass {
+	if declined == RetryDeclinedNothingToNarrow {
+		return contractsv1.ContextFabricSynthesisFailureNotNarrowable
+	}
+	return contractsv1.ContextFabricSynthesisFailureDeadline
+}
 
-func factsOnlyFailure() *SynthesisFailure {
-	return &SynthesisFailure{Class: factsOnlyFailureClass, DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom}
+func factsOnlyFailure(declined RetryDeclinedReason) *SynthesisFailure {
+	return &SynthesisFailure{Class: factsOnlyFailureClass(declined), DeferEvent: true, cause: errFactsOnlyNoSynthesisRoom}
 }
 
 // factsOnlyDeclinedReason: the retry reasons after which a facts-only answer
@@ -34,7 +38,9 @@ func (e *Engine) factsOnlyEligible(ctx context.Context, params synthesisAssembly
 	if _, ok := e.synthesizer.(DegradedSynthesizer); !ok {
 		return false
 	}
-	return !slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation)
+	return !slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisFailedFactsOnlyLimitation) &&
+		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisDeadlineLimitation) &&
+		!slices.Contains(first.Limitations, contractsv1.ContextFabricSynthesisNotNarrowableLimitation)
 }
 
 // serveFactsOnly assembles the question's facts, paths and coverage with the
@@ -45,7 +51,7 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 	allocation := AllocateItems(*plan, groupCountOf(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort))
 	factsParams := params.forRetry(params.Graph, params.Facts, allocation)
 	factsParams.Plan = *plan
-	factsParams.Degrade = factsOnlyFailure()
+	factsParams.Degrade = factsOnlyFailure(declined)
 	composed, consumed, pending, cardinality, err := e.synthesizeAndAssemble(ctx, principal, factsParams)
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, false

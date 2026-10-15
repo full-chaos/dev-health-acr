@@ -989,6 +989,16 @@ const (
 	// finish after the runtime's own retries (a per-call timeout, a call
 	// cancelled before it ended, a rate limit or an unavailable provider).
 	ContextFabricSynthesisFailureCallNotCompleted ContextFabricSynthesisFailureClass = "model_call_not_completed"
+	// ContextFabricSynthesisFailureDeadline: the model wrote a first answer
+	// that did not fit the response budget and the request's time budget left
+	// no room for a second synthesis, so the facts are served without model
+	// prose. No model call failed.
+	ContextFabricSynthesisFailureDeadline ContextFabricSynthesisFailureClass = "synthesis_deadline"
+	// ContextFabricSynthesisFailureNotNarrowable: the model wrote a first
+	// answer that did not fit the response budget and the cohort was already
+	// at its smallest, so a second synthesis could not shrink it; the facts
+	// are served without model prose. No model call failed.
+	ContextFabricSynthesisFailureNotNarrowable ContextFabricSynthesisFailureClass = "synthesis_not_narrowable"
 )
 
 // ContextFabricRetryHint is the closed vocabulary of what a caller may expect
@@ -1010,6 +1020,8 @@ var contextFabricSynthesisFailureClasses = [...]ContextFabricSynthesisFailureCla
 	ContextFabricSynthesisFailureRejected,
 	ContextFabricSynthesisFailureReceiptUnrecorded,
 	ContextFabricSynthesisFailureCallNotCompleted,
+	ContextFabricSynthesisFailureDeadline,
+	ContextFabricSynthesisFailureNotNarrowable,
 }
 
 var contextFabricRetryHints = [...]ContextFabricRetryHint{
@@ -1046,9 +1058,9 @@ func validRetryHint(hint ContextFabricRetryHint) bool {
 // class must say whether asking again helps.
 func ContextFabricRetryHintFor(class ContextFabricSynthesisFailureClass) (ContextFabricRetryHint, error) {
 	switch class {
-	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded, ContextFabricSynthesisFailureCallNotCompleted:
+	case ContextFabricSynthesisFailureModelOutputInvalid, ContextFabricSynthesisFailureReceiptUnrecorded, ContextFabricSynthesisFailureCallNotCompleted, ContextFabricSynthesisFailureDeadline:
 		return ContextFabricRetryMaySucceed, nil
-	case ContextFabricSynthesisFailureRejected:
+	case ContextFabricSynthesisFailureRejected, ContextFabricSynthesisFailureNotNarrowable:
 		return ContextFabricRetryUnlikelyToHelp, nil
 	}
 	return "", fmt.Errorf("synthesis failure class %q has no retry hint", class)

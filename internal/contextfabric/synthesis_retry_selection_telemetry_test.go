@@ -89,6 +89,8 @@ func TestSynthesisRetrySelectionUsesConfiguredInfoLoggerAndDeclaredMeasurement(t
 		"retry_attempted":             false,
 		"retry_fit":                   false,
 		"retry_failed":                false,
+		"facts_only_attempted":        false,
+		"facts_only_served":           false,
 		"deadline_reserved":           true,
 		"ledger_status":               "reconciled",
 		"quota_availability":          "bounded",
