@@ -167,7 +167,8 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 // blockerProdShapeBlockSizeOffenders reads the max_block_size each blocker
 // statement EXECUTED with from system.query_log (its Settings map, not the
 // statement text or the Go source), and returns the statements that did not run
-// with want rows per block. A wrapper or session default that drops the
+// with want rows per block (the blocker statements aggregate with uniqExactIf;
+// the authorization read that precedes them is a different statement). A wrapper or session default that drops the
 // setting leaves it out of the map, so it is reported here.
 func blockerProdShapeBlockSizeOffenders(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64, want string) (offenders []string, statements int) {
 	t.Helper()
@@ -176,7 +177,7 @@ func blockerProdShapeBlockSizeOffenders(t *testing.T, ctx context.Context, direc
 	}
 	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, any(Settings['max_block_size']), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'uniqExactIf') > 0
 GROUP BY normalized_query_hash`, mark)
 	if err != nil {
 		t.Fatalf("read executed settings: %v", err)
