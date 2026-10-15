@@ -214,6 +214,10 @@ func goVarName(e Event) string {
 		return "ModelSynthesizeDecision"
 	case ModelPhraseDecision.ID:
 		return "ModelPhraseDecision"
+	case FactScopeExpansionGap.ID:
+		return "FactScopeExpansionGap"
+	case FactScopeExpansionDecision.ID:
+		return "FactScopeExpansionDecision"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
@@ -329,6 +333,8 @@ func goFieldType(t FieldType) string {
 		return "[]string"
 	case FieldObjectSlice:
 		return "[]map[string]any"
+	case FieldCountMap:
+		return "map[string]int"
 	case FieldObject:
 		// One nested object. The generated construction interface carries it
 		// as a map the producer fills; its MEMBERS are still declared in
@@ -480,6 +486,7 @@ type jsonField struct {
 	Presence         string      `json:"presence"`
 	ClosedVocabulary []string    `json:"closed_vocabulary,omitempty"`
 	Applicability    string      `json:"applicability,omitempty"`
+	Nullable         bool        `json:"nullable,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -502,6 +509,7 @@ func toJSONFields(fs []Field) []jsonField {
 			Presence:         string(f.Presence),
 			ClosedVocabulary: f.ClosedVocabulary,
 			Applicability:    f.Applicability,
+			Nullable:         f.Nullable,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

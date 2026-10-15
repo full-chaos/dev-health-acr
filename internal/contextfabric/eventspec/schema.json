@@ -2544,6 +2544,574 @@
     ]
   },
   {
+    "id": "contextfabric.fact_scope_expansion_decision",
+    "msg": "context fabric fact scope expansion outcome",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "requirement_kind",
+      "origin_kind",
+      "policy"
+    ],
+    "bounded_aggregation": "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "origin_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "policy",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_needed",
+          "expanded",
+          "attempted_empty"
+        ]
+      },
+      {
+        "key": "origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "temporal_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unbounded_validity_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "malformed_touch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "duplicate_add_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_next_hop_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "failure_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "backend_unavailable",
+          "timeout",
+          "axis_unsupported",
+          "read_limit_exceeded"
+        ]
+      },
+      {
+        "key": "attribution_source_counts",
+        "type": "count_map",
+        "presence": "required",
+        "nullable": true
+      },
+      {
+        "key": "target_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_grant_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "direct_repo_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_explicit_text_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_heuristic_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_measured",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_organization_wide",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_exact_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_owner_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "orphaned_repository_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ambiguous_origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unknown_attribution_source_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_query_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_rows_returned",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "roots_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shared_target_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "executed",
+          "policy_none",
+          "policy_disabled",
+          "axis_unsupported",
+          "time_bounds_invalid",
+          "expander_unwired",
+          "backend_error",
+          "timeout",
+          "capacity_timeout",
+          "origin_unresolved",
+          "attribution_source_unrecognized",
+          "unrecognized"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.fact_scope_expansion_gap",
+    "msg": "context fabric fact scope expansion left a gap",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "requirement_kind",
+      "origin_kind",
+      "policy"
+    ],
+    "bounded_aggregation": "at most one line per (requirement kind, origin kind, policy) decision the resolver reaches in a request.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "origin_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "policy",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "policy_unavailable",
+          "expanded_partial",
+          "failed",
+          "target_kind_mismatch",
+          "matched_unauthorized"
+        ]
+      },
+      {
+        "key": "origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "temporal_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unbounded_validity_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "malformed_touch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "duplicate_add_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_next_hop_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "target_kind_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "failure_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "backend_unavailable",
+          "timeout",
+          "axis_unsupported",
+          "read_limit_exceeded"
+        ]
+      },
+      {
+        "key": "attribution_source_counts",
+        "type": "count_map",
+        "presence": "required",
+        "nullable": true
+      },
+      {
+        "key": "target_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_authorization_dropped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_grant_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "direct_repo_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_authorized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_explicit_text_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_heuristic_link_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_measured",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_organization_wide",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_exact_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_grant_owner_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "orphaned_repository_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ambiguous_origin_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unknown_attribution_source_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_query_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_rows_returned",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "roots_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shared_target_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "executed",
+          "policy_none",
+          "policy_disabled",
+          "axis_unsupported",
+          "time_bounds_invalid",
+          "expander_unwired",
+          "backend_error",
+          "timeout",
+          "capacity_timeout",
+          "origin_unresolved",
+          "attribution_source_unrecognized",
+          "unrecognized"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.frame_validation",
     "msg": "context fabric frame validation",
     "level": "info",
