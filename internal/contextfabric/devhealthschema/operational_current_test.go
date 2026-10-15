@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 )
 
-var directOperationalRead = regexp.MustCompile(`\b(FROM|JOIN)\s+(operational_incidents|operational_service_repository_mappings)\b`)
+var directOperationalRead = regexp.MustCompile(`(?i)\b(FROM|JOIN)\s+(operational_incidents|operational_service_repository_mappings)\b`)
 
 // operationalReaderFiles are the files that read the two tables; each must
 // take its rows from the current-row relations.
@@ -26,15 +26,27 @@ var operationalReaderFiles = []string{
 }
 
 // versionKeyedReads are the direct reads that name one physical row by its
-// version (id and last_synced) rather than the current row, with the number of
-// times each may occur.
-var versionKeyedReads = map[string]int{
+// version (id and last_synced) rather than the current row, by their exact
+// text: each must occur once in its file.
+var versionKeyedReads = map[string]string{
 	// readIncidentDescriptions: the description of the row the page chose.
-	"internal/contextfabric/devhealthsource/tables.go: FROM operational_incidents": 1,
+	"internal/contextfabric/devhealthsource/tables.go": "argMax(ifNull(i.description, ''), ` + devhealthschema.OperationalRowVersion(\"i\") + `)\n" +
+		"FROM operational_incidents AS i\n" +
+		"PREWHERE i.org_id = {org_id:String} AND (` + strings.Join(terms, \" OR \") + `)\n" +
+		"GROUP BY i.id",
 }
 
+// directOperationalReads lists the direct reads in Go source, full-line
+// comments aside.
 func directOperationalReads(source string) []string {
-	return directOperationalRead.FindAllString(source, -1)
+	var reads []string
+	for _, line := range strings.Split(source, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			line = ""
+		}
+		reads = append(reads, line)
+	}
+	return directOperationalRead.FindAllString(strings.Join(reads, "\n"), -1)
 }
 
 func TestCurrentOperationalPickIsOpsOrdering(t *testing.T) {
@@ -92,29 +104,22 @@ func productionSources(t *testing.T) map[string]string {
 // currentRowPickViolations lists every read of the two tables that does not go
 // through the current-row relations, in a stable order.
 func currentRowPickViolations(sources map[string]string) []string {
+	var violations []string
 	var offenders []string
 	for rel, source := range sources {
+		if read, listed := versionKeyedReads[rel]; listed {
+			if strings.Count(source, read) != 1 {
+				violations = append(violations, "version-keyed read changed or gone, update the entry: "+rel)
+			}
+			source = strings.Replace(source, read, "", 1)
+		}
 		for _, read := range directOperationalReads(source) {
 			offenders = append(offenders, rel+": "+read)
 		}
 	}
 	sort.Strings(offenders)
-	allowed := map[string]int{}
-	for key, count := range versionKeyedReads {
-		allowed[key] = count
-	}
-	var violations []string
 	for _, offender := range offenders {
-		if allowed[offender] > 0 {
-			allowed[offender]--
-			continue
-		}
 		violations = append(violations, "direct read (FINAL keeps every revision of an id): "+offender)
-	}
-	for key, left := range allowed {
-		if left != 0 {
-			violations = append(violations, "version-keyed read listed but not found, delete the entry: "+key)
-		}
 	}
 	for _, rel := range operationalReaderFiles {
 		if !strings.Contains(sources[rel], "devhealthschema.CurrentOperationalIncidents") {
@@ -159,6 +164,24 @@ func TestPlantedFinalReaderIsAViolation(t *testing.T) {
 			t.Errorf("planted %q in %s: want violation %q, got %v", plant[1], rel, want, violations)
 		}
 	}
+
+	const tables = "internal/contextfabric/devhealthsource/tables.go"
+	planted := map[string]string{}
+	for key, source := range sources {
+		planted[key] = source
+	}
+	planted[tables] = strings.Replace(planted[tables], "argMax(ifNull(i.description, ''), ` + devhealthschema.OperationalRowVersion(\"i\") + `)", "argMax(ifNull(i.description, ''), i.source_version_at)", 1)
+	violations := currentRowPickViolations(planted)
+	want := map[string]bool{
+		"version-keyed read changed or gone, update the entry: " + tables:                               true,
+		"direct read (FINAL keeps every revision of an id): " + tables + ": FROM operational_incidents": true,
+	}
+	for _, violation := range violations {
+		delete(want, violation)
+	}
+	if len(want) != 0 {
+		t.Errorf("a changed version-keyed read: missing violations %v, got %v", want, violations)
+	}
 }
 
 func TestDirectOperationalReadIsSeen(t *testing.T) {
@@ -168,6 +191,8 @@ func TestDirectOperationalReadIsSeen(t *testing.T) {
 		"AND e.incident_id IN (SELECT id FROM operational_incidents FINAL WHERE is_deleted = 0)",
 		"LEFT JOIN operational_service_repository_mappings AS m ON true",
 		"FROM\n\toperational_incidents",
+		"select id from operational_incidents final",
+		"x := `left join operational_service_repository_mappings m` // a trailing comment",
 	}
 	for _, statement := range planted {
 		if len(directOperationalReads(statement)) == 0 {
