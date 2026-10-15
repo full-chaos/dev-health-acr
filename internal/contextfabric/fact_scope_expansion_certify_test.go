@@ -182,3 +182,70 @@ func TestFactScopeExpansionLineCertifiesEveryFailureClassReasonAndMapShape(t *te
 	empty.AttributionSourceCounts = map[string]int{}
 	certifyFactScopeLine(t, recordFactScopeExpansion(empty), eventspec.FactScopeExpansionDecision, nil)
 }
+
+// TestFactScopeExpansionOpenCountMapKeysAreNamesNeverIdsOrText pins the key
+// rule of an open count map: the real stored attribution-source and link-tier
+// names pass, and an id-shaped or free-text key fails the declaration.
+func TestFactScopeExpansionOpenCountMapKeysAreNamesNeverIdsOrText(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{
+		"native_team", "issue_project", "project_ownership", "repo_ownership", "assignee_membership",
+		"linked_issue", "manual_fallback", "team_repo_ownership", "native", "heuristic",
+	} {
+		event := factScopeExpansionBaseEvent()
+		event.AttributionSourceCounts = map[string]int{name: 1}
+		certifyFactScopeLine(t, recordFactScopeExpansion(event), eventspec.FactScopeExpansionDecision, nil)
+	}
+	for _, bad := range []string{
+		"3f2b8c1e-9d4a-4c7b-8e21-5a6f0d9c1b73",         // uuid
+		"abcdef12-3456-7890-abcd-ef1234567890",         // uuid that starts with a letter
+		"alex.morgan@example.com",                      // email
+		"Native_Team",                                  // not lowercase
+		"native team",                                  // free text
+		"team_attribution_source_that_is_far_too_long", // past the bound
+		"repo-42", // carries a digit
+		"",        // empty
+	} {
+		event := factScopeExpansionBaseEvent()
+		event.AttributionSourceCounts = map[string]int{bad: 1}
+		raw := recordFactScopeExpansion(event)
+		log, err := certify.Parse(raw)
+		if err != nil {
+			t.Fatalf("certify.Parse: %v", err)
+		}
+		_, err = certify.Certify(log, certify.Assertion{Event: eventspec.FactScopeExpansionDecision, Want: map[string]any{
+			"request_id": factScopeCertifyRequestID, "requirement_kind": "status", "origin_kind": "project",
+			"policy": string(contextfabric.FactScopePolicyProjectWorkItemStatus),
+		}})
+		if err == nil {
+			t.Errorf("key %q was certified, want it refused as not a name token", bad)
+		}
+	}
+	for _, bad := range []string{"3.5", "-1"} {
+		raw := bytes.Replace(recordFactScopeExpansion(factScopeExpansionBaseEvent()), []byte(`"native_team":3`), []byte(`"native_team":`+bad), 1)
+		log, err := certify.Parse(raw)
+		if err != nil {
+			t.Fatalf("certify.Parse: %v", err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.FactScopeExpansionDecision, Want: map[string]any{
+			"request_id": factScopeCertifyRequestID, "requirement_kind": "status", "origin_kind": "project",
+			"policy": string(contextfabric.FactScopePolicyProjectWorkItemStatus),
+		}}); err == nil {
+			t.Errorf("count %s was certified, want it refused", bad)
+		}
+	}
+	// The producer's own sink writes a negative count it is handed, so the
+	// certifier is the only guard: drive it through the real sink too.
+	negative := factScopeExpansionBaseEvent()
+	negative.AttributionSourceCounts = map[string]int{"native_team": -1}
+	log, err := certify.Parse(recordFactScopeExpansion(negative))
+	if err != nil {
+		t.Fatalf("certify.Parse: %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.FactScopeExpansionDecision, Want: map[string]any{
+		"request_id": factScopeCertifyRequestID, "requirement_kind": "status", "origin_kind": "project",
+		"policy": string(contextfabric.FactScopePolicyProjectWorkItemStatus),
+	}}); err == nil {
+		t.Error("a negative count written by the real sink was certified, want it refused")
+	}
+}

@@ -468,6 +468,22 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "fractional":
+		if f.Type == eventspec.FieldCountMap {
+			// A count-map member that is fractional or negative is no count.
+			for _, bad := range []float64{0.5, -1} {
+				value := map[string]any{"sweep_key": bad}
+				if len(f.ClosedVocabulary) > 0 {
+					value = map[string]any{f.ClosedVocabulary[0]: bad}
+				}
+				row.applicable, row.wantAccept = true, false
+				_, err := certifyRecovered(t, mutate(value), Assertion{Event: ev, Want: wantFor(value)})
+				row.gotAccept = err == nil
+				if row.gotAccept {
+					return row
+				}
+			}
+			return row
+		}
 		if f.Type != eventspec.FieldInt {
 			return row
 		}
