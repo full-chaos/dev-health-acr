@@ -1191,7 +1191,13 @@ import (
 // incident stored at several revisions counted once per revision, and one
 // deleted, or a mapping deactivated, in its latest revision still counted
 // through an earlier one; an answer saved under v232 is not reused.
-const QueryVersion = "devhealthfacts.clickhouse.v233"
+//
+// v233 -> v234: every served failed-deployment count names its basis. The
+// deployments fact carries failed_deployments_basis (deployment_status); the
+// metrics fact carries change_failure_incident_linked_failed_deployments_count
+// and change_failure_status_failed_deployments_basis
+// (status_failed_not_incident_linked). An answer saved under v233 lacks them.
+const QueryVersion = "devhealthfacts.clickhouse.v234"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
