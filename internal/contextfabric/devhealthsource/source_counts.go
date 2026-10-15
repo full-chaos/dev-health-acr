@@ -31,8 +31,8 @@ WHERE p.org_id = {org_id:String}`},
 	{contractsv1.ContextFabricSubjectDeployment, `SELECT uniqExact(d.repo_id, d.deployment_id) FROM deployments AS d FINAL
 INNER JOIN repos AS r FINAL ON r.id = d.repo_id AND r.org_id = d.org_id
 WHERE d.org_id = {org_id:String}`},
-	{contractsv1.ContextFabricSubjectIncident, `SELECT uniqExact(i.id) FROM operational_incidents AS i FINAL
-INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
+	{contractsv1.ContextFabricSubjectIncident, `SELECT uniqExact(i.id) FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i
+INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 WHERE i.org_id = {org_id:String} AND i.is_deleted = 0`},
 	{contractsv1.ContextFabricSubjectPullRequestReview, `SELECT uniqExact(r.repo_id, r.number, r.review_id) FROM git_pull_request_reviews AS r FINAL
