@@ -460,9 +460,10 @@ func (r *OperationRunner) Run(ctx context.Context, principal storage.Principal, 
 		r.recorder.RecordOperationRead(ctx, principal, x.read)
 		return OperationResponse{}, err
 	}
-	// One source for every reply, served or refused: the digest the watch holds
-	// when the reply is built, so a refresh that landed during the dispatch
-	// shows and no reply carries a digest older than the last successful watch.
+	// One source for every reply, served or refused: the stamped digest when the
+	// reply is built (the served digest while the last registry fetch succeeded,
+	// else the pinned one), so a refresh that landed during the dispatch shows
+	// and a served and a refused reply never disagree at one moment.
 	resp.Source.SchemaDigest = r.catalogue.StampedSchemaDigest()
 	x.read.SchemaDigest = resp.Source.SchemaDigest
 	x.read.Completeness = resp.Completeness

@@ -264,3 +264,75 @@ func TestErrorReturnReadLogReportsADigestRefreshedDuringTheCall(t *testing.T) {
 		}
 	})
 }
+
+// After a successful watch, a failed refresh puts every reply back on the pinned
+// digest: the stamp is the served digest only while the last fetch succeeded.
+// A refusal and a data_catalog stamp agree with it at that moment.
+func TestRefusalAfterASuccessfulWatchThenAFailedRefreshReportsThePinnedDigest(t *testing.T) {
+	failRefresh := func(reg *swappableRegistry, cat *directread.Catalogue, watch *directread.RegistryWatch) {
+		reg.status.Store(http.StatusInternalServerError)
+		reg.offset.Add(int64(2 * time.Minute))
+		cat.StampedSchemaDigest()
+		watch.Wait()
+	}
+	catalog := func(cat *directread.Catalogue) string {
+		return directread.BuildDataCatalog(cat, directread.CatalogCaller{PrincipalClass: directread.ClassUnrestricted, Scopes: []string{"context:read", "data:read"}, DataRead: true}, nil).Versions.SchemaDigest
+	}
+	t.Run("run_operation", func(t *testing.T) {
+		cat, err := directread.LoadCatalogue(directread.EmbeddedCatalogueJSON())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := newSwappableRegistry(t, watchServedDigest)
+		watch := reg.watch(t, cat)
+		watch.Start()
+		watch.Wait()
+		rec := &opDigestRecorder{}
+		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, `{}` }, opHarnessOptions{catalogue: cat, recorder: rec})
+		refuse := func() string {
+			resp := h.run(t, opUnrestricted("org-a"), "no_such_operation", json.RawMessage(`{}`))
+			if resp.Call != directread.CallRefused {
+				t.Fatalf("want a refusal, got %s", resp.Call)
+			}
+			return resp.Source.SchemaDigest
+		}
+		if got := refuse(); got != watchServedDigest {
+			t.Fatalf("after a successful watch: refusal digest %s, want %s", got, watchServedDigest)
+		}
+		failRefresh(reg, cat, watch)
+		pinned := cat.SchemaDigest()
+		if got := refuse(); got != pinned || got != cat.StampedSchemaDigest() || got != catalog(cat) {
+			t.Fatalf("after a failed refresh: refusal digest %s, stamped %s, data_catalog %s, want the pinned digest %s", got, cat.StampedSchemaDigest(), catalog(cat), pinned)
+		}
+		if last := rec.reads[len(rec.reads)-1]; last.SchemaDigest != pinned {
+			t.Fatalf("read log carries %s, want %s", last.SchemaDigest, pinned)
+		}
+	})
+	t.Run("graphql_query", func(t *testing.T) {
+		rec := &digestRecorder{}
+		h := newGQLHarness(t, gqlHarnessOptions{recorder: rec, ownCatalogue: true})
+		cat := h.policy.Catalogue()
+		reg := newSwappableRegistry(t, watchServedDigest)
+		watch := reg.watch(t, cat)
+		watch.Start()
+		watch.Wait()
+		refuse := func() string {
+			resp := h.run(t, opUnrestricted("org-a"), "{ not a query", nil)
+			if resp.Call != directread.CallRefused {
+				t.Fatalf("want a refusal, got %s", resp.Call)
+			}
+			return resp.Source.SchemaDigest
+		}
+		if got := refuse(); got != watchServedDigest {
+			t.Fatalf("after a successful watch: refusal digest %s, want %s", got, watchServedDigest)
+		}
+		failRefresh(reg, cat, watch)
+		pinned := cat.SchemaDigest()
+		if got := refuse(); got != pinned || got != cat.StampedSchemaDigest() || got != catalog(cat) {
+			t.Fatalf("after a failed refresh: refusal digest %s, stamped %s, data_catalog %s, want the pinned digest %s", got, cat.StampedSchemaDigest(), catalog(cat), pinned)
+		}
+		if last := rec.reads[len(rec.reads)-1]; last.SchemaDigest != pinned {
+			t.Fatalf("read log carries %s, want %s", last.SchemaDigest, pinned)
+		}
+	})
+}
