@@ -1253,6 +1253,29 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
+	{
+		var rows []string
+		for i, e := range orderedResolved {
+			rows = append(rows, fmt.Sprintf("%d %s %s>%s", i, e.Name, e.From.CanonicalID, e.To.CanonicalID))
+		}
+		var admitted []string
+		for _, path := range admission.Paths {
+			for _, pe := range path.Edges {
+				admitted = append(admitted, fmt.Sprintf("%s %s>%s", pe.Type, pe.From.CanonicalID, pe.To.CanonicalID))
+			}
+		}
+		var drivers []string
+		for _, d := range admission.Drivers {
+			for _, s := range d.AffectedSubjects {
+				drivers = append(drivers, d.Title+"|"+s.CanonicalID)
+			}
+		}
+		committed := []string{}
+		for _, c := range request.Resolution.Committed {
+			committed = append(committed, c.CanonicalID)
+		}
+		slog.Default().Warn("DIAG9777 admission", "question", request.Request.Question, "committed", committed, "max_paths", request.Request.Options.MaxRelationshipPaths, "max_evidence", request.Request.Options.MaxEvidenceRefs, "max_drivers", request.Request.Options.MaxDrivers, "ordered", rows, "admitted", admitted, "drivers", drivers)
+	}
 	logSharedEdgeBudget(ctx, principal.OrgID, orderedResolved, resolvedEdgeOrigin, edgeOrigins, admission.Paths, len(textCandidates), textAdmitted)
 	// CHAOS-4395: DiscoveredCohort's ONLY node source used to be
 	// textNodes/resolvedNodes above -- fulltextSearchNodes over the raw
