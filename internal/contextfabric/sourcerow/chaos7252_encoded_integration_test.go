@@ -86,6 +86,7 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		workItems(org, secretID,
 			[2]string{"jira:A", ""}, [2]string{"B:jira:C", ""},
 			[2]string{"jira:PARENT2", ""}, [2]string{"jira:SP", ""},
+			[2]string{"jira:S2", "jira:SP2"}, [2]string{"jira:SP2", ""},
 		),
 		// The foreign organization: the same repository UUID, the same ids.
 		workItems(foreign, grantedID, [2]string{"jira:A:B", ""}, [2]string{"jira:C", ""}, [2]string{"jira:P:Q", "jira:R"}, [2]string{"jira:R", ""}),
@@ -209,6 +210,10 @@ func rowCases() []rowCase {
 		// here, refused to a granted-only caller). CHAOS-9795 ruling (MCP): a
 		// bare parent id resolves in the child's own repository only, so jira:S1
 		// has no PART_OF edge and no producer mints a ref: asserted below.
+		// The hierarchy gate-refusal cell: child and parent both in the secret
+		// repository (a bare parent id has no cross-repository form), so a
+		// granted-only caller is refused and an unrestricted caller is served.
+		{hierarchy, []string{secretID, "jira:S2", "jira:SP2"}, false, true, "child=jira:S2", ""},
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
 		// The resolver here has no subject gate, so a restricted caller is
