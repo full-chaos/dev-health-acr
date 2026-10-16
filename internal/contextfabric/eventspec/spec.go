@@ -102,6 +102,12 @@ const (
 	// multiplicity the same way it accepts ZeroOrOnePerPass, scoped by
 	// Attribution alone (never "pass", which this multiplicity forbids).
 	MultiplicityZeroOrOnePerRequest Multiplicity = "zero_or_one_per_request"
+	// MultiplicityZeroOrManyPerRequest: a request writes the line once per
+	// occurrence of a read that can run more than once (no "pass" and no
+	// "index" or "total" on the line), bounded by Event.MaxLinesPerScope.
+	// Certify validates every line in scope, refuses a scope over the
+	// bound, and requires Want to single out exactly one line.
+	MultiplicityZeroOrManyPerRequest Multiplicity = "zero_or_many_per_request"
 	// MultiplicityBoundedManyPerPass (CHAOS-5517): a scope (request, or
 	// request+pass for an event that also declares "pass") may carry ANY
 	// number of lines, 0..N, where N is a cardinality some other part of
@@ -221,6 +227,9 @@ type Field struct {
 	// MaxItems, when positive, bounds a slice field: the certifier refuses a
 	// line whose string_slice or object_slice carries more elements.
 	MaxItems int
+	// MaxInt, when set, bounds an int field from above: the certifier refuses
+	// a line whose value exceeds it.
+	MaxInt *int
 	// Nullable (FieldCountMap only) says the field may carry JSON null: the
 	// producer leaves the map nil when nothing was counted.
 	Nullable bool
@@ -290,6 +299,9 @@ type Event struct {
 	// uniquely attributable to the scope and attempt that produced it.
 	Attribution []string
 	Fields      []Field
+	// MaxLinesPerScope bounds the lines one scope may carry for
+	// MultiplicityZeroOrManyPerRequest; zero for every other multiplicity.
+	MaxLinesPerScope int
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -1825,13 +1837,69 @@ var FactRootRefused = Event{
 	BoundedAggregation: "at most one line per request: the fact-root re-check runs once after resolution commits its roots.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultDeniedReasonArr[:])},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(factRootRefusedReasonArr[:])},
 		{Key: "refused_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
+}
+
+func intPtr(n int) *int { return &n }
+
+// engineFactGateReadsPerRequest counts the gated reads one request can make.
+const engineFactGateReadsPerRequest = contextfabric.EngineFactGateReadsPerRequest
+
+func engineFactGateFields(decisions, reasons []string, undeclaredMax *int) []Field {
+	return []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"engine_fact_read"}},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: decisions},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: reasons},
+		{Key: "repository_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_undeclared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_withheld_from", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "references_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "references_refused", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fields_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evidence_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fields_undeclared", Type: FieldInt, Presence: PresenceRequired, MaxInt: undeclaredMax},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	}
+}
+
+// EngineFactGateWarn is the Warn line of the embedded-subject gate on a restricted caller's engine fact read that failed closed or removed a field its capability does not declare. Counts and closed values only, never the id or label of a withheld subject.
+var EngineFactGateWarn = Event{
+	ID:                 "contextfabric.engine_fact_gate_warn",
+	Msg:                "context fabric engine fact gate",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   engineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
+	Fields: engineFactGateFields(
+		[]string{contextfabric.EngineFactGateFiltered, contextfabric.EngineFactGateUnavailable},
+		[]string{
+			contextfabric.EngineFactGateReasonUnseenSubjectsWithheld, contextfabric.EngineFactGateReasonUndeclaredFieldsRemoved,
+			contextfabric.EngineFactGateReasonAuthorizationFailed, contextfabric.EngineFactGateReasonCanceled,
+		}, nil),
+}
+
+// EngineFactGateInfo is the Info line of the same gate for a clean read or one that only withheld subjects the caller may not see.
+var EngineFactGateInfo = Event{
+	ID:                 "contextfabric.engine_fact_gate_info",
+	Msg:                "context fabric engine fact gate",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   engineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
+	Fields: engineFactGateFields(
+		[]string{contextfabric.EngineFactGateClean, contextfabric.EngineFactGateFiltered},
+		[]string{"", contextfabric.EngineFactGateReasonUnseenSubjectsWithheld}, intPtr(0)),
 }
 
 // OrganizationSubjectRead is the Info line of a turn that resolved no subject and was answered from the caller's organization subject.
@@ -2804,7 +2872,7 @@ var (
 	storedResultSurfaceArr        = contextfabric.StoredResultSurfaceVocabulary()
 	storedResultDecisionArr       = contextfabric.StoredResultDecisionVocabulary()
 	storedResultReasonArr         = contextfabric.StoredResultAuthorizationReasonVocabulary()
-	storedResultDeniedReasonArr   = contextfabric.StoredResultDecideDeniedReasonVocabulary()
+	factRootRefusedReasonArr      = contextfabric.FactRootRefusedReasonVocabulary()
 	storedResultPrincipalScopeArr = contextfabric.StoredResultPrincipalScopeVocabulary()
 	storedResultSubjectKindArr    = contractsv1.ContextFabricSubjectKindVocabulary()
 )
@@ -3818,6 +3886,8 @@ var All = []Event{
 	InterpretationEnsembleResolved,
 	ServerStatusShadowLine,
 	FactRootRefused,
+	EngineFactGateWarn,
+	EngineFactGateInfo,
 	OrganizationSubjectRead,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,

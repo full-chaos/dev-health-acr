@@ -19,7 +19,7 @@ import (
 var graphWriteFunctions = []string{
 	"applyTombstone", "clearNodeVectors", "createFulltextIndex", "createIndex", "createVectorIndexWithOptions",
 	"dropVectorIndex", "projectContent", "projectEntity", "projectEpisode", "projectRelationship",
-	"retractColumnProjectEdges", "writeNodeVector", "writeWatermark",
+	"retractOpenEdges", "writeNodeVector", "writeWatermark",
 }
 
 func TestEveryGraphWriteSiteIsAProjectorFunction(t *testing.T) {

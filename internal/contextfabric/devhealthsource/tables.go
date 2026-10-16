@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -1245,15 +1246,21 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 	})
 }
 
+// hierarchyCursorExpr is queryWorkItemHierarchy's keyset position: the later of
+// the child's own ingest stamp and the newest stamp of any work item row that
+// carries its parent id. A child's edge depends on the rows that name its
+// parent (a second holder of a qualified key turns it ambiguous; the parent's
+// own window bounds the edge), so those rows bring the child back.
+const hierarchyCursorExpr = "greatest(c.last_synced, pa.latest_synced)"
+
 // queryWorkItemHierarchy (CHAOS-3779, §19.5.3 PART_OF) projects
 // work_items.parent_id -- a distinct column from work_item_dependencies,
 // carrying real hierarchy data (verified live: 2082 of 3282 work_items
 // rows have a non-empty parent_id, and every one of those resolves to a
-// real work_items row in the same organization). The INNER JOIN to a
-// second work_items instance for the parent enforces that resolvability at
-// query time: a child row whose parent_id names a work item that does not
-// exist (a different organization, or a row deleted out from under it) is
-// never projected as a dangling PART_OF edge.
+// real work_items row in the same organization). A child row whose
+// parent_id names a work item that does not exist (a different organization,
+// or a row deleted out from under it) is never projected as a dangling
+// PART_OF edge: it retracts the edges it holds instead.
 //
 // c.parent_id != c.work_item_id (CHAOS-3779 codex round-1 finding M3) is a
 // SELF-reference filter, not cycle detection. A multi-node cycle (A part_of
@@ -1271,26 +1278,41 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 // one bad row. Filtering it at the SQL boundary, before it ever becomes a
 // candidate, is cheap and permanent; live ClickHouse holds zero such rows
 // today (verified), but the filter guards against a future one.
-// The INNER JOIN to the parent work_items row stays INNER (CHAOS-3785 does
-// not touch it): it is the resolvability guarantee the doc comment above
-// describes, unrelated to which table owns the repo attribute. Only the
-// repos join relaxes to LEFT, for the same zero-UUID reason queryWorkItems
-// does -- a Linear-sourced child work item's repo_id is the zero UUID.
+// The parent join is LEFT: a child whose parent_id is empty, names no work
+// item in the child's own repository is read too, and emits a part_of_edges tombstone instead of an edge, so a changed
+// parent never leaves the old edge open. The repos join is LEFT for the
+// zero-UUID reason queryWorkItems has -- a Linear-sourced child work item's
+// repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(c.repo_id), ':', c.work_item_id)"
+	// parent_id names its parent by work item id. A qualified id (a known
+	// integration prefix and a key: parent_key.go) is unique in its provider's
+	// namespace and names its parent org-wide: pa holds the one candidate's
+	// data, and two or more candidates name no parent. Any other id is a
+	// per-container number and names the work item of that id in the CHILD'S
+	// OWN repository (p), and nothing else. pa.candidates also tells a parent
+	// that does not exist from one that cannot be told apart. A child gets one
+	// row: its parent, or a row that retracts its PART_OF edges.
+	qualified := qualifiedParentSQL("c.parent_id")
 	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
-       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id), c.last_synced
+       if(` + qualified + `, pa.created_at, p.created_at), ` + nullableTimestamp("if("+qualified+", pa.ended_at, coalesce(p.completed_at, p.closed_at))") + `,
+       if(` + qualified + `, pa.repo, toString(p.repo_id)),
+       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), toUInt8(` + qualified + `), toUInt8(` + emptyKeyParentSQL("c.parent_id") + `), ` + hierarchyCursorExpr + `
 FROM work_items AS c FINAL
-INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
+LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id AND p.repo_id = c.repo_id
+LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, max(last_synced) AS latest_synced, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
-WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
-	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, hierarchyCursorExpr, rowKey) + orderBy(hierarchyCursorExpr, rowKey)
+	notResolved := map[string]int{}
+	unmapped := map[string]int{}
+	items, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var childID, parentID, repoID, repoSlug, parentRepoID string
 		var observedAt, childCreatedAt, childEndedAt, parentCreatedAt, parentEndedAt time.Time
-		var childHasEnded, parentHasEnded uint8
+		var childHasEnded, parentHasEnded, ownRepoCandidate, qualifiedKey, emptyKey uint8
+		var candidates uint32
 		if err := r.Scan(&childID, &parentID, &repoID, &repoSlug, &observedAt,
-			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt, &parentRepoID); err != nil {
+			&childCreatedAt, &childHasEnded, &childEndedAt, &parentCreatedAt, &parentHasEnded, &parentEndedAt, &parentRepoID, &candidates, &ownRepoCandidate, &qualifiedKey, &emptyKey); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -1299,11 +1321,44 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		if err != nil {
 			return nil, err
 		}
+		if childOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		// No parent now (cleared, a self-reference, an empty key, none found)
+		// or one the id cannot name (a qualified key held more than once, a
+		// number held only outside the child's repository): the edges the
+		// child still holds are retracted, and none is asserted.
+		retract := ""
+		switch {
+		case parentID == "" || parentID == childID:
+			retract = "part_of_parent_cleared"
+		case emptyKey != 0:
+			retract = "part_of_parent_empty_key"
+		case candidates == 0:
+			retract = "part_of_parent_unresolved"
+		case qualifiedKey != 0 && candidates > 1:
+			retract = "part_of_parent_key_not_unique"
+		case qualifiedKey == 0 && ownRepoCandidate == 0:
+			retract = "part_of_parent_not_in_own_repository"
+		}
+		if retract != "" {
+			notResolved[retract]++
+		}
+		if prefix, ok := unmappedParentPrefix(parentID); ok {
+			unmapped[prefix]++
+		}
+		if retract != "" {
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind: contextfabric.TombstoneKindPartOfEdges, CanonicalID: childCanonicalID,
+				Reason: retract, EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			}
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
+		}
 		parentCanonicalID, parentOmitted, err := identity.Derive(identity.KindWorkItem, []string{parentRepoID, parentID}, nil)
 		if err != nil {
 			return nil, err
 		}
-		if childOmitted || parentOmitted {
+		if parentOmitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// Both endpoints are joined here, so the PART_OF edge gets the
@@ -1312,15 +1367,11 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		validFrom, validTo := edgeValidity(
 			requiredTime(childCreatedAt), optionalTime(childHasEnded, childEndedAt),
 			requiredTime(parentCreatedAt), optionalTime(parentHasEnded, parentEndedAt))
-		// CHAOS-3898 §1.5 P1-2 fix-forward (codex retroactive review of
-		// #151/#152, chris-verified): this producer was left on the OLD
-		// endpoint-independent id scheme when S2b converted
-		// queryWorkItemDependencies -- RelationshipFamilyWorkItemHierarchy
-		// was defined (identity/relationship.go) but never actually
-		// consumed anywhere. Unlike the dependency edge, hierarchy's INNER
-		// JOIN to the parent guarantees BOTH endpoints are always resolved
-		// real work_item.v2 nodes here (no unresolved-ref stub case), so
-		// this needs only the id-scheme conversion, no tombstone healing.
+		// CHAOS-3898 §1.5 P1-2 fix-forward: the endpoint-derived id scheme
+		// (RelationshipFamilyWorkItemHierarchy). The parent is a resolved
+		// real work_item.v2 node, so there is no unresolved-ref stub case.
+		// The id names the parent, so a re-parent mints a new id; the sink
+		// keeps one PART_OF edge per child (falkorgraph retractOpenEdges).
 		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, childCanonicalID, parentCanonicalID, string(contractsv1.ContextFabricRelationshipPartOf))
 		// CHAOS-7252: the child row's key (repo, work item) and the parent
 		// it names, each escaped.
@@ -1335,6 +1386,20 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})
+	for reason, count := range notResolved {
+		level := slog.LevelWarn
+		if reason == "part_of_parent_cleared" || reason == "part_of_parent_unresolved" {
+			level = slog.LevelInfo
+		}
+		startLogger(ctx).Log(ctx, level, "devhealthsource part_of parent not resolved",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", contextfabric.SanitizeLogAttr(reason), "children", count)
+	}
+	for prefix, count := range unmapped {
+		startLogger(ctx).WarnContext(ctx, "devhealthsource part_of parent id prefix is not mapped",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "prefix", contextfabric.SanitizeLogAttr(prefix), "children", count,
+			"reason", "the id resolves in the child's own repository only until the prefix is added to qualifiedParentPrefixes")
+	}
+	return items, truncated, err
 }
 
 // queryDeploymentIncidentEdges derives its validity window from its two

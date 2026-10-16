@@ -119,3 +119,62 @@ func TestLiveColumnProjectEdgesKeepOneOpenEdgePerWorkItem(t *testing.T) {
 		t.Fatalf("a retraction removed an edge stamped after it: open edges %v, want [rel-w1-C]", got)
 	}
 }
+
+func partOfEdge(rid string, from, to contextfabric.SubjectRef, observed time.Time) contextfabric.RelationshipProjection {
+	edge := columnEdge(rid, from, to, observed, nil)
+	edge.Type = contractsv1.ContextFabricRelationshipPartOf
+	return edge
+}
+
+func TestLivePartOfEdgesKeepOneEdgePerChild(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	org := "live-partof-" + time.Now().UTC().Format("20060102T150405.000000000")
+	key := graphKey(adapter.config.GraphPrefix, org)
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), org) })
+
+	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	child := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:child", Label: "child"}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:other", Label: "other"}
+	parentA := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:A", Label: "A"}
+	parentB := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:B", Label: "B"}
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:P", Label: "P"}
+	apply := func(id string, observed time.Time, rels []contextfabric.RelationshipProjection, tombs []contextfabric.ProjectionTombstone) {
+		t.Helper()
+		if _, err := adapter.ApplyProjectionBatch(ctx, columnEdgeBatch(org, id, observed, rels, tombs)); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+	retract := func(observed time.Time) contextfabric.ProjectionTombstone {
+		return contextfabric.ProjectionTombstone{Kind: contextfabric.TombstoneKindPartOfEdges, CanonicalID: child.CanonicalID, Reason: "part_of_parent_cleared", EffectiveAt: observed, SourceVersion: "v1"}
+	}
+
+	apply("batch-0001", t0, []contextfabric.RelationshipProjection{
+		partOfEdge("rel-child-A", child, parentA, t0),
+		partOfEdge("rel-other-A", other, parentA, t0),
+		columnEdge("rel-child-P", child, project, t0, nil),
+	}, []contextfabric.ProjectionTombstone{})
+	t1 := t0.Add(time.Minute)
+	apply("batch-0002", t1, []contextfabric.RelationshipProjection{partOfEdge("rel-child-B", child, parentB, t1)}, []contextfabric.ProjectionTombstone{})
+	if got := openEdgeIDs(t, ctx, adapter, key, org, child); fmt.Sprint(got) != "[rel-child-B rel-child-P]" {
+		t.Fatalf("re-parent A to B: open edges %v, want the edge to B and the untouched project edge", got)
+	}
+	if got := openEdgeIDs(t, ctx, adapter, key, org, other); fmt.Sprint(got) != "[rel-other-A]" {
+		t.Fatalf("a re-parent touched another child: %v", got)
+	}
+
+	t2 := t1.Add(time.Hour)
+	apply("batch-0003", t2, []contextfabric.RelationshipProjection{}, []contextfabric.ProjectionTombstone{retract(t2)})
+	if got := openEdgeIDs(t, ctx, adapter, key, org, child); fmt.Sprint(got) != "[rel-child-P]" {
+		t.Fatalf("parent cleared: open edges %v, want only the project edge", got)
+	}
+	if got := openEdgeIDs(t, ctx, adapter, key, org, other); fmt.Sprint(got) != "[rel-other-A]" {
+		t.Fatalf("a retraction touched another child: %v", got)
+	}
+
+	apply("batch-0004", t2.Add(time.Hour), []contextfabric.RelationshipProjection{partOfEdge("rel-child-A", child, parentA, t2.Add(time.Hour))}, []contextfabric.ProjectionTombstone{})
+	apply("batch-0005", t2, []contextfabric.RelationshipProjection{}, []contextfabric.ProjectionTombstone{retract(t2)})
+	if got := openEdgeIDs(t, ctx, adapter, key, org, child); fmt.Sprint(got) != "[rel-child-A rel-child-P]" {
+		t.Fatalf("a retraction removed an edge stamped after it: open edges %v", got)
+	}
+}

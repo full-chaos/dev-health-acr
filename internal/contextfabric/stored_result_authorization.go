@@ -124,16 +124,6 @@ const (
 	StoredResultReasonGraphReadFailed   StoredResultAuthorizationReason = "graph_read_failed"
 )
 
-// StoredResultDecideDeniedReasonVocabulary is the subset of reasons decide
-// gives a Denied decision (the grant reasons belong to the stored-result read
-// route, not to decide); the fact-root refusal line is written only for those.
-func StoredResultDecideDeniedReasonVocabulary() [5]StoredResultAuthorizationReason {
-	return [5]StoredResultAuthorizationReason{
-		StoredResultReasonOrganizationMismatch, StoredResultReasonSubjectDenied, StoredResultReasonSubjectAbsent,
-		StoredResultReasonGroupUnproven, StoredResultReasonGraphNotProjected,
-	}
-}
-
 // StoredResultAuthorizationReasonVocabulary is the closed set of reasons.
 func StoredResultAuthorizationReasonVocabulary() [12]StoredResultAuthorizationReason {
 	return [12]StoredResultAuthorizationReason{
