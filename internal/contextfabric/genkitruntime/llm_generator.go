@@ -19,10 +19,6 @@ import (
 // Completions clients are built to send none, as the Genkit transport did.
 const DefaultMaxOutputTokens = 32768
 
-// outputFormatName is the json_schema name the Genkit OpenAI-compatible
-// plugin always sent; kept so the wire request does not change.
-const outputFormatName = "output"
-
 // cutStopReasons are the stop reasons each client reports for a reply cut at
 // its output cap (Chat Completions, Messages, Responses).
 var cutStopReasons = map[string]bool{"length": true, "max_tokens": true, "max_output_tokens": true}
@@ -45,6 +41,9 @@ const (
 type outputSchema struct {
 	wire     map[string]any
 	compiled *gojsonschema.Schema
+	// instructions is Genkit's own JSON format instruction for this schema
+	// (ai/format_json.go), which Genkit appended to the system message.
+	instructions string
 }
 
 func newOutputSchema(value any) (outputSchema, error) {
@@ -57,7 +56,8 @@ func newOutputSchema(value any) (outputSchema, error) {
 	if err != nil {
 		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
 	}
-	return outputSchema{wire: wire, compiled: compiled}, nil
+	instructions := fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", string(raw))
+	return outputSchema{wire: wire, compiled: compiled, instructions: instructions}, nil
 }
 
 // LLMClients maps each model a runtime calls (Config.Model, and
@@ -141,10 +141,13 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 	if !ok {
 		return "", contextfabric.ModelUsage{}, fmt.Errorf("%w: no client for the requested model", contextfabric.ErrModelUnavailable)
 	}
+	// The request Genkit sent, byte for byte: no schema on the wire (a JSON
+	// object answer), and the schema as text at the end of the system
+	// message. acr's output schemas use keywords OpenAI's strict mode does not
+	// support, so a strict json_schema changed the model's answers.
 	result, err := client.Complete(ctx, llm.Request{
-		System:          request.System,
+		System:          request.System + schema.instructions,
 		Prompt:          request.Prompt,
-		Format:          &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire},
 		MaxOutputTokens: g.maxOutputTokens,
 		Seed:            seedOf(request.Config),
 	})
