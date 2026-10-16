@@ -140,13 +140,13 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			continue
 		}
 		if len(fact.EvidenceRefIDs) == 0 {
-			missing("no_evidence")
+			missing(projectStatusStateNoEvidence)
 			continue
 		}
 		title, ok := observation.title(fact.Fields)
 		claimValue, hasValue := fact.Fields[observation.field]
 		if !ok || !hasValue || claimValue.Null {
-			missing("no_value")
+			missing(projectStatusStateNoValue)
 			continue
 		}
 		if len(drivers) >= allowed {
@@ -206,6 +206,42 @@ func projectStatusMissingLimitations(event *ProjectStatusDriverEvent) []string {
 	return sentences
 }
 
+// The three missing states a project status driver can report that are not a
+// source state: the fact held no evidence, the fact held no value, and the
+// coverage held no observation of the kind.
+const (
+	projectStatusStateNoEvidence = "no_evidence"
+	projectStatusStateNoValue    = "no_value"
+	projectStatusStateNotRead    = "not_read"
+)
+
+// ProjectStatusDriverKindVocabulary is the closed set of fact kinds a project
+// status driver event names as missing or partial: the kinds the observations read.
+func ProjectStatusDriverKindVocabulary() []string {
+	out := make([]string, 0, len(projectStatusObservations))
+	for _, observation := range projectStatusObservations {
+		out = append(out, string(observation.kind))
+	}
+	return out
+}
+
+// ProjectStatusDriverMissingStateVocabulary is the closed set of states a
+// missing project status kind reports: a source state, or one of the three
+// states above.
+func ProjectStatusDriverMissingStateVocabulary() []string {
+	return []string{
+		string(SourceAvailable), string(SourceStale), string(SourceUnavailable), string(SourceUnconfigured), string(SourceUnauthorized),
+		string(SourceNoData), string(SourceTruncated), string(SourceConflicted), string(SourceNotApplicable), string(SourcePruned),
+		projectStatusStateNoEvidence, projectStatusStateNoValue, projectStatusStateNotRead,
+	}
+}
+
+// ProjectStatusDriverPartialStateVocabulary is the closed set of states a
+// partial project status kind reports: a usable state that is not available.
+func ProjectStatusDriverPartialStateVocabulary() []string {
+	return []string{string(SourceStale), string(SourceTruncated)}
+}
+
 func projectStatusCoverageState(coverage Coverage, kind FactKind) string {
 	source := "canonical_fact:" + string(kind)
 	observed := ""
@@ -221,5 +257,5 @@ func projectStatusCoverageState(coverage Coverage, kind FactKind) string {
 	if observed != "" {
 		return observed
 	}
-	return "not_read"
+	return projectStatusStateNotRead
 }

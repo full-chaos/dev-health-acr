@@ -248,6 +248,10 @@ func goVarName(e Event) string {
 		return "TeamPRLinkStateNativeFirst"
 	case PullRequestProjectNativeFirst.ID:
 		return "PullRequestProjectNativeFirst"
+	case ProjectStatusDrivers.ID:
+		return "ProjectStatusDrivers"
+	case TeamBlockersDrivers.ID:
+		return "TeamBlockersDrivers"
 	case FactBytesBoundExceeded.ID:
 		return "FactBytesBoundExceeded"
 	case SubjectIDShapeRejected.ID:

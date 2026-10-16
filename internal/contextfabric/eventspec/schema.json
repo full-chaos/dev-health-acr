@@ -6157,6 +6157,93 @@
     ]
   },
   {
+    "id": "contextfabric.project_status_drivers",
+    "msg": "context fabric project status drivers",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that builds project status drivers.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "emitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_budget",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_id_clash",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "workload",
+          "readiness",
+          "health"
+        ]
+      },
+      {
+        "key": "missing_states",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "available",
+          "stale",
+          "unavailable",
+          "unconfigured",
+          "unauthorized",
+          "no_data",
+          "truncated",
+          "conflicted",
+          "not_applicable",
+          "pruned",
+          "no_evidence",
+          "no_value",
+          "not_read"
+        ]
+      },
+      {
+        "key": "partial_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "workload",
+          "readiness",
+          "health"
+        ]
+      },
+      {
+        "key": "partial_states",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "stale",
+          "truncated"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.pull_request_status_filter",
     "msg": "context_fabric: pull request status filter",
     "level": "info",
@@ -8132,6 +8219,69 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.team_blockers_drivers",
+    "msg": "context fabric team blockers drivers",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that builds team blockers drivers.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "emitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_missing",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_zero",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_budget",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_id_clash",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_stale",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_duplicate",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",

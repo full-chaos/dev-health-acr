@@ -1035,13 +1035,19 @@ func (t SlogEngineTelemetry) RecordProjectStatusDrivers(ctx context.Context, pri
 	for _, state := range event.PartialStates {
 		partialStates = append(partialStates, string(state))
 	}
+	// missing_states was written through the sanitizer straight from the
+	// event, where nothing missing leaves it nil and the JSON handler writes
+	// null beside the three lists that write []: the measured zero is an
+	// empty list.
+	missingStates := make([]string, 0, len(event.MissingStates))
+	missingStates = append(missingStates, event.MissingStates...)
 	t.logger.InfoContext(ctx, "context fabric project status drivers", append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"emitted", event.Emitted,
 		"skipped_budget", event.SkippedBudget,
 		"skipped_id_clash", event.SkippedIDClash,
 		"missing_kinds", SanitizeLogStrings(missing),
-		"missing_states", SanitizeLogStrings(event.MissingStates),
+		"missing_states", SanitizeLogStrings(missingStates),
 		"partial_kinds", SanitizeLogStrings(partial),
 		"partial_states", SanitizeLogStrings(partialStates),
 	}, requestIDLogAttrs(ctx)...)...)
