@@ -62,10 +62,18 @@ func TestFactRootRefusedLineCertifiesEveryReasonAndKind(t *testing.T) {
 	if line["level"] != "WARN" {
 		t.Fatalf("the refusal must stay a Warn line, got %v", line["level"])
 	}
-	for _, reason := range contextfabric.StoredResultAuthorizationReasonVocabulary() {
+	for _, reason := range contextfabric.StoredResultDecideDeniedReasonVocabulary() {
 		d := decision
 		d.Reason = reason
 		certifyRequestLine(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, map[string]any{"reason": string(reason)})
+	}
+	for _, reason := range []contextfabric.StoredResultAuthorizationReason{
+		contextfabric.StoredResultReasonNoSubjects, contextfabric.StoredResultReasonUnrestrictedPrincipal, contextfabric.StoredResultReasonSubjectsAdmitted,
+		contextfabric.StoredResultReasonAuthorizerMissing, contextfabric.StoredResultReasonGraphReadFailed,
+	} {
+		d := decision
+		d.Reason = reason
+		certifyRefused(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, "a reason the recheck never records: "+string(reason))
 	}
 	var kinds []string
 	for _, kind := range contractsv1.ContextFabricSubjectKindVocabulary() {
@@ -73,7 +81,11 @@ func TestFactRootRefusedLineCertifiesEveryReasonAndKind(t *testing.T) {
 	}
 	d := decision
 	d.RefusedKinds = kinds
-	certifyRequestLine(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, nil)
+	asAny := make([]any, 0, len(kinds))
+	for _, kind := range kinds {
+		asAny = append(asAny, kind)
+	}
+	certifyRequestLine(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, map[string]any{"refused_kinds": asAny})
 	d.RefusedKinds = []string{}
 	certifyRequestLine(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, map[string]any{"refused_kinds": []any{}})
 
@@ -159,7 +171,7 @@ func TestOrganizationSubjectReadLineCertifies(t *testing.T) {
 				event.SurveyMemberKind = contextfabric.SubjectKind(kind)
 			}
 			certifyRequestLine(t, recordOrganizationSubjectRead(event), eventspec.OrganizationSubjectRead, map[string]any{
-				"reason": reason, "organization_fact_kinds": []any{},
+				"reason": reason, "survey_member_kind": kind, "organization_fact_kinds": []any{},
 			})
 		}
 	}
@@ -167,12 +179,40 @@ func TestOrganizationSubjectReadLineCertifies(t *testing.T) {
 	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
 		kinds = append(kinds, string(kind))
 	}
+	kindsAny := make([]any, 0, len(kinds))
+	for _, kind := range kinds {
+		kindsAny = append(kindsAny, kind)
+	}
 	certifyRequestLine(t, recordOrganizationSubjectRead(contextfabric.OrganizationSubjectReadEvent{
 		Reason: contextfabric.OrganizationSubjectReadReasonInvestment, FactsRead: len(kinds), FactKinds: kinds,
-	}), eventspec.OrganizationSubjectRead, map[string]any{"organization_facts_read": len(kinds)})
+	}), eventspec.OrganizationSubjectRead, map[string]any{"organization_facts_read": len(kinds), "organization_fact_kinds": kindsAny})
 
 	certifyRefused(t, recordOrganizationSubjectRead(contextfabric.OrganizationSubjectReadEvent{Reason: "future_reason", FactKinds: []string{}}), eventspec.OrganizationSubjectRead, "an unknown reason")
 	certifyRefused(t, recordOrganizationSubjectRead(contextfabric.OrganizationSubjectReadEvent{
 		Reason: contextfabric.OrganizationSubjectReadReasonInvestment, FactKinds: []string{"future_kind"},
 	}), eventspec.OrganizationSubjectRead, "an unknown fact kind")
+}
+
+// TestEngineFactGateLineIsCertifiableOncePerReadAndBounded drives the line a
+// request writes when it makes the main, group and period delta reads: three
+// lines under one request id, each singled out by Want, the fourth refused.
+func TestEngineFactGateLineIsCertifiableOncePerReadAndBounded(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry, ctx := cohortTelemetry(&buf)
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: make([]string, 2)}
+	reads := []contextfabric.EngineFactGateDecision{
+		{Decision: contextfabric.EngineFactGateClean, FactsChecked: 5},
+		{Decision: contextfabric.EngineFactGateFiltered, Reason: contextfabric.EngineFactGateReasonUnseenSubjectsWithheld, FactsChecked: 6, FactsWithheldFrom: 1},
+		{Decision: contextfabric.EngineFactGateClean, FactsChecked: 7},
+	}
+	for _, read := range reads {
+		telemetry.RecordEngineFactGate(ctx, principal, read)
+	}
+	for _, read := range reads {
+		certifyRequestLine(t, buf.Bytes(), eventspec.EngineFactGateInfo, map[string]any{"facts_checked": read.FactsChecked, "decision": read.Decision})
+	}
+	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateInfo, "a Want that singles out two of the three reads", map[string]any{"decision": contextfabric.EngineFactGateClean})
+	telemetry.RecordEngineFactGate(ctx, principal, contextfabric.EngineFactGateDecision{Decision: contextfabric.EngineFactGateClean, FactsChecked: 8})
+	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateInfo, "a fourth read over the declared bound", map[string]any{"facts_checked": 8})
 }

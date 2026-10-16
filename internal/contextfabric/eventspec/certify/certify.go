@@ -130,7 +130,7 @@ func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool,
 	switch m {
 	case eventspec.MultiplicityExactlyOnePerPass, eventspec.MultiplicityZeroOrOnePerPass:
 		return true, true
-	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest:
+	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest, eventspec.MultiplicityZeroOrManyPerRequest:
 		return false, true
 	default:
 		// MultiplicityBoundedManyPerPass is NOT handled here: whether it
@@ -316,6 +316,31 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			}
 			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want exactly 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
+		}
+		if a.Event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
+			if a.Event.MaxLinesPerScope <= 0 {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares no MaxLinesPerScope bound", a.Event.ID)
+			}
+			if len(scoped) > a.Event.MaxLinesPerScope {
+				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q for this attempt, over the declared bound of %d", a.Event.ID, len(scoped), a.Event.Msg, a.Event.MaxLinesPerScope)
+			}
+			var matched []Line
+			for _, candidate := range scoped {
+				all := true
+				for key, want := range a.Want {
+					if !jsonEqual(want, candidate[key]) {
+						all = false
+						break
+					}
+				}
+				if all {
+					matched = append(matched, candidate)
+				}
+			}
+			if len(matched) != 1 {
+				return Result{}, fmt.Errorf("certify: %s: Want singles out %d of the %d lines with msg %q for this attempt, want exactly 1", a.Event.ID, len(matched), len(scoped), a.Event.Msg)
+			}
+			scoped = matched
 		}
 		if len(scoped) > 1 {
 			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
@@ -679,7 +704,7 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	if err := requireCanonicalEvent(ev); err != nil {
 		return err
 	}
-	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest {
 		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass or zero_or_one_per_request -- CertifyAbsent only applies to one of those two", ev.ID, ev.Multiplicity)
 	}
 	for _, attrKey := range ev.Attribution {

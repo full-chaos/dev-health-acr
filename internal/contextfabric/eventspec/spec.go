@@ -102,6 +102,12 @@ const (
 	// multiplicity the same way it accepts ZeroOrOnePerPass, scoped by
 	// Attribution alone (never "pass", which this multiplicity forbids).
 	MultiplicityZeroOrOnePerRequest Multiplicity = "zero_or_one_per_request"
+	// MultiplicityZeroOrManyPerRequest: a request writes the line once per
+	// occurrence of a read that can run more than once (no "pass" and no
+	// "index" or "total" on the line), bounded by Event.MaxLinesPerScope.
+	// Certify validates every line in scope, refuses a scope over the
+	// bound, and requires Want to single out exactly one line.
+	MultiplicityZeroOrManyPerRequest Multiplicity = "zero_or_many_per_request"
 	// MultiplicityBoundedManyPerPass (CHAOS-5517): a scope (request, or
 	// request+pass for an event that also declares "pass") may carry ANY
 	// number of lines, 0..N, where N is a cardinality some other part of
@@ -290,6 +296,9 @@ type Event struct {
 	// uniquely attributable to the scope and attempt that produced it.
 	Attribution []string
 	Fields      []Field
+	// MaxLinesPerScope bounds the lines one scope may carry for
+	// MultiplicityZeroOrManyPerRequest; zero for every other multiplicity.
+	MaxLinesPerScope int
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -1825,7 +1834,7 @@ var FactRootRefused = Event{
 	BoundedAggregation: "at most one line per request: the fact-root re-check runs once after resolution commits its roots.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultDeniedReasonArr[:])},
 		{Key: "refused_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},
@@ -1833,6 +1842,9 @@ var FactRootRefused = Event{
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
+
+// engineFactGateReadsPerRequest counts the gated reads one request can make.
+const engineFactGateReadsPerRequest = 3
 
 func engineFactGateFields(decisions, reasons []string) []Field {
 	return []Field{
@@ -1859,9 +1871,10 @@ var EngineFactGateWarn = Event{
 	ID:                 "contextfabric.engine_fact_gate_warn",
 	Msg:                "context fabric engine fact gate",
 	Level:              LevelWarn,
-	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   engineFactGateReadsPerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "one line per gated engine fact read of a restricted caller; a request that reads facts more than once (main read, group read, period delta) carries one line per read, so a certification asserts a request that makes one read.",
+	BoundedAggregation: "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
 	Fields: engineFactGateFields(
 		[]string{contextfabric.EngineFactGateFiltered, contextfabric.EngineFactGateUnavailable},
 		[]string{
@@ -1875,9 +1888,10 @@ var EngineFactGateInfo = Event{
 	ID:                 "contextfabric.engine_fact_gate_info",
 	Msg:                "context fabric engine fact gate",
 	Level:              LevelInfo,
-	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   engineFactGateReadsPerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "one line per gated engine fact read of a restricted caller; a request that reads facts more than once (main read, group read, period delta) carries one line per read, so a certification asserts a request that makes one read.",
+	BoundedAggregation: "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
 	Fields: engineFactGateFields(
 		[]string{contextfabric.EngineFactGateClean, contextfabric.EngineFactGateFiltered},
 		[]string{"", contextfabric.EngineFactGateReasonUnseenSubjectsWithheld}),
@@ -2853,6 +2867,7 @@ var (
 	storedResultSurfaceArr        = contextfabric.StoredResultSurfaceVocabulary()
 	storedResultDecisionArr       = contextfabric.StoredResultDecisionVocabulary()
 	storedResultReasonArr         = contextfabric.StoredResultAuthorizationReasonVocabulary()
+	storedResultDeniedReasonArr   = contextfabric.StoredResultDecideDeniedReasonVocabulary()
 	storedResultPrincipalScopeArr = contextfabric.StoredResultPrincipalScopeVocabulary()
 	storedResultSubjectKindArr    = contractsv1.ContextFabricSubjectKindVocabulary()
 )
