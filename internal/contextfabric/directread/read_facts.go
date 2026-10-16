@@ -606,6 +606,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, allFacts, withheldBySubject, derived)
 	response.RequestNotes = requestNotes(plan, bundle)
 	response.RequestNotes = append(response.RequestNotes, emptyFactNotes(plan, emptyByKind)...)
+	response.RequestNotes = append(response.RequestNotes, driversKeptNotes(plan, response.Facts)...)
 	if plan.units != nil {
 		noteUnitsCoverage(response.Coverage, response.Facts, unitsNotVisible)
 	}
@@ -894,6 +895,38 @@ func serveFact(item GatedFact, capability contextfabric.FactCapability, plan rea
 		served.Withheld = append(served.Withheld, WithheldItem{Field: name, Reason: "field_not_declared"})
 	}
 	return served, slices.Compact(withheld)
+}
+
+// driversKeptNotes says, once per kind, that tables=omit still served the
+// drivers table of a scored fact (decision K7: never a bare score). A kept
+// drivers table is not a cut: no coverage row changes.
+func driversKeptNotes(plan readPlan, facts []ServedFact) []RequestNote {
+	if plan.tables != TablesOmit {
+		return nil
+	}
+	var notes []RequestNote
+	for _, kind := range plan.kinds {
+		kept := map[string]bool{}
+		for _, fact := range facts {
+			if fact.Kind != string(kind) {
+				continue
+			}
+			for name := range fact.Tables {
+				kept[name] = true
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(kept))
+		for name := range kept {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		notes = append(notes, RequestNote{Kind: string(kind), Note: fmt.Sprintf(
+			"tables omit still serves the drivers table of a scored %s fact (%s): a score is never served without the table that explains it; this is not a truncation", kind, strings.Join(names, ", "))})
+	}
+	return notes
 }
 
 func isDriversTable(capability contextfabric.FactCapability, kind contextfabric.SubjectKind, table string) bool {
