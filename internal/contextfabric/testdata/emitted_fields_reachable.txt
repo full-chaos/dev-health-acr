@@ -202,7 +202,7 @@ FactIncidents
   fields             incident_attribution_basis incidents_count_window org_incidents_not_attributable_count_window owned_repositories owned_repositories_omitted_count owned_repository_count project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name repository_tables_basis resolved_incidents_count_window rollup_basis severity status window_basis window_end window_start
 
 FactInvestment
-  reached_funcs      243
+  reached_funcs      244
   dynamic_key_sites  10
   leaked_call_sites  66
     leak interface_method     35
@@ -210,10 +210,10 @@ FactInvestment
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         10
-    calls followed            1286
+    calls followed            1289
     calls accounted           15
-    calls not_a_call          47
-    calls excluded_by_design  746
+    calls not_a_call          48
+    calls excluded_by_design  751
     calls leaked              66
   fields             attribution attribution_basis denominator effort_unit_count investment_mix_source link_tier measure mix_source native_multi_placed_unit_count next_cursor owned_repository_count owning_team_rollup_work_unit_count page_share_total population_window project_reached_repositories project_reached_repositories_omitted_count project_reached_repository_count repo_count repositories_in_scope repository_id repository_link_basis repository_name rollup_basis scope scope_share_total scope_unattributed_rows scope_unattributed_total scope_unit_rows share share_in_scope sizing_coverage sizing_note source spanning_unit_count team_count theme theme_breakdown theme_quality_bugfix unattributed_effort_share unit_attribution_basis unit_effort_value unit_from unit_issue_size unit_kind unit_mix_source unit_pull_request_count unit_refs_unresolved unit_to unit_unresolved_refs unit_weight units_refs_unresolved units_returned unsized_unit_count weighted_effort work_unit_count work_unit_id work_units_without_repo_link
 
@@ -282,7 +282,7 @@ FactOperationalDeficiencies
   fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_score_unavailable_reason latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
 
 FactPullRequests
-  reached_funcs      145
+  reached_funcs      146
   dynamic_key_sites  0
   leaked_call_sites  22
     leak interface_method     10
@@ -290,10 +290,10 @@ FactPullRequests
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         2
-    calls followed            1071
+    calls followed            1073
     calls accounted           14
-    calls not_a_call          12
-    calls excluded_by_design  335
+    calls not_a_call          13
+    calls excluded_by_design  339
     calls leaked              22
   fields             link_tier link_tier_breakdown owned_repositories owned_repositories_omitted_count owned_repository_count project_breakdown project_reached_repository_count pull_request_count pull_request_link_basis pull_requests_by_state pull_requests_by_state_basis pull_requests_by_state_omitted_count pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_open_current pull_requests_opened_window pull_requests_without_state_count reach_basis repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis scope scope_id scope_name state window_basis window_end window_start
 

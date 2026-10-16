@@ -36,18 +36,19 @@ func (m *isolationLogs) Export(_ context.Context, records []sdklog.Record) error
 func (m *isolationLogs) Shutdown(context.Context) error   { return nil }
 func (m *isolationLogs) ForceFlush(context.Context) error { return nil }
 
-// TestGenkitTelemetryNeverExported pins that the service's own OTLP export
-// (internal/otelexport) never carries Genkit's telemetry, which holds model
-// prompt and response content. It runs a real generation through New()
-// inside an exported request span, with the runtime logging through the
-// exported logger, and plants the question text as the secret.
+// TestModelCallTelemetryNeverExported pins that the service's own OTLP export
+// (internal/otelexport) never carries the model call's own telemetry. It runs
+// a real generation through New() inside an exported request span, with the
+// runtime logging through the exported logger, and plants the question text
+// as the secret.
 //
-// Non-vacuous by construction: a span processor attached to Genkit's own
-// (global, suppressed) TracerProvider after New() shows Genkit DID record
-// the secret, in a span of the SAME trace as the exported request span.
-// The exported sinks must hold the request span and the runtime's own log
-// lines, and none of Genkit's spans, metrics or content.
-func TestGenkitTelemetryNeverExported(t *testing.T) {
+// Non-vacuous by construction: a span processor attached to the global
+// TracerProvider New() installs shows the shared client DID record its
+// per-attempt span, in the SAME trace as the exported request span, and that
+// span holds no question content. The exported sinks must hold the request
+// span and the runtime's own log lines, and none of the model call's spans,
+// metrics or content.
+func TestModelCallTelemetryNeverExported(t *testing.T) {
 	ctx := context.Background()
 	spans := tracetest.NewInMemoryExporter()
 	metrics := sdkmetric.NewManualReader()
@@ -70,15 +71,15 @@ func TestGenkitTelemetryNeverExported(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Genkit's own provider, as New() left it: the global one.
+	// The model call's provider, as New() left it: the global one.
 	global, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider)
 	if !ok {
 		t.Fatalf("global tracer provider is %T, want the *sdktrace.TracerProvider New() installs", otel.GetTracerProvider())
 	}
-	genkitSpans := tracetest.NewInMemoryExporter()
-	genkitProcessor := sdktrace.NewSimpleSpanProcessor(genkitSpans)
-	global.RegisterSpanProcessor(genkitProcessor)
-	defer global.UnregisterSpanProcessor(genkitProcessor)
+	modelSpans := tracetest.NewInMemoryExporter()
+	modelProcessor := sdktrace.NewSimpleSpanProcessor(modelSpans)
+	global.RegisterSpanProcessor(modelProcessor)
+	defer global.UnregisterSpanProcessor(modelProcessor)
 
 	requestCtx, requestSpan := exporter.Tracer().Start(ctx, "POST /api/v1/context-fabric/investigations")
 	request := testRequest()
@@ -91,7 +92,7 @@ func TestGenkitTelemetryNeverExported(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Exported spans: exactly the request span, nothing of Genkit's.
+	// Exported spans: exactly the request span, nothing of the model call.
 	exported := spans.GetSpans()
 	if len(exported) != 1 || exported[0].Name != "POST /api/v1/context-fabric/investigations" {
 		names := make([]string, 0, len(exported))
@@ -106,20 +107,24 @@ func TestGenkitTelemetryNeverExported(t *testing.T) {
 		}
 	}
 
-	// The plant is real: Genkit recorded the secret, inside the request's trace.
-	genkitCarried := false
-	for _, s := range genkitSpans.GetSpans() {
+	// The model call's own span is real, inside the request's trace, and
+	// carries no question content.
+	modelCallSpans := 0
+	for _, s := range modelSpans.GetSpans() {
+		if s.Name == "dev_health.llm.request" {
+			modelCallSpans++
+			if s.SpanContext.TraceID() != requestSpan.SpanContext().TraceID() {
+				t.Fatalf("model call span %q is not in the request trace; the isolation claim needs it to be", s.Name)
+			}
+		}
 		for _, kv := range s.Attributes {
 			if strings.Contains(kv.Value.Emit(), secret) {
-				genkitCarried = true
-				if s.SpanContext.TraceID() != requestSpan.SpanContext().TraceID() {
-					t.Fatalf("genkit span %q is not in the request trace; the isolation claim needs it to be", s.Name)
-				}
+				t.Fatalf("model call span %q attribute %s carries the secret", s.Name, kv.Key)
 			}
 		}
 	}
-	if !genkitCarried {
-		t.Fatalf("sanity: no genkit span carried the planted question (%d genkit spans); this test would prove nothing", len(genkitSpans.GetSpans()))
+	if modelCallSpans == 0 {
+		t.Fatalf("sanity: no model call span was recorded (%d spans); this test would prove nothing", len(modelSpans.GetSpans()))
 	}
 
 	// Exported logs: the runtime's own lines reached the export, none carries
@@ -146,14 +151,14 @@ func TestGenkitTelemetryNeverExported(t *testing.T) {
 		}
 	}
 
-	// Exported metrics: nothing from Genkit's meter.
+	// Exported metrics: nothing from Genkit's meter or the shared client's.
 	var rm metricdata.ResourceMetrics
 	if err := metrics.Collect(ctx, &rm); err != nil {
 		t.Fatal(err)
 	}
 	for _, sm := range rm.ScopeMetrics {
-		if strings.Contains(sm.Scope.Name, "genkit") {
-			t.Fatalf("exported metrics include Genkit's scope %q", sm.Scope.Name)
+		if strings.Contains(sm.Scope.Name, "genkit") || strings.Contains(sm.Scope.Name, "dev_health/llm") {
+			t.Fatalf("exported metrics include the model call's scope %q", sm.Scope.Name)
 		}
 	}
 }

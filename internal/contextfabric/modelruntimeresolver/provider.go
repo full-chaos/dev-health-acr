@@ -43,6 +43,7 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		Timeout:              defaults.Timeout,
 		MaxAttempts:          defaults.MaxAttempts,
 		MaxTransportRetries:  defaults.MaxTransportRetries,
+		MaxOutputTokens:      defaults.MaxOutputTokens,
 		AllowInsecureBaseURL: false,
 		// CHAOS-5655: inherited from defaults, same as the other tuning
 		// knobs above -- see contextFabricModelDefaults's own doc comment
