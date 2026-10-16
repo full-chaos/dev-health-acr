@@ -18,6 +18,7 @@ name: fullstack-acceptance
 
 "on":
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   push:
     tags: ["v*"]
   schedule:
@@ -52,6 +53,7 @@ env:
 jobs:
   compose:
     name: compose acceptance
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci-full'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -324,6 +326,7 @@ jobs:
 
   fixture-graph:
     name: fixture graph use-cases
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci-full'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -385,6 +388,7 @@ jobs:
   # against the migrated tables.
   live-schema-parity:
     name: live schema parity (ops-migrated ClickHouse)
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci-full'))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -440,7 +444,7 @@ jobs:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft || github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci-full')
     steps:
       # See the equivalent step in the compose job for why this must run before anything else
       # touches Docker in this job.
