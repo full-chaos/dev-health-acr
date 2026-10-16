@@ -838,6 +838,10 @@ check_verify_reads_plan() {
   # shellcheck disable=SC2016
   grep -qE '"\$result" = skipped' <<<"$block" || {
     printf 'verify has no draft-skip allowance\n' >&2; return 1; }
+  # The allowance must hold ONLY when plan said heavy=false.
+  # shellcheck disable=SC2016
+  grep -qF 'if [ "$heavy" = false ] && [ "$result" = skipped ]' <<<"$block" || {
+    printf 'verify skip allowance is not bound to heavy=false\n' >&2; return 1; }
 }
 
 run_all_checks() {
@@ -1350,6 +1354,11 @@ assert_check_fails 'removed the plan gate from the build job' check_heavy_jobs_g
 verify_ignores_plan="$tmpdir/verify-ignores-plan.yml"
 sed 's/plan\.outputs\.heavy \/\/ "missing"/plan.outputs.other \/\/ "missing"/' "$workflow" > "$verify_ignores_plan"
 assert_check_fails 'verify stopped reading plan.outputs.heavy' check_verify_reads_plan "$verify_ignores_plan"
+verify_skip_polarity="$tmpdir/verify-skip-polarity.yml"
+# shellcheck disable=SC2016
+sed 's/if \[ "\$heavy" = false \] && \[ "\$result" = skipped \]/if [ "$heavy" = true ] \&\& [ "$result" = skipped ]/' "$workflow" > "$verify_skip_polarity"
+cmp -s "$workflow" "$verify_skip_polarity" && { printf 'polarity mutation did not apply\n' >&2; exit 1; }
+assert_check_fails 'verify allows skipped heavy lanes when heavy=true' check_verify_reads_plan "$verify_skip_polarity"
 
 # (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
 # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX env in place -- the exact shape that

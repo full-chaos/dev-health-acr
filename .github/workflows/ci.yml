@@ -70,7 +70,7 @@ jobs:
           set -euo pipefail
           heavy=true
           if [ "$EVENT" = pull_request ] && [ "$DRAFT" = true ] \
-             && ! printf '%s' "$LABELS" | jq -e 'index("ci-full")' >/dev/null; then
+             && ! printf '%s' "$LABELS" | jq -e 'any(.[]; ascii_downcase == "ci-full")' >/dev/null; then
             heavy=false
           fi
           printf 'event=%s draft=%s labels=%s heavy=%s\n' "$EVENT" "$DRAFT" "$LABELS" "$heavy"
@@ -1690,11 +1690,11 @@ jobs:
           # event or from which jobs happened to skip. A missing or non-boolean
           # value fails the gate, so a plan that never ran cannot read green.
           heavy="$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.heavy // "missing"')"
+          printf 'plan heavy=%s\n' "$heavy"
           case "$heavy" in
             true | false) ;;
-            *) printf 'plan output heavy is %s, expected true or false\n' "$heavy" >&2; exit 1 ;;
+            *) printf 'plan output heavy is %s, expected true or false\n' "$heavy" >&2; failed=1; heavy=invalid ;;
           esac
-          printf 'plan heavy=%s\n' "$heavy"
 
           # LIGHT lanes run on every event and must be a literal success.
           # Every other lane is heavy: a literal success when heavy=true, and
