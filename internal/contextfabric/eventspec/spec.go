@@ -2294,6 +2294,37 @@ var HealthDailyHealthCapCut = Event{
 	},
 }
 
+// DeficiencyRuleBasisDayAbsent is the Info line of an operational_deficiencies read whose compounding-risk rule row parsed as a rule basis but names no score day, so the fact is served without rule_basis_as_of_day. The omission is also visible on the served fact (the field is absent); this line carries the org and the closed rule id only.
+var DeficiencyRuleBasisDayAbsent = Event{
+	ID:                 "devhealthfacts.rule_basis_day_absent",
+	Msg:                "devhealthfacts.rule_basis_day_absent",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per fired compounding-risk rule row without a day.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rule_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// DeficiencyRuleBasisDayInvalid is the Warn line of an operational_deficiencies read whose compounding-risk rule row names a score day that is not a calendar date, so the fact is served without rule_basis_as_of_day. The invalid text is sanitized before it is written.
+var DeficiencyRuleBasisDayInvalid = Event{
+	ID:                 "devhealthfacts.rule_basis_day_invalid",
+	Msg:                "devhealthfacts.rule_basis_day_invalid",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per fired compounding-risk rule row with an invalid day.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rule_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "day", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // FactBytesBoundExceeded is the Warn line of a producer that dropped an additive time series because it, with the legacy rows, passed the joint cell or byte bound of a dual-table fact. The drop is also disclosed on the served fact; producer and kind are closed values, never row content.
 var FactBytesBoundExceeded = Event{
 	ID:                 "devhealthfacts.fact_bytes_bound_exceeded",
@@ -4335,6 +4366,8 @@ var All = []Event{
 	TeamBlockersDrivers,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
+	DeficiencyRuleBasisDayAbsent,
+	DeficiencyRuleBasisDayInvalid,
 	FactBytesBoundExceeded,
 	SubjectIDShapeRejected,
 	OwningTeamsTruncated,

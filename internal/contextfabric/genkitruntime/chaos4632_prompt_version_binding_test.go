@@ -105,7 +105,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// superlative. See DefaultSynthesisPromptVersion's own doc comment.
 			// v16 -> v17: the instruction to restate relevant supplied facts as
 			// claimed_facts. See DefaultSynthesisPromptVersion's own doc comment.
-			digest: "3a3c1ea13dc6e381272bfd70d91855608380a7a470d25ec3cbf37a19564dea75",
+			// v26 -> v27: the deficiency rule basis is dated by
+			// rule_basis_as_of_day when present. See DefaultSynthesisPromptVersion's
+			// own doc comment.
+			digest: "1c5d552517489186b9cd19ec0d7c18e782f93d9d8c9d9bc808ebd43957d7a0ee",
 		},
 		{
 			name:    "interpretation model-output schema",
