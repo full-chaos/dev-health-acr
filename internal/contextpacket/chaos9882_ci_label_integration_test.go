@@ -3,6 +3,7 @@ package contextpacket_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
@@ -30,6 +31,17 @@ func TestCIRunLabelOnARealStore(t *testing.T) {
 	} {
 		scopeExec(t, ctx, direct, statement)
 	}
+	edgeNames := map[string]string{
+		"edge-blank":   "   ",
+		"edge-padded":  "\t pad name \n",
+		"edge-long":    strings.Repeat("a", 81),
+		"edge-unicode": strings.Repeat("é", 81),
+		"edge-inner":   "build  and\ttest",
+		"edge-exact":   strings.Repeat("b", 80),
+	}
+	for id, name := range edgeNames {
+		scopeExec(t, ctx, direct, fmt.Sprintf(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id, pipeline_name) VALUES ('%s', '%s', 'success', %s, %s, '%s', '%s')`, scopeRepoID, id, event, synced, scopeOrgA, name))
+	}
 	plan := contextpacket.ReadPlan{OrgID: scopeOrgA, RepoID: scopeRepoID, RepoSlug: scopeRepo}
 	evidence, _, _, err := contextpacket.NewCatalogClickHouseRows(query).EvidenceRows(ctx, plan)
 	if err != nil {
@@ -39,6 +51,11 @@ func TestCIRunLabelOnARealStore(t *testing.T) {
 	for _, ref := range evidence {
 		if ref.Source.EntityType == "ci_pipeline_run" {
 			got[ref.Source.EntityID] = ref.Source.DisplayLabel
+		}
+	}
+	for id, name := range edgeNames {
+		if want := contextpacket.CIRunLabel(name, id); got[id] != want {
+			t.Errorf("run %s display_label = %q, want the shared rule's %q", id, got[id], want)
 		}
 	}
 	want := map[string]string{"run-named": "CI build and test #run-named", "run-bare": "CI run-bare"}
