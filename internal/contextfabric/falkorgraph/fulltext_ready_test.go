@@ -23,6 +23,7 @@ type fulltextReadyScript struct {
 	polls    int
 	queried  bool
 	queryAt  int
+	queryAts []int
 }
 
 func (s *fulltextReadyScript) fake(indexErr error) *fakeConn {
@@ -45,6 +46,7 @@ func (s *fulltextReadyScript) fake(indexErr error) *fakeConn {
 			defer s.mu.Unlock()
 			s.queried = true
 			s.queryAt = s.polls
+			s.queryAts = append(s.queryAts, s.polls)
 			return nil, nil
 		},
 	}
@@ -117,5 +119,18 @@ func TestFulltextQueryRunsWhenTheIndexStatusCannotBeRead(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "status unreadable") || strings.Contains(logs.String(), "connection string") {
 		t.Fatalf("the unreadable-status log is missing or carries the error text:\n%s", logs.String())
+	}
+}
+
+func TestFulltextQueryWaitsAgainWhenTheIndexReturnsToConstructionAfterNewWrites(t *testing.T) {
+	script := &fulltextReadyScript{statuses: []string{"OPERATIONAL", "[Indexing] 3/3: UNDER CONSTRUCTION", "OPERATIONAL"}}
+	adapter := newFakeAdapter(t, script.fake(nil))
+	for i := 0; i < 2; i++ {
+		if _, _, err := adapter.fulltextSearchNodes(context.Background(), "graph", "org-1", "escalation", 10, temporalFilter{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(script.queryAts) != 2 || script.queryAts[0] != 1 || script.queryAts[1] != 3 {
+		t.Fatalf("status reads before each query = %v, want [1 3]: the first query found the index operational, then new writes put it back under construction and the second query must wait again (no memo of an earlier OPERATIONAL)", script.queryAts)
 	}
 }
