@@ -600,6 +600,7 @@ func deficiencyFields() []fieldDecl {
 		declFresh(fStr("rule_computed_at")),
 		fNum("rule_basis_compounding_risk", ""),
 		fStr("rule_basis_severity"),
+		fStr("rule_basis_as_of_day"),
 		fNum("latest_compounding_risk", ""),
 		fStr("latest_severity"),
 		declFresh(fStr("latest_computed_at")),
