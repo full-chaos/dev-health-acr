@@ -1235,12 +1235,18 @@ import (
 // "pull requests without linked work" reason can be given where v239 held it
 // back. An answer saved under v239 can differ.
 //
-// v240 -> v241: a health read no longer marks the whole kind truncated because
+// v240 -> v241: a project a pull request reaches only through explicit_text or
+// heuristic links that a native link covers (by the link's issue, or by the
+// pull request) is no longer served in its project_breakdown, and a project
+// kept by an uncovered fallback link is served at that link's tier. An answer
+// saved under v240 can differ.
+//
+// v241 -> v242: a health read no longer marks the whole kind truncated because
 // one team's daily_health table lost rows to the display cap; the fact names
 // the loss (daily_health_omitted_count) and read_facts marks only that subject
-// truncated, and only when the table is served. An answer saved under v240
+// truncated, and only when the table is served. An answer saved under v241
 // can carry a truncated state for every team of the read.
-const QueryVersion = "devhealthfacts.clickhouse.v241"
+const QueryVersion = "devhealthfacts.clickhouse.v242"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

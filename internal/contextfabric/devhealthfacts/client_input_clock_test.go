@@ -207,6 +207,9 @@ func clockTestSubjectID(kind contextfabric.SubjectKind) (canonicalID, rowID stri
 func clockTestRules() []stringRule {
 	const day = "2026-09-10"
 	return []stringRule{
+		// The pull request project links: key, provider, project id, name, tier, then
+		// the one below-native link "rank|provenance|issue" the row carries.
+		{match: "groupUniqArrayIf(concat(toString(lk.link_rank)", values: []string{"r1:7", "linear", "P1", "Project One", "heuristic", "1|heuristic|item1"}},
 		{match: "SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo", values: []string{"item1", "r1", "repo-one"}},
 		{match: "SELECT toString(repo_id), toString(day), toInt64(commits_count)", values: []string{"r1", day}},
 		{match: "SELECT scope_id, toString(day), toString(severity)", values: []string{"$id", day, "low"}},

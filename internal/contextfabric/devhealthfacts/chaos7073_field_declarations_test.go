@@ -491,7 +491,7 @@ func t4Cases() []t4Case {
 	}})
 	add(t4Case{name: "pull_requests/pull_request_projects", kind: contextfabric.FactPullRequests, subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")}, tables: []fakeTable{
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}}},
-		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:1042", "jira", "P1", "Payments", uint8(3), "native"}}},
+		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:1042", "jira", "P1", "Payments", uint8(3), "native", []string{}}}},
 	}})
 	add(t4Case{name: "pull_requests/project", kind: contextfabric.FactPullRequests, subjects: proj, tables: []fakeTable{
 		{match: "lp.project_key", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1), int64(0)}, {"linear:proj-1", int64(1), int64(1), int64(0), int64(0), int64(1)}}},
