@@ -257,13 +257,13 @@ FROM (
 		concat('r:', toString(repo_id)) AS link_key
 	FROM (
 		SELECT *, unit_size_weight AS effort_value
-		FROM ` + sizedUnits(`SELECT work_unit_id, {org_id:String} AS org_id,
+		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 			argMax(from_ts, computed_at) AS from_ts,
 			argMax(theme_distribution_json, computed_at) AS theme_distribution_json
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
-		GROUP BY work_unit_id`) + `
+		GROUP BY work_unit_id, org_id`) + `
 	)
 	WHERE repo_id IS NOT NULL
 ) AS u
@@ -290,12 +290,12 @@ FROM (
 		concat('r:', toString(repo_id)) AS link_key
 	FROM (
 		SELECT *, unit_size_weight AS effort_value
-		FROM ` + sizedUnits(`SELECT work_unit_id, {org_id:String} AS org_id,
+		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 			argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
-		GROUP BY work_unit_id`) + `
+		GROUP BY work_unit_id, org_id`) + `
 	)
 	WHERE repo_id IS NOT NULL
 ) AS u
@@ -511,12 +511,12 @@ FROM (
         theme_distribution_json['` + contextfabric.ThemeRisk + `'] AS theme_risk
     FROM (
         SELECT *, unit_size_weight AS effort_value
-        FROM ` + sizedUnits(`SELECT work_unit_id, {org_id:String} AS org_id,
+        FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
             argMax(from_ts, computed_at) AS from_ts,
             argMax(theme_distribution_json, computed_at) AS theme_distribution_json
         FROM work_unit_investments
         WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
-        GROUP BY work_unit_id`) + `
+        GROUP BY work_unit_id, org_id`) + `
     )
 )`
 }

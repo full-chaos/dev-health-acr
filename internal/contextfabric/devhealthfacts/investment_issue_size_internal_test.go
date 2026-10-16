@@ -131,3 +131,23 @@ func TestUnitFactNamesItsIssueSize(t *testing.T) {
 		t.Errorf("an unsized unit serves unit_issue_size %v, want 0 (it counts 1 in unit_effort_value)", got)
 	}
 }
+
+// The sized source needs org_id on the folded units. In the SELECT that reads
+// work_unit_investments it must be the table's own column: an alias of the
+// same name there wins over the column in the WHERE and turns the org filter
+// into a constant true, which reads every organization's units.
+func TestProjectFoldsCarryTheOrgColumnNotAnAliasOfIt(t *testing.T) {
+	t.Parallel()
+	for name, statement := range map[string]string{
+		"project roll-up themes": projectRollupRepoThemesStatement(),
+		"project roll-up bugfix": projectRollupRepoBugfixStatement(),
+		"project native values":  projectNativeThemeValuesStatement(),
+	} {
+		if strings.Contains(statement, "{org_id:String} AS org_id") {
+			t.Errorf("%s: aliases org_id beside the org_id filter of work_unit_investments", name)
+		}
+		if !strings.Contains(statement, "GROUP BY work_unit_id, org_id") {
+			t.Errorf("%s: does not carry the table's org_id column through the fold", name)
+		}
+	}
+}
