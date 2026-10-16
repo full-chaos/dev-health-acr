@@ -85,6 +85,8 @@ github.com/full-chaos/dev-health-go v0.23.1-0.20261016165702-95098052a761 h1:W6o
 github.com/full-chaos/dev-health-go v0.23.1-0.20261016165702-95098052a761/go.mod h1:cXWyqVQoIL1IybpHrK7CE1DXDc2oI6SVic6w3GtsPfU=
 github.com/full-chaos/dev-health-go v0.23.1-0.20261016170322-fbc14842a469 h1:diUvFYq+Hyeby2YDC2URLrv938ZLRIj4L8ScXSvn2Ac=
 github.com/full-chaos/dev-health-go v0.23.1-0.20261016170322-fbc14842a469/go.mod h1:cXWyqVQoIL1IybpHrK7CE1DXDc2oI6SVic6w3GtsPfU=
+github.com/full-chaos/dev-health-go v0.23.1-0.20261016173538-121d09a24389 h1:a0WD2Qyy1yopq3yQlVEqy+kjTwEFZzfEf7rV+nUGywg=
+github.com/full-chaos/dev-health-go v0.23.1-0.20261016173538-121d09a24389/go.mod h1:cXWyqVQoIL1IybpHrK7CE1DXDc2oI6SVic6w3GtsPfU=
 github.com/go-faster/city v1.0.1 h1:4WAxSZ3V2Ws4QRDrscLEDcibJY8uf41H6AhXDrNDcGw=
 github.com/go-faster/city v1.0.1/go.mod h1:jKcUJId49qdW3L1qKHH/3wPeUstCVpVSXTM6vO3VcTw=
 github.com/go-faster/errors v0.7.1 h1:MkJTnDoEdi9pDabt1dpWf7AA8/BaSYZqibYyhZ20AYg=

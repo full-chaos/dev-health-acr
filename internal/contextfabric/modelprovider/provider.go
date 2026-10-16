@@ -105,7 +105,7 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 		"provider", contextfabric.SanitizeLogAttr(cfg.Provider), "llm_kind", contextfabric.SanitizeLogAttr(string(llmKind)),
 		"model", contextfabric.SanitizeLogAttr(cfg.Model), "fallback_model", contextfabric.SanitizeLogAttr(cfg.FallbackModel),
 		"phrasing_model", contextfabric.SanitizeLogAttr(cfg.PhrasingModel), "temperature", contextfabric.SanitizeLogAttr("omitted"),
-		"max_output_tokens", genkitruntime.DefaultMaxOutputTokens)
+		"output_cap", contextfabric.SanitizeLogAttr("omitted"))
 	return primary, nil
 }
 
@@ -123,8 +123,9 @@ const llmKind = llm.KindLocal
 // model, all on cfg's endpoint and credential. The configured model is
 // always passed explicitly, so the package default never applies.
 //
-// Temperature is omitted: GPT-5 models refuse any temperature but their
-// default with a 400, and the Genkit plugin never sent one. The HTTP client
+// Temperature and the output cap are omitted, as the Genkit plugin omitted
+// them: GPT-5 models refuse any temperature but their default with a 400,
+// and a fixed cap is a 400 on a model whose context window is not above it. The HTTP client
 // times out with the per-attempt bound; the attempt's own context deadline
 // still governs first.
 func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, error) {
@@ -147,6 +148,7 @@ func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, erro
 			Model:       model,
 			HTTPClient:  newModelHTTPClient(cfg),
 			Temperature: llm.TemperatureOmit,
+			OutputCap:   llm.OutputCapOmit,
 		})
 		if err != nil {
 			return nil, err

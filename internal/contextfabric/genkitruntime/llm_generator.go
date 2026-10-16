@@ -14,10 +14,9 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
-// DefaultMaxOutputTokens is the output cap every model call asks for. The
-// Genkit transport sent no cap at all, so the model's own maximum applied; a
-// reasoning model counts its reasoning against this cap, and the shared
-// client's own floor (4096) can cut a synthesis answer short.
+// DefaultMaxOutputTokens is the output cap a model call asks for where the
+// client sends one (the Anthropic Messages API requires a cap). The Chat
+// Completions clients are built to send none, as the Genkit transport did.
 const DefaultMaxOutputTokens = 32768
 
 // outputFormatName is the json_schema name the Genkit OpenAI-compatible

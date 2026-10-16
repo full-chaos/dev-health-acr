@@ -102,8 +102,7 @@ func TestConfiguredModelWinsOverThePackageDefault(t *testing.T) {
 // TestInterpretRequestKeepsTheGenkitWireShape drives the real entry point
 // and pins the Chat Completions body the Genkit compat_oai plugin sent, plus
 // what the shared client changes on purpose: no temperature (GPT-5 models
-// refuse one), the sample seed as an exact integer, and an explicit output
-// cap.
+// refuse one), the sample seed as an exact integer, and no output cap.
 func TestInterpretRequestKeepsTheGenkitWireShape(t *testing.T) {
 	recorder := &bodyRecorder{}
 	cfg := testConfig(&providerServer{baseURL: recorder.server(t, validInterpretationJSON)})
@@ -126,8 +125,8 @@ func TestInterpretRequestKeepsTheGenkitWireShape(t *testing.T) {
 	if _, err := seed.Int64(); err != nil {
 		t.Fatalf("seed %s is not an int64: %v", seed, err)
 	}
-	if body["max_completion_tokens"] != json.Number("32768") || genkitruntime.DefaultMaxOutputTokens != 32768 {
-		t.Errorf("max_completion_tokens = %v", body["max_completion_tokens"])
+	if _, present := body["max_completion_tokens"]; present {
+		t.Errorf("max_completion_tokens = %v, want none (the Genkit transport sent no cap)", body["max_completion_tokens"])
 	}
 	messages, _ := body["messages"].([]any)
 	if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "user" {
