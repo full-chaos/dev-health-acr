@@ -225,7 +225,7 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 	}
 	for _, want := range []string{
 		"name: race (devhealthsource, isolated scope)",
-		"needs: mirror-preflight",
+		"- mirror-preflight",
 		"TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX",
 		"isolated-dedicated devhealthsource",
 		"scripts/ci/run-isolated-budget.sh",
@@ -250,7 +250,7 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 	}
 	for _, want := range []string{
 		"name: race (devhealthsource heavy, isolated scope)",
-		"needs: mirror-preflight",
+		"- mirror-preflight",
 		"isolated-dedicated devhealthsource",
 		"race-split.sh devhealthsource race-heavy)",
 		"race-split.sh devhealthsource race-partition",
@@ -272,7 +272,7 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 	}
 	for _, want := range []string{
 		"name: race (devhealthsource mid, isolated scope)",
-		"needs: mirror-preflight",
+		"- mirror-preflight",
 		"isolated-dedicated devhealthsource",
 		"race-split.sh devhealthsource race-mid)",
 	} {
