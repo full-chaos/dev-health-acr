@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -196,11 +197,26 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		rejectedCount += rejected
 	}
 
+	// A daily_health display-cap cut is disclosed on the fact that lost rows
+	// (daily_health_omitted_count). When it is the ONLY reason for truncation,
+	// the kind is still truncated for the engine, but the truncation is local
+	// to those subjects: their facts say truncated and every other fact says
+	// available.
+	subjectLocal := false
+	if dailyCut := factsWithDailyHealthCut(facts); dailyCut > 0 {
+		subjectLocal = !truncated
+		truncated = true
+		if subjectLocal {
+			markSubjectLocalTruncation(facts)
+		}
+		slog.DebugContext(ctx, "health daily_health display cap cut rows", "org_id", contextfabric.SanitizeLogAttr(orgID), "subjects_cut", dailyCut, "subjects", len(facts), "subject_local", subjectLocal)
+	}
+
 	state, retentionReason := timeBound.retentionState(len(facts))
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, TruncationSubjectLocal: subjectLocal}
 	applyTeamsOwningNothing(&result, query.Subjects, len(teamIDs), teamsOwningNothingWithoutData(teamIDs, teamBySubject, teamOwned, facts, nil))
 	return result, nil
 }
@@ -1114,4 +1130,29 @@ func activeTeamScopeFor(scope, column string) string {
 		return ""
 	}
 	return " AND " + devhealthschema.ActiveTeamScopePredicate(column)
+}
+
+func factHasDailyHealthCut(fact contextfabric.CanonicalFact) bool {
+	_, cut := fact.Fields["daily_health_omitted_count"]
+	return cut
+}
+
+func factsWithDailyHealthCut(facts []contextfabric.CanonicalFact) int {
+	cut := 0
+	for _, fact := range facts {
+		if factHasDailyHealthCut(fact) {
+			cut++
+		}
+	}
+	return cut
+}
+
+func markSubjectLocalTruncation(facts []contextfabric.CanonicalFact) {
+	for index := range facts {
+		if factHasDailyHealthCut(facts[index]) {
+			facts[index].SourceState = contextfabric.SourceTruncated
+		} else {
+			facts[index].SourceState = contextfabric.SourceAvailable
+		}
+	}
 }
