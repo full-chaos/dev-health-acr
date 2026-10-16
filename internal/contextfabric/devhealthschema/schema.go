@@ -622,6 +622,17 @@ var ProductionColumns = map[string][]Column{
 		{Name: "superseded_work_unit_id", Type: "String"},
 		{Name: "superseded_at", Type: "DateTime64(9, 'UTC')"},
 	},
+	// work_unit_issue_size (ops migration 130, CHAOS-9619): the issue size of
+	// each work unit, the sum of its issues' positive story points. Read by
+	// the investment mix through readers.LatestWorkUnitIssueSizeSource
+	// (argMax over computed_at per unit); sized_issue_count/issue_count/
+	// categorization_run_id are not read and omitted.
+	"work_unit_issue_size": {
+		{Name: "org_id", Type: "String"},
+		{Name: "work_unit_id", Type: "String"},
+		{Name: "issue_size", Type: "Float64"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+	},
 	"work_item_team_attributions": {
 		{Name: "org_id", Type: "String"},
 		{Name: "repo_id", Type: "UUID"},
@@ -832,6 +843,7 @@ var EngineFull = map[string]string{
 	"work_unit_membership":      "ReplacingMergeTree(computed_at) ORDER BY (org_id, node_type, node_id, category_kind, category, run_id) SETTINGS index_granularity = 8192",
 	"work_unit_membership_runs": "ReplacingMergeTree(completed_at) ORDER BY (org_id, run_id) SETTINGS index_granularity = 8192",
 	"work_unit_supersessions":   "ReplacingMergeTree(superseded_at) ORDER BY (org_id, superseded_work_unit_id) SETTINGS index_granularity = 8192",
+	"work_unit_issue_size":      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
 }
 
 // AcceptsColumnType reports whether typ is the canonical type of the column or

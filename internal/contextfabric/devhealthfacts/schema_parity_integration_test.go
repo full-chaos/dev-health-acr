@@ -53,7 +53,7 @@ var factSchemaTables = []string{
 	// otherwise never parity-tested against production typing).
 	"work_item_metrics_daily", "work_item_measure_capability", "ic_landscape_rolling_30d", "projects", "team_project_ownership", "teams",
 	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source.
-	"work_unit_investments", "work_item_team_attributions", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
+	"work_unit_investments", "work_unit_issue_size", "work_item_team_attributions", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 	// The shared work-item authorization relation joins the project
 	// ownership chain and the issue-to-pull-request links into every
 	// work-item reader's statement.

@@ -34,7 +34,7 @@ func readOrganizationInvestment(t *testing.T, client *fakeClient, principal stor
 // repositories, resolved effort, unresolved effort, earliest start.
 func organizationMixTable() []fakeTable {
 	return []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{"feature_delivery": 30, "operational": 50, "maintenance": 10, "quality": 6, "risk": 4}, 5.0, uint64(9), uint64(3), 100.0, 25.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{map[string]float64{"feature_delivery": 30, "operational": 50, "maintenance": 10, "quality": 6, "risk": 4}, 5.0, uint64(9), uint64(7), uint64(3), 100.0, 25.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
 	}}}
 }
 
@@ -194,7 +194,7 @@ func TestInvestmentOrganizationNamedByBothSpellingsIsOneFact(t *testing.T) {
 func TestInvestmentOrganizationWithOnlyUnattributedEffortDisclosesItWithoutAMix(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{}, 0.0, uint64(0), uint64(0), 0.0, 10.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), uint64(0), 0.0, 10.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
 	}}}}
 	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
 	if len(result.Facts) != 1 {
@@ -220,7 +220,7 @@ func TestInvestmentOrganizationWithOnlyUnattributedEffortDisclosesItWithoutAMix(
 func TestInvestmentOrganizationWithNothingUnattributedServesTheMixWithAZeroShare(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{"feature_delivery": 4, "risk": 6}, 0.0, uint64(2), uint64(1), 10.0, 0.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{map[string]float64{"feature_delivery": 4, "risk": 6}, 0.0, uint64(2), uint64(1), uint64(1), 10.0, 0.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
 	}}}}
 	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
 	if len(result.Facts) != 1 {

@@ -456,7 +456,7 @@ func newLinkedProdShapeStore(t *testing.T, ctx context.Context, orgID string, sh
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-	tables := []string{"work_unit_investments", "work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "projects", "repos", "team_repo_ownership"}
+	tables := []string{"work_unit_investments", "work_unit_issue_size", "work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "projects", "repos", "team_repo_ownership"}
 	t.Cleanup(func() {
 		for _, table := range tables {
 			// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.

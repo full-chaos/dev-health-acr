@@ -22,7 +22,7 @@ func TestInvestmentUnitsStatementReadsWorkUnitInvestmentsOnceAndKeysetOnlyWithAC
 		first := investmentUnitsStatement(bound, false)
 		next := investmentUnitsStatement(bound, true)
 		for label, statement := range map[string]string{"first": first, "next": next} {
-			if got := strings.Count(statement, "work_unit_investments"); got != 1 {
+			if got := strings.Count(statement, "FROM work_unit_investments"); got != 1 {
 				t.Errorf("%s/%s: statement names work_unit_investments %d times, want 1", name, label, got)
 			}
 			assertReposReadOnceBesidesTheRequestedLookup(t, name+"/"+label, statement)

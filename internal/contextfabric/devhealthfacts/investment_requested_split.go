@@ -141,38 +141,39 @@ WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(` + linked 
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
 	}
 	return head + `
-	effort_value, theme_distribution_json, bugfix_share, span_from` + rowCols + `
+	effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from` + rowCols + `
 FROM (
 	SELECT work_unit_id,
 		any(effort_value) AS effort_value,
+		any(unit_issue_size) AS unit_issue_size,
 		any(theme_distribution_json) AS theme_distribution_json,
 		any(bugfix_share) AS bugfix_share,
 		any(span_from) AS span_from,
 		any(wins) AS wins,` + unitAgg + `
 		` + pairs + `
 	FROM (
-		SELECT parsed.work_unit_id AS work_unit_id, parsed.effort_value AS effort_value,
+		SELECT parsed.work_unit_id AS work_unit_id, parsed.effort_value AS effort_value, parsed.unit_issue_size AS unit_issue_size,
 			parsed.theme_distribution_json AS theme_distribution_json, parsed.bugfix_share AS bugfix_share,
 			parsed.span_from AS span_from, parsed.from_ts AS from_ts, parsed.to_ts AS to_ts, parsed.wins AS wins,
 			parsed.pr_number AS pr_number, parsed.ref_text AS ref_text,
 			ifNull(if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')), '') AS ref_repo
 		FROM (
-			SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins,
+			SELECT work_unit_id, effort_value, unit_issue_size, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins,
 				ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 			FROM (
 				SELECT work_unit_id, latest.1 AS repo_id, latest.2 AS from_ts, latest.3 AS to_ts, latest.4 AS effort_value,
-					latest.5 AS theme_distribution_json, latest.6 AS bugfix_share, latest.7 AS pr_refs,
+					latest.5 AS theme_distribution_json, latest.6 AS bugfix_share, latest.7 AS pr_refs, latest.8 AS unit_issue_size,
 					` + wins + ` AS wins
 				FROM (
 					SELECT work_unit_id,
-						argMaxIf(tuple(repo_id, from_ts, to_ts, effort_value, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest
+						argMaxIf(tuple(repo_id, from_ts, to_ts, effort_value, theme_distribution_json, unit_bugfix_share, pr_refs, unit_issue_size), computed_at, reaches) AS latest
 					FROM (
-						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, toFloat64(1) AS effort_value, theme_distribution_json,
+						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, unit_size_weight AS effort_value, unit_issue_size, theme_distribution_json,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS unit_bugfix_share,
 							` + referenceKeys + `,
 							` + reaches + ` AS reaches,
 							if(reaches, ` + prRefsExpression + `, []) AS pr_refs
-						FROM work_unit_investments
+						FROM ` + sizedWorkUnitInvestments + `
 						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
 					)
 					GROUP BY work_unit_id

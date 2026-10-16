@@ -46,7 +46,7 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership", "repos",
-		"work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
+		"work_unit_investments", "work_unit_issue_size", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 		"work_item_team_attributions",
 		"work_items", "project_membership_transitions",
 	) {

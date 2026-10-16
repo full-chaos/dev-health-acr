@@ -78,7 +78,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"repository_name", "required_child_work_item_id", "required_child_work_item_ref", "rule_basis_severity",
 		"rule_computed_at", "rule_id", "rule_version", "scope", "scope_id", "scope_name", "severity", "severity_as_of",
 		"status_since", "success_criterion", "team_id", "team_name", "title", "unit_from", "unit_to", "window_end",
-		"window_start", "work_scope_id", "work_unit_id",
+		"window_start", "work_scope_id", "work_unit_id", "sizing_note",
 		"latest_sprint_end", "next_sprint_end", "state_source", "target_date", "target_date_provider",
 	} {
 		classes[name] = StringFieldText
@@ -87,7 +87,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"archived_items", "attribution", "closed_alert_basis", "collection_basis", "complexity_basis", "hotspot_basis", "secret_scanning_basis", "attribution_basis", "basis", "blocker_status_basis", "change_failure_link_tier",
 		"change_failure_rate_state", "change_failure_unknown_reason", "change_failure_evidence_basis", "change_failure_status_failed_deployments_basis", "failed_deployments_basis", "last_failure_stage", "daily_flow_omitted_reason", "incident_attribution_basis", "investment_mix_source",
 		"latest_score_unavailable_reason", "latest_severity_unavailable_reason", "latest_unavailable_reason", "link_tier",
-		"member_kind", "mix_source", "oldest_blocked_age_basis", "oldest_blocked_age_unavailable_reason", "outcome", "window", "p50_basis", "p50_unavailable_reason", "population_window", "pull_request_link_basis", "reach_basis",
+		"member_kind", "measure", "mix_source", "oldest_blocked_age_basis", "oldest_blocked_age_unavailable_reason", "outcome", "window", "p50_basis", "p50_unavailable_reason", "population_window", "pull_request_link_basis", "reach_basis",
 		"relationship_type", "repository_link_basis", "repository_tables_basis", "rollup_basis", "commit_counts_basis",
 		"rule_basis_unavailable_reason", "severity_basis", "severity_unavailable_reason", "signal", "source", "state",
 		"status", "status_basis", "status_provenance", "status_since_basis", "story_points_completed_unavailable_reason",

@@ -49,6 +49,7 @@ type unitRow struct {
 	RepoID         string
 	Share          float64
 	Effort         float64
+	IssueSize      float64
 	Theme          map[string]float64
 	From, To       time.Time
 	PRs            []string
@@ -61,6 +62,10 @@ type unitRow struct {
 	// or a repository, whose statement never selects those rows).
 	ScopeUnattributedTotal float64
 	ScopeUnattributedRows  uint64
+	// ScopeDistinctUnits and ScopeSizedUnits count the distinct work units of
+	// the whole listing scope and those that carry an issue size (D6027).
+	ScopeDistinctUnits uint64
+	ScopeSizedUnits    uint64
 }
 
 const investmentUnitAttributionUnattributed = contextfabric.InvestmentUnitAttributionUnattributed
@@ -106,7 +111,7 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
 			arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs,
-			effort_value, theme_distribution_json, from_ts, to_ts, prs
+			effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs
 		FROM (
 ` + core + `		)
 	)
@@ -114,10 +119,11 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 	if !organization {
 		rows = "\n" + requestedSplitRows(memberships, false, scope, true) + "\t)"
 	}
-	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows
+	statement := `SELECT work_unit_id, repo_uuid, share, effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs, scope_total, scope_units, scope_unattributed_total, scope_unattributed_rows, scope_distinct_units, scope_sized_units
 FROM (
-	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
+	SELECT work_unit_id, repo_uuid, c / n * effort_value AS share, effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs, unresolved_n, unresolved_refs,
 		sum(c / n * effort_value) OVER () AS scope_total, count() OVER () AS scope_units,
+		uniqExact(work_unit_id) OVER () AS scope_distinct_units, uniqExactIf(work_unit_id, unit_issue_size > 0) OVER () AS scope_sized_units,
 		sumIf(c / n * effort_value, repo_uuid = '') OVER () AS scope_unattributed_total, countIf(repo_uuid = '') OVER () AS scope_unattributed_rows
 	FROM (` + rows + `
 )` + keyset + `
@@ -200,7 +206,7 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 		}
 		scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, reader, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
 			var r unitRow
-			if err := row.Scan(&r.WorkUnitID, &r.RepoID, &r.Share, &r.Effort, &r.Theme, &r.From, &r.To, &r.PRs, &r.UnresolvedN, &r.UnresolvedRefs, &r.ScopeTotal, &r.ScopeUnits, &r.ScopeUnattributedTotal, &r.ScopeUnattributedRows); err != nil {
+			if err := row.Scan(&r.WorkUnitID, &r.RepoID, &r.Share, &r.Effort, &r.IssueSize, &r.Theme, &r.From, &r.To, &r.PRs, &r.UnresolvedN, &r.UnresolvedRefs, &r.ScopeTotal, &r.ScopeUnits, &r.ScopeUnattributedTotal, &r.ScopeUnattributedRows, &r.ScopeDistinctUnits, &r.ScopeSizedUnits); err != nil {
 				return err
 			}
 			r.PRs = withoutEmpty(r.PRs)
@@ -236,6 +242,7 @@ func (p *InvestmentProvider) readInvestmentUnits(ctx context.Context, orgID stri
 	if len(rows) > 0 {
 		page["scope_share_total"] = contextfabric.NumberFactValue(rows[0].ScopeTotal)
 		page["scope_unit_rows"] = contextfabric.IntegerFactValue(int64(rows[0].ScopeUnits))
+		investmentSizingFields(page, rows[0].ScopeTotal, int64(rows[0].ScopeDistinctUnits), int64(rows[0].ScopeSizedUnits))
 		if organization {
 			page["scope_unattributed_total"] = contextfabric.NumberFactValue(rows[0].ScopeUnattributedTotal)
 			page["scope_unattributed_rows"] = contextfabric.IntegerFactValue(int64(rows[0].ScopeUnattributedRows))
@@ -271,6 +278,7 @@ func unitFact(subject contextfabric.SubjectRef, r unitRow, orgID string) context
 		"unit_to":                 contextfabric.StringFactValue(r.To.UTC().Format(time.RFC3339)),
 		"share_in_scope":          contextfabric.NumberFactValue(r.Share),
 		"unit_effort_value":       contextfabric.NumberFactValue(r.Effort),
+		"unit_issue_size":         contextfabric.NumberFactValue(r.IssueSize),
 		"unit_pull_request_count": contextfabric.IntegerFactValue(int64(len(r.PRs))),
 		"unit_refs_unresolved":    contextfabric.IntegerFactValue(int64(r.UnresolvedN)),
 		"unit_mix_source":         contextfabric.StringFactValue(repoMixSource),
