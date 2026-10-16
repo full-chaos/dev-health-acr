@@ -18,10 +18,10 @@ func TestRuntimeConfigPropagatesLogger(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 	cfg := Config{Provider: "test-provider", Model: "test-model", Logger: logger}
 
-	if got := runtimeConfig(nil, cfg, cfg.Model, nil); got.Logger != logger {
+	if got := runtimeConfig(cfg, cfg.Model, nil); got.Logger != logger {
 		t.Fatalf("runtimeConfig().Logger = %#v, want the configured logger", got.Logger)
 	}
-	if got := runtimeConfigWithPhrasing(nil, cfg, cfg.Model, nil); got.Logger != logger {
+	if got := runtimeConfigWithPhrasing(cfg, cfg.Model, nil); got.Logger != logger {
 		t.Fatalf("runtimeConfigWithPhrasing().Logger = %#v, want the configured logger", got.Logger)
 	}
 }
@@ -33,7 +33,7 @@ func TestRuntimeConfigPropagatesLogger(t *testing.T) {
 // package-internal default silently substituted here.
 func TestRuntimeConfigLeavesLoggerNilWhenConfigDoesNotSetIt(t *testing.T) {
 	cfg := Config{Provider: "test-provider", Model: "test-model"}
-	if got := runtimeConfig(nil, cfg, cfg.Model, nil); got.Logger != nil {
+	if got := runtimeConfig(cfg, cfg.Model, nil); got.Logger != nil {
 		t.Fatalf("runtimeConfig().Logger = %#v, want nil", got.Logger)
 	}
 }

@@ -19,10 +19,10 @@ func TestRuntimeConfigPropagatesTelemetry(t *testing.T) {
 	telemetry := contextfabric.NewSlogEngineTelemetry(nil)
 	cfg := Config{Provider: "test-provider", Model: "test-model", Telemetry: telemetry}
 
-	if got := runtimeConfig(nil, cfg, cfg.Model, nil); got.Telemetry != telemetry {
+	if got := runtimeConfig(cfg, cfg.Model, nil); got.Telemetry != telemetry {
 		t.Fatalf("runtimeConfig().Telemetry = %#v, want %#v", got.Telemetry, telemetry)
 	}
-	if got := runtimeConfigWithPhrasing(nil, cfg, cfg.Model, nil); got.Telemetry != telemetry {
+	if got := runtimeConfigWithPhrasing(cfg, cfg.Model, nil); got.Telemetry != telemetry {
 		t.Fatalf("runtimeConfigWithPhrasing().Telemetry = %#v, want %#v", got.Telemetry, telemetry)
 	}
 }
@@ -34,7 +34,7 @@ func TestRuntimeConfigPropagatesTelemetry(t *testing.T) {
 // default silently substituted in.
 func TestRuntimeConfigLeavesTelemetryNilWhenConfigDoesNotSetIt(t *testing.T) {
 	cfg := Config{Provider: "test-provider", Model: "test-model"}
-	if got := runtimeConfig(nil, cfg, cfg.Model, nil); got.Telemetry != nil {
+	if got := runtimeConfig(cfg, cfg.Model, nil); got.Telemetry != nil {
 		t.Fatalf("runtimeConfig().Telemetry = %#v, want nil", got.Telemetry)
 	}
 }

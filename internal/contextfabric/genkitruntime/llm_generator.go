@@ -1,0 +1,295 @@
+package genkitruntime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+
+	"github.com/firebase/genkit/go/core"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-go/llm"
+	"github.com/xeipuuv/gojsonschema"
+)
+
+// DefaultMaxOutputTokens is the output cap a model call asks for where the
+// client sends one (the Anthropic Messages API requires a cap). The Chat
+// Completions clients are built to send none, as the Genkit transport did.
+const DefaultMaxOutputTokens = 32768
+
+// outputFormatName is the json_schema name the Genkit OpenAI-compatible
+// plugin always sent; kept so the wire request does not change.
+const outputFormatName = "output"
+
+// cutStopReasons are the stop reasons each client reports for a reply cut at
+// its output cap (Chat Completions, Messages, Responses).
+var cutStopReasons = map[string]bool{"length": true, "max_tokens": true, "max_output_tokens": true}
+
+// errOutputSchemaMismatch is the shared-client path's twin of Genkit's own
+// schema-mismatch error: a reply that is not JSON, or JSON that fails the
+// output schema. classifyModelError maps it to ErrModelOutput, as it maps
+// Genkit's.
+var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
+
+const (
+	llmCallFailedMessage  = "context fabric model call failed"
+	llmReplyCutMessage    = "context fabric model reply hit the output cap"
+	llmDrawRejectedReason = "context fabric model reply failed the output schema"
+)
+
+// outputSchema is one output type's JSON Schema: the map sent as the strict
+// response format, and the same document compiled for the local check Genkit
+// ran after every call.
+type outputSchema struct {
+	wire     map[string]any
+	compiled *gojsonschema.Schema
+}
+
+func newOutputSchema(value any) (outputSchema, error) {
+	wire := core.InferSchemaMap(value)
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		return outputSchema{}, fmt.Errorf("encode output schema: %w", err)
+	}
+	compiled, err := gojsonschema.NewSchema(gojsonschema.NewBytesLoader(raw))
+	if err != nil {
+		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
+	}
+	return outputSchema{wire: wire, compiled: compiled}, nil
+}
+
+// LLMClients maps each model a runtime calls (Config.Model, and
+// Config.PhrasingModel when it differs) to its shared-package client.
+type LLMClients map[string]llm.Provider
+
+type llmGenerator struct {
+	clients         LLMClients
+	interpretation  outputSchema
+	synthesis       outputSchema
+	phrasing        outputSchema
+	maxOutputTokens int
+	logger          *slog.Logger
+}
+
+// NewWithLLM builds a Runtime whose model calls go through the shared
+// dev-health-go llm clients instead of a Genkit instance. config.Genkit is
+// not used; ModelRef and PhrasingModelRef must be left empty (they default to
+// the bare model ids, which are the clients' keys).
+func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
+	if len(clients) == 0 {
+		return nil, errors.New("llm clients are required")
+	}
+	for model, client := range clients {
+		if client == nil {
+			return nil, fmt.Errorf("llm client for model %q is nil", model)
+		}
+		if client.Model() != model {
+			return nil, fmt.Errorf("llm client keyed %q calls model %q", model, client.Model())
+		}
+	}
+	gen := llmGenerator{clients: clients, maxOutputTokens: config.MaxOutputTokens, logger: config.Logger}
+	if gen.maxOutputTokens == 0 {
+		gen.maxOutputTokens = DefaultMaxOutputTokens
+	}
+	if gen.logger == nil {
+		gen.logger = slog.Default()
+	}
+	var err error
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+		return nil, err
+	}
+	if gen.synthesis, err = newOutputSchema(synthesisOutput{}); err != nil {
+		return nil, err
+	}
+	if gen.phrasing, err = newOutputSchema(phrasingOutput{}); err != nil {
+		return nil, err
+	}
+	runtime, err := newWithGenerator(config, gen)
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range []string{runtime.config.ModelRef, runtime.config.PhrasingModelRef} {
+		if _, ok := clients[model]; !ok {
+			return nil, fmt.Errorf("no llm client for model %q", model)
+		}
+	}
+	return runtime, nil
+}
+
+// seedOf reads the decoding seed out of generationRequest.Config, which
+// carries it in the shape chaos4631InterpretDecodingConfig builds.
+func seedOf(config any) *int64 {
+	values, ok := config.(map[string]any)
+	if !ok {
+		return nil
+	}
+	seed, ok := values["seed"].(int64)
+	if !ok {
+		return nil
+	}
+	return &seed
+}
+
+// complete runs one call and returns the reply text the output check reads:
+// the compact JSON, or, when the shared client's JSON gate refused the reply,
+// the reply as written (Genkit's own check unwraps a fenced reply, so the
+// same recovery has to see it).
+func (g llmGenerator) complete(ctx context.Context, operation string, request generationRequest, schema outputSchema) (string, contextfabric.ModelUsage, error) {
+	client, ok := g.clients[request.Model]
+	if !ok {
+		return "", contextfabric.ModelUsage{}, fmt.Errorf("%w: no client for the requested model", contextfabric.ErrModelUnavailable)
+	}
+	result, err := client.Complete(ctx, llm.Request{
+		System:          request.System,
+		Prompt:          request.Prompt,
+		Format:          &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire},
+		MaxOutputTokens: g.maxOutputTokens,
+		Seed:            seedOf(request.Config),
+	})
+	if err != nil {
+		class, _ := llm.ClassOf(err)
+		g.logger.DebugContext(ctx, llmCallFailedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "error_class", contextfabric.SanitizeLogAttr(string(class)))
+		return "", contextfabric.ModelUsage{}, err
+	}
+	if cutStopReasons[result.StopReason] {
+		outputTokens := 0
+		if result.Usage.OutputTokens != nil {
+			outputTokens = *result.Usage.OutputTokens
+		}
+		g.logger.DebugContext(ctx, llmReplyCutMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "stop_reason", contextfabric.SanitizeLogAttr(result.StopReason),
+			"output_tokens", outputTokens, "max_output_tokens", g.maxOutputTokens)
+	}
+	usage := llmUsage(result.Usage)
+	if result.Text != "" {
+		return result.Text, usage, nil
+	}
+	return result.Unparsed, usage, nil
+}
+
+func llmUsage(usage llm.Usage) contextfabric.ModelUsage {
+	var out contextfabric.ModelUsage
+	if usage.InputTokens != nil {
+		out.InputTokens = *usage.InputTokens
+	}
+	if usage.OutputTokens != nil {
+		out.OutputTokens = *usage.OutputTokens
+	}
+	out.TotalTokens = out.InputTokens + out.OutputTokens
+	return out
+}
+
+// check is Genkit's ParseMessage for a schema-bound call: unwrap a fenced
+// reply, require JSON, validate it against the output schema.
+func (g llmGenerator) check(ctx context.Context, operation, text string, schema outputSchema) (string, error) {
+	candidate := extractGenkitJSON(text)
+	reason := ""
+	switch {
+	case candidate == "":
+		reason = "empty"
+	case !json.Valid([]byte(candidate)):
+		reason = "not_json"
+	default:
+		result, err := schema.compiled.Validate(gojsonschema.NewStringLoader(candidate))
+		if err != nil {
+			reason = "not_json"
+		} else if !result.Valid() {
+			reason = "schema"
+		}
+	}
+	if reason == "" {
+		return candidate, nil
+	}
+	g.logger.DebugContext(ctx, llmDrawRejectedReason, "operation", contextfabric.SanitizeLogAttr(operation),
+		"reason", contextfabric.SanitizeLogAttr(reason), "reply_bytes", len(text))
+	return candidate, fmt.Errorf("%w: %s", errOutputSchemaMismatch, reason)
+}
+
+func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	text, usage, err := g.complete(ctx, "interpret", request, g.interpretation)
+	if err != nil {
+		return interpretationOutput{}, contextfabric.ModelUsage{}, err
+	}
+	candidate, checkErr := g.check(ctx, "interpret", text, g.interpretation)
+	var output interpretationOutput
+	decodeErr := json.Unmarshal([]byte(candidate), &output)
+	if checkErr != nil {
+		rejection := &decodeRejection{cause: checkErr}
+		if decodeErr == nil {
+			rejection.output, rejection.parsed = output, true
+		}
+		return rejection.output, usage, rejection
+	}
+	if decodeErr != nil {
+		return interpretationOutput{}, usage, &decodeRejection{cause: fmt.Errorf("%w: decode", errOutputSchemaMismatch)}
+	}
+	return output, usage, nil
+}
+
+func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	text, usage, err := g.complete(ctx, "synthesize", request, g.synthesis)
+	if err != nil {
+		return synthesisOutput{}, contextfabric.ModelUsage{}, err
+	}
+	candidate, checkErr := g.check(ctx, "synthesize", text, g.synthesis)
+	var output synthesisOutput
+	decodeErr := json.Unmarshal([]byte(candidate), &output)
+	if checkErr == nil && decodeErr != nil {
+		checkErr = fmt.Errorf("%w: decode", errOutputSchemaMismatch)
+	}
+	if checkErr != nil {
+		rejection := &decodeSynthesisRejection{cause: classifyModelError(checkErr), digest: contextfabric.DigestModelValue([]byte(text))}
+		if decodeErr == nil {
+			rejection.output, rejection.parsed = output, true
+		}
+		return rejection.output, usage, rejection
+	}
+	return output, usage, nil
+}
+
+func (g llmGenerator) Phrase(ctx context.Context, request generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	text, usage, err := g.complete(ctx, "phrase", request, g.phrasing)
+	if err != nil {
+		return phrasingOutput{}, contextfabric.ModelUsage{}, err
+	}
+	candidate, checkErr := g.check(ctx, "phrase", text, g.phrasing)
+	if checkErr != nil {
+		return phrasingOutput{}, usage, checkErr
+	}
+	var output phrasingOutput
+	if err := json.Unmarshal([]byte(candidate), &output); err != nil {
+		return phrasingOutput{}, usage, fmt.Errorf("%w: decode", errOutputSchemaMismatch)
+	}
+	return output, usage, nil
+}
+
+// classifyLLMError maps the shared client's errors to the model runtime
+// sentinels the way the Genkit transport's were mapped: an HTTP 429 is rate
+// limited whatever its body says (the client's class calls an
+// insufficient_quota 429 auth), and every other response status is
+// unavailable. Only the class and status reach the message: the client's
+// errors are already sanitized, and none of its text is forwarded.
+func classifyLLMError(err error) (error, bool) {
+	var typed *llm.Error
+	if !errors.As(err, &typed) {
+		return nil, false
+	}
+	class, ok := llm.ClassOf(err)
+	if !ok {
+		return nil, false
+	}
+	if status := typed.StatusCode(); status == http.StatusTooManyRequests {
+		return fmt.Errorf("%w: provider status %d", contextfabric.ErrModelRateLimited, status), true
+	}
+	switch class {
+	case llm.ClassRateLimit:
+		return fmt.Errorf("%w: provider class %s", contextfabric.ErrModelRateLimited, class), true
+	case llm.ClassOutput:
+		return fmt.Errorf("%w: provider class %s", contextfabric.ErrModelOutput, class), true
+	default:
+		return fmt.Errorf("%w: provider class %s", contextfabric.ErrModelUnavailable, class), true
+	}
+}

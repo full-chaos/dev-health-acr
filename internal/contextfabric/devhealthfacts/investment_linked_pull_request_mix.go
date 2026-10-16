@@ -123,7 +123,7 @@ func (p *InvestmentProvider) readLinkedPullRequestSet(ctx context.Context, orgID
 		return nil, nil, nil, err
 	}
 	kept, dropped := dropCoveredLinks(links, covered)
-	slog.InfoContext(ctx, "devhealthfacts.team_linked_mix_native_first", "outcome", contextfabric.SanitizeLogAttr(nativeFirstOutcome(links, dropped)), "link_rows", len(links), "fallback_rows", fallbackRows(links), "dropped_rows", dropped, "native_cover_issues", len(covered.issues), "native_cover_pull_requests", len(covered.pullRequests))
+	slog.InfoContext(ctx, "devhealthfacts.team_linked_mix_native_first", append([]any{"outcome", contextfabric.SanitizeLogAttr(nativeFirstOutcome(links, dropped)), "link_rows", len(links), "fallback_rows", fallbackRows(links), "dropped_rows", dropped, "native_cover_issues", len(covered.issues), "native_cover_pull_requests", len(covered.pullRequests)}, requestIDLogAttrs(ctx)...)...)
 	return kept.repos(), kept.numbers(), kept.teams(), nil
 }
 
@@ -186,7 +186,7 @@ func (p *InvestmentProvider) readLinkedPullRequestMixRows(ctx context.Context, o
 		if len(repos) == 0 {
 			outcome = "empty_set_mix_skipped"
 		}
-		slog.InfoContext(ctx, "devhealthfacts.team_linked_mix_set", "outcome", contextfabric.SanitizeLogAttr(outcome), "teams", len(chunk), "linked_pull_requests", len(repos), "scope_mode", contextfabric.SanitizeLogAttr(scope.modeName()))
+		slog.InfoContext(ctx, "devhealthfacts.team_linked_mix_set", append([]any{"outcome", contextfabric.SanitizeLogAttr(outcome), "teams", len(chunk), "linked_pull_requests", len(repos), "scope_mode", contextfabric.SanitizeLogAttr(scope.modeName())}, requestIDLogAttrs(ctx)...)...)
 		if len(repos) == 0 {
 			continue
 		}

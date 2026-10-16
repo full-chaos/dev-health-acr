@@ -189,8 +189,8 @@ spec:
               value: {{ .Values.contextFabric.model.timeout | quote }}
             - name: ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS
               value: {{ .Values.contextFabric.model.maxAttempts | quote }}
-            - name: ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES
-              value: {{ .Values.contextFabric.model.maxTransportRetries | quote }}
+            - name: ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS
+              value: {{ .Values.contextFabric.model.maxOutputTokens | quote }}
             - name: ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL
               value: {{ .Values.contextFabric.model.allowInsecureBaseURL | quote }}
             {{- if .Values.contextFabric.model.existingSecret }}

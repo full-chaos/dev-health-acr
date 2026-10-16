@@ -113,11 +113,11 @@ func TestNew_fallbackLegDrawsOnceEvenWhenItsAnswerClaimsNothing(t *testing.T) {
 // builders the composition reads.
 func TestFallbackRuntimeConfigIsSingleDraw(t *testing.T) {
 	cfg := Config{Provider: "test-provider", Model: "primary-model", FallbackModel: "fallback-model", MaxSynthesisResynthesisAttempts: 3, PhrasingModel: "phrasing-model"}
-	got := fallbackRuntimeConfig(nil, cfg)
+	got := fallbackRuntimeConfig(cfg)
 	if !got.SingleDraw || got.Model != "fallback-model" || got.MaxSynthesisResynthesisAttempts != 0 || got.PhrasingModel != "" {
 		t.Fatalf("fallbackRuntimeConfig() = single_draw %v model %q attempts %d phrasing %q, want a single-draw fallback-model config with no inherited bound or phrasing model", got.SingleDraw, got.Model, got.MaxSynthesisResynthesisAttempts, got.PhrasingModel)
 	}
-	if primary := runtimeConfigWithPhrasing(nil, cfg, cfg.Model, nil); primary.SingleDraw {
+	if primary := runtimeConfigWithPhrasing(cfg, cfg.Model, nil); primary.SingleDraw {
 		t.Fatal("the primary runtime must not be single-draw")
 	}
 }

@@ -60,6 +60,11 @@ type FactKindOutcome struct {
 	// came from the scope gap alone: the provider returned every row it was
 	// asked for and nothing was cut by a cap.
 	TruncatedOnlyByScopeGap bool
+	// TruncatedOnlyBySubjectCuts is set on a completed read whose truncated
+	// state came only from cuts the provider disclosed on the facts that lost
+	// rows (FactProviderResult.TruncationSubjectLocal): a subject whose fact
+	// carries no cut was read whole.
+	TruncatedOnlyBySubjectCuts bool
 	// UnreachedRoot is set when a kind read some subjects but a scope gap left
 	// the roots of another kind unreached. It carries that gap's own cause.
 	UnreachedRoot *FactUnreachedRoot
