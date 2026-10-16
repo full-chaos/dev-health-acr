@@ -296,3 +296,28 @@ func TestLLMSchemaRejectionLogsWhereTheReplyBrokeTheSchemaWithoutItsText(t *test
 		t.Fatalf("the reply's text reached the log: %s", logs.String())
 	}
 }
+
+func TestLLMLogsTheFormatPathAtInfoOnlyForAFallback(t *testing.T) {
+	for _, tc := range []struct {
+		path     string
+		wantInfo bool
+	}{{llm.FormatPathSchema, false}, {llm.FormatPathTool, true}, {llm.FormatPathText, true}} {
+		var logs strings.Builder
+		client := &scriptedLLM{model: "m", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput()), FormatPath: tc.path}}}}
+		runtime, err := NewWithLLM(Config{
+			Provider: "anthropic", Model: "m", Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
+			InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1", SchemaVersion: "schema-v1",
+			EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+		}, LLMClients{"m": client})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+			t.Fatal(err)
+		}
+		line := "level=INFO msg=\"context fabric model answer format path\" operation=interpret llm_kind=anthropic format_path=" + tc.path
+		if got := strings.Contains(logs.String(), line); got != tc.wantInfo {
+			t.Fatalf("path %s: info line present = %v, want %v: %s", tc.path, got, tc.wantInfo, logs.String())
+		}
+	}
+}

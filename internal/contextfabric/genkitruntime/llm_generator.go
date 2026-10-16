@@ -36,6 +36,7 @@ var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
 const (
 	llmCallFailedMessage  = "context fabric model call failed"
 	llmReplyCutMessage    = "context fabric model reply hit the output cap"
+	llmFormatPathMessage  = "context fabric model answer format path"
 	llmSeedDroppedMessage = "context fabric model call sent without its seed"
 	llmDrawRejectedReason = "context fabric model reply failed the output schema"
 )
@@ -177,6 +178,14 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "error_class", contextfabric.SanitizeLogAttr(string(class)))
 		return "", contextfabric.ModelUsage{}, err
 	}
+	formatLevel := slog.LevelDebug
+	if result.FormatPath != "" && result.FormatPath != llm.FormatPathSchema {
+		// The provider refused the strict schema and the answer came by a
+		// fallback path: worth seeing at the default level.
+		formatLevel = slog.LevelInfo
+	}
+	g.logger.Log(ctx, formatLevel, llmFormatPathMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+		"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "format_path", contextfabric.SanitizeLogAttr(result.FormatPath))
 	if cutStopReasons[result.StopReason] {
 		outputTokens := 0
 		if result.Usage.OutputTokens != nil {
