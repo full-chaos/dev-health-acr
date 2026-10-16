@@ -747,4 +747,41 @@ main() {
   printf '%s\n' "${shard_packages[*]}"
 }
 
-main "$@"
+# CHAOS-9948: AFFECTED_PACKAGES (space-separated import paths, set by ci.yml on
+# a pull request whose changes scripts/ci/affected_packages.py proved narrow)
+# narrows a SHARD or DEDICATED selection to the affected packages. The shard
+# assignment itself is computed over the whole module first, so every package
+# keeps its shard and the closure property (union of shards == go list ./...)
+# is unchanged; the intersection happens only afterwards. A selection that
+# ends up empty prints an empty line and exits 0 -- the caller reads that as
+# "this leg has nothing to run", never as "run everything". Unset or empty
+# AFFECTED_PACKAGES leaves every output byte-identical to before.
+filter_to_affected() {
+  local out="$1" pkg a keep=()
+  for pkg in $out; do
+    for a in $AFFECTED_PACKAGES; do
+      if [ "$pkg" = "$a" ]; then
+        keep+=("$pkg")
+        break
+      fi
+    done
+  done
+  printf '%s\n' "${keep[*]:-}"
+}
+
+filtered_forms() {
+  # shard forms: [--with-isolated] <index> <total>; dedicated selections.
+  case "$1" in
+    --with-isolated) [ "$#" -eq 3 ] ;;
+    isolated-dedicated | isolated-shared) return 0 ;;
+    [0-9]*) [ "$#" -eq 2 ] ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ -n "${AFFECTED_PACKAGES:-}" ] && [ "$#" -ge 1 ] && filtered_forms "$@"; then
+  selection="$(main "$@")" || exit $?
+  filter_to_affected "$selection"
+else
+  main "$@"
+fi

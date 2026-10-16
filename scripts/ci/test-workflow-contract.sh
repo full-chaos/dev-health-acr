@@ -761,7 +761,7 @@ check_reports_steps() {
   matrix_line="$(job_block "$file" unit | grep -E 'shard: *\[' | head -n1 || true)"
   n="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
   tool='go run ./ci/mergetestreports'
-  cancelled="\${{ !cancelled() && needs.unit.result != 'skipped' }}"
+  cancelled="\${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}"
 
   # Job level: only these keys, and this exact condition.
   keys="$(grep -oE '^ {4}[a-z-]+:' <<<"$block" | tr -d ' :' || true)"
@@ -791,7 +791,7 @@ check_reports_steps() {
     printf 'verify lane check is not the last step (last: %s)\n' "$last" >&2
     status=1
   fi
-  if ! grep -qE "^ {8}if: \\\$\{\{ !cancelled\(\) && needs\.unit\.result != 'skipped' \}\}$" <<<"$(printf '%s\n' "$block" | awk '/^ {6}- uses: actions\/download-artifact/ { g=1; print; next } g && /^ {6}(- |#)/ { g=0 } g')"; then
+  if ! grep -qE "^ {8}if: \\\$\{\{ !cancelled\(\) && needs\.unit\.result != 'skipped' && needs\.plan\.outputs\.scope == 'full' \}\}$" <<<"$(printf '%s\n' "$block" | awk '/^ {6}- uses: actions\/download-artifact/ { g=1; print; next } g && /^ {6}(- |#)/ { g=0 } g')"; then
     printf 'verify download of the shard reports is not gated on the unit-not-skipped expression\n' >&2
     status=1
   fi
@@ -813,18 +813,27 @@ make coverage-cobertura" || status=1
 # must `needs: plan` and carry exactly the plan-output `if:`, so a new job
 # defaults to heavy (skipped on a draft) and cannot quietly run on every draft
 # push; and verify must READ plan.outputs.heavy and reject a missing value.
-light_jobs=' plan mirror-preflight scripts lint docs-mermaid unit reports verify '
+light_jobs=' plan mirror-preflight scripts lint docs-mermaid unit verify '
 check_heavy_jobs_gated() {
-  local file="$1" job block status=0
+  local file="$1" job block status=0 gated="" listed
   while IFS= read -r job; do
     case "$light_jobs" in *" $job "*) continue ;; esac
     block="$(job_block "$file" "$job")"
-    if ! grep -qxF "    if: needs.plan.outputs.heavy == 'true'" <<<"$block" \
+    if ! grep -qE "^ {4}if: needs\.plan\.outputs\.heavy == 'true'( && .*)?\$" <<<"$block" \
        || ! list_needs <<<"$block" | grep -qx plan; then
       printf 'heavy job "%s" is not gated on needs.plan.outputs.heavy\n' "$job" >&2
       status=1
+    else
+      gated+="$job"$'\n'
     fi
   done < <(list_jobs "$file")
+  # plan.sh names the jobs it lists in skip_jobs for a draft; that list must be
+  # exactly the gated jobs, or a draft would expect the wrong lanes skipped.
+  listed="$("$repo_root/scripts/ci/plan.sh" --print-heavy-jobs | LC_ALL=C sort)"
+  if [ "$listed" != "$(printf '%s' "$gated" | LC_ALL=C sort)" ]; then
+    printf 'scripts/ci/plan.sh heavy_jobs differs from the plan-gated jobs in %s\n' "$file" >&2
+    status=1
+  fi
   return "$status"
 }
 
@@ -835,13 +844,17 @@ check_verify_reads_plan() {
     printf 'verify does not read plan.outputs.heavy\n' >&2; return 1; }
   grep -qF 'plan output heavy is' <<<"$block" || {
     printf 'verify does not fail on a missing plan output\n' >&2; return 1; }
+  grep -qF '.plan.outputs.skip_jobs // "missing"' <<<"$block" || {
+    printf 'verify does not read plan.outputs.skip_jobs\n' >&2; return 1; }
+  grep -qF 'plan output skip_jobs is' <<<"$block" || {
+    printf 'verify does not fail on a missing skip_jobs output\n' >&2; return 1; }
+  # Both directions: a listed job must be skipped, an unlisted job must succeed.
   # shellcheck disable=SC2016
-  grep -qE '"\$result" = skipped' <<<"$block" || {
-    printf 'verify has no draft-skip allowance\n' >&2; return 1; }
-  # The allowance must hold ONLY when plan said heavy=false.
+  grep -qF 'elif [ "$want" = success ] && [ "$result" != success ]' <<<"$block" || {
+    printf 'verify does not require an unlisted job to succeed\n' >&2; return 1; }
   # shellcheck disable=SC2016
-  grep -qF 'if [ "$heavy" = false ] && [ "$result" = skipped ]' <<<"$block" || {
-    printf 'verify skip allowance is not bound to heavy=false\n' >&2; return 1; }
+  grep -qF 'elif [ "$want" = skipped ] && [ "$result" != skipped ]' <<<"$block" || {
+    printf 'verify does not require a listed job to be skipped\n' >&2; return 1; }
 }
 
 run_all_checks() {
@@ -1354,11 +1367,15 @@ assert_check_fails 'removed the plan gate from the build job' check_heavy_jobs_g
 verify_ignores_plan="$tmpdir/verify-ignores-plan.yml"
 sed 's/plan\.outputs\.heavy \/\/ "missing"/plan.outputs.other \/\/ "missing"/' "$workflow" > "$verify_ignores_plan"
 assert_check_fails 'verify stopped reading plan.outputs.heavy' check_verify_reads_plan "$verify_ignores_plan"
-verify_skip_polarity="$tmpdir/verify-skip-polarity.yml"
+verify_ignores_skip_jobs="$tmpdir/verify-ignores-skip-jobs.yml"
+sed 's/plan\.outputs\.skip_jobs \/\/ "missing"/plan.outputs.other \/\/ "missing"/' "$workflow" > "$verify_ignores_skip_jobs"
+cmp -s "$workflow" "$verify_ignores_skip_jobs" && { printf 'skip_jobs mutation did not apply\n' >&2; exit 1; }
+assert_check_fails 'verify stopped reading plan.outputs.skip_jobs' check_verify_reads_plan "$verify_ignores_skip_jobs"
+verify_listed_may_run="$tmpdir/verify-listed-may-run.yml"
 # shellcheck disable=SC2016
-sed 's/if \[ "\$heavy" = false \] && \[ "\$result" = skipped \]/if [ "$heavy" = true ] \&\& [ "$result" = skipped ]/' "$workflow" > "$verify_skip_polarity"
-cmp -s "$workflow" "$verify_skip_polarity" && { printf 'polarity mutation did not apply\n' >&2; exit 1; }
-assert_check_fails 'verify allows skipped heavy lanes when heavy=true' check_verify_reads_plan "$verify_skip_polarity"
+sed 's/elif \[ "\$want" = skipped \] \&\& \[ "\$result" != skipped \]/elif [ "$want" = skipped ] \&\& [ "$result" = failure ]/' "$workflow" > "$verify_listed_may_run"
+cmp -s "$workflow" "$verify_listed_may_run" && { printf 'polarity mutation did not apply\n' >&2; exit 1; }
+assert_check_fails 'verify no longer requires a listed job to be skipped' check_verify_reads_plan "$verify_listed_may_run"
 
 # (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
 # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX env in place -- the exact shape that

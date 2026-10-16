@@ -49,32 +49,44 @@ env:
   GOFLAGS: -trimpath
 
 jobs:
-  # Decides whether the heavy lanes (every race job, build, contracts,
-  # container-*) run. Draft pull requests run only the light lanes (plan,
-  # mirror-preflight, scripts, lint, docs-mermaid, unit, reports); a ready PR,
-  # a push to main, and a draft carrying the `ci-full` label run everything.
-  # Heavy jobs `needs: plan` and gate on this output; `verify` reads the same
-  # output to decide which jobs may report `skipped`.
+  # scripts/ci/plan.sh decides which lanes run. (1) heavy: draft pull requests
+  # skip the heavy lanes (every race job, build, contracts, container-*) unless
+  # labeled `ci-full`; a ready PR, a push to main, and every non-PR event run
+  # them. (2) scope: a pull request whose changes are all added or modified .go
+  # files under internal/ or cmd/ runs only the affected packages' tests
+  # (scripts/ci/affected_packages.py); anything else, and every non-PR event,
+  # is the full suite. `skip_jobs` lists the job keys that must report
+  # `skipped`; `verify` reads it and requires exactly that.
   plan:
     runs-on: ubuntu-latest
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
+      scope: ${{ steps.decide.outputs.scope }}
+      affected: ${{ steps.decide.outputs.affected }}
+      race_schema: ${{ steps.decide.outputs.race_schema }}
+      race_facts: ${{ steps.decide.outputs.race_facts }}
+      race_source: ${{ steps.decide.outputs.race_source }}
+      race_factoracle: ${{ steps.decide.outputs.race_factoracle }}
+      skip_jobs: ${{ steps.decide.outputs.skip_jobs }}
     steps:
-      - name: Decide whether the heavy lanes run
+      # actions/checkout v7.0.0. Full history: the pull request's changed
+      # paths are `git diff base...head`.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false, fetch-depth: 0}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - name: Decide which lanes run
         id: decide
         env:
           EVENT: ${{ github.event_name }}
           DRAFT: ${{ github.event.pull_request.draft }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: |
-          set -euo pipefail
-          heavy=true
-          if [ "$EVENT" = pull_request ] && [ "$DRAFT" = true ] \
-             && ! printf '%s' "$LABELS" | jq -e 'any(.[]; ascii_downcase == "ci-full")' >/dev/null; then
-            heavy=false
-          fi
-          printf 'event=%s draft=%s labels=%s heavy=%s\n' "$EVENT" "$DRAFT" "$LABELS" "$heavy"
-          printf 'heavy=%s\n' "$heavy" >> "$GITHUB_OUTPUT"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/plan.sh
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
   # triggered by the SAME push, with no cross-workflow `needs` (GitHub
   # Actions has none). The introducing PR hit this directly: mirror-images.yml
@@ -251,6 +263,10 @@ jobs:
         run: scripts/ci/test-unit-split-partition.sh
       - name: Test the shard budget guard
         run: scripts/ci/test-shard-budget-guard.sh
+      # Offline cases for plan.sh, the affected-package selector, the
+      # AFFECTED_PACKAGES shard filter and verify's reading of the plan.
+      - name: Test the lane plan and affected-package selection
+        run: scripts/ci/test-plan.sh
       - name: Test the isolated-job budget wrapper
         run: scripts/ci/test-run-isolated-budget.sh
       - name: Check known Go vulnerabilities
@@ -340,8 +356,11 @@ jobs:
     # thing. While it was a `-hosted`/`-self-hosted` pair this job carried an
     # explicit `if:` instead, because exactly one leg ran and the cascade
     # would otherwise have skipped this job along with the leg that never ran.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
     env:
+      AFFECTED_PACKAGES: ${{ needs.plan.outputs.affected }}
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
       # hardcoded reaper) at the ghcr.io/full-chaos mirror. `go test ./...`
@@ -365,10 +384,19 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: true
+      - name: Select this leg's packages
+        id: leg
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh --with-isolated ${{ matrix.shard }} 4)"
+          if [ -n "${packages// /}" ]; then run=true; else run=false; fi
+          printf 'leg %s: run=%s packages: %s\n' '${{ matrix.shard }}' "$run" "$packages"
+          printf 'run=%s\n' "$run" >>"$GITHUB_OUTPUT"
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
+        if: steps.leg.outputs.run == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
@@ -382,6 +410,7 @@ jobs:
       # skip-reads-as-ok trap the grant proof exists to close. Both the
       # unit and race jobs run this suite, so both install the client.
       - name: Install PostgreSQL client for the compose ACL integration test
+        if: steps.leg.outputs.run == 'true'
         run: |
           set -euo pipefail
           # The runner image already ships the PostgreSQL 16 client binaries;
@@ -420,6 +449,7 @@ jobs:
       # fails the step instead of being read as a test result.
       - name: Run Go tests with coverage and JUnit reporting
         id: go-tests
+        if: steps.leg.outputs.run == 'true'
         run: |
           packages="$(scripts/ci/test-shard.sh --with-isolated ${{ matrix.shard }} 4)"
           printf 'unit leg %s of ${{ strategy.job-total }} packages:\n%s\n' '${{ matrix.shard }}' "$packages"
@@ -493,7 +523,7 @@ jobs:
         if: always() && steps.go-tests.outputs.budget != ''
         run: scripts/ci/shard-budget-guard.sh --json '${{ steps.go-tests.outputs.budget }}' .tmp/coverage/go-test.json
       - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
-        if: always() && steps.go-tests.outputs.status != '0'
+        if: always() && steps.leg.outputs.run == 'true' && steps.go-tests.outputs.status != '0'
         run: |
           jq -r '
             select(.Action == "output") |
@@ -550,6 +580,7 @@ jobs:
     # race shards (memory/CPU headroom); unset, this falls back to ubuntu-latest.
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
+      AFFECTED_PACKAGES: ${{ needs.plan.outputs.affected }}
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
       # CHAOS-4855 R1: see the unit job's env above for why this is
@@ -564,10 +595,19 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: true
+      - name: Select this leg's packages
+        id: leg
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
+          if [ -n "${packages// /}" ]; then run=true; else run=false; fi
+          printf 'leg %s: run=%s packages: %s\n' '${{ matrix.shard }}' "$run" "$packages"
+          printf 'run=%s\n' "$run" >>"$GITHUB_OUTPUT"
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
+        if: steps.leg.outputs.run == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
@@ -581,6 +621,7 @@ jobs:
       # skip-reads-as-ok trap the grant proof exists to close. Both the
       # unit and race jobs run this suite, so both install the client.
       - name: Install PostgreSQL client for the compose ACL integration test
+        if: steps.leg.outputs.run == 'true'
         run: |
           set -euo pipefail
           # The runner image already ships the PostgreSQL 16 client binaries;
@@ -608,6 +649,7 @@ jobs:
       # scripts/ci/test-shard.sh, so each shard still runs a real subset of
       # `go list ./...` under -race with the same deterministic shuffle.
       - name: Run race and deterministic shuffle tests
+        if: steps.leg.outputs.run == 'true'
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
@@ -654,7 +696,7 @@ jobs:
     # Same CI_RACE_RUNNER contract as the `race` job above.
     needs:
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_schema == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -716,7 +758,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_facts == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -756,7 +798,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_facts == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -794,7 +836,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_facts == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -832,7 +874,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_facts == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -887,7 +929,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_source == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -925,7 +967,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_source == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -965,7 +1007,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_source == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1013,7 +1055,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_factoracle == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1051,7 +1093,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.race_factoracle == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1633,21 +1675,21 @@ jobs:
       # actions/download-artifact v8.0.1. One directory per artifact
       # (merge-multiple is left false), which is the layout the merge tool reads.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         with:
           pattern: go-unit-shard-*
           path: .tmp/unit-shards
       - name: Merge JUnit reports
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml
       - name: Merge coverage profiles and convert to Cobertura once
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         run: |
           set -euo pipefail
           go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out
           make coverage-cobertura
       - name: List every shard's failed tests
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
       # The behaviour check. The steps above are text a later edit can disable,
       # gate off, or replace with `true` while this job still reads green;
@@ -1658,11 +1700,11 @@ jobs:
       # than the sum fails HERE. (scripts/ci/test-workflow-contract.sh still
       # greps for every step as a second line, and cannot see any of this.)
       - name: Verify the merged reports against the shards
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         with:
           name: go-coverage
           path: .tmp/coverage/coverage.xml
@@ -1671,7 +1713,7 @@ jobs:
           retention-days: 90
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && needs.unit.result != 'skipped' && needs.plan.outputs.scope == 'full' }}
         with:
           name: go-junit
           path: .tmp/coverage/junit.xml
@@ -1686,31 +1728,41 @@ jobs:
           set -euo pipefail
           failed=0
 
-          # The plan job's `heavy` output is READ here, never inferred from the
-          # event or from which jobs happened to skip. A missing or non-boolean
-          # value fails the gate, so a plan that never ran cannot read green.
+          # The plan job's outputs are READ here, never inferred from the event
+          # or from which jobs happened to skip. A missing or malformed output
+          # fails the gate, so a plan that never ran cannot read green.
           heavy="$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.heavy // "missing"')"
           printf 'plan heavy=%s\n' "$heavy"
           case "$heavy" in
             true | false) ;;
-            *) printf 'plan output heavy is %s, expected true or false\n' "$heavy" >&2; failed=1; heavy=invalid ;;
+            *) printf 'plan output heavy is %s, expected true or false\n' "$heavy" >&2; failed=1 ;;
           esac
+          skip_json="$(printf '%s' "$NEEDS" | jq -c '.plan.outputs.skip_jobs // "missing" | fromjson? // "missing"')"
+          printf 'plan skip_jobs=%s\n' "$skip_json"
+          if ! printf '%s' "$skip_json" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null; then
+            printf 'plan output skip_jobs is %s, expected a JSON array of job keys\n' "$skip_json" >&2
+            failed=1
+            skip_json='[]'
+          fi
 
-          # LIGHT lanes run on every event and must be a literal success.
-          # Every other lane is heavy: a literal success when heavy=true, and
-          # when heavy=false (a draft PR without the ci-full label) it must be
-          # exactly `skipped` -- a failed or cancelled heavy lane never passes.
-          light=" plan mirror-preflight scripts lint docs-mermaid unit reports "
-          while IFS=$'\t' read -r job result; do
-            printf '%s: %s\n' "$job" "$result"
-            if [ "$result" != success ]; then
-              if [ "$heavy" = false ] && [ "$result" = skipped ] \
-                 && [[ "$light" != *" $job "* ]]; then
-                continue
-              fi
+          # LIGHT lanes run on every event: they must succeed and may never be
+          # listed in skip_jobs. Every other job must end exactly as the plan
+          # says: `skipped` when listed in skip_jobs, `success` when not. A
+          # failed or cancelled lane never matches either, and a listed lane
+          # that ran (or an unlisted lane that skipped) is a plan/gate mismatch.
+          light=" plan mirror-preflight scripts lint docs-mermaid unit "
+          while IFS=$'\t' read -r job result want; do
+            printf '%s: %s (plan expects %s)\n' "$job" "$result" "$want"
+            if [ "$want" = skipped ] && [[ "$light" == *" $job "* ]]; then
+              printf 'plan lists light lane %s in skip_jobs\n' "$job" >&2
+              failed=1
+            elif [ "$want" = success ] && [ "$result" != success ]; then
+              failed=1
+            elif [ "$want" = skipped ] && [ "$result" != skipped ]; then
               failed=1
             fi
-          done < <(printf '%s' "$NEEDS" | jq -r 'to_entries[] | [.key, .value.result] | @tsv')
+          done < <(printf '%s' "$NEEDS" | jq -r --argjson skip "$skip_json" \
+            'to_entries[] | [.key, .value.result, (if (.key as $k | $skip | index($k)) != null then "skipped" else "success" end)] | @tsv')
 
           test "$(printf '%s' "$NEEDS" | jq -r 'length')" -gt 0 || {
             printf 'no lane results were reported\n' >&2; exit 1; }
