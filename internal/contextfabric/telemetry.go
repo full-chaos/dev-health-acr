@@ -1162,13 +1162,12 @@ func (t SlogEngineTelemetry) RecordPeriodDeltaComposition(ctx context.Context, p
 // that method's doc comment for what it reports and why it fires even when
 // nothing was selected.
 //
-// One line per selected shape and one per skipped rule, plus a summary line
-// carrying the count, rather than one line with a nested value: a reader
-// filtering on "render_shape_rule=cohort_driver_contribution" finds the
-// decision they are diagnosing without parsing anything. The summary line
-// always fires, so render_shapes_selected=0 is a positive statement that
-// the rules ran and chose nothing -- never the absence of a log line, which
-// is indistinguishable from the selector never having run.
+// One summary record per decision, carrying the count and the list of selected
+// shapes, plus one line per skipped rule (the selector accounts every rule
+// exactly once). The summary line always fires, so render_shapes_selected=0 is
+// a positive statement that the rules ran and chose nothing -- never the
+// absence of a log line, which is indistinguishable from the selector never
+// having run.
 //
 // Content-safe: an org id, closed-vocabulary values, and non-identifying
 // counts. No shape label, subject label, or plotted number is ever logged.
@@ -1188,21 +1187,29 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 	if err := event.Accounted(); err != nil {
 		accounting = "violated"
 	}
+	// ONE record per selector decision: the shapes the selector chose ride on
+	// the summary line as a list (never absent, an empty list when nothing was
+	// chosen), so the decision is a single typed record. Before this the
+	// selected shapes were one line each, which no declared multiplicity could
+	// describe (a rule can select several shapes and the line carried no
+	// index or total).
+	selected := make([]map[string]any, 0, len(event.Selected))
+	for _, selection := range event.Selected {
+		selected = append(selected, map[string]any{
+			"render_shape_kind":         SanitizeLogAttr(string(selection.Kind)),
+			"render_shape_presentation": SanitizeLogAttr(string(selection.Presentation)),
+			"render_shape_rule":         SanitizeLogAttr(string(selection.Rule)),
+			"render_shape_series":       selection.SeriesCount,
+			"render_shape_points":       selection.PointCount,
+		})
+	}
 	t.logger.InfoContext(ctx, "context fabric render shape selection",
 		base("render_shapes_selected", len(event.Selected),
 			"render_shape_rules_skipped", len(event.Skipped),
 			"render_shape_members_truncated", event.MembersTruncated,
 			"render_shape_trends_omitted", event.TrendsOmitted,
-			"render_shape_accounting", SanitizeLogAttr(accounting))...)
-	for _, selection := range event.Selected {
-		t.logger.InfoContext(ctx, "context fabric render shape selected", base(
-			"render_shape_kind", string(selection.Kind),
-			"render_shape_presentation", string(selection.Presentation),
-			"render_shape_rule", string(selection.Rule),
-			"render_shape_series", selection.SeriesCount,
-			"render_shape_points", selection.PointCount,
-		)...)
-	}
+			"render_shape_accounting", SanitizeLogAttr(accounting),
+			"selected_shapes", selected)...)
 	for _, skip := range event.Skipped {
 		t.logger.InfoContext(ctx, "context fabric render shape rule skipped", base(
 			"render_shape_rule", string(skip.Rule),

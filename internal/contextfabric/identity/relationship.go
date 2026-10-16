@@ -90,6 +90,13 @@ const (
 	// service mapping names, so an edge whose mapping ended is retracted by
 	// its own id while the incident's other edges stay.
 	RelationshipFamilyIncidentRepository RelationshipFamily = "incident_repository"
+	// RelationshipFamilyDeploymentIncident is devhealthsource's deployment ->
+	// incident CORRELATED_WITH_INCIDENT edge, read from
+	// work_graph_deployment_incident_edges. The id is versioned by the
+	// deployment's canonical id, which carries the repository: ops' edge_id
+	// hashes (org, deployment_id, incident_id) alone, so two repositories that
+	// share a deployment_id share an edge_id.
+	RelationshipFamilyDeploymentIncident RelationshipFamily = "deployment_incident"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:
