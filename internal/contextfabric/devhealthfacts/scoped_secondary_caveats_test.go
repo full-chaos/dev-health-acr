@@ -115,7 +115,7 @@ func TestInvestmentUnitsCursorInstructionRidesOnlyTheCutSubject(t *testing.T) {
 	theme := map[string]float64{"feature_delivery": 1}
 	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	unit := func(id string) []any {
-		return []any{id, repoUUID("units-a"), 1.0, 1.0, theme, from, from, []string{"7"}, uint64(0), []string{}, 3.0, uint64(3), 0.0, uint64(0)}
+		return []any{id, repoUUID("units-a"), 1.0, 1.0, 0.0, theme, from, from, []string{"7"}, uint64(0), []string{}, 3.0, uint64(3), 0.0, uint64(0), uint64(3), uint64(0)}
 	}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "WHERE win >= 0", rows: [][]any{unit("wu-a"), unit("wu-b"), unit("wu-c")}},

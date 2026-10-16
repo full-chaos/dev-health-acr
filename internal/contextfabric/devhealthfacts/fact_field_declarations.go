@@ -1020,6 +1020,25 @@ func investmentThemeFields(aggregateShares bool) []fieldDecl {
 	return out
 }
 
+// investmentSizingDeclarations are the measure and sizing coverage a mix fact
+// carries in ISSUE_SIZE (D6027, D6031). A team's counts are taken over every
+// repository the team owns, like its shares, so they are aggregates.
+func investmentSizingDeclarations(aggregate bool) []fieldDecl {
+	fields := []fieldDecl{
+		fStr("measure"),
+		fNum("denominator", ""),
+		declNullable(fNum("sizing_coverage", "ratio")),
+		fInt("unsized_unit_count", "count"),
+		declNullable(fStr("sizing_note")),
+	}
+	if aggregate {
+		for i := range fields {
+			fields[i] = declAggregate(fields[i])
+		}
+	}
+	return fields
+}
+
 func investmentFields() []fieldDecl {
 	themeBreakdown := fTable("theme_breakdown",
 		cStr("theme"), cNum("share", "ratio"), cNum("weighted_effort", ""), cStr("source"), cStr("attribution"))
@@ -1034,6 +1053,9 @@ func investmentFields() []fieldDecl {
 		declOn(declTeamProject, investmentThemeFields(true)...),
 		declOn(declOrganizationOnly, investmentThemeFields(false)...),
 		declOn(declRepoTeamOrg, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
+		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization}, investmentSizingDeclarations(false)...),
+		declOn(declTeamOnly, investmentSizingDeclarations(true)...),
+		declOn(declProjectOnly, fStr("measure")),
 		declOn(declRepoTeamOrg, investmentUnitFields()...),
 		declOn(declOrganizationOnly, fStr("scope"), fInt("repositories_in_scope", "count"), fNum("unattributed_effort_share", "ratio")),
 		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization}, fInt("work_unit_count", "count")),
@@ -1073,7 +1095,7 @@ func investmentUnitFields() []fieldDecl {
 		fStr("unit_kind"), fStr("unit_weight"), fStr("work_unit_id"),
 		declRef(declRepositoryRef, fStr("repository_id")),
 		fStr("unit_from"), fStr("unit_to"),
-		fNum("share_in_scope", ""), fNum("unit_effort_value", ""),
+		fNum("share_in_scope", ""), fNum("unit_effort_value", ""), fNum("unit_issue_size", ""),
 		fInt("unit_pull_request_count", "count"), fInt("unit_refs_unresolved", "count"),
 		// The handles name issue keys that matched no repository of the
 		// organization, so they can name a repository the caller has no grant

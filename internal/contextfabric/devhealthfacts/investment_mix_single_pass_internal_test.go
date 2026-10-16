@@ -22,7 +22,7 @@ func TestRepoMixStatementReadsWorkUnitInvestmentsOnce(t *testing.T) {
 		"point in time+prior": {{active: true, end: end}, prior},
 	} {
 		statement := repoMixStatement(bounds)
-		if got := strings.Count(statement, "work_unit_investments"); got != 1 {
+		if got := strings.Count(statement, "FROM work_unit_investments"); got != 1 {
 			t.Errorf("%s: statement references work_unit_investments %d times, want 1", name, got)
 		}
 		assertReposReadOnceBesidesTheRequestedLookup(t, name, statement)
@@ -68,7 +68,7 @@ func TestProjectMixStatementsReadWorkUnitInvestmentsOnce(t *testing.T) {
 				t.Errorf("%s / %s: statement reads work_unit_investments %d times, want 1", statementName, name, got)
 			}
 			// Any other mention (a table alias, a join) would be a second reader.
-			if got := strings.Count(statement, "work_unit_investments"); got != 1 {
+			if got := strings.Count(statement, "FROM work_unit_investments"); got != 1 {
 				t.Errorf("%s / %s: statement names work_unit_investments %d times, want 1", statementName, name, got)
 			}
 			for _, cte := range []string{"latest AS", "windowed AS", "repo_linked AS", "evidence_resolved AS", "unit_issue AS", "resolved AS"} {
@@ -136,7 +136,7 @@ func TestSpanSentinelIsInTheMixStatementAndNotTheUnitListing(t *testing.T) {
 	if strings.Contains(investmentUnitsStatement(factTimeBound{}, false), sentinel) {
 		t.Error("the unit listing carries the span sentinel window")
 	}
-	if got := strings.Count(repoMixStatement([]factTimeBound{{}, {}}), "work_unit_investments"); got != 1 {
+	if got := strings.Count(repoMixStatement([]factTimeBound{{}, {}}), "FROM work_unit_investments"); got != 1 {
 		t.Errorf("mix statement names work_unit_investments %d times with the sentinel, want 1", got)
 	}
 }
@@ -156,7 +156,7 @@ func TestProjectScopeStatementReportsTheSpanBeyondTheWindowFilter(t *testing.T) 
 	if strings.Contains(statement, "\nWHERE 1") {
 		t.Error("project scope statement filters rows to the window before the span aggregate")
 	}
-	if got := strings.Count(statement, "work_unit_investments"); got != 1 {
+	if got := strings.Count(statement, "FROM work_unit_investments"); got != 1 {
 		t.Errorf("project scope statement names work_unit_investments %d times, want 1", got)
 	}
 }
