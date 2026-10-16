@@ -54,13 +54,14 @@ func nativeMixUnits(project string, effortUnits int) []nativePhasedUnit {
 // nativePhasedTables answers the four statements of the phased native read.
 func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 	var ids, pUnit, pProvider, pProject []string
-	var pMulti []uint8
+	var pMulti, sized []uint8
 	var effort, fd, op, zero, bugfix []float64
 	var versions []int64
 	var froms []time.Time
 	for _, units := range groups {
 		for _, u := range units {
 			ids = append(ids, u.id)
+			sized = append(sized, 1)
 			versions = append(versions, 1)
 			if u.from.IsZero() {
 				froms = append(froms, clockSpanStart)
@@ -77,7 +78,7 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 	return []fakeTable{
 		{match: "AS unit_ids", rows: [][]any{{ids, versions, clockSpanStart}}},
 		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
-		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero, froms}}},
+		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero, froms, sized}}},
 		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},
 	}
 }

@@ -407,11 +407,12 @@ check_unit_shard_agreement() {
 
 # CHAOS-3895: the `unit` shards do not publish `go-coverage` / `go-junit`
 # themselves (a matrix job uploading under one name collides across its own
-# legs). Each uploads an intermediate go-unit-shard-<i>, and the `reports` job
-# merges them with ci/mergetestreports and publishes the two names. Every link
+# legs). Each uploads an intermediate go-unit-shard-<i>, and the `verify` job
+# merges them with ci/mergetestreports and publishes the two names (CHAOS-9877:
+# the merge was its own `reports` job; one job less is one queue wait less). Every link
 # of that chain is a bare string no compiler reads, and each way of breaking one
 # leaves the run green:
-#   - `reports` deleted, or not gated on `unit`: no merged report exists.
+#   - the merge steps deleted, or verify not needing `unit`: no merged report.
 #   - -expect disagreeing with the unit matrix: a matrix that shrank while
 #     -expect stayed put fails at run time only as a "missing shard"; this
 #     check names the real cause, and catches a -expect edited alone.
@@ -424,11 +425,11 @@ check_unit_shard_agreement() {
 check_reports_job() {
   local file="$1" status=0
   local reports_block unit_block prefix matrix_line matrix_count sub call expect want
-  if ! list_jobs "$file" | grep -qx reports; then
-    printf 'no reports job: the unit shards reports are never merged into go-coverage or go-junit\n' >&2
+  if ! list_jobs "$file" | grep -qx verify; then
+    printf 'no verify job: the unit shards reports are never merged into go-coverage or go-junit\n' >&2
     return 1
   fi
-  reports_block="$(job_block "$file" reports)"
+  reports_block="$(job_block "$file" verify)"
   unit_block="$(job_block "$file" unit)"
 
   prefix="$(grep -oE 'shardArtifactPrefix = "[^"]+"' "$repo_root/ci/mergetestreports/main.go" | head -n1 | sed -E 's/.*"([^"]+)"/\1/' || true)"
@@ -437,8 +438,8 @@ check_reports_job() {
     return 1
   fi
 
-  if ! grep -qE '^ {4}needs: *unit *$' <<<"$reports_block"; then
-    printf 'reports does not declare "needs: unit", so it could run before the shards have uploaded\n' >&2
+  if ! list_needs <<<"$reports_block" | grep -qx unit; then
+    printf 'verify does not need unit, so its merge could run before the shards have uploaded\n' >&2
     status=1
   fi
   if ! grep -qE '^ {4}if: .*!cancelled\(\)' <<<"$reports_block"; then
@@ -703,7 +704,7 @@ assert_step() {
   local step keys key ifs runs run_text want_line
   step="$(printf '%s\n' "$block" | step_block "$name")"
   if [ -z "$step" ]; then
-    printf 'reports has no step named "%s"\n' "$name" >&2
+    printf 'verify has no step named "%s"\n' "$name" >&2
     return 1
   fi
   keys="$(grep -oE '^ {8}[a-z-]+:' <<<"$step" | tr -d ' :' || true)"
@@ -711,7 +712,7 @@ assert_step() {
     case "$key" in
       if | run) ;;
       *)
-        printf 'reports step "%s" carries key "%s", which can make it not run or not fail the job (allowed: if, run)\n' "$name" "$key" >&2
+        printf 'verify step "%s" carries key "%s", which can make it not run or not fail the job (allowed: if, run)\n' "$name" "$key" >&2
         return 1
         ;;
     esac
@@ -720,30 +721,30 @@ assert_step() {
   if [ -n "$want_if" ]; then
     want_line="        if: $want_if"
     if [ "$ifs" != "$want_line" ]; then
-      printf 'reports step "%s" has condition [%s], want exactly [%s]\n' "$name" "${ifs:-<none>}" "$want_line" >&2
+      printf 'verify step "%s" has condition [%s], want exactly [%s]\n' "$name" "${ifs:-<none>}" "$want_line" >&2
       return 1
     fi
   elif [ -n "$ifs" ]; then
-    printf 'reports step "%s" has a condition [%s]; it must run whenever the job does\n' "$name" "$ifs" >&2
+    printf 'verify step "%s" has a condition [%s]; it must run whenever the job does\n' "$name" "$ifs" >&2
     return 1
   fi
   runs="$(grep -cE '^ {8}run:' <<<"$step" || true)"
   if [ "$runs" != 1 ]; then
-    printf 'reports step "%s" has %s run: keys, want exactly 1\n' "$name" "$runs" >&2
+    printf 'verify step "%s" has %s run: keys, want exactly 1\n' "$name" "$runs" >&2
     return 1
   fi
   case "$want_run" in
     *$'\n'*)
       run_text="$(awk '/^ {8}run: \|$/ { g=1; next } g' <<<"$step" | sed -E 's/^ {10}//')"
       if [ "$run_text" != "$want_run" ]; then
-        printf 'reports step "%s" runs a different script than expected\n--- got:\n%s\n--- want:\n%s\n' "$name" "$run_text" "$want_run" >&2
+        printf 'verify step "%s" runs a different script than expected\n--- got:\n%s\n--- want:\n%s\n' "$name" "$run_text" "$want_run" >&2
         return 1
       fi
       ;;
     *)
       want_line="        run: $want_run"
       if [ "$(grep -E '^ {8}run:' <<<"$step")" != "$want_line" ]; then
-        printf 'reports step "%s" does not run exactly the expected command [%s]\n' "$name" "$want_run" >&2
+        printf 'verify step "%s" does not run exactly the expected command [%s]\n' "$name" "$want_run" >&2
         return 1
       fi
       ;;
@@ -751,16 +752,16 @@ assert_step() {
 }
 
 check_reports_steps() {
-  local file="$1" block matrix_line n status=0 key keys tool cancelled
-  if ! list_jobs "$file" | grep -qx reports; then
-    printf 'no reports job\n' >&2
+  local file="$1" block matrix_line n status=0 key keys tool cancelled lane last
+  if ! list_jobs "$file" | grep -qx verify; then
+    printf 'no verify job\n' >&2
     return 1
   fi
-  block="$(job_block "$file" reports)"
+  block="$(job_block "$file" verify)"
   matrix_line="$(job_block "$file" unit | grep -E 'shard: *\[' | head -n1 || true)"
   n="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
   tool='go run ./ci/mergetestreports'
-  cancelled="\${{ !cancelled() }}"
+  cancelled="\${{ !cancelled() && needs.unit.result != 'skipped' }}"
 
   # Job level: only these keys, and this exact condition.
   keys="$(grep -oE '^ {4}[a-z-]+:' <<<"$block" | tr -d ' :' || true)"
@@ -768,17 +769,34 @@ check_reports_steps() {
     case "$key" in
       name | needs | if | runs-on | steps) ;;
       *)
-        printf 'reports job carries key "%s" (allowed: name, needs, if, runs-on, steps)\n' "$key" >&2
+        printf 'verify job carries key "%s" (allowed: name, needs, if, runs-on, steps)\n' "$key" >&2
         status=1
         ;;
     esac
   done
-  if ! grep -qxF "    if: \${{ !cancelled() && needs.unit.result != 'skipped' }}" <<<"$block"; then
-    printf 'reports job condition is not exactly the not-cancelled-and-unit-not-skipped expression\n' >&2
+  if ! grep -qxF "    if: '!cancelled()'" <<<"$block"; then
+    printf 'verify job condition is not exactly !cancelled()\n' >&2
     status=1
   fi
 
-  assert_step "$block" 'Merge JUnit reports' '' \
+  # The lane check runs last and on !cancelled() alone: a failed merge step
+  # before it must not stop it from printing every lane's result.
+  lane="$(printf '%s\n' "$block" | step_block 'Assert every lane succeeded')"
+  if [ "$(grep -E '^ {8}if:' <<<"$lane" || true)" != "        if: \${{ !cancelled() }}" ]; then
+    printf 'verify lane check does not run on exactly the not-cancelled expression\n' >&2
+    status=1
+  fi
+  last="$(grep -E '^      - ' <<<"$block" | tail -n1)"
+  if [ "$last" != "      - name: Assert every lane succeeded" ]; then
+    printf 'verify lane check is not the last step (last: %s)\n' "$last" >&2
+    status=1
+  fi
+  if ! grep -qE "^ {8}if: \\\$\{\{ !cancelled\(\) && needs\.unit\.result != 'skipped' \}\}$" <<<"$(printf '%s\n' "$block" | awk '/^ {6}- uses: actions\/download-artifact/ { g=1; print; next } g && /^ {6}(- |#)/ { g=0 } g')"; then
+    printf 'verify download of the shard reports is not gated on the unit-not-skipped expression\n' >&2
+    status=1
+  fi
+
+  assert_step "$block" 'Merge JUnit reports' "$cancelled" \
     "$tool junit -dir .tmp/unit-shards -expect $n -out .tmp/coverage/junit.xml" || status=1
   assert_step "$block" 'Merge coverage profiles and convert to Cobertura once' "$cancelled" \
     "set -euo pipefail
@@ -994,31 +1012,32 @@ sed 's|test-shard\.sh --with-isolated|test-shard.sh|' "$workflow" > "$unit_witho
 assert_check_fails 'dropped --with-isolated from the unit job'"'"'s test-shard.sh invocation' \
   check_unit_shard_agreement "$unit_without_isolated"
 
-# (r) CHAOS-3895: each link of the unit-shards -> reports -> go-coverage/go-junit
+# (r) CHAOS-3895: each link of the unit-shards -> verify merge -> go-coverage/go-junit
 # chain is a bare string, so each gets its own mutation. All of them leave the
 # workflow otherwise valid, so a red here is the reports check and nothing else.
 reports_job_removed="$tmpdir/reports-job-removed.yml"
 awk '
-  /^  reports:/ { skip=1 }
-  skip && /^  [A-Za-z0-9_-]+:/ && !/^  reports:/ { skip=0 }
+  $0 == "      - name: Merge JUnit reports" { skip=1; next }
+  skip && /^      (- |#)/ { skip=0 }
   !skip { print }
 ' "$workflow" > "$reports_job_removed"
-assert_check_fails 'removed the reports job' check_reports_job "$reports_job_removed"
+cmp -s "$workflow" "$reports_job_removed" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_job_removed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'removed the JUnit merge step from verify' check_reports_job "$reports_job_removed"
 
 reports_without_needs="$tmpdir/reports-without-needs.yml"
 awk '
-  /^  reports:/ { in_job=1 }
-  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  reports:/ { in_job=0 }
-  in_job && /^ {4}needs: unit *$/ { next }
+  /^  verify:/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  verify:/ { in_job=0 }
+  in_job && /^ {6}- unit *$/ { next }
   { print }
 ' "$workflow" > "$reports_without_needs"
-assert_check_fails 'dropped needs: unit from the reports job' check_reports_job "$reports_without_needs"
+cmp -s "$workflow" "$reports_without_needs" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_without_needs did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped unit from verify.needs' check_reports_job "$reports_without_needs"
 
 reports_success_only="$tmpdir/reports-success-only.yml"
-sed "s/^    if: \\\${{ !cancelled() && needs.unit.result != 'skipped' }}\$/    if: \\\${{ success() }}/" \
-  "$workflow" > "$reports_success_only"
+sed "s/^    if: '!cancelled()'\$/    if: success()/" "$workflow" > "$reports_success_only"
 cmp -s "$workflow" "$reports_success_only" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_success_only did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'gated the reports job on success(), so a failing shard skips the merged JUnit' \
+assert_check_fails 'gated verify on success(), so a failing shard skips the merged JUnit' \
   check_reports_job "$reports_success_only"
 
 # One subcommand's -expect edited alone.
@@ -1093,13 +1112,42 @@ cmp -s "$workflow" "$reports_coverage_true" && { printf 'NEGATIVE CONTROL SETUP 
 assert_check_fails 'replaced the coverage merge command inside its script with true' check_reports_steps "$reports_coverage_true"
 
 reports_job_continue="$tmpdir/reports-job-continue.yml"
-awk '{ print } /^  reports:$/ { print "    continue-on-error: true" }' "$workflow" > "$reports_job_continue"
-assert_check_fails 'added continue-on-error: true to the reports job' check_reports_steps "$reports_job_continue"
+awk '{ print } /^  verify:$/ { print "    continue-on-error: true" }' "$workflow" > "$reports_job_continue"
+assert_check_fails 'added continue-on-error: true to the verify job' check_reports_steps "$reports_job_continue"
 
 reports_job_if_true="$tmpdir/reports-job-if-true.yml"
-sed "s/^    if: \\\${{ !cancelled() && needs.unit.result != 'skipped' }}\$/    if: \\\${{ !cancelled() \&\& needs.unit.result != 'skipped' \&\& false }}/" "$workflow" > "$reports_job_if_true"
+sed "s/^    if: '!cancelled()'\$/    if: '!cancelled() \&\& false'/" "$workflow" > "$reports_job_if_true"
 cmp -s "$workflow" "$reports_job_if_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_job_if_true did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'made the reports job condition always false' check_reports_steps "$reports_job_if_true"
+assert_check_fails 'made the verify job condition always false' check_reports_steps "$reports_job_if_true"
+
+# CHAOS-9877: the lane check must run last and on !cancelled() alone, and the
+# shard download must be gated like the merge steps.
+lane_check_on_success="$tmpdir/lane-check-on-success.yml"
+awk '
+  $0 == "      - name: Assert every lane succeeded" { in_step=1; print; next }
+  in_step && /^ {8}if: / { in_step=0; next }
+  { print }
+' "$workflow" > "$lane_check_on_success"
+cmp -s "$workflow" "$lane_check_on_success" && { printf 'NEGATIVE CONTROL SETUP FAILED: lane_check_on_success did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the lane check condition, so a failed merge step skips it' check_reports_steps "$lane_check_on_success"
+
+lane_check_not_last="$tmpdir/lane-check-not-last.yml"
+awk '
+  { print }
+  $0 == "      - name: Assert every lane succeeded" { lane=1 }
+  lane && /at least one lane did not succeed/ { print "      - name: After the lane check"; print "        run: echo late"; lane=0 }
+' "$workflow" > "$lane_check_not_last"
+cmp -s "$workflow" "$lane_check_not_last" && { printf 'NEGATIVE CONTROL SETUP FAILED: lane_check_not_last did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'added a step after the lane check' check_reports_steps "$lane_check_not_last"
+
+download_ungated="$tmpdir/download-ungated.yml"
+awk '
+  /^ {6}- uses: actions\/download-artifact/ { in_step=1; print; next }
+  in_step && /^ {8}if: / { in_step=0; next }
+  { print }
+' "$workflow" > "$download_ungated"
+cmp -s "$workflow" "$download_ungated" && { printf 'NEGATIVE CONTROL SETUP FAILED: download_ungated did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'removed the unit-not-skipped gate from the shard download' check_reports_steps "$download_ungated"
 
 reports_coverage_renamed="$tmpdir/reports-coverage-renamed.yml"
 sed 's/^\( \{10\}\)name: go-coverage$/\1name: go-coverage-merged/' "$workflow" > "$reports_coverage_renamed"

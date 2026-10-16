@@ -175,14 +175,6 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
-		// A project mix is still read in COUNT (every unit weighs 1): it says
-		// so, and carries no sizing coverage, until the project statements are
-		// weighed by issue size (D6032: a surface flips with its coverage).
-		for i := range facts {
-			if facts[i].Kind == contextfabric.FactInvestment && facts[i].Subject.Kind == contextfabric.SubjectProject {
-				facts[i].Fields["measure"] = contextfabric.StringFactValue(investmentMeasureCount)
-			}
-		}
 		// Missing is not healthy: a project with no canonical mix serves no
 		// fact, and says so by a NAMED reason instead of a silent absence.
 		projectsNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
@@ -794,6 +786,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// rollup_basis names both hops (owning teams, then their owned
 		// repos) so a synthesizer never presents this as a project-native
 		// attribution computed directly from the project's own work items.
+		investmentSizingFields(fields, currentTotal, int64(workUnits), int64(mix.SizedUnits))
 		fields["rollup_basis"] = contextfabric.StringFactValue("team_project_ownership_via_owned_repos_work_unit_investments")
 		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceOwningTeamRollup)
 		fields["team_count"] = contextfabric.IntegerFactValue(int64(teamCount))
@@ -897,7 +890,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	rows, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe, p)
+	rows, sizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe, p)
 	if err != nil {
 		return 0, err
 	}
@@ -936,6 +929,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(row.BugfixWeighted / currentTotal))
 		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceProjectNative)
 		fields["rollup_basis"] = contextfabric.StringFactValue(projectNativeMixBasis)
+		investmentSizingFields(fields, currentTotal, int64(row.WorkUnits), int64(sizedByProject[row.ProjectSubjectKey]))
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
@@ -964,7 +958,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			}
 			break
 		}
-		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link"})
+		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link", "sizing_coverage", "sizing_note"})
 	}
 	return rowCount, nil
 }
