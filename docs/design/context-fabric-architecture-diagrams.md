@@ -463,9 +463,9 @@ same rows; no edge is provider-specific. Producers are in
   Issue <> Pull request hop reads. It is directed, issue -> pull request. It
   carries the link's provenance tier as the edge properties `link_provenance`
   and `link_provenance_rank`: `native` (3) > `explicit_text` (2) > `heuristic`
-  (1). Text and heuristic links are a fallback only: the fact readers
-  (`devhealthfacts/issue_pull_request_link_rows.go`, `nativeFirstLinkSQL`)
-  count one only where no native link covers its pull request or its issue,
+  (1). Text and heuristic links are a fallback only: the team
+  project-reach readers (`devhealthfacts/issue_pull_request_link_rows.go`,
+  `nativeFirstLinkSQL`) count one only where no native link covers its pull request or its issue,
   as ops does at the source (`issueprlinks/fallback.go`). The issue end is the issue's own `work_items` row (its own `repo_id`);
   the table's `repo_id` is the pull request's repository. A row is projected
   only when the work item resolves and is not a pull request (`pr` or

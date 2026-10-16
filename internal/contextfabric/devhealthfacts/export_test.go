@@ -29,6 +29,15 @@ func RelationCurrentProbeForTest(orgID string) string {
 	return strings.ReplaceAll(probe, "{org_id:String}", "'"+orgID+"'")
 }
 
+// admittedLinkedPullRequestRowsSQL is the admitted link rows before the
+// native-first rule: the oracle forms below read the table this way.
+var admittedLinkedPullRequestRowsSQL = `(
+  SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
+  FROM work_graph_issue_pr AS l FINAL
+  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
+)`
+
 func TeamProjectLinkRowsSQLForTest() string {
 	return teamProjectLinkRowsSQL("ids", factTimeBound{})
 }

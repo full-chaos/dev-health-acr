@@ -2,9 +2,9 @@ package devhealthfacts
 
 // The issue <> pull request link of record is work_graph_issue_pr, one row per
 // (pull request repository, issue, pull request number) carrying a provenance
-// tier: native 3 > explicit_text 2 > heuristic 1; a lower tier counts only
-// where no native row covers its pull request or its issue (nativeFirstLinkSQL).
-// Every reader of the link in
+// tier: native 3 > explicit_text 2 > heuristic 1. The team project-reach reads
+// count a lower tier only where no native row covers its pull request or its
+// issue (nativeFirstLinkSQL). Every reader of the link in
 // this package reads it through issueLinkRowsSQL (or its admitted subset), so
 // one rule decides whether a row counts:
 //
@@ -25,7 +25,9 @@ const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'exp
 // issue. A native row always counts. l is the work_graph_issue_pr alias. Ops
 // retracts the covered rows at the source; the native sets are read without
 // FINAL because a native row is never replaced by a lower tier (version_rank),
-// so any stored native row is a current one; this keeps a read right before that
+// and the table has no tombstone column (a native row is only ever replaced by
+// a newer native row), so any stored native row is a current one; if ops adds
+// an unlink path for native rows these sets must read FINAL again; this keeps a read right before that
 // build has run for an organization.
 //
 // scope is a condition over the unaliased work_graph_issue_pr columns that
@@ -67,6 +69,12 @@ var issueLinkRowsSQL = issueLinkRowsAmongSQL("")
 // organization. Every row of a kept id, and every version of a kept pull
 // request, is still read, so the rule over a kept id is unchanged.
 func issueLinkRowsAmongSQL(candidates string) string {
+	return issueLinkRowsCoreSQL(candidates, false)
+}
+
+// issueLinkRowsCoreSQL is issueLinkRowsAmongSQL; nativeFirst applies the
+// fallback-only rule (nativeFirstLinkSQL) to the rows it returns.
+func issueLinkRowsCoreSQL(candidates string, nativeFirst bool) string {
 	workItems, pullRequests, among, scope := `work_items AS wi FINAL`, `git_pull_requests AS pr FINAL`, ``, ``
 	if candidates != "" {
 		scope = `work_item_id IN ` + candidates
@@ -74,12 +82,16 @@ func issueLinkRowsAmongSQL(candidates string) string {
 		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
 		among = ` AND l.work_item_id IN ` + candidates
 	}
+	covered := ``
+	if nativeFirst {
+		covered = ` AND ` + nativeFirstLinkSQL(scope)
+	}
 	return `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, l.provenance AS provenance, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
   LEFT JOIN ` + workItems + ` ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
-  WHERE l.org_id = {org_id:String}` + among + ` AND ` + nativeFirstLinkSQL(scope) + ` AND ` + workItemIsIssueSQL("wi") + `
+  WHERE l.org_id = {org_id:String}` + among + covered + ` AND ` + workItemIsIssueSQL("wi") + `
 )`
 }
 
@@ -93,6 +105,14 @@ func admittedIssueLinksAmongSQL(candidates string) string {
 	return `(SELECT work_item_id, pr_repo_id, pr_number, provenance, link_rank FROM ` + issueLinkRowsAmongSQL(candidates) + ` WHERE link_rank > 0)`
 }
 
+// nativeFirstIssueLinksAmongSQL is admittedIssueLinksAmongSQL under the
+// fallback-only rule: an explicit_text or heuristic row counts only where no
+// native row covers its pull request or its issue. The team project-reach
+// reads use it; candidates must name the work item ids being read.
+func nativeFirstIssueLinksAmongSQL(candidates string) string {
+	return `(SELECT work_item_id, pr_repo_id, pr_number, provenance, link_rank FROM ` + issueLinkRowsCoreSQL(candidates, true) + ` WHERE link_rank > 0)`
+}
+
 // issuesWithLinkedPullRequestSQL is the set of issue ids that have at least
 // one admitted link row.
 var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssueLinksSQL + `)`
@@ -102,14 +122,17 @@ var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssu
 // work items, used to prune work_items by primary key before a join to them.
 const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 
-// admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
+// nativeFirstLinkedPullRequestRowsAmongSQL is the admitted link rows (known
+// tier, native-first) of the work item ids candidates (a subquery) names whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
 // without reading work_items: a caller that has already restricted the work
 // items to issues joins it on work_item_id, and so reads the work item table
 // once.
-var admittedLinkedPullRequestRowsSQL = `(
+func nativeFirstLinkedPullRequestRowsAmongSQL(candidates string) string {
+	return `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0 AND ` + nativeFirstLinkSQL("") + `
+  WHERE l.org_id = {org_id:String} AND l.work_item_id IN ` + candidates + ` AND ` + linkTierRankSQL + ` > 0 AND ` + nativeFirstLinkSQL(`work_item_id IN `+candidates) + `
 )`
+}
