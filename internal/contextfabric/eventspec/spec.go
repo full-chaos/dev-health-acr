@@ -227,6 +227,9 @@ type Field struct {
 	// MaxItems, when positive, bounds a slice field: the certifier refuses a
 	// line whose string_slice or object_slice carries more elements.
 	MaxItems int
+	// MaxInt, when set, bounds an int field from above: the certifier refuses
+	// a line whose value exceeds it.
+	MaxInt *int
 	// Nullable (FieldCountMap only) says the field may carry JSON null: the
 	// producer leaves the map nil when nothing was counted.
 	Nullable bool
@@ -1843,10 +1846,12 @@ var FactRootRefused = Event{
 	},
 }
 
+func intPtr(n int) *int { return &n }
+
 // engineFactGateReadsPerRequest counts the gated reads one request can make.
 const engineFactGateReadsPerRequest = contextfabric.EngineFactGateReadsPerRequest
 
-func engineFactGateFields(decisions, reasons []string) []Field {
+func engineFactGateFields(decisions, reasons []string, undeclaredMax *int) []Field {
 	return []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"engine_fact_read"}},
@@ -1861,7 +1866,7 @@ func engineFactGateFields(decisions, reasons []string) []Field {
 		{Key: "rows_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "fields_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "evidence_withheld", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "fields_undeclared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fields_undeclared", Type: FieldInt, Presence: PresenceRequired, MaxInt: undeclaredMax},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	}
 }
@@ -1880,7 +1885,7 @@ var EngineFactGateWarn = Event{
 		[]string{
 			contextfabric.EngineFactGateReasonUnseenSubjectsWithheld, contextfabric.EngineFactGateReasonUndeclaredFieldsRemoved,
 			contextfabric.EngineFactGateReasonAuthorizationFailed, contextfabric.EngineFactGateReasonCanceled,
-		}),
+		}, nil),
 }
 
 // EngineFactGateInfo is the Info line of the same gate for a clean read or one that only withheld subjects the caller may not see.
@@ -1894,7 +1899,7 @@ var EngineFactGateInfo = Event{
 	BoundedAggregation: "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
 	Fields: engineFactGateFields(
 		[]string{contextfabric.EngineFactGateClean, contextfabric.EngineFactGateFiltered},
-		[]string{"", contextfabric.EngineFactGateReasonUnseenSubjectsWithheld}),
+		[]string{"", contextfabric.EngineFactGateReasonUnseenSubjectsWithheld}, intPtr(0)),
 }
 
 // OrganizationSubjectRead is the Info line of a turn that resolved no subject and was answered from the caller's organization subject.

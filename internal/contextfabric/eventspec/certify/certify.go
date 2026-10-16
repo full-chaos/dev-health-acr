@@ -354,6 +354,15 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			if a.Event.MaxLinesPerScope <= 0 {
 				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares no MaxLinesPerScope bound", a.Event.ID)
 			}
+			family := 0
+			for _, line := range log.linesWithMsg(a.Event.Msg) {
+				if scopeMatch(a.Event, requestScope, line) {
+					family++
+				}
+			}
+			if family > a.Event.MaxLinesPerScope {
+				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q (every level) for this attempt, over the declared bound of %d", a.Event.ID, family, a.Event.Msg, a.Event.MaxLinesPerScope)
+			}
 			if len(scoped) > a.Event.MaxLinesPerScope {
 				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q for this attempt, over the declared bound of %d", a.Event.ID, len(scoped), a.Event.Msg, a.Event.MaxLinesPerScope)
 			}
@@ -956,6 +965,9 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			// own FieldInt case shares, so the two can never disagree.
 			if !isWholeNumber(gotFloat) {
 				return fmt.Errorf("certify: %s: %q = %v, declared type=int but is not a whole number", eventID, field.Key, got)
+			}
+			if field.MaxInt != nil && gotFloat > float64(*field.MaxInt) {
+				return fmt.Errorf("certify: %s: %q = %v exceeds the declared maximum %d", eventID, field.Key, got, *field.MaxInt)
 			}
 		case eventspec.FieldFloat:
 			// CHAOS-5517: JSON's own number shape already covers this --

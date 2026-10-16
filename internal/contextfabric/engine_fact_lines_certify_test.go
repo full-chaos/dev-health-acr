@@ -322,3 +322,54 @@ func TestIdenticalGateLinesOfOneRequestCertifyAsOnePayload(t *testing.T) {
 	telemetry.RecordEngineFactGate(ctx, principal, clean)
 	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateInfo, "a Want matching two different payloads", map[string]any{"decision": contextfabric.EngineFactGateClean})
 }
+
+// TestAWarnWorthyGateLineLoggedAtInfoIsNotAnInfoLine: the producer writes
+// filtered / unseen_subjects_withheld at Warn when a field was undeclared, so
+// the same payload at INFO is a level regression. It is neither certified as
+// the Info variant nor hidden from the Warn variant's absence check.
+func TestAWarnWorthyGateLineLoggedAtInfoIsNotAnInfoLine(t *testing.T) {
+	t.Parallel()
+	decision := contextfabric.EngineFactGateDecision{
+		Decision: contextfabric.EngineFactGateFiltered, Reason: contextfabric.EngineFactGateReasonUnseenSubjectsWithheld,
+		FactsChecked: 4, FactsWithheldFrom: 1, Report: contextfabric.EmbeddedSubjectReport{FieldsUndeclared: 1},
+	}
+	warn := recordEngineFactGate(decision, 2)
+	certifyRequestLine(t, warn, eventspec.EngineFactGateWarn, map[string]any{"fields_undeclared": 1})
+	misleveled := bytes.Replace(warn, []byte(`"level":"WARN"`), []byte(`"level":"INFO"`), 1)
+	if bytes.Equal(misleveled, warn) {
+		t.Fatalf("the fixture was not a WARN line: %s", warn)
+	}
+	certifyRefused(t, misleveled, eventspec.EngineFactGateInfo, "a Warn-worthy payload at INFO certified as the Info variant")
+	log, err := certify.Parse(misleveled)
+	if err != nil {
+		t.Fatalf("certify.Parse: %v", err)
+	}
+	if err := certify.CertifyAbsent(log, eventspec.EngineFactGateWarn, map[string]any{"request_id": factScopeCertifyRequestID}); err == nil {
+		t.Fatalf("a Warn-worthy payload at INFO certified the Warn variant absent")
+	}
+}
+
+// TestTheGateBoundCountsEveryLevelOfTheMessage: the per-request bound is the
+// most gate lines a request writes in total, not per level.
+func TestTheGateBoundCountsEveryLevelOfTheMessage(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry, ctx := cohortTelemetry(&buf)
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: make([]string, 2)}
+	for i := 1; i <= contextfabric.EngineFactGateReadsPerRequest; i++ {
+		decision := contextfabric.EngineFactGateDecision{Decision: contextfabric.EngineFactGateClean, FactsChecked: i}
+		if i == 2 {
+			decision = contextfabric.EngineFactGateDecision{
+				Decision: contextfabric.EngineFactGateUnavailable, Reason: contextfabric.EngineFactGateReasonCanceled, FactsChecked: i,
+			}
+		}
+		telemetry.RecordEngineFactGate(ctx, principal, decision)
+	}
+	certifyRequestLine(t, buf.Bytes(), eventspec.EngineFactGateInfo, map[string]any{"facts_checked": 1})
+	certifyRequestLine(t, buf.Bytes(), eventspec.EngineFactGateWarn, map[string]any{"facts_checked": 2})
+	telemetry.RecordEngineFactGate(ctx, principal, contextfabric.EngineFactGateDecision{
+		Decision: contextfabric.EngineFactGateUnavailable, Reason: contextfabric.EngineFactGateReasonCanceled, FactsChecked: 9,
+	})
+	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateInfo, "a fourth line of the other level over the request bound", map[string]any{"facts_checked": 1})
+	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateWarn, "a fourth line over the request bound", map[string]any{"facts_checked": 9})
+}

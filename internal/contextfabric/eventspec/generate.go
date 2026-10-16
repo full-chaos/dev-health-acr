@@ -510,6 +510,7 @@ type jsonField struct {
 	Applicability    string      `json:"applicability,omitempty"`
 	Nullable         bool        `json:"nullable,omitempty"`
 	MaxItems         int         `json:"max_items,omitempty"`
+	MaxInt           *int        `json:"max_int,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -535,6 +536,7 @@ func toJSONFields(fs []Field) []jsonField {
 			Applicability:    f.Applicability,
 			Nullable:         f.Nullable,
 			MaxItems:         f.MaxItems,
+			MaxInt:           f.MaxInt,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

@@ -114,6 +114,9 @@ func canonicalValueFor(f eventspec.Field) any {
 		if f.Key == "index" || f.Key == "total" {
 			return 1
 		}
+		if f.MaxInt != nil {
+			return *f.MaxInt
+		}
 		return 7
 	case eventspec.FieldFloat:
 		return 0.5
@@ -509,6 +512,15 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, mutate(badValue), Assertion{Event: ev, Want: wantFor(badValue)})
 		row.gotAccept = err == nil
 	case "boundary":
+		// An int field that declares MaxInt accepts its maximum and refuses
+		// one more.
+		if f.Type == eventspec.FieldInt && f.MaxInt != nil {
+			row.applicable, row.wantAccept = true, true
+			_, atMax := certifyRecovered(t, mutate(*f.MaxInt), Assertion{Event: ev, Want: wantFor(*f.MaxInt)})
+			_, overMax := certifyRecovered(t, mutate(*f.MaxInt+1), Assertion{Event: ev, Want: wantFor(*f.MaxInt + 1)})
+			row.gotAccept = atMax == nil && overMax != nil
+			return row
+		}
 		// A slice field that declares MaxItems accepts exactly that many
 		// elements and refuses one more.
 		if f.MaxItems <= 0 || (f.Type != eventspec.FieldStringSlice && f.Type != eventspec.FieldObjectSlice) {

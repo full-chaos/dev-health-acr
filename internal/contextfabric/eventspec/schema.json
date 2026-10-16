@@ -2607,7 +2607,8 @@
       {
         "key": "fields_undeclared",
         "type": "int",
-        "presence": "required"
+        "presence": "required",
+        "max_int": 0
       },
       {
         "key": "request_id",
