@@ -75,7 +75,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"alert_basis", "complexity_snapshot_day", "file_path", "latest_run_day", "rank_basis", "as_of_day", "blocked_by_work_item_id", "blocked_by_work_item_ref", "completed_at", "computed_at", "day",
 		"environment", "id", "last_failure_occurred_at", "last_sync_at", "latest_as_of_day", "latest_day",
 		"latest_computed_at", "latest_severity", "latest_synced_at", "map_name", "newest_open_created_at", "oldest_open_created_at", "name", "organization_id", "provider", "repository_id",
-		"repository_name", "required_child_work_item_id", "required_child_work_item_ref", "rule_basis_severity",
+		"repository_name", "required_child_work_item_id", "required_child_work_item_ref", "rule_basis_as_of_day", "rule_basis_severity",
 		"rule_computed_at", "rule_id", "rule_version", "scope", "scope_id", "scope_name", "severity", "severity_as_of",
 		"status_since", "success_criterion", "team_id", "team_name", "title", "unit_from", "unit_to", "window_end",
 		"window_start", "work_scope_id", "work_unit_id", "sizing_note",

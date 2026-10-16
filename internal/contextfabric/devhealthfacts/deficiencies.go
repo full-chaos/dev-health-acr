@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -135,6 +137,13 @@ ORDER BY team_id, rule_id`)
 			if parsed {
 				fields["rule_basis_compounding_risk"] = contextfabric.NumberFactValue(basis.score)
 				fields["rule_basis_severity"] = contextfabric.StringFactValue(basis.severity)
+				if basis.day != "" {
+					fields["rule_basis_as_of_day"] = contextfabric.StringFactValue(basis.day)
+				} else if basis.invalidDay != "" {
+					slog.Warn("devhealthfacts.rule_basis_day_invalid", eventspec.NewDeficiencyRuleBasisDayInvalidFields(orgID, ruleID, basis.invalidDay).SlogArgs()...)
+				} else {
+					slog.Info("devhealthfacts.rule_basis_day_absent", eventspec.NewDeficiencyRuleBasisDayAbsentFields(orgID, ruleID).SlogArgs()...)
+				}
 			} else {
 				fields["rule_basis_unavailable_reason"] = contextfabric.StringFactValue(ruleBasisUnavailableNotRuleSentence)
 				slog.Warn("devhealthfacts.rule_basis_unparsed", "rule_id", contextfabric.SanitizeLogAttr(ruleID))
@@ -383,13 +392,20 @@ const (
 	ruleBasisUnavailableNotRuleSentence = "rationale_not_in_rule_sentence_form"
 )
 
-var compoundingRiskRationalePattern = regexp.MustCompile(`^Compounding Risk score is (\d+\.\d+) \(severity: (elevated|high)\)(?:, computed from \d+% of its inputs \((?:churn|complexity trend|ownership concentration|review latency)(?:, (?:churn|complexity trend|ownership concentration|review latency))*\))?\.`)
+var compoundingRiskRationalePattern = regexp.MustCompile(`^Compounding Risk score is (\d+\.\d+) \(severity: (elevated|high)\)(?:, computed from \d+% of its inputs \((?:churn|complexity trend|ownership concentration|review latency)(?:, (?:churn|complexity trend|ownership concentration|review latency))*\))?\.(?: Score as of (\d{4}-\d{2}-\d{2})\.)?`)
 
 // ruleBasis is the score and band the Ops rule states it ran on, read from
 // the rule's own rationale text (Ops stores no structured column for it).
 type ruleBasis struct {
 	score    float64
 	severity string
+	// day is the calendar day of the score the rule read, from the sentence
+	// "Score as of <day>." that follows the score sentence. Empty for a rule
+	// row written before Ops named the day: the field is then not served.
+	day string
+	// invalidDay is a captured day sentence value that is not a calendar date.
+	// It is never served; the caller reports it.
+	invalidDay string
 }
 
 type basisFact struct {
@@ -411,7 +427,13 @@ func parseCompoundingRiskRationale(rationale string) (ruleBasis, bool) {
 	if err != nil {
 		return ruleBasis{}, false
 	}
-	return ruleBasis{score: score, severity: match[2]}, true
+	day := match[3]
+	if day != "" {
+		if _, dayErr := time.Parse("2006-01-02", day); dayErr != nil {
+			return ruleBasis{score: score, severity: match[2], invalidDay: day}, true
+		}
+	}
+	return ruleBasis{score: score, severity: match[2], day: day}, true
 }
 
 type latestCompoundingRisk struct {

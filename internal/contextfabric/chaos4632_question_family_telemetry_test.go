@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"sort"
 	"strings"
 	"testing"
 
@@ -70,26 +70,34 @@ func TestQuestionFamilyResolutionReachesTheProductionSink(t *testing.T) {
 	// The per-sample rows are the round-2 finding: singular fields cannot
 	// represent two samples failing DIFFERENT precedence rows with
 	// DIFFERENT attempted families. Every row's every field must be
-	// present.
+	// present, in one bounded list.
+	rows, ok := record["samples"].([]any)
+	if !ok || len(rows) != len(samples) {
+		t.Fatalf("samples = %#v, want a list of %d rows", record["samples"], len(samples))
+	}
 	for i := range samples {
-		prefix := "sample_" + strconv.Itoa(i) + "_"
-		for _, suffix := range []string{
+		row, _ := rows[i].(map[string]any)
+		for _, key := range []string{
 			"shape", "attempted_family", "resolved_family", "row",
 			"incompatibility_reason", "group_kind_set", "scope_anchor_set",
 		} {
-			if _, ok := record[prefix+suffix]; !ok {
-				t.Errorf("record has no %q key -- a split consensus cannot be diagnosed without every per-sample field", prefix+suffix)
+			if _, ok := row[key]; !ok {
+				t.Errorf("samples[%d] has no %q key -- a split consensus cannot be diagnosed without every per-sample field", i, key)
 			}
 		}
 	}
 	// Sample 2 is the downgraded one, and its reason must be nameable
 	// from the line alone -- that is the whole diagnosis-from-artifacts
 	// bar AGENTS.md sets.
-	if record["sample_2_incompatibility_reason"] != string(FamilyIncompatibilityUnreachable) {
-		t.Errorf("sample_2_incompatibility_reason = %v, want %q", record["sample_2_incompatibility_reason"], FamilyIncompatibilityUnreachable)
+	third, _ := rows[2].(map[string]any)
+	if third["incompatibility_reason"] != string(FamilyIncompatibilityUnreachable) {
+		t.Errorf("samples[2].incompatibility_reason = %v, want %q", third["incompatibility_reason"], FamilyIncompatibilityUnreachable)
 	}
-	if record["sample_2_attempted_family"] != string(QuestionFamilyTrend) {
-		t.Errorf("sample_2_attempted_family = %v, want %q", record["sample_2_attempted_family"], QuestionFamilyTrend)
+	if third["attempted_family"] != string(QuestionFamilyTrend) {
+		t.Errorf("samples[2].attempted_family = %v, want %q", third["attempted_family"], QuestionFamilyTrend)
+	}
+	if record["samples_omitted"] != float64(0) {
+		t.Errorf("samples_omitted = %v, want 0 for a list within the bound", record["samples_omitted"])
 	}
 }
 
@@ -175,10 +183,7 @@ func TestQuestionFamilyTelemetryLeaksNoContent(t *testing.T) {
 		"org_id": true, "family": true, "source": true, "ensemble_size": true,
 		"downgraded_count": true, "consensus_field_divergence": true,
 		"family_version": true, "sample_families": true,
-		"sample_0_shape": true, "sample_0_attempted_family": true,
-		"sample_0_resolved_family": true, "sample_0_row": true,
-		"sample_0_incompatibility_reason": true,
-		"sample_0_group_kind_set":         true, "sample_0_scope_anchor_set": true,
+		"samples": true, "samples_omitted": true,
 		// The CHAOS-4452 shadow comparison. Every one of these is a
 		// closed-vocabulary member or a boolean: two families, two rows,
 		// one agreement class, one outcome, one server-authored version
@@ -238,16 +243,21 @@ func TestSampleFamilyDistributionIsStablyOrdered(t *testing.T) {
 	}
 }
 
-// renderValue flattens the logged sample_families array to a comparable
-// string.
+// renderValue flattens the logged sample_families object to a comparable
+// string (keys sorted).
 func renderValue(value any) string {
-	items, ok := value.([]any)
+	counts, ok := value.(map[string]any)
 	if !ok {
-		return "not-a-list"
+		return "not-an-object"
 	}
-	parts := make([]string, 0, len(items))
-	for _, item := range items {
-		parts = append(parts, fmt.Sprint(item))
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+fmt.Sprint(counts[key]))
 	}
 	return strings.Join(parts, "|")
 }

@@ -56,6 +56,7 @@ var ByID = map[string]Event{
 	"contextfabric.plan_carry_outcome":                 PlanCarryOutcome,
 	"contextfabric.project_deployment_walk":            ProjectDeploymentWalk,
 	"contextfabric.pull_request_status_filter":         PullRequestStatusFilter,
+	"contextfabric.question_family_resolution":         QuestionFamilyResolution,
 	"contextfabric.remembered_window_axis":             RememberedWindowAxis,
 	"contextfabric.render_shape_rule_skipped":          RenderShapeRuleSkipped,
 	"contextfabric.render_shape_selection_summary":     RenderShapeSelectionSummary,
@@ -82,6 +83,8 @@ var ByID = map[string]Event{
 	"devhealthfacts.health_daily_health_cap_cut":       HealthDailyHealthCapCut,
 	"devhealthfacts.owning_teams_truncated":            OwningTeamsTruncated,
 	"devhealthfacts.pull_request_project_native_first": PullRequestProjectNativeFirst,
+	"devhealthfacts.rule_basis_day_absent":             DeficiencyRuleBasisDayAbsent,
+	"devhealthfacts.rule_basis_day_invalid":            DeficiencyRuleBasisDayInvalid,
 	"devhealthfacts.subject_id_shape_rejected":         SubjectIDShapeRejected,
 	"devhealthfacts.team_linked_mix_native_first":      TeamLinkedMixNativeFirst,
 	"devhealthfacts.team_linked_mix_set":               TeamLinkedMixSet,
@@ -3834,6 +3837,120 @@ func (f PullRequestStatusFilterFields) SlogArgs() []any {
 	}
 }
 
+// QuestionFamilyResolutionFields is contextfabric.question_family_resolution's generated typed construction interface
+// (CHAOS-5516): one Go field per Field QuestionFamilyResolution.Fields declares in spec.go.
+type QuestionFamilyResolutionFields struct {
+	OrgID                    string
+	Family                   string
+	Source                   string
+	EnsembleSize             int
+	DowngradedCount          int
+	ConsensusFieldDivergence int
+	FamilyVersion            string
+	SampleFamilies           map[string]int
+	Samples                  []map[string]any
+	SamplesOmitted           int
+	ShadowFrameObserved      bool
+	ShadowFrameOutcome       string
+	ShadowProjectionVersion  string
+	ShadowProjectedFamily    string
+	ShadowProjectedRow       string
+	ShadowPrecedenceFamily   string
+	ShadowPrecedenceRow      string
+	ShadowAgreementClass     string
+	ShadowAgreed             bool
+	FamilySource             string
+	RouteClass               string
+	RouteDisposition         string
+	RouteSwitched            bool
+	RequestID                string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every QuestionFamilyResolutionFields uniformly, set ONLY by NewQuestionFamilyResolutionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewQuestionFamilyResolutionFields is the generated constructor for QuestionFamilyResolutionFields -- every
+// field QuestionFamilyResolution.Fields declares is a required parameter.
+func NewQuestionFamilyResolutionFields(orgID string, family string, source string, ensembleSize int, downgradedCount int, consensusFieldDivergence int, familyVersion string, sampleFamilies map[string]int, samples []map[string]any, samplesOmitted int, shadowFrameObserved bool, shadowFrameOutcome string, shadowProjectionVersion string, shadowProjectedFamily string, shadowProjectedRow string, shadowPrecedenceFamily string, shadowPrecedenceRow string, shadowAgreementClass string, shadowAgreed bool, familySource string, routeClass string, routeDisposition string, routeSwitched bool, requestID string) QuestionFamilyResolutionFields {
+	valid := true
+	if samples == nil {
+		valid = false
+	}
+	return QuestionFamilyResolutionFields{
+		OrgID:                    orgID,
+		Family:                   family,
+		Source:                   source,
+		EnsembleSize:             ensembleSize,
+		DowngradedCount:          downgradedCount,
+		ConsensusFieldDivergence: consensusFieldDivergence,
+		FamilyVersion:            familyVersion,
+		SampleFamilies:           sampleFamilies,
+		Samples:                  samples,
+		SamplesOmitted:           samplesOmitted,
+		ShadowFrameObserved:      shadowFrameObserved,
+		ShadowFrameOutcome:       shadowFrameOutcome,
+		ShadowProjectionVersion:  shadowProjectionVersion,
+		ShadowProjectedFamily:    shadowProjectedFamily,
+		ShadowProjectedRow:       shadowProjectedRow,
+		ShadowPrecedenceFamily:   shadowPrecedenceFamily,
+		ShadowPrecedenceRow:      shadowPrecedenceRow,
+		ShadowAgreementClass:     shadowAgreementClass,
+		ShadowAgreed:             shadowAgreed,
+		FamilySource:             familySource,
+		RouteClass:               routeClass,
+		RouteDisposition:         routeDisposition,
+		RouteSwitched:            routeSwitched,
+		RequestID:                requestID,
+		constructed:              valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewQuestionFamilyResolutionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f QuestionFamilyResolutionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns QuestionFamilyResolution's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f QuestionFamilyResolutionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"ensemble_size", f.EnsembleSize,
+		"downgraded_count", f.DowngradedCount,
+		"consensus_field_divergence", f.ConsensusFieldDivergence,
+		"family_version", contextfabric.SanitizeLogAttr(f.FamilyVersion),
+		"sample_families", f.SampleFamilies,
+		"samples", f.Samples,
+		"samples_omitted", f.SamplesOmitted,
+		"shadow_frame_observed", f.ShadowFrameObserved,
+		"shadow_frame_outcome", contextfabric.SanitizeLogAttr(f.ShadowFrameOutcome),
+		"shadow_projection_version", contextfabric.SanitizeLogAttr(f.ShadowProjectionVersion),
+		"shadow_projected_family", contextfabric.SanitizeLogAttr(f.ShadowProjectedFamily),
+		"shadow_projected_row", contextfabric.SanitizeLogAttr(f.ShadowProjectedRow),
+		"shadow_precedence_family", contextfabric.SanitizeLogAttr(f.ShadowPrecedenceFamily),
+		"shadow_precedence_row", contextfabric.SanitizeLogAttr(f.ShadowPrecedenceRow),
+		"shadow_agreement_class", contextfabric.SanitizeLogAttr(f.ShadowAgreementClass),
+		"shadow_agreed", f.ShadowAgreed,
+		"family_source", contextfabric.SanitizeLogAttr(f.FamilySource),
+		"route_class", contextfabric.SanitizeLogAttr(f.RouteClass),
+		"route_disposition", contextfabric.SanitizeLogAttr(f.RouteDisposition),
+		"route_switched", f.RouteSwitched,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // RememberedWindowAxisFields is contextfabric.remembered_window_axis's generated typed construction interface
 // (CHAOS-5516): one Go field per Field RememberedWindowAxis.Fields declares in spec.go.
 type RememberedWindowAxisFields struct {
@@ -5851,6 +5968,97 @@ func (f PullRequestProjectNativeFirstFields) SlogArgs() []any {
 		"fallback_links", f.FallbackLinks,
 		"dropped_links", f.DroppedLinks,
 		"dropped_rows", f.DroppedRows,
+	}
+}
+
+// DeficiencyRuleBasisDayAbsentFields is devhealthfacts.rule_basis_day_absent's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DeficiencyRuleBasisDayAbsent.Fields declares in spec.go.
+type DeficiencyRuleBasisDayAbsentFields struct {
+	OrgID  string
+	RuleID string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DeficiencyRuleBasisDayAbsentFields uniformly, set ONLY by NewDeficiencyRuleBasisDayAbsentFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDeficiencyRuleBasisDayAbsentFields is the generated constructor for DeficiencyRuleBasisDayAbsentFields -- every
+// field DeficiencyRuleBasisDayAbsent.Fields declares is a required parameter.
+func NewDeficiencyRuleBasisDayAbsentFields(orgID string, ruleID string) DeficiencyRuleBasisDayAbsentFields {
+	return DeficiencyRuleBasisDayAbsentFields{
+		OrgID:       orgID,
+		RuleID:      ruleID,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDeficiencyRuleBasisDayAbsentFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DeficiencyRuleBasisDayAbsentFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DeficiencyRuleBasisDayAbsent's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DeficiencyRuleBasisDayAbsentFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"rule_id", contextfabric.SanitizeLogAttr(f.RuleID),
+	}
+}
+
+// DeficiencyRuleBasisDayInvalidFields is devhealthfacts.rule_basis_day_invalid's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DeficiencyRuleBasisDayInvalid.Fields declares in spec.go.
+type DeficiencyRuleBasisDayInvalidFields struct {
+	OrgID  string
+	RuleID string
+	Day    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DeficiencyRuleBasisDayInvalidFields uniformly, set ONLY by NewDeficiencyRuleBasisDayInvalidFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDeficiencyRuleBasisDayInvalidFields is the generated constructor for DeficiencyRuleBasisDayInvalidFields -- every
+// field DeficiencyRuleBasisDayInvalid.Fields declares is a required parameter.
+func NewDeficiencyRuleBasisDayInvalidFields(orgID string, ruleID string, day string) DeficiencyRuleBasisDayInvalidFields {
+	return DeficiencyRuleBasisDayInvalidFields{
+		OrgID:       orgID,
+		RuleID:      ruleID,
+		Day:         day,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDeficiencyRuleBasisDayInvalidFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DeficiencyRuleBasisDayInvalidFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DeficiencyRuleBasisDayInvalid's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DeficiencyRuleBasisDayInvalidFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"rule_id", contextfabric.SanitizeLogAttr(f.RuleID),
+		"day", contextfabric.SanitizeLogAttr(f.Day),
 	}
 }
 
