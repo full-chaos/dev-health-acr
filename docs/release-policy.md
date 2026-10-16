@@ -18,9 +18,17 @@ archives, SPDX SBOMs, manifests, checksums, and Sigstore verification material.
 The workflow supports three entry points:
 
 1. Pushing to `main`. The protected branch and merge permissions are the
-   authorization boundary. The workflow publishes the full 40-character commit
-   SHA as the immutable GHCR image tag, creates a `main-<full-sha>` GitHub
-   Release, and, after rechecking the branch tip, moves the `latest` aliases.
+   authorization boundary. The release starts when that push's `ci` run
+   completes (`workflow_run`), and its `ci-reference` job reads that run's
+   `verify` job once: a failed `verify` refuses the release by name. The run is
+   named `Release <full-sha>`, the commit it releases, because a
+   `workflow_run` run's own head sha is the tip of `main`, which may have moved
+   on (`promote-main-image-aliases.yml` reads the commit from that name). The
+   workflow publishes the full 40-character commit SHA as the immutable GHCR
+   image tag, creates a `main-<full-sha>` GitHub Release, and, after rechecking
+   the branch tip, moves the `latest` aliases. It used to start on the push
+   itself and poll for the `ci` run on a runner of its own for at most an hour;
+   on a saturated hosted queue that hour ran out with the commit green.
 2. Pushing a canonical tag:
    `vMAJOR.MINOR.PATCH`, `vMAJOR.MINOR.PATCH-dev.N`, or
    `vMAJOR.MINOR.PATCH-beta.N`.

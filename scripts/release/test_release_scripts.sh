@@ -225,6 +225,59 @@ if assert_go_version_pins "$tmp/ci-one-unpinned-setup-go.yml" "$release_workflow
 grep -F 'workflow_dispatch:' "$release_workflow" >/dev/null
 grep -F 'branches: [main]' "$release_workflow" >/dev/null
 grep -F 'channel=main' "$release_workflow" >/dev/null
+
+# CHAOS-9918: a main push is released from its ci run's completion. The checks
+# run on the real file, then on mutated copies that each must fail.
+check_release_trigger() {
+  local wf="$1" promote="$2" on_block push_block wr_block
+  on_block="$(awk '/^"on":/ {f=1; next} f && /^[^ ]/ {exit} f' "$wf")"
+  push_block="$(awk '/^  push:/ {f=1; next} f && /^  [a-z_]+:/ {exit} f' <<<"$on_block")"
+  wr_block="$(awk '/^  workflow_run:/ {f=1; next} f && /^  [a-z_]+:/ {exit} f' <<<"$on_block")"
+  grep -qxF '    tags: ["v*"]' <<<"$push_block" || return 1
+  if grep -q 'branches' <<<"$push_block"; then return 1; fi
+  grep -qxF '    workflows: [ci]' <<<"$wr_block" || return 1
+  grep -qxF '    types: [completed]' <<<"$wr_block" || return 1
+  grep -qxF '    branches: [main]' <<<"$wr_block" || return 1
+  grep -qxF 'run-name: Release ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.sha }}' "$wf" || return 1
+  grep -qF "|| github.event.inputs.tag || github.event.workflow_run.head_sha || github.sha }}" "$wf" || return 1
+  grep -qF "(github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))" "$wf" || return 1
+  grep -qF 'commit="$RUN_HEAD_SHA"' "$wf" || return 1
+  if grep -qF 'commit="$GITHUB_SHA"' "$wf"; then return 1; fi
+  test "$(grep -cxF '          ref: ${{ github.event.workflow_run.head_sha || github.sha }}' "$wf")" -eq 2 || return 1
+  if grep -qxF '          ref: ${{ github.sha }}' "$wf"; then return 1; fi
+  grep -qF 'TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}' "$wf" || return 1
+  grep -qF '[ "$TRIGGER_HEAD_SHA" = "$COMMIT" ]' "$wf" || return 1
+  grep -qF "(github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'push')" "$promote" || return 1
+  grep -qF '[[ "$RELEASE_TITLE" =~ ^Release\ ([0-9a-f]{40})$ ]]' "$promote" || return 1
+  grep -qF '"$RELEASE_EVENT" == workflow_run' "$promote" || return 1
+  grep -qF 'LEVEL LIMIT: ci -> Release (this workflow_run) -> promote-main-image-aliases' "$wf" || return 1
+  grep -qxF "          printf '%s\\n' \"\$commit\" > .tmp/release-commit/commit" "$wf" || return 1
+  grep -qxF '          name: release-commit' "$wf" || return 1
+  grep -qF -- '--name release-commit' "$promote" || return 1
+  grep -qF '[[ "$recorded" == "$SOURCE_SHA" ]]' "$promote" || return 1
+  grep -qxF '  actions: read' "$promote" || return 1
+}
+promote_workflow="$root/.github/workflows/promote-main-image-aliases.yml"
+check_release_trigger "$release_workflow" "$promote_workflow"
+mutant() { # NAME SED-EXPR FILE-KIND
+  local out="$tmp/trigger-$1.yml" src="$release_workflow" p="$promote_workflow"
+  [ "$3" = promote ] && src="$promote_workflow"
+  sed "$2" "$src" > "$out"
+  cmp -s "$src" "$out" && { printf 'release trigger control %s did not change the file\n' "$1" >&2; exit 1; }
+  if [ "$3" = promote ]; then p="$out"; out="$release_workflow"; fi
+  if check_release_trigger "$out" "$p"; then printf 'release trigger control %s passed and must fail\n' "$1" >&2; exit 1; fi
+}
+mutant push-main 's/^    tags: \["v\*"\]$/    branches: [main]\n    tags: ["v*"]/' release
+mutant no-workflow-run 's/^    workflows: \[ci\]$/    workflows: [Mirror images]/' release
+mutant any-branch '/^  workflow_run:/,/^  [a-z_]*:$/{/^    branches: \[main\]$/d}' release
+mutant sha-from-github 's/commit="$RUN_HEAD_SHA"/commit="$GITHUB_SHA"/' release
+mutant assemble-tip 's/^          ref: ${{ github.event.workflow_run.head_sha || github.sha }}$/          ref: ${{ github.sha }}/' release
+mutant concurrency-tip 's/ || github.event.workflow_run.head_sha || github.sha }}/ || github.sha }}/' release
+mutant reference-polls 's/\[ "$TRIGGER_HEAD_SHA" = "$COMMIT" \]/true/' release
+mutant promote-head-sha 's/"$RELEASE_EVENT" == workflow_run/"$RELEASE_EVENT" == never/' promote
+mutant no-commit-artifact 's/^          name: release-commit$/          name: release-commit-x/' release
+mutant promote-no-crosscheck 's/\[\[ "$recorded" == "$SOURCE_SHA" \]\]/true/' promote
+mutant promote-push-only "s/(github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'push')/github.event.workflow_run.event == 'push'/" promote
 grep -F 'tag="$commit"' "$release_workflow" >/dev/null
 grep -F -- '--derive-main-version "$commit"' "$release_workflow" >/dev/null
 grep -F -- '--version "$VERSION"' "$release_workflow" >/dev/null
