@@ -371,5 +371,11 @@ func TestThePullRequestProjectLineCertifiesThroughItsProducer(t *testing.T) {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		certifyLinkLine(t, buf, eventspec.PullRequestProjectNativeFirst, tc.want)
+		_, wantsCover := tc.want["native_cover_issues"]
+		for _, key := range []string{"native_cover_issues", "native_cover_pull_requests"} {
+			if got := strings.Contains(buf.String(), `"`+key+`"`); got != wantsCover {
+				t.Fatalf("%s: key %s present=%v, want %v (written only when a native cover was read): %s", tc.name, key, got, wantsCover, buf.String())
+			}
+		}
 	}
 }

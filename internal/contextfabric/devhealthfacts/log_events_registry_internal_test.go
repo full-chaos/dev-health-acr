@@ -93,6 +93,13 @@ func collectLogMessages(fset *token.FileSet, files []*ast.File, names []string) 
 	// stringConstants maps a package-level constant to its value when the value
 	// is a string literal, another such constant, or a concatenation of them.
 	constantExprs := map[string]ast.Expr{}
+	for index, file := range files {
+		for _, spec := range file.Imports {
+			if spec.Name != nil && spec.Name.Name == "." && spec.Path.Value == `"log/slog"` {
+				dynamic = append(dynamic, names[index]+" (log/slog dot import: its calls cannot be followed)")
+			}
+		}
+	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
@@ -264,5 +271,11 @@ func g(name string) {
 }`})
 	if len(dynamic) != 2 {
 		t.Errorf("a slog function used as a value and a variable message must both be reported, got %v", dynamic)
+	}
+	_, dynamic = parseForGuard(t, map[string]string{"c.go": `package p
+import . "log/slog"
+func h() { Info("dot_imported_event") }`})
+	if len(dynamic) != 1 || !strings.Contains(dynamic[0], "dot import") {
+		t.Errorf("a dot import of log/slog must be reported, got %v", dynamic)
 	}
 }
