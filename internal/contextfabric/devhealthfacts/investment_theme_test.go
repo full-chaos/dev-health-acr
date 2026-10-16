@@ -19,7 +19,7 @@ import (
 // table is faked by ownsRepoTable) and the scan order is window, repo_id, theme map,
 // bugfix, work_units.
 func themeMixRow(teamID, teamName string, themes map[string]float64, bugfix float64) []any {
-	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3), clockSpanStart}
+	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3), []uint64{1, 2, 3}, []uint64{}, clockSpanStart}
 }
 
 // watermarkTable answers the freshness read (max computed_at) ahead of the

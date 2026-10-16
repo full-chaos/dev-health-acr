@@ -55,7 +55,7 @@ import (
 var sharedClickHouseTables = []string{
 	"repo_metrics_daily", "repo_change_failure_daily", "compounding_risk_daily", "capacity_forecasts",
 	"estimate_coverage_metrics_daily", "recommendations_daily",
-	"work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
+	"work_unit_investments", "work_unit_issue_size", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 	"work_item_team_attributions", "repos",
 	"projects", "work_items", "git_pull_requests", "git_pull_request_reviews",
 	"work_item_metrics_daily", "work_item_measure_capability", "team_project_ownership", "team_repo_ownership",

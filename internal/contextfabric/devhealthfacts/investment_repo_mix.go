@@ -52,6 +52,12 @@ type repoMixRow struct {
 	Theme     map[string]float64
 	Bugfix    float64
 	WorkUnits int64
+	// UnitHashes and SizedUnitHashes are cityHash64 of the distinct work unit
+	// ids of the row, and of those that carry an issue size: a team's
+	// coverage counts a unit once however many of its repositories the unit
+	// reaches, so the per-repository rows keep the units themselves.
+	UnitHashes      []uint64
+	SizedUnitHashes []uint64
 }
 
 // mixWindowParams names the bind parameters of window i: window 0 uses the
@@ -121,9 +127,11 @@ func repoMixStatementScoped(bounds []factTimeBound, scope membershipScope, limit
 	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
 	sum(bugfix_share * effort) AS bugfix_effort,
 	uniqExact(work_unit_id) AS work_units,
+	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0)) AS unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0 AND unit_issue_size > 0)) AS sized_unit_hashes,
 	min(span_from) AS span_from
 FROM (
-	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from
 	FROM (
 `+requestedSplitRows(memberships, true, scope, false)+`	)
 )
@@ -146,41 +154,40 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
-	return `			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
+	return `			SELECT *, unit_size_weight AS effort_value
+			FROM ` + sizedUnits(`SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id, {org_id:String} AS org_id,
 				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
-				any(parsed.effort_value) AS effort_value,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
 				any(parsed.bugfix_share) AS bugfix_share,
-				any(parsed.span_from) AS span_from` + unitAgg + `
+				any(parsed.span_from) AS span_from`+unitAgg+`
 			FROM (
-				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, span_from, win,` + unitCols + `
+				SELECT work_unit_id, theme_distribution_json, bugfix_share, span_from, win,`+unitCols+`
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
-					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json, from_ts AS span_from,` + unitCols + `
-						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
-						` + wins + ` AS wins,
-						` + prRefsExpression + ` AS pr_refs,
-						` + repoRefsExpression + ` AS refs
+					SELECT work_unit_id, repo_id, theme_distribution_json, from_ts AS span_from,`+unitCols+`
+						ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0) AS bugfix_share,
+						`+wins+` AS wins,
+						`+prRefsExpression+` AS pr_refs,
+						`+repoRefsExpression+` AS refs
 					FROM (
 						SELECT work_unit_id,
 							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 							argMax(from_ts, computed_at) AS from_ts,
 							argMax(to_ts, computed_at) AS to_ts,
-							toFloat64(1) AS effort_value,
 							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
 						FROM work_unit_investments
-						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
+						WHERE org_id = {org_id:String}`+supersededWorkUnitIDsFilter()+scope.filter()+`
 						GROUP BY work_unit_id
 					)
 				)
 				ARRAY JOIN wins AS win
 				ARRAY JOIN refs AS ref
 			) AS parsed
-			LEFT JOIN ` + repoLookupJoin + `
-			GROUP BY win, work_unit_id, repo_uuid
+			LEFT JOIN `+repoLookupJoin+`
+			GROUP BY win, work_unit_id, repo_uuid`) + `
 `
 }
 
@@ -283,7 +290,7 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			var window uint8
 			var workUnits uint64
 			var spanFrom time.Time
-			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits, &spanFrom); err != nil {
+			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits, &r.UnitHashes, &r.SizedUnitHashes, &spanFrom); err != nil {
 				return err
 			}
 			if window == spanSentinelServed {
@@ -323,6 +330,14 @@ type repoThemeTotals struct {
 	theme     map[string]float64
 	bugfix    float64
 	workUnits int64
+	// sizedUnits is how many of the units carry an issue size (D6027).
+	sizedUnits int64
+	// unitSet and sizedUnitSet are the distinct units behind a mix that is the
+	// union of several repositories (a team), by cityHash64 of the work unit
+	// id; their sizes are the coverage, so a unit in two owned repositories
+	// counts once. nil for a mix whose counts the statement made exact.
+	unitSet      map[uint64]struct{}
+	sizedUnitSet map[uint64]struct{}
 	// repos counts the repositories folded into a team total (0 for a
 	// single-repository total, where it is not meaningful).
 	repos int64
@@ -364,12 +379,45 @@ func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
 		if r.WorkUnits > t.workUnits {
 			t.workUnits = r.WorkUnits
 		}
+		if t.unitSet == nil {
+			t.unitSet, t.sizedUnitSet = map[uint64]struct{}{}, map[uint64]struct{}{}
+		}
+		for _, h := range r.UnitHashes {
+			t.unitSet[h] = struct{}{}
+		}
+		for _, h := range r.SizedUnitHashes {
+			t.sizedUnitSet[h] = struct{}{}
+		}
+		t.sizedUnits = int64(len(t.sizedUnitSet))
 		for theme, effort := range r.Theme {
 			t.theme[theme] += effort
 		}
 		t.bugfix += r.Bugfix
 	}
 	return out
+}
+
+// unionUnits folds the distinct units of o into t.
+func (t *repoThemeTotals) unionUnits(o *repoThemeTotals) {
+	if t.unitSet == nil {
+		t.unitSet, t.sizedUnitSet = map[uint64]struct{}{}, map[uint64]struct{}{}
+	}
+	for h := range o.unitSet {
+		t.unitSet[h] = struct{}{}
+	}
+	for h := range o.sizedUnitSet {
+		t.sizedUnitSet[h] = struct{}{}
+	}
+}
+
+// sizingUnits is the coverage population of the mix: the distinct units of a
+// union (a team), else the statement's own exact counts (repository,
+// organization).
+func (t *repoThemeTotals) sizingUnits() (units, sized int64) {
+	if t.unitSet != nil {
+		return int64(len(t.unitSet)), int64(len(t.sizedUnitSet))
+	}
+	return t.workUnits, t.sizedUnits
 }
 
 func (t *repoThemeTotals) total() float64 {
@@ -438,6 +486,8 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 		}
 		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(t.bugfix / total))
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(t.workUnits)
+		units, sized := t.sizingUnits()
+		investmentSizingFields(fields, total, units, sized)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis)
 		fields["theme_breakdown"] = themeBreakdownTable(t, timeBound.effectiveGrain(grainDaily))
@@ -569,6 +619,8 @@ func sumOwnedRepoMix(owned map[string][]string, perRepo map[string]*repoThemeTot
 				team.theme[theme] += t.theme[theme]
 			}
 			team.bugfix += t.bugfix
+			team.workUnits += t.workUnits
+			team.unionUnits(t)
 			team.repos++
 		}
 		if team.repos == 0 || team.total() <= 0 {

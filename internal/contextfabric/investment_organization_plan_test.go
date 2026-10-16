@@ -16,7 +16,7 @@ import (
 // capability fails here rather than silently pruning the read.
 func TestPlannerAdmitsInvestmentForTheOrganizationSubject(t *testing.T) {
 	client := &memberStateClient{values: []any{
-		map[string]float64{"feature_delivery": 6, "risk": 4}, 0.0, uint64(3), uint64(2), 10.0, 0.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		map[string]float64{"feature_delivery": 6, "risk": 4}, 0.0, uint64(3), uint64(1), uint64(2), 10.0, 0.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 	}}
 	registry, err := cf.NewFactCapabilityRegistry(devhealthfacts.NewProviders(client), cf.FactRegistryOptions{})
 	if err != nil {

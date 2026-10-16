@@ -188,7 +188,7 @@ func TestHierarchyEdgeIntersectsBothEndpointWindows(t *testing.T) {
 	// baseTables, so it is added here rather than overridden.
 	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
-			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1"}}})
+			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}})
 	batch := projectOneBatch(t, tables)
 
 	edge := relationshipByID(t, batch, workItemHierarchyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-050"))
@@ -211,7 +211,7 @@ func TestHierarchyEdgeStaysOpenWhenBothEndpointsAreOpen(t *testing.T) {
 	}
 	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
-			childCreated, uint8(0), zeroTime, parentCreated, uint8(0), zeroTime, "repo-1"}}})
+			childCreated, uint8(0), zeroTime, parentCreated, uint8(0), zeroTime, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}})
 	batch := projectOneBatch(t, tables)
 
 	edge := relationshipByID(t, batch, workItemHierarchyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-050"))
@@ -710,7 +710,7 @@ func TestDisjointHierarchyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	}
 	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
-			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1"}}})
+			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}})
 	batch := projectOneBatch(t, tables)
 
 	edge := relationshipByID(t, batch, workItemHierarchyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-050"))

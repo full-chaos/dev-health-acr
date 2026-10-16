@@ -175,6 +175,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+		// A project mix is still read in COUNT (every unit weighs 1): it says
+		// so, and carries no sizing coverage, until the project statements are
+		// weighed by issue size (D6032: a surface flips with its coverage).
+		for i := range facts {
+			if facts[i].Kind == contextfabric.FactInvestment && facts[i].Subject.Kind == contextfabric.SubjectProject {
+				facts[i].Fields["measure"] = contextfabric.StringFactValue(investmentMeasureCount)
+			}
+		}
 		// Missing is not healthy: a project with no canonical mix serves no
 		// fact, and says so by a NAMED reason instead of a silent absence.
 		projectsNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
@@ -400,6 +408,8 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		}
 		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(m.bugfix / currentTotal))
 		fields["theme_breakdown"] = themeBreakdownTable(m, timeBound.effectiveGrain(grainDaily))
+		units, sized := m.sizingUnits()
+		investmentSizingFields(fields, currentTotal, units, sized)
 		fields["owned_repository_count"] = contextfabric.IntegerFactValue(m.repos)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership")

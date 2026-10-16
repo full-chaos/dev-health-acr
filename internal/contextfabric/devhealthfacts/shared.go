@@ -1208,7 +1208,15 @@ import (
 // v235 -> v236: the team metrics fact and the project rollup fact carry
 // commit_counts_basis beside the commit counts (owner_share_weighted_latest_day);
 // an answer saved under v235 lacks it.
-const QueryVersion = "devhealthfacts.clickhouse.v236"
+//
+// v236 -> v237: the repository, team and organization investment mix weighs
+// every work unit by its issue size (D6027; a unit with none counts 1) and
+// carries its measure and sizing coverage (measure, denominator,
+// sizing_coverage, unsized_unit_count, sizing_note); the units listing weighs
+// the same way and names unit_issue_size. The project mixes still read in
+// COUNT and say so (measure). An answer saved under v236 holds shares of the
+// old measure.
+const QueryVersion = "devhealthfacts.clickhouse.v237"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
