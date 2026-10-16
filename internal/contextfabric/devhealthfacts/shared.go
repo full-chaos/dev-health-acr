@@ -1217,11 +1217,17 @@ import (
 // COUNT and say so (measure). An answer saved under v236 holds shares of the
 // old measure.
 //
-// v237 -> v238: the project mixes (the owning-team roll-up and the project
+// v237 -> v238: the team linked pull request mix drops an explicit_text or
+// heuristic link that a native link covers, by its issue or by its pull
+// request, before the linked set is sent; a team's project-reached mix no
+// longer counts a fallback link next to a native one. An answer saved under
+// v237 can differ.
+//
+// v238 -> v239: the project mixes (the owning-team roll-up and the project
 // native mix) weigh every work unit by its issue size and carry the same
 // measure and sizing coverage. An answer saved under v237 holds a project
 // share of the COUNT measure.
-const QueryVersion = "devhealthfacts.clickhouse.v238"
+const QueryVersion = "devhealthfacts.clickhouse.v239"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

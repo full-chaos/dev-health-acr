@@ -53,12 +53,15 @@ GROUP BY lr.team_id
 ORDER BY lr.team_id`, limit)
 }
 
-// linkedPullRequestSetStatement is the distinct (repository id, PR number,
-// team id) of the pull requests linked to the issues of the {ids} teams' owned
-// projects, as three parallel arrays in one row.
+// linkedPullRequestSetStatement is the distinct link rows of the pull requests
+// linked to the issues of the {ids} teams' owned projects, as five parallel
+// arrays in one row: repository id, PR number, team id, the issue id of a row
+// below native (empty for a native row, whose issue is not needed) and the
+// row's tier rank. The fallback-only rule drops covered rows in Go
+// (dropCoveredLinks) before the set is sent.
 func linkedPullRequestSetStatement(bound factTimeBound) string {
-	return `SELECT groupArray(r), groupArray(n), groupArray(t) FROM (
-	SELECT DISTINCT toString(pr_repo_id) AS r, toString(pr_number) AS n, team_id AS t FROM ` + teamProjectLinkRowsSQL("ids", bound) + `
+	return `SELECT groupArray(r), groupArray(n), groupArray(t), groupArray(i), groupArray(k) FROM (
+	SELECT DISTINCT toString(pr_repo_id) AS r, toString(pr_number) AS n, team_id AS t, if(link_rank < 3, work_item_id, '') AS i, toUInt8(link_rank) AS k FROM ` + teamProjectLinkRowsSQL("ids", bound) + `
 )`
 }
 
@@ -98,18 +101,30 @@ func membershipScopeExternalTable(ids []string) (*ext.Table, error) {
 }
 
 func (p *InvestmentProvider) readLinkedPullRequestSet(ctx context.Context, orgID string, chunk []string, bound factTimeBound) (repos, numbers, teams []string, err error) {
+	var issues []string
+	var ranks []uint8
 	rows := 0
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 		rows++
-		return row.Scan(&repos, &numbers, &teams)
+		return row.Scan(&repos, &numbers, &teams, &issues, &ranks)
 	}, boundReaderBindings(bound)...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if rows != 1 || len(numbers) != len(repos) || len(teams) != len(repos) {
-		return nil, nil, nil, fmt.Errorf("team linked pull request set returned %d rows of %d/%d/%d values", rows, len(repos), len(numbers), len(teams))
+	if rows != 1 || len(numbers) != len(repos) || len(teams) != len(repos) || len(issues) != len(repos) || len(ranks) != len(repos) {
+		return nil, nil, nil, fmt.Errorf("team linked pull request set returned %d rows of %d/%d/%d/%d/%d values", rows, len(repos), len(numbers), len(teams), len(issues), len(ranks))
 	}
-	return repos, numbers, teams, nil
+	links := make([]linkedSetRow, len(repos))
+	for i := range repos {
+		links[i] = linkedSetRow{repo: repos[i], number: numbers[i], team: teams[i], issue: issues[i], rank: ranks[i]}
+	}
+	covered, err := p.nativeCover(ctx, orgID, links)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	kept, dropped := dropCoveredLinks(links, covered)
+	slog.InfoContext(ctx, "devhealthfacts.team_linked_mix_native_first", "outcome", contextfabric.SanitizeLogAttr(nativeFirstOutcome(links, dropped)), "link_rows", len(links), "fallback_rows", fallbackRows(links), "dropped_rows", dropped, "native_cover_issues", len(covered.issues), "native_cover_pull_requests", len(covered.pullRequests))
+	return kept.repos(), kept.numbers(), kept.teams(), nil
 }
 
 // linkedMixRow is one team's row of the linked mix statement, as read.
