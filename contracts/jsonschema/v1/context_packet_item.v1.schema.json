@@ -178,6 +178,31 @@
         "maxLength": 256
       },
       "uniqueItems": true
+    },
+    "cause_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_type",
+        "entity_id",
+        "occurred_at"
+      ],
+      "properties": {
+        "entity_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   },
   "$id": "https://contracts.fullchaos.dev/acr/v1/context_packet_item.v1.schema.json",

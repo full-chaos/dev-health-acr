@@ -675,6 +675,30 @@
             "maxLength": 256
           },
           "uniqueItems": true
+        },
+        "cause_event": {
+          "type": "object",
+          "required": [
+            "entity_type",
+            "entity_id",
+            "occurred_at"
+          ],
+          "properties": {
+            "entity_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "entity_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "occurred_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         }
       },
       "allOf": [

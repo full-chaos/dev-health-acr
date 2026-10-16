@@ -159,6 +159,17 @@ type ContextPacketItem struct {
 	Flags           ItemFlags       `json:"flags"`
 	RelatedEntities []RelatedEntity `json:"related_entities"`
 	EvidenceRefIDs  []string        `json:"evidence_ref_ids"`
+	// CauseEvent names the stored event a cause item is tied to (the failed
+	// deployment that carried it) and when it happened. Absent for every
+	// other item.
+	CauseEvent *CauseEvent `json:"cause_event,omitempty"`
+}
+
+// CauseEvent is the dated event behind a cause item.
+type CauseEvent struct {
+	EntityType string    `json:"entity_type"`
+	EntityID   string    `json:"entity_id"`
+	OccurredAt time.Time `json:"occurred_at"`
 }
 
 type ValidityScope struct {
