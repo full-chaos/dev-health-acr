@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -81,7 +80,7 @@ func llmRuntime(t *testing.T, clients LLMClients, phrasingModel string) *Runtime
 	return runtime
 }
 
-func TestLLMInterpretSendsTheSampleSeedAndTheGenkitOutputSchema(t *testing.T) {
+func TestLLMInterpretSendsTheSampleSeedAndTheGenkitSchemaText(t *testing.T) {
 	client := &scriptedLLM{model: "gpt-5.6-luna", replies: []llmReply{{result: llm.Result{
 		Text: jsonOf(t, validInterpretationOutput()), Model: "gpt-5.6-luna",
 		Usage: llm.Usage{InputTokens: intp(40), OutputTokens: intp(18)},
@@ -98,8 +97,9 @@ func TestLLMInterpretSendsTheSampleSeedAndTheGenkitOutputSchema(t *testing.T) {
 	if sent.Seed == nil || *sent.Seed != want {
 		t.Fatalf("seed = %v, want the sample-0 seed %d", sent.Seed, want)
 	}
-	if sent.Format == nil || sent.Format.Name != "output" || !reflect.DeepEqual(sent.Format.Schema, core.InferSchemaMap(interpretationOutput{})) {
-		t.Fatalf("format = %+v, want name %q and the schema Genkit derived", sent.Format, "output")
+	schema, _ := json.Marshal(core.InferSchemaMap(interpretationOutput{}))
+	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONObject || !strings.HasSuffix(sent.System, "Output should be in JSON format and conform to the following schema:\n\n```"+string(schema)+"```") {
+		t.Fatalf("format = %+v, system tail missing: want Genkit's json_object request with the schema as text", sent.Format)
 	}
 	if sent.MaxOutputTokens != DefaultMaxOutputTokens || sent.System == "" || sent.Prompt == "" {
 		t.Fatalf("request = max %d, system %d bytes, prompt %d bytes", sent.MaxOutputTokens, len(sent.System), len(sent.Prompt))
@@ -121,8 +121,9 @@ func TestLLMSynthesizeSendsNoSeed(t *testing.T) {
 	if sent.Seed != nil {
 		t.Fatalf("synthesis seed = %d, want none", *sent.Seed)
 	}
-	if sent.Format == nil || !reflect.DeepEqual(sent.Format.Schema, core.InferSchemaMap(synthesisOutput{})) {
-		t.Fatal("synthesis format is not the schema Genkit derived")
+	schema, _ := json.Marshal(core.InferSchemaMap(synthesisOutput{}))
+	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONObject || !strings.HasSuffix(sent.System, "```"+string(schema)+"```") {
+		t.Fatal("synthesis is not Genkit's json_object request with the schema as text")
 	}
 }
 
@@ -322,5 +323,23 @@ func TestLLMLogsTheFormatPathAtInfoOncePerModeAndAtDebugEveryCall(t *testing.T) 
 	}
 	if got := strings.Count(logs.String(), "level=DEBUG "+tail); got != 3 {
 		t.Fatalf("debug lines = %d, want one per call", got)
+	}
+}
+
+func TestLLMAnthropicGetsTheSchemaNotTheGenkitText(t *testing.T) {
+	client := &scriptedLLM{model: "claude-haiku-5-5", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+	runtime, err := NewWithLLM(Config{
+		Provider: "anthropic", Model: "claude-haiku-5-5", InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1",
+		SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	}, LLMClients{"claude-haiku-5-5": client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	sent := client.request(0)
+	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONSchema || sent.Format.Name != "output" || strings.Contains(sent.System, "Output should be in JSON format") {
+		t.Fatalf("anthropic request = format %+v, schema text in system %v", sent.Format, strings.Contains(sent.System, "Output should be in JSON format"))
 	}
 }

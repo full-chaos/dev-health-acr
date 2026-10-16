@@ -52,6 +52,9 @@ const (
 type outputSchema struct {
 	wire     map[string]any
 	compiled *gojsonschema.Schema
+	// instructions is Genkit's own JSON format instruction for this schema
+	// (ai/format_json.go), which Genkit appended to the system message.
+	instructions string
 }
 
 func newOutputSchema(value any) (outputSchema, error) {
@@ -64,7 +67,8 @@ func newOutputSchema(value any) (outputSchema, error) {
 	if err != nil {
 		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
 	}
-	return outputSchema{wire: wire, compiled: compiled}, nil
+	instructions := fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", string(raw))
+	return outputSchema{wire: wire, compiled: compiled, instructions: instructions}, nil
 }
 
 // LLMClients maps each model a runtime calls (Config.Model, and
@@ -170,13 +174,21 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 		folded := *seed % (1 << 31)
 		seed = &folded
 	}
-	result, err := client.Complete(ctx, llm.Request{
-		System:          request.System,
-		Prompt:          request.Prompt,
-		Format:          &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire},
-		MaxOutputTokens: g.maxOutputTokens,
-		Seed:            seed,
-	})
+	call := llm.Request{Prompt: request.Prompt, MaxOutputTokens: g.maxOutputTokens, Seed: seed}
+	if client.Kind() == llm.KindAnthropic {
+		// Anthropic: the schema itself, as structured outputs or one tool
+		// call, picked by the client before the call.
+		call.System = request.System
+		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire}
+	} else {
+		// Chat Completions: the request Genkit sent, byte for byte. No schema
+		// on the wire (a JSON object answer) and the schema as text at the
+		// end of the system message: acr's output schemas use keywords
+		// OpenAI's strict mode refuses.
+		call.System = request.System + schema.instructions
+		call.Format = &llm.JSONFormat{Type: llm.FormatTypeJSONObject}
+	}
+	result, err := client.Complete(ctx, call)
 	if err != nil {
 		class, _ := llm.ClassOf(err)
 		g.logger.DebugContext(ctx, llmCallFailedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
