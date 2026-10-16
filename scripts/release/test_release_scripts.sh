@@ -240,7 +240,12 @@ check_release_trigger() {
   grep -qxF '    branches: [main]' <<<"$wr_block" || return 1
   grep -qxF 'run-name: Release ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.sha }}' "$wf" || return 1
   grep -qF "|| github.event.inputs.tag || github.event.workflow_run.head_sha || github.sha }}" "$wf" || return 1
-  grep -qF "(github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))" "$wf" || return 1
+  grep -qF "(github.event.workflow_run.conclusion == 'success' &&" "$wf" || return 1
+  grep -qF "github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))" "$wf" || return 1
+  local root_jobs gated
+  root_jobs="$(awk '/^jobs:/{f=1;next} f&&/^  [a-z-]+:$/{if(j!=""&&!n)print j; j=$1;n=0} f&&/^    needs:/{n=1} END{if(j!=""&&!n)print j}' "$wf" | wc -l)"
+  gated="$(grep -cF "github.event.workflow_run.conclusion == 'success'" "$wf")"
+  test "$root_jobs" -ge 1 && test "$gated" -ge "$root_jobs" || return 1
   grep -qF 'commit="$RUN_HEAD_SHA"' "$wf" || return 1
   if grep -qF 'commit="$GITHUB_SHA"' "$wf"; then return 1; fi
   test "$(grep -cxF '          ref: ${{ github.event.workflow_run.head_sha || github.sha }}' "$wf")" -eq 2 || return 1
@@ -267,6 +272,8 @@ mutant() { # NAME SED-EXPR FILE-KIND
   if [ "$3" = promote ]; then p="$out"; out="$release_workflow"; fi
   if check_release_trigger "$out" "$p"; then printf 'release trigger control %s passed and must fail\n' "$1" >&2; exit 1; fi
 }
+mutant no-success-gate-preflight "/^  preflight:/,/^    runs-on:/{/conclusion == 'success'/d}" release
+mutant no-success-gate-dryrun "/^  publish-dry-run:/,/^    runs-on:/{/conclusion == 'success'/d}" release
 mutant push-main 's/^    tags: \["v\*"\]$/    branches: [main]\n    tags: ["v*"]/' release
 mutant no-workflow-run 's/^    workflows: \[ci\]$/    workflows: [Mirror images]/' release
 mutant any-branch '/^  workflow_run:/,/^  [a-z_]*:$/{/^    branches: \[main\]$/d}' release
