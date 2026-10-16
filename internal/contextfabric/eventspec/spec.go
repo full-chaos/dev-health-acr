@@ -913,6 +913,7 @@ var Decision = Event{
 			Key: "population_basis", Type: FieldString, Presence: PresenceRequired,
 			// Open vocabulary: a population-basis token, or "none".
 		},
+		{Key: "offered_under_window_gate", Type: FieldBool, Presence: PresenceRequired},
 	},
 }
 
@@ -966,6 +967,8 @@ var AliasLookup = Event{
 		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "identity_lookup", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"complete", "incomplete", "graph_lag", "not_run_time_axis"}},
 		{Key: "matched_claimants", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "term_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "matched_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 	},
 }
 
@@ -2374,6 +2377,11 @@ var EvidenceRound = Event{
 		{Key: "shadow_handle_insensitivity_evaluated", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_handle_insensitivity_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: kindInsensitivityOutcome},
 		{Key: "shadow_caller_hint_short_circuit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_survivor_excluded_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "scope_anchor"}},
+		{Key: "shadow_trigger", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"caller_hint", "committed_scope_anchor", "stalled"}},
+		{Key: "shadow_caller_narrowing", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "narrowed_to_one", "narrowed_to_none", "narrowed_to_many", "census_truncated", "satisfier_read_failed"}},
+		{Key: "shadow_narrowed_from", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "shadow_narrowed_to", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 
@@ -3395,6 +3403,12 @@ var AnswerDisplay = Event{
 		{Key: "max_evidence", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "floor_counts", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "recorded_counts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_serialized_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "narrative_byte_allowance", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "limitations_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "warnings_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "limitations_byte_cut", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "warnings_byte_cut", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "count_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"absent", "floor", "recorded", "mixed"}},
 		{Key: "projection_truncated", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "markdown_rendered", Type: FieldBool, Presence: PresenceRequired},
