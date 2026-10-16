@@ -1,11 +1,28 @@
 ---
 # yamllint disable rule:line-length
 name: Release
+# Names the release commit, so promote-main-image-aliases.yml can read it back:
+# a run started by workflow_run carries the main TIP as its head sha, not the
+# commit it releases.
+run-name: Release ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.sha }}
 
 "on":
+  # CHAOS-9918: a main push is released from its own ci run's completion, not
+  # from the push itself. Triggered by the push, Release had to poll for that
+  # run on a runner of its own with a 3600 s deadline; on a saturated hosted
+  # queue the run took longer (main ci 38799434459, 2026-10-15: 65 minutes)
+  # and Release failed with the commit green. Tag pushes keep the push trigger.
+  #
+  # LEVEL LIMIT: ci -> Release (this workflow_run) -> promote-main-image-aliases
+  # (workflow_run of Release) is three workflow_run levels, GitHub's maximum.
+  # A workflow started by workflow_run of promote would never run: do not add a
+  # fourth level.
   push:
-    branches: [main]
     tags: ["v*"]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
@@ -78,7 +95,7 @@ concurrency:
   # contract pass even when the value was folded. A comment that defeats the
   # check it describes is worse than no comment. The file already disables the
   # line-length rule at the top.
-  group: release-${{ inputs.dry_run && format('dryrun-{0}', github.run_id) || github.event.inputs.tag || github.sha }}
+  group: release-${{ inputs.dry_run && format('dryrun-{0}', github.run_id) || github.event.inputs.tag || github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -89,7 +106,13 @@ jobs:
     # A dry run must not trigger the real pipeline: every other job reaches the
     # graph through preflight, so skipping it here skips the whole ~50-minute
     # build rather than needing a guard on each job.
-    if: github.repository == 'full-chaos/dev-health-acr' && !inputs.dry_run
+    # A workflow_run release is for a SUCCESSFUL main PUSH ci run only. Every job
+    # without `needs` carries the conclusion gate; the rest skip through needs.
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' && !inputs.dry_run &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-24.04
     outputs:
       channel: ${{ steps.release.outputs.channel }}
@@ -101,6 +124,7 @@ jobs:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -109,6 +133,7 @@ jobs:
         env:
           ACR_RELEASE_OPERATORS: ${{ vars.ACR_RELEASE_OPERATORS }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           fail() {
@@ -122,19 +147,23 @@ jobs:
           commit=""
 
           case "$GITHUB_EVENT_NAME" in
+            workflow_run)
+              # The main push ci run that finished; its head sha is the commit.
+              # GITHUB_SHA is the main tip here and is never the release commit.
+              channel=main
+              commit="$RUN_HEAD_SHA"
+              [[ "$commit" =~ ^[0-9a-f]{40}$ ]] \
+                || fail "the ci run did not provide a full commit SHA"
+              test "$(git rev-parse HEAD)" = "$commit" \
+                || fail "checked-out source does not match the ci run's commit"
+              git merge-base --is-ancestor "$commit" refs/remotes/origin/main \
+                || fail "the ci run's commit is not on main"
+              tag="$commit"
+              version="$(scripts/release/publish-ci-release.sh --derive-main-version "$commit")"
+              printf '::notice::main publication uses immutable SHA %s and promotes it to latest only if it remains the main tip.\n' "$commit"
+              ;;
             push)
               case "$GITHUB_REF" in
-                refs/heads/main)
-                  channel=main
-                  commit="$GITHUB_SHA"
-                  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] \
-                    || fail "main push did not provide a full commit SHA"
-                  test "$(git rev-parse HEAD)" = "$commit" \
-                    || fail "checked-out source does not match the main push commit"
-                  tag="$commit"
-                  version="$(scripts/release/publish-ci-release.sh --derive-main-version "$commit")"
-                  printf '::notice::main publication uses immutable SHA %s and promotes it to latest only if it remains the main tip.\n' "$commit"
-                  ;;
                 refs/tags/*)
                   channel=versioned
                   tag="$GITHUB_REF_NAME"
@@ -193,6 +222,18 @@ jobs:
             printf 'commit=%s\n' "$commit"
             printf 'date=%s\n' "$(date -u -d "$(git show -s --format=%cI "$commit")" +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "$GITHUB_OUTPUT"
+          mkdir -p .tmp/release-commit
+          printf '%s\n' "$commit" > .tmp/release-commit/commit
+      # CHAOS-9918: the released commit as an artifact, so promote can check the
+      # commit it read from this run's name against what preflight resolved.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-commit
+          path: .tmp/release-commit/commit
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   # CHAOS-4855 R4 (codex round 2): Release and Mirror images both trigger on
   # the same `push`, with no cross-workflow `needs` (GitHub Actions has
@@ -265,14 +306,26 @@ jobs:
           REPO: ${{ github.repository }}
           COMMIT: ${{ needs.preflight.outputs.commit }}
           WAIT_SECONDS: "3600"
+          # Set only when this release was started by the ci run's completion:
+          # that run is the reference, read once, never polled for.
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "ci reference: commit is not a full sha: '$COMMIT'" >&2; exit 1; }
+          if [ -n "$TRIGGER_RUN_ID" ]; then
+            [ "$TRIGGER_HEAD_SHA" = "$COMMIT" ] || { echo "ci reference: triggering run $TRIGGER_RUN_ID is for $TRIGGER_HEAD_SHA, not $COMMIT" >&2; exit 1; }
+            WAIT_SECONDS=0
+          fi
           deadline=$(( $(date +%s) + WAIT_SECONDS ))
           while :; do
-            runs="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$COMMIT&event=push&per_page=50" \
-              --jq '[.workflow_runs[] | select(.head_sha == "'"$COMMIT"'" and .head_branch == "main")] | sort_by(.created_at) | reverse')"
-            run_id="$(printf '%s' "$runs" | jq -r '.[0].id // empty')"
+            if [ -n "$TRIGGER_RUN_ID" ]; then
+              run_id="$TRIGGER_RUN_ID"
+            else
+              runs="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$COMMIT&event=push&per_page=50" \
+                --jq '[.workflow_runs[] | select(.head_sha == "'"$COMMIT"'" and .head_branch == "main")] | sort_by(.created_at) | reverse')"
+              run_id="$(printf '%s' "$runs" | jq -r '.[0].id // empty')"
+            fi
             if [ -z "$run_id" ]; then
               state="no ci.yml push run for $COMMIT on main yet"
             else
@@ -672,7 +725,9 @@ jobs:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ github.sha }}
+          # A workflow_run release assembles from the ci run's commit; github.sha
+          # is the main tip there. Tags and dispatches keep github.sha.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -744,7 +799,9 @@ jobs:
     #             (https://api.github.com/repos/full-chaos/dev-health-acr/releases)
     # on run 34002287512, and the only call a full pipeline run has to spend
     # fifty minutes to reach.
-    if: github.repository == 'full-chaos/dev-health-acr' && inputs.dry_run
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' && inputs.dry_run &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
