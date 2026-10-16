@@ -1222,7 +1222,14 @@ import (
 // request, before the linked set is sent; a team's project-reached mix no
 // longer counts a fallback link next to a native one. An answer saved under
 // v237 can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v238"
+//
+// v238 -> v239: a pull request counts as linked in the investment team link
+// state only through a link that is native or whose issue has no native link
+// in any repository; a fallback link of an issue that carries a native link no
+// longer makes the pull request linked, so the "pull requests without linked
+// work" reason can be given where v238 held it back. An answer saved under v238
+// can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v239"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
