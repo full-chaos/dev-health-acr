@@ -16,4 +16,13 @@ package contextfabric
 // out leaves its turns to the others. An edge belongs to the subject that
 // reaches it in the fewest hops (a subject's own edges are its own), ties to
 // the earlier subject.
-const GraphWalkVersion = "graph-walk.v1"
+//
+// v1 -> v2: within a committed subject, its own edges whose relationship type
+// the question names through the fact kinds it requires (graphrank.NamedByQuestion:
+// a project's or repository's OWNED_BY_TEAM for identity, BLOCKS for blockers)
+// come before the gate edges.
+// "Fewest hops" is counted over every resolved edge, so an edge a deeper walk
+// read goes to the subject nearest to it. Origins take turns within each run of
+// equal confidence, so a turn never puts a lower-confidence edge ahead of a
+// higher one.
+const GraphWalkVersion = "graph-walk.v2"
