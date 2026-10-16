@@ -3080,7 +3080,7 @@ func (t SlogEngineTelemetry) RecordEngineFactGate(ctx context.Context, principal
 		"fields_undeclared", decision.Report.FieldsUndeclared,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	if decision.Decision == "unavailable" || decision.Report.FieldsUndeclared > 0 {
+	if decision.Decision == EngineFactGateUnavailable || decision.Report.FieldsUndeclared > 0 {
 		t.logger.WarnContext(ctx, EngineFactGateLogMessage, args...)
 		return
 	}

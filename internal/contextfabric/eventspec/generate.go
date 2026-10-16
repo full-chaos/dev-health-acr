@@ -220,6 +220,10 @@ func goVarName(e Event) string {
 		return "FactScopeExpansionDecision"
 	case FactRootRefused.ID:
 		return "FactRootRefused"
+	case EngineFactGateWarn.ID:
+		return "EngineFactGateWarn"
+	case EngineFactGateInfo.ID:
+		return "EngineFactGateInfo"
 	case OrganizationSubjectRead.ID:
 		return "OrganizationSubjectRead"
 	case CohortRanked.ID:
@@ -506,6 +510,7 @@ type jsonField struct {
 	Applicability    string      `json:"applicability,omitempty"`
 	Nullable         bool        `json:"nullable,omitempty"`
 	MaxItems         int         `json:"max_items,omitempty"`
+	MaxInt           *int        `json:"max_int,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -516,6 +521,7 @@ type jsonEvent struct {
 	Multiplicity       string      `json:"multiplicity"`
 	Attribution        []string    `json:"attribution"`
 	BoundedAggregation string      `json:"bounded_aggregation"`
+	MaxLinesPerScope   int         `json:"max_lines_per_scope,omitempty"`
 	Fields             []jsonField `json:"fields"`
 }
 
@@ -530,6 +536,7 @@ func toJSONFields(fs []Field) []jsonField {
 			Applicability:    f.Applicability,
 			Nullable:         f.Nullable,
 			MaxItems:         f.MaxItems,
+			MaxInt:           f.MaxInt,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}
@@ -548,6 +555,7 @@ func generateSchema() ([]byte, error) {
 			Multiplicity:       string(e.Multiplicity),
 			Attribution:        e.Attribution,
 			BoundedAggregation: e.BoundedAggregation,
+			MaxLinesPerScope:   e.MaxLinesPerScope,
 			Fields:             toJSONFields(e.Fields),
 		})
 	}
