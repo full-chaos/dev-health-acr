@@ -394,3 +394,38 @@ func TestNewClientOptions_neutralizesAmbientProviderEnvironment(t *testing.T) {
 		t.Fatal("no request reached the configured base URL; an ambient OPENAI_BASE_URL redirected the traffic")
 	}
 }
+
+func TestConfigFromEnvReadsTheOutputCap(t *testing.T) {
+	lookup := func(env map[string]string) func(string) (string, bool) {
+		return func(key string) (string, bool) { value, ok := env[key]; return value, ok }
+	}
+	cfg, err := ConfigFromEnv(lookup(map[string]string{EnvAPIKey: "k"}))
+	if err != nil || cfg.MaxOutputTokens != DefaultMaxOutputTokens || DefaultMaxOutputTokens != 32768 {
+		t.Fatalf("default output cap = %d, err = %v, want 32768", cfg.MaxOutputTokens, err)
+	}
+	cfg, err = ConfigFromEnv(lookup(map[string]string{EnvAPIKey: "k", EnvMaxOutputTokens: "8192"}))
+	if err != nil || cfg.MaxOutputTokens != 8192 {
+		t.Fatalf("output cap = %d, err = %v, want 8192", cfg.MaxOutputTokens, err)
+	}
+	for _, bad := range []string{"100", "300000", "lots"} {
+		if _, err := ConfigFromEnv(lookup(map[string]string{EnvAPIKey: "k", EnvMaxOutputTokens: bad})); err == nil {
+			t.Errorf("%s=%q was accepted", EnvMaxOutputTokens, bad)
+		}
+	}
+	if got := RetiredVariables(lookup(map[string]string{EnvMaxTransportRetries: "2"})); len(got) != 1 || got[0] != EnvMaxTransportRetries {
+		t.Fatalf("RetiredVariables = %v", got)
+	}
+	if got := RetiredVariables(lookup(map[string]string{EnvMaxTransportRetries: "  "})); len(got) != 0 {
+		t.Fatalf("a blank retired variable was reported: %v", got)
+	}
+}
+
+func TestRuntimeConfigCarriesTheOutputCap(t *testing.T) {
+	cfg := Config{Provider: "openai", Model: "m", MaxOutputTokens: 8192}
+	if got := runtimeConfigWithPhrasing(cfg, cfg.Model, nil).MaxOutputTokens; got != 8192 {
+		t.Fatalf("primary MaxOutputTokens = %d, want 8192", got)
+	}
+	if got := fallbackRuntimeConfig(Config{Provider: "openai", FallbackModel: "f", MaxOutputTokens: 8192}).MaxOutputTokens; got != 8192 {
+		t.Fatalf("fallback MaxOutputTokens = %d, want 8192", got)
+	}
+}

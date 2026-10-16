@@ -1235,11 +1235,17 @@ import (
 // "pull requests without linked work" reason can be given where v239 held it
 // back. An answer saved under v239 can differ.
 //
-// v240 -> v241: the compounding-risk operational-deficiency fact serves
+// v240 -> v241: a project a pull request reaches only through explicit_text or
+// heuristic links that a native link covers (by the link's issue, or by the
+// pull request) is no longer served in its project_breakdown, and a project
+// kept by an uncovered fallback link is served at that link's tier. An answer
+// saved under v240 can differ.
+//
+// v241 -> v242: the compounding-risk operational-deficiency fact serves
 // rule_basis_as_of_day, the calendar day of the score the rule read, when the
-// rule's rationale names it. An answer saved under v240 states the rule basis
+// rule's rationale names it. An answer saved under v241 states the rule basis
 // without that day.
-const QueryVersion = "devhealthfacts.clickhouse.v241"
+const QueryVersion = "devhealthfacts.clickhouse.v242"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
