@@ -909,10 +909,15 @@ func validateNoUndeclaredKeys(ev eventspec.Event, line Line) error {
 	for _, field := range ev.Fields {
 		declared[field.Key] = true
 	}
+	var undeclared []string
 	for key := range line {
 		if !declared[key] {
-			return fmt.Errorf("certify: %s: the line carries key %q, which the declaration does not list -- a line may carry only declared keys", ev.ID, key)
+			undeclared = append(undeclared, key)
 		}
+	}
+	if len(undeclared) > 0 {
+		sort.Strings(undeclared)
+		return fmt.Errorf("certify: %s: the line carries keys %q, which the declaration does not list -- a line may carry only declared keys", ev.ID, undeclared)
 	}
 	return nil
 }
