@@ -106,13 +106,13 @@ jobs:
     # A dry run must not trigger the real pipeline: every other job reaches the
     # graph through preflight, so skipping it here skips the whole ~50-minute
     # build rather than needing a guard on each job.
-    # A workflow_run release is for a main PUSH ci run only. A failed one still
-    # starts the release, so ci-reference refuses it by name instead of the
-    # release silently never running.
+    # A workflow_run release is for a SUCCESSFUL main PUSH ci run only. Every job
+    # without `needs` carries the conclusion gate; the rest skip through needs.
     if: >-
       github.repository == 'full-chaos/dev-health-acr' && !inputs.dry_run &&
       (github.event_name != 'workflow_run' ||
-       (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-24.04
     outputs:
       channel: ${{ steps.release.outputs.channel }}
@@ -799,7 +799,9 @@ jobs:
     #             (https://api.github.com/repos/full-chaos/dev-health-acr/releases)
     # on run 34002287512, and the only call a full pipeline run has to spend
     # fifty minutes to reach.
-    if: github.repository == 'full-chaos/dev-health-acr' && inputs.dry_run
+    if: >-
+      github.repository == 'full-chaos/dev-health-acr' && inputs.dry_run &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
