@@ -1236,7 +1236,7 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				if cut, ok := cutTables[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID]; ok && row.Outcome == OutcomeFactServed {
 					row.Outcome = OutcomeTruncated
 					row.Reason = joinReason(row.Reason, cut+" lost rows to the provider row cap")
-					slog.Debug("read_facts subject truncated by served table", "kind", string(kind), "table", cut)
+					slog.Debug("read_facts subject truncated by served table", "kind", contextfabric.SanitizeLogAttr(string(kind)), "table", contextfabric.SanitizeLogAttr(cut))
 				}
 				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				notRun := expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable

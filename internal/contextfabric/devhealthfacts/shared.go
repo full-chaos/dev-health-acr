@@ -1228,12 +1228,19 @@ import (
 // measure and sizing coverage. An answer saved under v237 holds a project
 // share of the COUNT measure.
 //
-// v239 -> v240: a health read no longer marks the whole kind truncated because
+// v239 -> v240: a pull request counts as linked in the investment team link
+// state only through a link that is native or whose issue has no native link
+// in the repositories the read covers; a fallback link of an issue that
+// carries a native link there no longer makes the pull request linked, so the
+// "pull requests without linked work" reason can be given where v239 held it
+// back. An answer saved under v239 can differ.
+//
+// v240 -> v241: a health read no longer marks the whole kind truncated because
 // one team's daily_health table lost rows to the display cap; the fact names
 // the loss (daily_health_omitted_count) and read_facts marks only that subject
-// truncated, and only when the table is served. An answer saved under v239
+// truncated, and only when the table is served. An answer saved under v240
 // can carry a truncated state for every team of the read.
-const QueryVersion = "devhealthfacts.clickhouse.v240"
+const QueryVersion = "devhealthfacts.clickhouse.v241"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

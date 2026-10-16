@@ -105,6 +105,24 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	s.pullRequest("repo-open", 1, beforeWindow, nil)
 	s.team("team-staleonly", "repo-staleonly")
 	s.link("repo-staleonly", "issue-1", 99, "native")
+	// A fallback link of an issue that carries a native link in a repository the
+	// read covers is no admitted link: team-coveredhere's native link is in its
+	// own repository. (A native link in a repository nobody asks about is the
+	// known gap TestTeamPullRequestLinkStateKnownGapNativeLinkInAnotherRepository.)
+	s.team("team-coveredhere", "repo-coveredhere")
+	s.pullRequest("repo-coveredhere", 1, inWindow, nil)
+	s.link("repo-coveredhere", "issue-covered-here", 1, "heuristic")
+	s.link("repo-coveredhere", "issue-covered-here", 2, "native")
+	// A pull request with a native link and a heuristic link counts once, as
+	// linked (the reader asks whether the pull request has any admitted link).
+	s.team("team-bothtiers", "repo-bothtiers")
+	s.pullRequest("repo-bothtiers", 1, inWindow, nil)
+	s.link("repo-bothtiers", "issue-both-native", 1, "native")
+	s.link("repo-bothtiers", "issue-both-heuristic", 1, "heuristic")
+	// A fallback-only issue still links its pull request.
+	s.team("team-fallbackonly", "repo-fallbackonly")
+	s.pullRequest("repo-fallbackonly", 1, inWindow, nil)
+	s.link("repo-fallbackonly", "issue-fallback-only", 1, "heuristic")
 
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -112,7 +130,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	}
 	seam := &seamCapture{registry: registry.WithoutScopeExpansion()}
 	reader := directread.NewFactsReader(directread.NewSubjectGate(admitAllGraph{}, nil), directread.NewFactReader(seam), nil)
-	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly"}
+	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly", "team-coveredhere", "team-fallbackonly", "team-bothtiers"}
 	requested := make([]directread.RequestSubject, 0, len(teams))
 	for _, team := range teams {
 		requested = append(requested, directread.RequestSubject{Kind: "team", CanonicalID: teamSubject(team).CanonicalID})
@@ -140,6 +158,12 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		"team-oldpr":     {old, ""},
 		"team-open":      {token, "1 pull request"},
 		"team-staleonly": {old, ""},
+		// The only link of the pull request is a fallback on an issue that has a
+		// native link in the team's own repository: no admitted link. A
+		// fallback-only issue still links its pull request.
+		"team-coveredhere":  {token, "1 pull request"},
+		"team-fallbackonly": {old, ""},
+		"team-bothtiers":    {old, ""},
 	}
 	reasons := map[string]string{}
 	for _, row := range response.Coverage {
@@ -167,7 +191,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	// The served request note names the token, the team count, and that the
 	// pull request total is per team (a pull request in a repository two of
 	// these teams share would count for each).
-	const wantNote = "investment_team_prs_without_linked_work for 3: 5 pull request(s) counted per team"
+	const wantNote = "investment_team_prs_without_linked_work for 4: 6 pull request(s) counted per team"
 	noted := false
 	for _, note := range response.RequestNotes {
 		if note.Kind == "investment" && strings.Contains(note.Note, wantNote) && strings.Contains(note.Note, "no pull request in the window has an admitted link to tracked work") {
@@ -193,14 +217,30 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 // organization sizes, the lowest of five warm reads each, must not grow, and
 // the highest peak of those reads stays under the ceiling the package other rows use.
 func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *testing.T) {
+	assertTeamPullRequestLinkStateCostIsFlat(t, "org-pr-link-cost", false)
+}
+
+// The same measurement with a link on every pull request of the team: each
+// pull request's issue has a fallback link and a native link in the team's
+// repository, so the link-state statement has 20 issues to cover among the
+// unrelated links of 400 repositories.
+func TestTeamPullRequestLinkStateCostIsFlatWithLinkedIssuesOnRealClickHouse(t *testing.T) {
+	assertTeamPullRequestLinkStateCostIsFlat(t, "org-pr-link-cost-linked", true)
+}
+
+func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIssues bool) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	const orgID = "org-pr-link-cost"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
 	s.team("team-cost", "repo-cost")
 	for n := uint32(1); n <= 20; n++ {
 		s.pullRequest("repo-cost", n, inWindow, nil)
+		if linkIssues {
+			issue := fmt.Sprintf("issue-cost-%d", n)
+			s.link("repo-cost", issue, n, "heuristic")
+			s.link("repo-cost", issue, 1000+n, "native")
+		}
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
@@ -244,7 +284,23 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 		}
 		return lowRows, lowPeak, highPeak
 	}
+	if linkIssues {
+		// The key-prefix read of a repository floors at the granule its rows share
+		// with their neighbours (8,192 rows) whatever the organization's size. A base
+		// table below one granule would read as flat against that floor, or as growth
+		// once any bulk exists; so the base already holds unrelated rows of other
+		// repositories and another organization above one granule.
+		for _, org := range []string{orgID, orgID + "-other"} {
+			s.exec(fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
+SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 40), 12, '0'))), '%s', toUInt32(number + 5000000), 'pr', 'open', now(), now() - INTERVAL 20 DAY, NULL, NULL, 'feature', '' FROM numbers(12000)`, org))
+			s.exec(fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 40), 12, '0'))), concat('prefill-', toString(number)), toUInt32(number + 5000000), 1, 'native', '', now(), '%s' FROM numbers(12000)`, org))
+		}
+	}
 	baseRows, baseLowPeak, baseHighPeak := measure()
+	if linkIssues && baseRows <= 8192 {
+		t.Fatalf("base read_rows %d is not above one granule (8192): the pre-fill no longer lifts the base over the granule floor, so a flat read would be told from growth wrongly", baseRows)
+	}
 	const ceiling = 64 << 20
 	for _, step := range []int{50_000, 150_000} {
 		s.exec(fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
