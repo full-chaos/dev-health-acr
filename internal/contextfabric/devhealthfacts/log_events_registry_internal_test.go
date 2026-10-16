@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,8 +15,11 @@ import (
 )
 
 // operationalLogEvents are the slog messages this package writes that describe
-// what a reader or the projector did, not a decision of the engine. Each has a
-// reason; a message that is neither here nor declared in eventspec fails the
+// what a reader did (reads, retries, fallbacks, bounds, budgets), not a
+// decision-graph event of the engine: the scope ruling of the sweep (MCP,
+// 2026-10-15) lists the devhealthfacts read, mix and tree filter lines as
+// operational, to be listed in the closing inventory with their owning
+// package. Each has a reason; a message that is neither here nor declared in eventspec fails the
 // guard below.
 var operationalLogEvents = map[string]string{
 	"devhealthfacts.blocker_age_read_failed":               "read failure of one blocker age probe",
@@ -34,28 +38,80 @@ var operationalLogEvents = map[string]string{
 	"investment membership scope cold load":                "membership scope cache load report",
 	"devhealthfacts.project_mix_inputs_changed":            "project mix retry report",
 	"devhealthfacts.project_mix_contended":                 "project mix contention report",
+	"devhealthfacts.blocker_authorization":                 "authorization basis report of the blocker read (mode, authorized endpoint count, bound); it logs a query-plan choice (shape and count) and does not decide the answer (MCP 2026-10-16)",
+	"devhealthfacts.landscape_retracted_rows":              "debug data-quality report of retraction rows",
+	"devhealthfacts.read_budget_exceeded":                  "warn report of a query that hit the read budget (reader and ClickHouse code)",
+	"devhealthfacts.read_stats":                            "read statistics report of one query",
 }
 
-// logMessagesWrittenByThePackage returns every message literal passed to a
-// package-level slog call in the package's non-test files, with the file that
-// writes it, and the call sites whose message is not a literal.
+// slogMethodMessageArg is the position of the message argument of every slog
+// call shape: the package-level functions and the *slog.Logger methods share
+// them.
+var slogMethodMessageArg = map[string]int{
+	"Info": 0, "Warn": 0, "Error": 0, "Debug": 0,
+	"InfoContext": 1, "WarnContext": 1, "ErrorContext": 1, "DebugContext": 1,
+	"Log": 2, "LogAttrs": 2,
+}
+
+// logMessagesWrittenByThePackage returns every message passed to a slog call
+// in the package's non-test files, with the file that writes it: the
+// package-level functions, the Log and LogAttrs forms, and any method of a
+// logger value (the call shapes are the same on every receiver, so the scan
+// does not look at the receiver). A message written as a package-level string
+// constant is resolved. dynamic lists the call sites whose message is neither
+// a literal nor such a constant.
 func logMessagesWrittenByThePackage(t *testing.T) (messages map[string]string, dynamic []string) {
 	t.Helper()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read package directory: %v", err)
+	fset := token.NewFileSet()
+	var files []*ast.File
+	var names []string
+	if err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path != "." && (entry.Name() == "testdata" || strings.HasPrefix(entry.Name(), ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		files = append(files, file)
+		names = append(names, path)
+		return nil
+	}); err != nil {
+		t.Fatalf("scan package: %v", err)
+	}
+	constants := map[string]string{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok || len(value.Names) != len(value.Values) {
+					continue
+				}
+				for i, name := range value.Names {
+					if literal, ok := value.Values[i].(*ast.BasicLit); ok && literal.Kind == token.STRING {
+						if unquoted, err := strconv.Unquote(literal.Value); err == nil {
+							constants[name.Name] = unquoted
+						}
+					}
+				}
+			}
+		}
 	}
 	messages = map[string]string{}
-	fset := token.NewFileSet()
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
+	for index, file := range files {
 		ast.Inspect(file, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
@@ -65,31 +121,29 @@ func logMessagesWrittenByThePackage(t *testing.T) (messages map[string]string, d
 			if !ok {
 				return true
 			}
-			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Name != "slog" {
+			messageArg, isSlogShape := slogMethodMessageArg[selector.Sel.Name]
+			if !isSlogShape || len(call.Args) <= messageArg {
 				return true
 			}
-			messageArg := 0
-			switch selector.Sel.Name {
-			case "Info", "Warn", "Error", "Debug":
-			case "InfoContext", "WarnContext", "ErrorContext", "DebugContext":
-				messageArg = 1
-			default:
-				return true
-			}
-			if len(call.Args) <= messageArg {
-				return true
-			}
-			literal, ok := call.Args[messageArg].(*ast.BasicLit)
-			if !ok || literal.Kind != token.STRING {
+			switch argument := call.Args[messageArg].(type) {
+			case *ast.BasicLit:
+				if argument.Kind != token.STRING {
+					return true
+				}
+				message, err := strconv.Unquote(argument.Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", argument.Value, err)
+				}
+				messages[message] = names[index]
+			case *ast.Ident:
+				if message, ok := constants[argument.Name]; ok {
+					messages[message] = names[index]
+					return true
+				}
 				dynamic = append(dynamic, fset.Position(call.Pos()).String())
-				return true
+			default:
+				dynamic = append(dynamic, fset.Position(call.Pos()).String())
 			}
-			message, err := strconv.Unquote(literal.Value)
-			if err != nil {
-				t.Fatalf("unquote %s: %v", literal.Value, err)
-			}
-			messages[message] = name
 			return true
 		})
 	}

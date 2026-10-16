@@ -9554,9 +9554,11 @@
     "msg": "devhealthfacts.team_linked_mix_native_first",
     "level": "info",
     "multiplicity": "zero_or_many_per_request",
-    "attribution": [],
+    "attribution": [
+      "request_id"
+    ],
     "bounded_aggregation": "one line per team chunk of a team linked mix read.",
-    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
+    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
     "fields": [
       {
         "key": "outcome",
@@ -9592,6 +9594,12 @@
         "key": "native_cover_pull_requests",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },
@@ -9600,9 +9608,11 @@
     "msg": "devhealthfacts.team_linked_mix_set",
     "level": "info",
     "multiplicity": "zero_or_many_per_request",
-    "attribution": [],
+    "attribution": [
+      "request_id"
+    ],
     "bounded_aggregation": "one line per team chunk of a team linked mix read.",
-    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
+    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
     "fields": [
       {
         "key": "outcome",
@@ -9634,6 +9644,12 @@
           "ids_table",
           "subquery"
         ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },
@@ -9642,9 +9658,11 @@
     "msg": "devhealthfacts.team_pr_link_state_native_first",
     "level": "info",
     "multiplicity": "zero_or_many_per_request",
-    "attribution": [],
+    "attribution": [
+      "request_id"
+    ],
     "bounded_aggregation": "one line per team pull request link state read.",
-    "data_dependent_bound": "one line per link state read of a team rollup, so the count follows the number of rollups a request makes.",
+    "data_dependent_bound": "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
     "fields": [
       {
         "key": "outcome",
@@ -9674,6 +9692,12 @@
         "key": "suppressed_pull_requests",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },

@@ -5661,6 +5661,7 @@ type TeamLinkedMixNativeFirstFields struct {
 	DroppedRows             int
 	NativeCoverIssues       int
 	NativeCoverPullRequests int
+	RequestID               string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamLinkedMixNativeFirstFields uniformly, set ONLY by NewTeamLinkedMixNativeFirstFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5674,7 +5675,7 @@ type TeamLinkedMixNativeFirstFields struct {
 
 // NewTeamLinkedMixNativeFirstFields is the generated constructor for TeamLinkedMixNativeFirstFields -- every
 // field TeamLinkedMixNativeFirst.Fields declares is a required parameter.
-func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRows int, droppedRows int, nativeCoverIssues int, nativeCoverPullRequests int) TeamLinkedMixNativeFirstFields {
+func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRows int, droppedRows int, nativeCoverIssues int, nativeCoverPullRequests int, requestID string) TeamLinkedMixNativeFirstFields {
 	return TeamLinkedMixNativeFirstFields{
 		Outcome:                 outcome,
 		LinkRows:                linkRows,
@@ -5682,6 +5683,7 @@ func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRow
 		DroppedRows:             droppedRows,
 		NativeCoverIssues:       nativeCoverIssues,
 		NativeCoverPullRequests: nativeCoverPullRequests,
+		RequestID:               requestID,
 		constructed:             true,
 	}
 }
@@ -5705,6 +5707,7 @@ func (f TeamLinkedMixNativeFirstFields) SlogArgs() []any {
 		"dropped_rows", f.DroppedRows,
 		"native_cover_issues", f.NativeCoverIssues,
 		"native_cover_pull_requests", f.NativeCoverPullRequests,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
@@ -5715,6 +5718,7 @@ type TeamLinkedMixSetFields struct {
 	Teams              int
 	LinkedPullRequests int
 	ScopeMode          string
+	RequestID          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamLinkedMixSetFields uniformly, set ONLY by NewTeamLinkedMixSetFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5728,12 +5732,13 @@ type TeamLinkedMixSetFields struct {
 
 // NewTeamLinkedMixSetFields is the generated constructor for TeamLinkedMixSetFields -- every
 // field TeamLinkedMixSet.Fields declares is a required parameter.
-func NewTeamLinkedMixSetFields(outcome string, teams int, linkedPullRequests int, scopeMode string) TeamLinkedMixSetFields {
+func NewTeamLinkedMixSetFields(outcome string, teams int, linkedPullRequests int, scopeMode string, requestID string) TeamLinkedMixSetFields {
 	return TeamLinkedMixSetFields{
 		Outcome:            outcome,
 		Teams:              teams,
 		LinkedPullRequests: linkedPullRequests,
 		ScopeMode:          scopeMode,
+		RequestID:          requestID,
 		constructed:        true,
 	}
 }
@@ -5755,6 +5760,7 @@ func (f TeamLinkedMixSetFields) SlogArgs() []any {
 		"teams", f.Teams,
 		"linked_pull_requests", f.LinkedPullRequests,
 		"scope_mode", contextfabric.SanitizeLogAttr(f.ScopeMode),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
@@ -5766,6 +5772,7 @@ type TeamPRLinkStateNativeFirstFields struct {
 	PullRequests           int
 	Linked                 int
 	SuppressedPullRequests int
+	RequestID              string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamPRLinkStateNativeFirstFields uniformly, set ONLY by NewTeamPRLinkStateNativeFirstFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5779,13 +5786,14 @@ type TeamPRLinkStateNativeFirstFields struct {
 
 // NewTeamPRLinkStateNativeFirstFields is the generated constructor for TeamPRLinkStateNativeFirstFields -- every
 // field TeamPRLinkStateNativeFirst.Fields declares is a required parameter.
-func NewTeamPRLinkStateNativeFirstFields(outcome string, repositories int, pullRequests int, linked int, suppressedPullRequests int) TeamPRLinkStateNativeFirstFields {
+func NewTeamPRLinkStateNativeFirstFields(outcome string, repositories int, pullRequests int, linked int, suppressedPullRequests int, requestID string) TeamPRLinkStateNativeFirstFields {
 	return TeamPRLinkStateNativeFirstFields{
 		Outcome:                outcome,
 		Repositories:           repositories,
 		PullRequests:           pullRequests,
 		Linked:                 linked,
 		SuppressedPullRequests: suppressedPullRequests,
+		RequestID:              requestID,
 		constructed:            true,
 	}
 }
@@ -5808,6 +5816,7 @@ func (f TeamPRLinkStateNativeFirstFields) SlogArgs() []any {
 		"pull_requests", f.PullRequests,
 		"linked", f.Linked,
 		"suppressed_pull_requests", f.SuppressedPullRequests,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 

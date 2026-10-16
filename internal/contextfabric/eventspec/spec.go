@@ -2085,8 +2085,8 @@ var TeamLinkedMixNativeFirst = Event{
 	Msg:                "devhealthfacts.team_linked_mix_native_first",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
-	Attribution:        []string{},
+	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	Attribution:        []string{"request_id"},
 	BoundedAggregation: "one line per team chunk of a team linked mix read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_row_covered", "covered_fallback_rows_dropped"}},
@@ -2095,23 +2095,25 @@ var TeamLinkedMixNativeFirst = Event{
 		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
 
-// TeamLinkedMixSet is the Info line of the linked pull request set a team linked mix chunk sends: how many teams and linked pull requests, and how the membership scope was applied.
+// TeamLinkedMixSet is the Info line of the linked pull request set a team linked mix chunk sends: how many teams and linked pull requests, and the membership scope mode the read resolved (an ids scope is sent to the query as a table, the line reports the resolved mode).
 var TeamLinkedMixSet = Event{
 	ID:                 "devhealthfacts.team_linked_mix_set",
 	Msg:                "devhealthfacts.team_linked_mix_set",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
-	Attribution:        []string{},
+	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	Attribution:        []string{"request_id"},
 	BoundedAggregation: "one line per team chunk of a team linked mix read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"sent", "empty_set_mix_skipped"}},
 		{Key: "teams", Type: FieldInt, Presence: PresenceRequired, MaxInt: intPtr(100)},
 		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "scope_mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"none", "ids", "ids_table", "subquery"}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
 
@@ -2121,8 +2123,8 @@ var TeamPRLinkStateNativeFirst = Event{
 	Msg:                "devhealthfacts.team_pr_link_state_native_first",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per link state read of a team rollup, so the count follows the number of rollups a request makes.",
-	Attribution:        []string{},
+	DataDependentBound: "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+	Attribution:        []string{"request_id"},
 	BoundedAggregation: "one line per team pull request link state read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_link_suppressed", "covered_fallback_links_suppressed"}},
@@ -2130,6 +2132,7 @@ var TeamPRLinkStateNativeFirst = Event{
 		{Key: "pull_requests", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "linked", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "suppressed_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
 

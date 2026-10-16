@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 type linkScanner struct {
@@ -72,18 +73,21 @@ func captureLinkLines(t *testing.T) *bytes.Buffer {
 func certifyLinkLine(t *testing.T, buf *bytes.Buffer, event eventspec.Event, want map[string]any) {
 	t.Helper()
 	var line []byte
+	written := 0
 	for _, candidate := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		if bytes.Contains(candidate, []byte(`"msg":"`+event.Msg+`"`)) {
 			line = candidate
+			written++
 		}
 	}
-	if line == nil {
-		t.Fatalf("no %q line was written: %s", event.Msg, buf.String())
+	if written != 1 {
+		t.Fatalf("one producer invocation wrote %d %q lines, want exactly one: %s", written, event.Msg, buf.String())
 	}
 	log, err := certify.Parse(line)
 	if err != nil {
 		t.Fatalf("certify.Parse: %v", err)
 	}
+	want["request_id"] = linkLineRequestID
 	if _, err := certify.Certify(log, certify.Assertion{Event: event, Want: want}); err != nil {
 		t.Fatalf("%s failed certification: %v\n%s", event.ID, err, line)
 	}
@@ -93,8 +97,10 @@ func certifyLinkLine(t *testing.T, buf *bytes.Buffer, event eventspec.Event, wan
 // that write the decision-basis lines through a stub client and certifies each
 // line, and requires every closed value the declarations name to be one the
 // producers write.
+const linkLineRequestID = "req_0123456789abcdef0123456789abcdef"
+
 func TestTheTeamLinkLinesCertifyThroughTheirProducers(t *testing.T) {
-	ctx := context.Background()
+	ctx := observability.WithRequestID(context.Background(), linkLineRequestID)
 
 	// team pull request link state: both outcomes.
 	for _, tc := range []struct {
@@ -174,5 +180,18 @@ func TestTheTeamLinkLinesCertifyThroughTheirProducers(t *testing.T) {
 		if field.Key == "teams" && (field.MaxInt == nil || *field.MaxInt != linkedMixTeamChunk) {
 			t.Errorf("teams is declared with maximum %v, the producer's chunk is %d", field.MaxInt, linkedMixTeamChunk)
 		}
+	}
+}
+
+// TestTheTeamLinkLinesCarryNoRequestIDWithoutOne: the request id is read from
+// the context only; a context without one writes no request_id key.
+func TestTheTeamLinkLinesCarryNoRequestIDWithoutOne(t *testing.T) {
+	buf := captureLinkLines(t)
+	client := &linkStubClient{linkStateRows: [][]any{{"repo-1", uint64(5), uint64(3), uint64(0)}}}
+	if _, _, err := newInvestmentProvider(client).readTeamPRLinkState(context.Background(), "org-1", []string{"repo-1"}, factTimeBound{}); err != nil {
+		t.Fatalf("readTeamPRLinkState: %v", err)
+	}
+	if strings.Contains(buf.String(), "request_id") {
+		t.Fatalf("a context without a request id wrote a request_id key: %s", buf.String())
 	}
 }
