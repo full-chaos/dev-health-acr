@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -138,6 +139,19 @@ func certifyRegistryLine(t *testing.T, raw []byte, event eventspec.Event, want m
 		if _, ok := decoded[field.Key]; !ok && field.Presence == eventspec.PresenceRequired {
 			t.Fatalf("%s: the line lacks declared required key %q: %s", event.ID, field.Key, raw)
 		}
+	}
+	var order []string
+	for _, key := range jsonKeys(t, raw) {
+		order = append(order, key)
+	}
+	expected := []string{"time", "level", "msg"}
+	for _, field := range event.Fields {
+		if _, ok := decoded[field.Key]; ok {
+			expected = append(expected, field.Key)
+		}
+	}
+	if !reflect.DeepEqual(order, expected) {
+		t.Fatalf("%s: key order %v differs from the declaration order %v", event.ID, order, expected)
 	}
 	return certifyRequestLine(t, raw, event, want)
 }
@@ -515,4 +529,86 @@ func TestRegistryLinesNeverCarryProviderControlledText(t *testing.T) {
 	}
 	pinKeys(t, bytes.NewBuffer(rejected[0]), factTableDeclarationRejectedKeys, 1)
 	certifyRegistryLine(t, rejected[0], eventspec.FactTableDeclarationRejected, map[string]any{"org_id": "org_1", "kind": "status", "reason": "invalid_shape", "tables": 1})
+}
+
+// TestCoverageWindowEndNeverCarriesProviderText: a latest_window_end that is
+// not a date is logged as the closed word "invalid", a date and a date and time
+// are logged as they are, and the certifier refuses any other value.
+func TestCoverageWindowEndNeverCarriesProviderText(t *testing.T) {
+	t.Parallel()
+	status := contextfabric.FactStatus
+	run := func(windowEnd string) []byte {
+		provider := &registryProviderStub{
+			capability: registryCapability(status, contextfabric.SubjectProject),
+			result: contextfabric.FactProviderResult{
+				State: contextfabric.SourceAvailable, Version: "v1",
+				Evaluation: &contextfabric.FactEvaluationCoverage{Covered: 1, LatestWindowEnd: windowEnd},
+			},
+		}
+		raw := readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{provider}, registryRequest(status))
+		lines := linesOf(t, raw, "context fabric evaluation coverage")
+		if len(lines) != 1 {
+			t.Fatalf("want one coverage line, got %d", len(lines))
+		}
+		return lines[0]
+	}
+	for windowEnd, want := range map[string]string{
+		"2026-10-15": "2026-10-15", "2026-10-15 03:04:05": "2026-10-15 03:04:05", "": "",
+		"tenant widgets password=hunter2": "invalid", "2026-10-15; drop": "invalid",
+	} {
+		line := run(windowEnd)
+		if strings.Contains(string(line), "hunter2") || strings.Contains(string(line), "widgets") {
+			t.Fatalf("provider text reached the coverage line: %s", line)
+		}
+		certifyRegistryLine(t, line, eventspec.FactEvaluationCoverage, map[string]any{"kind": "status", "latest_window_end": want})
+	}
+	mutated := bytes.Replace(run("2026-10-15"), []byte(`"latest_window_end":"2026-10-15"`), []byte(`"latest_window_end":"tenant widgets"`), 1)
+	certifyRefused(t, mutated, eventspec.FactEvaluationCoverage, "free text in latest_window_end", map[string]any{"kind": "status"})
+}
+
+// TestCappedTableDeclarationsAreTheSameOnEveryRead: when the cap cuts through a
+// fact's tables, the same declarations are written every time.
+func TestCappedTableDeclarationsAreTheSameOnEveryRead(t *testing.T) {
+	t.Parallel()
+	status := contextfabric.FactStatus
+	two := func(i int) contextfabric.CanonicalFact {
+		small := aBreakdownTable(contextfabric.IntegerFactValue(int64(i)))
+		large := aBreakdownTable(contextfabric.IntegerFactValue(int64(i)))
+		large.Measures = []string{"items", "more"}
+		large.Rows[0].Fields["more"] = contextfabric.IntegerFactValue(1)
+		return contextfabric.CanonicalFact{
+			Kind: status, Subject: registryProject, SourceState: contextfabric.SourceAvailable,
+			Fields: map[string]contextfabric.FactValue{
+				"a": contextfabric.TableFactValue(small), "b": contextfabric.TableFactValue(large),
+			},
+		}
+	}
+	facts := make([]contextfabric.CanonicalFact, 0, contextfabric.FactTableDeclarationsPerReadCap/2+1)
+	// One single-table fact first, so the cap falls inside the last fact's two tables.
+	only := two(0)
+	delete(only.Fields, "b")
+	facts = append(facts, only)
+	for i := 1; i <= contextfabric.FactTableDeclarationsPerReadCap/2; i++ {
+		facts = append(facts, two(i))
+	}
+	provider := &registryProviderStub{
+		capability: registryCapability(status, contextfabric.SubjectProject),
+		result:     contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Version: "v1", Facts: facts},
+	}
+	measureCounts := func() int {
+		raw := readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{provider}, registryRequest(status))
+		total := 0
+		for _, line := range linesOf(t, raw, "context fabric fact table declaration") {
+			if bytes.Contains(line, []byte(`"measure_count":2`)) {
+				total++
+			}
+		}
+		return total
+	}
+	first := measureCounts()
+	for i := 0; i < 25; i++ {
+		if got := measureCounts(); got != first {
+			t.Fatalf("read %d wrote %d two-measure declarations, the first read wrote %d: the cap picks a different subset each time", i+2, got, first)
+		}
+	}
 }

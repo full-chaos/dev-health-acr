@@ -3020,7 +3020,8 @@
       {
         "key": "latest_window_end",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "pattern": "^(\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2}:\\d{2})?|invalid)?$"
       },
       {
         "key": "freshness_window_days",

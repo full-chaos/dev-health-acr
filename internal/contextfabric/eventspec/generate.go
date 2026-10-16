@@ -526,6 +526,7 @@ type jsonField struct {
 	MaxItems         int         `json:"max_items,omitempty"`
 	MaxInt           *int        `json:"max_int,omitempty"`
 	JoinedMembers    []string    `json:"joined_members,omitempty"`
+	Pattern          string      `json:"pattern,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -553,6 +554,7 @@ func toJSONFields(fs []Field) []jsonField {
 			MaxItems:         f.MaxItems,
 			MaxInt:           f.MaxInt,
 			JoinedMembers:    f.JoinedMembers,
+			Pattern:          f.Pattern,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

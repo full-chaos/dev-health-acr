@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -1257,6 +1258,19 @@ const (
 	factReadCancelled factReadOutcome = "cancelled"
 )
 
+// FactLatestWindowEndPattern is the shape of the latest_window_end value a log line carries: empty, a date, a date and time, or "invalid" for any other provider value.
+const FactLatestWindowEndPattern = `^(\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?|invalid)?$`
+
+var factWindowEndShape = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$`)
+
+// latestWindowEndLogValue keeps a provider-supplied string out of the log: only a date or a date and time is written, anything else is the closed word "invalid".
+func latestWindowEndLogValue(value string) string {
+	if value == "" || factWindowEndShape.MatchString(value) {
+		return value
+	}
+	return "invalid"
+}
+
 // FactReadOutcomeVocabulary is the closed set of outcomes the fact read line carries.
 func FactReadOutcomeVocabulary() []string {
 	return []string{
@@ -1349,7 +1363,7 @@ func (r *FactCapabilityRegistry) recordEvaluationCoverage(ctx context.Context, p
 		"never_evaluated", coverage.NeverEvaluated,
 		"measured_zero_credited", credited,
 		"rules_evaluated", coverage.RulesEvaluated,
-		"latest_window_end", SanitizeLogAttr(coverage.LatestWindowEnd),
+		"latest_window_end", SanitizeLogAttr(latestWindowEndLogValue(coverage.LatestWindowEnd)),
 		"freshness_window_days", coverage.FreshnessWindowDays,
 		"withheld_capped_read", coverage.Withheld,
 	}
@@ -1432,7 +1446,13 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 	}
 	written, dropped, invalid := 0, 0, 0
 	for _, fact := range facts {
-		for _, value := range fact.Fields {
+		names := make([]string, 0, len(fact.Fields))
+		for name := range fact.Fields {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			value := fact.Fields[name]
 			if value.Table == nil {
 				continue
 			}

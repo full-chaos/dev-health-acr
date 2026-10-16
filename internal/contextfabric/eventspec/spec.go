@@ -234,6 +234,10 @@ type Field struct {
 	// sorted, unique, comma-joined list of members of this set; the empty
 	// string is the empty list.
 	JoinedMembers []string
+	// Pattern (FieldString only), when set, is an anchored regular expression
+	// the value must match; PatternExample is a value that matches it.
+	Pattern        string
+	PatternExample string
 	// Nullable (FieldCountMap only) says the field may carry JSON null: the
 	// producer leaves the map nil when nothing was counted.
 	Nullable bool
@@ -1967,8 +1971,8 @@ var FactEvaluationCoverage = Event{
 		{Key: "never_evaluated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "measured_zero_credited", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "rules_evaluated", Type: FieldInt, Presence: PresenceRequired},
-		// A date as the evaluation store prints it (toString of a date column, deficiencies.go), or empty when none was seen.
-		{Key: "latest_window_end", Type: FieldString, Presence: PresenceRequired},
+		// A date or date and time, empty when none was seen, or "invalid" for any other provider value.
+		{Key: "latest_window_end", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.FactLatestWindowEndPattern, PatternExample: "2026-10-15"},
 		{Key: "freshness_window_days", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "withheld_capped_read", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
