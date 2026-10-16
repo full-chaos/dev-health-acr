@@ -105,6 +105,22 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	s.pullRequest("repo-open", 1, beforeWindow, nil)
 	s.team("team-staleonly", "repo-staleonly")
 	s.link("repo-staleonly", "issue-1", 99, "native")
+	// A fallback link of an issue that carries a native link is no admitted link,
+	// whatever repository the native link is in: team-coveredhere's native link is
+	// in its own repository, team-coveredelsewhere's in repo-holder, which no
+	// team asks about.
+	s.team("team-coveredhere", "repo-coveredhere")
+	s.pullRequest("repo-coveredhere", 1, inWindow, nil)
+	s.link("repo-coveredhere", "issue-covered-here", 1, "heuristic")
+	s.link("repo-coveredhere", "issue-covered-here", 2, "native")
+	s.team("team-coveredelsewhere", "repo-coveredelsewhere")
+	s.pullRequest("repo-coveredelsewhere", 1, inWindow, nil)
+	s.link("repo-coveredelsewhere", "issue-covered-elsewhere", 1, "explicit_text")
+	s.link("repo-holder", "issue-covered-elsewhere", 7, "native")
+	// A fallback-only issue still links its pull request.
+	s.team("team-fallbackonly", "repo-fallbackonly")
+	s.pullRequest("repo-fallbackonly", 1, inWindow, nil)
+	s.link("repo-fallbackonly", "issue-fallback-only", 1, "heuristic")
 
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -112,7 +128,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	}
 	seam := &seamCapture{registry: registry.WithoutScopeExpansion()}
 	reader := directread.NewFactsReader(directread.NewSubjectGate(admitAllGraph{}, nil), directread.NewFactReader(seam), nil)
-	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly"}
+	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly", "team-coveredhere", "team-coveredelsewhere", "team-fallbackonly"}
 	requested := make([]directread.RequestSubject, 0, len(teams))
 	for _, team := range teams {
 		requested = append(requested, directread.RequestSubject{Kind: "team", CanonicalID: teamSubject(team).CanonicalID})
@@ -140,6 +156,12 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		"team-oldpr":     {old, ""},
 		"team-open":      {token, "1 pull request"},
 		"team-staleonly": {old, ""},
+		// The only link of the pull request is a fallback on an issue that has a
+		// native link (in the team's own repository, and in another one): no
+		// admitted link. A fallback-only issue still links its pull request.
+		"team-coveredhere":      {token, "1 pull request"},
+		"team-coveredelsewhere": {token, "1 pull request"},
+		"team-fallbackonly":     {old, ""},
 	}
 	reasons := map[string]string{}
 	for _, row := range response.Coverage {
@@ -167,7 +189,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	// The served request note names the token, the team count, and that the
 	// pull request total is per team (a pull request in a repository two of
 	// these teams share would count for each).
-	const wantNote = "investment_team_prs_without_linked_work for 3: 5 pull request(s) counted per team"
+	const wantNote = "investment_team_prs_without_linked_work for 5: 7 pull request(s) counted per team"
 	noted := false
 	for _, note := range response.RequestNotes {
 		if note.Kind == "investment" && strings.Contains(note.Note, wantNote) && strings.Contains(note.Note, "no pull request in the window has an admitted link to tracked work") {

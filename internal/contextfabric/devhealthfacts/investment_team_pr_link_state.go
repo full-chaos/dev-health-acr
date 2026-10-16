@@ -53,9 +53,11 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 	return withRowLimitOf(`SELECT toString(pr.repo_id) AS repo_id, count() AS pull_requests,
 	countIf((pr.repo_id, pr.number) IN (
 		SELECT l.repo_id, l.pr_number
-		FROM work_graph_issue_pr AS l FINAL
-		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
-			AND `+linkTierRankSQL+` > 0
+		FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native
+			FROM work_graph_issue_pr FINAL
+			WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`) AS l
+		WHERE l.repo_id IN `+teamPRLinkRepositorySet+`
+			AND `+linkTierRankSQL+` > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
 	)) AS linked
 FROM git_pull_requests AS pr FINAL
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+
