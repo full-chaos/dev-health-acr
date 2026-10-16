@@ -486,7 +486,8 @@ func TestTheProductionSinkReportsTheAccountingAndTheTrendLoss(t *testing.T) {
 	for _, want := range []string{
 		"render_shape_accounting=ok",
 		"render_shape_trends_omitted=0",
-		"render_shape_rule=dated_fact_trend",
+		// The selected shapes ride on the one summary record as a list.
+		"render_shape_rule:dated_fact_trend",
 	} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("the production sink never emitted %q; logged:\n%s", want, logged)

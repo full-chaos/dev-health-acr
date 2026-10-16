@@ -107,7 +107,8 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		// other-org/secret, INC-U to nothing.
 		fmt.Sprintf(`INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, started_at, is_deleted) VALUES ('%[1]s', %[2]s, 'INC-1', %[2]s, %[2]s, 'svc-1', 'Outage', %[2]s, 0), ('%[1]s', %[2]s, 'INC-S', %[2]s, %[2]s, 'svc-s', 'Secret outage', %[2]s, 0), ('%[1]s', %[2]s, 'INC-U', %[2]s, %[2]s, 'svc-u', 'Unmapped outage', %[2]s, 0)`, org, past7252),
 		fmt.Sprintf(`INSERT INTO operational_service_repository_mappings (org_id, source_version_at, id, relationship_provenance, relationship_confidence, service_id, repo_id, valid_from, is_active) VALUES ('%[1]s', %[2]s, 'map-1', 'native', 0.9, 'svc-1', '%[3]s', %[2]s, 1), ('%[1]s', %[2]s, 'map-s', 'native', 0.9, 'svc-s', '%[4]s', %[2]s, 1)`, org, past7252, grantedID, secretID),
-		// One (deployment, incident) under TWO sources: one edge_id, two rows.
+		// One (deployment, incident, repository) is one row, whatever the source (ops keys it so, the higher tier wins):
+		// the heuristic row below is replaced by the native one.
 		fmt.Sprintf(`INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES
 			('edge-1', '%[1]s', 'dep-1', 'INC-1', '%[2]s', 0.9, 'native', 'asserted link', %[3]s, %[3]s),
 			('edge-1', '%[1]s', 'dep-1', 'INC-1', '%[2]s', 0.4, 'heuristic', 'inferred link', %[3]s, %[3]s),
@@ -216,9 +217,8 @@ func rowCases() []rowCase {
 		{team, []string{zeroRepoID, "jira:ABC-1:ari", "cloud:identity::team/1", "issue_project"}, false, true, "source=issue_project", ""},
 		// A co-owner row (is_primary = 2) is its own edge and its ref resolves.
 		{team, []string{zeroRepoID, "jira:ABC-1", "cloud:identity::team/1", "project_ownership"}, false, true, "source=project_ownership", ""},
-		// One (deployment, incident), two sources: two rows, two refs.
+		// One (deployment, incident) seeded under two sources is one row: the native one (the higher tier wins).
 		{deploymentIncident, []string{grantedID, "dep-1", "INC-1", "native"}, true, true, "asserted link", "edge-1"},
-		{deploymentIncident, []string{grantedID, "dep-1", "INC-1", "heuristic"}, true, true, "inferred link", "edge-1"},
 		// An incident no service maps: refused to every caller.
 		{deploymentIncident, []string{grantedID, "dep:2", "INC-U", "native"}, false, false, "", ""},
 		// An incident mapped only to other-org/secret.
@@ -387,6 +387,9 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, []string{"jira:T1", "jira:T2", "blocks"}},
 		// The (deployment, incident) pair under a source it has no row for.
 		{contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, []string{grantedID, "dep-1", "INC-1", "manual"}},
+		// The heuristic row of a pair that also has a native row was replaced by it: a ref minted from the older row
+		// names a row that is gone (named in the PR's risk notes).
+		{contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, []string{grantedID, "dep-1", "INC-1", "heuristic"}},
 	} {
 		ref, id := mustMint(t, gone.kind, gone.values...)
 		for _, principal := range []storage.Principal{granted, orgWide} {

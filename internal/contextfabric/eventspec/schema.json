@@ -4489,6 +4489,102 @@
     ]
   },
   {
+    "id": "contextfabric.interpretation_ensemble_gap",
+    "msg": "context fabric interpretation ensemble did not reach quorum",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per interpretation ensemble, written at Warn when quorum was not met.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requested",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "primary_succeeded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "failed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quorum_met",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.interpretation_ensemble_resolved",
+    "msg": "context fabric interpretation ensemble resolved",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per interpretation ensemble, written at Info when quorum was met.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requested",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "primary_succeeded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "failed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quorum_met",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.operation_read",
     "msg": "context fabric operation read",
     "level": "info",
@@ -5231,6 +5327,185 @@
     ]
   },
   {
+    "id": "contextfabric.render_shape_rule_skipped",
+    "msg": "context fabric render shape rule skipped",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "render_shape_rule"
+    ],
+    "bounded_aggregation": "at most one line per render shape rule per selection pass: the selector accounts every rule exactly once, selected or skipped.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "question_shape",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open"
+        ]
+      },
+      {
+        "key": "render_shape_rule",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "cohort_attention_score",
+          "cohort_driver_contribution",
+          "dated_fact_trend"
+        ]
+      },
+      {
+        "key": "render_shape_skip_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_cohort_intent",
+          "no_ranked_member",
+          "no_drivers",
+          "too_many_signals",
+          "no_declared_table",
+          "no_time_series_table",
+          "claim_field_not_a_measure",
+          "unresolvable_measure_roles",
+          "no_plottable_measure",
+          "shape_budget_spent",
+          "not_plan_authorized"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.render_shape_selection_summary",
+    "msg": "context fabric render shape selection",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per render shape selection pass, written even when nothing was selected so a zero is a statement and not an absent line.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "question_shape",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open"
+        ]
+      },
+      {
+        "key": "render_shapes_selected",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "render_shape_rules_skipped",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "render_shape_members_truncated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "render_shape_trends_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "render_shape_accounting",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ok",
+          "violated"
+        ]
+      },
+      {
+        "key": "selected_shapes",
+        "type": "object_slice",
+        "presence": "required",
+        "max_items": 8,
+        "fields": [
+          {
+            "key": "render_shape_kind",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "series",
+              "table",
+              "quadrant",
+              "treemap",
+              "sunburst",
+              "sankey",
+              "burndown",
+              "forecast"
+            ]
+          },
+          {
+            "key": "render_shape_presentation",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "bars",
+              "stacked_bars",
+              "line"
+            ]
+          },
+          {
+            "key": "render_shape_rule",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "cohort_attention_score",
+              "cohort_driver_contribution",
+              "dated_fact_trend"
+            ]
+          },
+          {
+            "key": "render_shape_series",
+            "type": "int",
+            "presence": "required"
+          },
+          {
+            "key": "render_shape_points",
+            "type": "int",
+            "presence": "required"
+          }
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.repository_work_item_walk",
     "msg": "context_fabric: repository work item walk",
     "level": "info",
@@ -5961,6 +6236,88 @@
         "key": "request_id",
         "type": "string",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.server_status_shadow",
+    "msg": "context fabric server status shadow",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that reaches assembly with a plan.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "server_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_plan",
+          "no_frame",
+          "unobservable_obligation",
+          "no_claimed_facts",
+          "required_drivers_absent",
+          "required_ranking_absent",
+          "required_remaining_work_absent",
+          "required_readiness_absent",
+          "required_count_absent",
+          "coverage_degraded",
+          "limitation_disclosed",
+          "served"
+        ]
+      },
+      {
+        "key": "derived",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "disagreed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },
