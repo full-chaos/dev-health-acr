@@ -157,6 +157,8 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].([]string)
 		case *[]int64:
 			*value = row[index].([]int64)
+		case *[]uint64:
+			*value = row[index].([]uint64)
 		case *[][]string:
 			*value = row[index].([][]string)
 		case *[]time.Time:

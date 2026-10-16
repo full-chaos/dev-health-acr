@@ -50,6 +50,9 @@ type linkedProdShape struct {
 	// extremePRs pull requests and extremeIssues issue references.
 	extremeEvery, extremePRs, extremeIssues int
 	padHashes                               int
+	// fallbackEvery makes every link with k % fallbackEvery = 0 an
+	// explicit_text link next to the native ones (0: every link native).
+	fallbackEvery int
 	// wideUnitIDs gives every unit id prod's width (about 73 characters, a
 	// hash suffix) instead of the short wu-<n>.
 	wideUnitIDs bool
@@ -64,6 +67,14 @@ func (s linkedProdShape) unitIDSQL(col string) string {
 }
 
 // unitID is the unit id of i, equal to unitIDSQL's.
+// linkTierSQL is the provenance of link number k.
+func (s linkedProdShape) linkTierSQL() string {
+	if s.fallbackEvery > 0 {
+		return fmt.Sprintf("if(k %% %d = 0, 'explicit_text', 'native')", s.fallbackEvery)
+	}
+	return "'native'"
+}
+
 func (s linkedProdShape) unitID(i int) string {
 	if s.wideUnitIDs {
 		return fmt.Sprintf("wu-%d-%x", i, sha256.Sum256([]byte(strconv.Itoa(i))))
@@ -176,7 +187,7 @@ SELECT repos_arr[1 + number % ?], ?, toUInt32(1 + intDiv(number, ?)), 'pr', 'mer
 		uint64(s.ownedRepos), orgID, uint64(s.ownedRepos), at, at, uint64(s.pullRequests))
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 WITH `+repoArr+` AS repos_arr
-SELECT repos_arr[1 + pr % ?], concat('wi-', toString(k % ?)), toUInt32(1 + intDiv(pr, ?)), 1, if(k % 3 = 0, 'explicit_text', 'native'), '', ?, ?
+SELECT repos_arr[1 + pr % ?], concat('wi-', toString(k % ?)), toUInt32(1 + intDiv(pr, ?)), 1, `+s.linkTierSQL()+`, '', ?, ?
 FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 		uint64(s.ownedRepos), uint64(s.linkedItems), uint64(s.ownedRepos), at, orgID, uint64(s.pullRequests), uint64(s.links))
 	// One insert per version: a single insert block would collapse the two
@@ -305,7 +316,12 @@ func readLinkedMixRows(t *testing.T, ctx context.Context, query contextpacket.Cl
 	if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixDifferential", statement, orgID, teams, func(row readers.RowScanner) error {
 		var team string
 		var r linkedMixRow
-		if err := row.Scan(&team, &r.repos, &r.theme, &r.bugfix); err != nil {
+		var unitHashes, sizedHashes []uint64
+		dest := []any{&team, &r.repos, &r.theme, &r.bugfix}
+		if strings.Contains(frag.SQL, "unit_hashes") {
+			dest = append(dest, &unitHashes, &sizedHashes)
+		}
+		if err := row.Scan(dest...); err != nil {
 			return err
 		}
 		out[team] = r
@@ -456,7 +472,7 @@ func newLinkedProdShapeStore(t *testing.T, ctx context.Context, orgID string, sh
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
-	tables := []string{"work_unit_investments", "work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "projects", "repos", "team_repo_ownership"}
+	tables := []string{"work_unit_investments", "work_unit_issue_size", "work_items", "work_graph_issue_pr", "git_pull_requests", "team_project_ownership", "projects", "repos", "team_repo_ownership"}
 	t.Cleanup(func() {
 		for _, table := range tables {
 			// devhealthschema:not-a-production-replica this statement maintains a table the production DDL created; no column, type or engine is declared here.

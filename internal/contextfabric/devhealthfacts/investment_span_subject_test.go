@@ -23,7 +23,7 @@ func TestInvestmentSpanIsPerSubject(t *testing.T) {
 	mixA := themeMixRow("A", "", themes, 0)
 	mixB := themeMixRow("B", "", themes, 0)
 	sentinel := func(team string, from time.Time) []any {
-		return []any{uint8(255), "repo-" + team, themes, 0.0, uint64(1), from}
+		return []any{uint8(255), "repo-" + team, themes, 0.0, uint64(1), []uint64{1}, []uint64{}, from}
 	}
 	tables := []fakeTable{
 		{match: "FROM team_repo_ownership", rows: [][]any{{"T", "repo-A"}, {"T", "repo-B"}, {"U", "repo-B"}}},
@@ -70,7 +70,7 @@ func TestInvestmentSpanIsStatedForASubjectWithNoFact(t *testing.T) {
 	t.Parallel()
 	themes := map[string]float64{"feature_delivery": 1}
 	tables := []fakeTable{
-		{match: "FROM work_unit_investments", rows: [][]any{{uint8(255), "repo-A", themes, 0.0, uint64(1), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)}}},
+		{match: "FROM work_unit_investments", rows: [][]any{{uint8(255), "repo-A", themes, 0.0, uint64(1), []uint64{1}, []uint64{}, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)}}},
 	}
 	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)

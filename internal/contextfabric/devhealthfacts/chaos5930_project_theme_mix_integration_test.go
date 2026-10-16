@@ -43,7 +43,7 @@ func createCHAOS5930Tables(t *testing.T, ctx context.Context, connection clickho
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership",
-		"repos", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
+		"repos", "work_unit_investments", "work_unit_issue_size", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 		"work_item_team_attributions", "work_items", "project_membership_transitions",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {
@@ -225,6 +225,16 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 		if got := factInt(t, *fact, "work_unit_count"); got != 2 {
 			t.Errorf("work_unit_count = %d, want 2", got)
+		}
+		// The project mix is still read in COUNT: it says so and carries no
+		// sizing coverage until it is weighed by issue size.
+		if got := factString(t, *fact, "measure"); got != "COUNT" {
+			t.Errorf("measure = %q, want COUNT (project mixes are not read in issue size yet)", got)
+		}
+		for _, name := range []string{"sizing_coverage", "unsized_unit_count", "sizing_note", "denominator"} {
+			if _, has := fact.Fields[name]; has {
+				t.Errorf("project fact serves %s; a COUNT mix carries no sizing coverage", name)
+			}
 		}
 		if got := factInt(t, *fact, "work_units_without_repo_link"); got != 0 {
 			t.Errorf("work_units_without_repo_link = %d, want 0 -- neither seeded work unit is missing a repo link", got)

@@ -42,6 +42,7 @@ type orgMixRow struct {
 	Theme              map[string]float64
 	Bugfix             float64
 	WorkUnits          int64
+	SizedUnits         int64
 	Repositories       int64
 	ResolvedEffort     float64
 	UnattributedEffort float64
@@ -74,16 +75,17 @@ func orgMixStatement(bound factTimeBound) string {
 	sumMap(mapApply((k, v) -> (k, if(win >= 0 AND repo_uuid != '', v * effort, 0.)), theme_distribution_json)) AS theme_effort,
 	sumIf(bugfix_share * effort, win >= 0 AND repo_uuid != '') AS bugfix_effort,
 	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '') AS work_units,
+	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND unit_issue_size > 0) AS sized_units,
 	uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories,
 	sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort,
 	sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort,
 	min(span_from) AS span_from
 FROM (
-	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share, span_from
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, theme_distribution_json, bugfix_share, span_from
+			effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from
 		FROM (
 ` + orgSplitCore(memberships) + `		)
 	)
@@ -98,13 +100,14 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 		extra = append(extra, readers.Binding{Name: tb.Name, Value: tb.Value})
 	}
 	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadOrganizationThemeMix", orgMixStatement(bound), orgID, []string{}, func(row contextpacket.ClickHouseRowScanner) error {
-		var workUnits, repositories uint64
+		var workUnits, sizedUnits, repositories uint64
 		var spanFrom time.Time
-		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &repositories, &out.ResolvedEffort, &out.UnattributedEffort, &spanFrom); err != nil {
+		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &sizedUnits, &repositories, &out.ResolvedEffort, &out.UnattributedEffort, &spanFrom); err != nil {
 			return err
 		}
 		out.EarliestUnit = spanFrom
 		out.WorkUnits = int64(workUnits)
+		out.SizedUnits = int64(sizedUnits)
 		out.Repositories = int64(repositories)
 		return nil
 	}, extra...)
@@ -148,7 +151,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	for _, subject := range own {
 		recordInvestmentSpan(ctx, subject.CanonicalID, row.EarliestUnit)
 	}
-	t := &repoThemeTotals{theme: row.Theme, bugfix: row.Bugfix, workUnits: row.WorkUnits, repos: row.Repositories}
+	t := &repoThemeTotals{theme: row.Theme, bugfix: row.Bugfix, workUnits: row.WorkUnits, sizedUnits: row.SizedUnits, repos: row.Repositories}
 	if t.theme == nil {
 		t.theme = map[string]float64{}
 	}
@@ -168,6 +171,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 			}
 			fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(t.bugfix / total))
 			fields["theme_breakdown"] = themeBreakdownTable(t, timeBound.effectiveGrain(grainDaily))
+			investmentSizingFields(fields, total, t.workUnits, t.sizedUnits)
 		}
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(t.workUnits)
 		fields["scope"] = contextfabric.StringFactValue(orgMixScope)
