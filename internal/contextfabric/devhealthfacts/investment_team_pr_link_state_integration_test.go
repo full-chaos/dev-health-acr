@@ -105,18 +105,14 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	s.pullRequest("repo-open", 1, beforeWindow, nil)
 	s.team("team-staleonly", "repo-staleonly")
 	s.link("repo-staleonly", "issue-1", 99, "native")
-	// A fallback link of an issue that carries a native link is no admitted link,
-	// whatever repository the native link is in: team-coveredhere's native link is
-	// in its own repository, team-coveredelsewhere's in repo-holder, which no
-	// team asks about.
+	// A fallback link of an issue that carries a native link in a repository the
+	// read covers is no admitted link: team-coveredhere's native link is in its
+	// own repository. (A native link in a repository nobody asks about is the
+	// known gap TestTeamPullRequestLinkStateKnownGapNativeLinkInAnotherRepository.)
 	s.team("team-coveredhere", "repo-coveredhere")
 	s.pullRequest("repo-coveredhere", 1, inWindow, nil)
 	s.link("repo-coveredhere", "issue-covered-here", 1, "heuristic")
 	s.link("repo-coveredhere", "issue-covered-here", 2, "native")
-	s.team("team-coveredelsewhere", "repo-coveredelsewhere")
-	s.pullRequest("repo-coveredelsewhere", 1, inWindow, nil)
-	s.link("repo-coveredelsewhere", "issue-covered-elsewhere", 1, "explicit_text")
-	s.link("repo-holder", "issue-covered-elsewhere", 7, "native")
 	// A pull request with a native link and a heuristic link counts once, as
 	// linked (the reader asks whether the pull request has any admitted link).
 	s.team("team-bothtiers", "repo-bothtiers")
@@ -134,7 +130,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	}
 	seam := &seamCapture{registry: registry.WithoutScopeExpansion()}
 	reader := directread.NewFactsReader(directread.NewSubjectGate(admitAllGraph{}, nil), directread.NewFactReader(seam), nil)
-	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly", "team-coveredhere", "team-coveredelsewhere", "team-fallbackonly", "team-bothtiers"}
+	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly", "team-coveredhere", "team-fallbackonly", "team-bothtiers"}
 	requested := make([]directread.RequestSubject, 0, len(teams))
 	for _, team := range teams {
 		requested = append(requested, directread.RequestSubject{Kind: "team", CanonicalID: teamSubject(team).CanonicalID})
@@ -163,12 +159,11 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		"team-open":      {token, "1 pull request"},
 		"team-staleonly": {old, ""},
 		// The only link of the pull request is a fallback on an issue that has a
-		// native link (in the team's own repository, and in another one): no
-		// admitted link. A fallback-only issue still links its pull request.
-		"team-coveredhere":      {token, "1 pull request"},
-		"team-coveredelsewhere": {token, "1 pull request"},
-		"team-fallbackonly":     {old, ""},
-		"team-bothtiers":        {old, ""},
+		// native link in the team's own repository: no admitted link. A
+		// fallback-only issue still links its pull request.
+		"team-coveredhere":  {token, "1 pull request"},
+		"team-fallbackonly": {old, ""},
+		"team-bothtiers":    {old, ""},
 	}
 	reasons := map[string]string{}
 	for _, row := range response.Coverage {
@@ -196,7 +191,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	// The served request note names the token, the team count, and that the
 	// pull request total is per team (a pull request in a repository two of
 	// these teams share would count for each).
-	const wantNote = "investment_team_prs_without_linked_work for 5: 7 pull request(s) counted per team"
+	const wantNote = "investment_team_prs_without_linked_work for 4: 6 pull request(s) counted per team"
 	noted := false
 	for _, note := range response.RequestNotes {
 		if note.Kind == "investment" && strings.Contains(note.Note, wantNote) && strings.Contains(note.Note, "no pull request in the window has an admitted link to tracked work") {
@@ -226,9 +221,9 @@ func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *
 }
 
 // The same measurement with a link on every pull request of the team: each
-// pull request's issue has a fallback link in the team's repository and a
-// native link in another one, so the issue lookup of the link-state statement
-// has 20 issue ids to find among the unrelated links of 400 repositories.
+// pull request's issue has a fallback link and a native link in the team's
+// repository, so the link-state statement has 20 issues to cover among the
+// unrelated links of 400 repositories.
 func TestTeamPullRequestLinkStateCostIsFlatWithLinkedIssuesOnRealClickHouse(t *testing.T) {
 	assertTeamPullRequestLinkStateCostIsFlat(t, "org-pr-link-cost-linked", true)
 }
@@ -244,7 +239,7 @@ func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIs
 		if linkIssues {
 			issue := fmt.Sprintf("issue-cost-%d", n)
 			s.link("repo-cost", issue, n, "heuristic")
-			s.link("repo-holder", issue, 1000+n, "native")
+			s.link("repo-cost", issue, 1000+n, "native")
 		}
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
