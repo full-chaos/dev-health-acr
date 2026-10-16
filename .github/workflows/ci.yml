@@ -215,6 +215,8 @@ jobs:
       # packages would still report success.
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
+      - name: Test the devhealthsource unit split partition
+        run: scripts/ci/test-unit-split-partition.sh
       - name: Test the shard budget guard
         run: scripts/ci/test-shard-budget-guard.sh
       - name: Test the isolated-job budget wrapper
@@ -298,8 +300,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    name: unit (shard ${{ matrix.shard }} of 8)
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    name: unit (shard ${{ matrix.shard }} of 9)
     runs-on: ubuntu-latest
     # mirror-preflight is a single job again (the ARC pool is gone), so a
     # plain `needs:` is correct: the default skip-cascade now does the right
@@ -419,15 +421,17 @@ jobs:
           # Legs 5-8 run the two split packages, each in two halves split by
           # the SAME list the race jobs use (scripts/ci/<package>-heavy-tests.txt):
           # legs 5 and 6 run the rest half of devhealthfacts and devhealthsource
-          # (-skip), legs 7 and 8 run only their heavy tests (-run).
+          # (-skip), legs 7 and 8 run only their heavy tests (-run). CHAOS-9871: devhealthsource's rest half
+          # lost its three slowest tests to leg 9 (the race-mid list, -run), so leg 6 skips heavy and mid.
           heavy_half=""
           case '${{ matrix.shard }}' in
             5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"; split_pkg=devhealthfacts ;;
-            6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource ;;
-            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"; split_pkg=devhealthfacts; heavy_half=1 ;;
-            8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource; heavy_half=1 ;;
+            6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource unit-rest)"; split_pkg=devhealthsource ;;
+            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"; split_pkg=devhealthfacts; heavy_half="heavy half" ;;
+            8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource; heavy_half="heavy half" ;;
+            9) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-mid)"; split_pkg=devhealthsource; heavy_half="mid half" ;;
           esac
-          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
+          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
           set +e
           if [ -n "$isolated_timeout" ]; then
             make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
@@ -438,11 +442,11 @@ jobs:
           set -e
           # gotestsum names the suite after the package, and the reports merge
           # refuses one suite name in two shards. The heavy half holds
-          # disjoint tests, so its suite is renamed; classnames are untouched.
-          if [ "$heavy_half" = 1 ]; then
-            sed -E "/^[[:space:]]*<testsuite /s| name=\"([^\"]*/$split_pkg)\"| name=\"\1 (heavy half)\"|" .tmp/coverage/junit.xml >.tmp/coverage/junit.renamed.xml
-            renamed="$(grep -cE "^[[:space:]]*<testsuite .* name=\"[^\"]*/$split_pkg \(heavy half\)\"" .tmp/coverage/junit.renamed.xml || true)"
-            test "$renamed" -eq 1 || { echo "::error::heavy half junit.xml: expected 1 $split_pkg suite, renamed $renamed"; exit 1; }
+          # disjoint tests, so its suite is renamed (heavy half / mid half); classnames are untouched.
+          if [ -n "$heavy_half" ]; then
+            sed -E "/^[[:space:]]*<testsuite /s| name=\"([^\"]*/$split_pkg)\"| name=\"\1 ($heavy_half)\"|" .tmp/coverage/junit.xml >.tmp/coverage/junit.renamed.xml
+            renamed="$(grep -cE "^[[:space:]]*<testsuite .* name=\"[^\"]*/$split_pkg \($heavy_half\)\"" .tmp/coverage/junit.renamed.xml || true)"
+            test "$renamed" -eq 1 || { echo "::error::$heavy_half junit.xml: expected 1 $split_pkg suite, renamed $renamed"; exit 1; }
             mv .tmp/coverage/junit.renamed.xml .tmp/coverage/junit.xml
           fi
           failure="$(jq -r '
@@ -526,16 +530,16 @@ jobs:
           pattern: go-unit-shard-*
           path: .tmp/unit-shards
       - name: Merge JUnit reports
-        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 8 -out .tmp/coverage/junit.xml
+        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml
       - name: Merge coverage profiles and convert to Cobertura once
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 8 -out .tmp/coverage/cover.out
+          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out
           make coverage-cobertura
       - name: List every shard's failed tests
         if: ${{ !cancelled() }}
-        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 8 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
       # The behaviour check. The steps above are text a later edit can disable,
       # gate off, or replace with `true` while this job still reads green;
       # this one recomputes testcase / suite counts from the raw shard files
@@ -546,7 +550,7 @@ jobs:
       # greps for every step as a second line, and cannot see any of this.)
       - name: Verify the merged reports against the shards
         if: ${{ !cancelled() }}
-        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 8 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
+        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ !cancelled() }}
