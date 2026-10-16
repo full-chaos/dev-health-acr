@@ -35,7 +35,9 @@ const (
 	//
 	// v25 -> v26: the input no longer carries a declared score whose drivers table is not served (decision K7), so an
 	// answer reused under v25 is never served with a bare score.
-	PromptVersion = "context-fabric-synthesis.v26"
+	//
+	// v26 -> v27: the deficiency rule basis is dated by rule_basis_as_of_day when it is present, not only by rule_computed_at.
+	PromptVersion = "context-fabric-synthesis.v27"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

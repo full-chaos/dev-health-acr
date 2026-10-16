@@ -182,3 +182,49 @@ func assertNumberField(t *testing.T, fields map[string]contextfabric.FactValue, 
 		t.Fatalf("%s = %#v, want %v", name, got, *want)
 	}
 }
+
+// The rule reads the score of the day before its window end, so the served
+// basis names that day beside the score. A rule row written before Ops named
+// the day serves no day field, never an empty or a guessed one.
+func TestDeficiencyFactServesTheRuleBasisDayOnlyWhenTheRationaleNamesIt(t *testing.T) {
+	t.Parallel()
+	const withDay = "Compounding Risk score is 0.739 (severity: high). Score as of 2026-10-14. Churn is compounding above its tuned threshold."
+	cases := []struct {
+		name, rationale, wantDay string
+	}{
+		{"named", withDay, "2026-10-14"},
+		{"not named", ruleBasisRationale, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			client := &fakeClient{tables: []fakeTable{
+				{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{{
+					"team-1", "compounding-risk", "v1", "warning", "Code risk is compounding where change pressure is highest.",
+					c.rationale, "criterion", "2026-10-03", "2026-10-15", "2026-10-15 06:00:00",
+				}}},
+			}}
+			def, err := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies).ReadFacts(
+				context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+					Kind: contextfabric.FactOperationalDeficiencies, Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
+				})
+			if err != nil || len(def.Facts) != 1 {
+				t.Fatalf("ReadFacts() = %d facts, err %v", len(def.Facts), err)
+			}
+			fields := def.Facts[0].Fields
+			if fields["rule_basis_compounding_risk"].Number == nil {
+				t.Fatalf("rule basis score not served: %#v", fields)
+			}
+			day, served := fields["rule_basis_as_of_day"]
+			if c.wantDay == "" {
+				if served {
+					t.Errorf("rule_basis_as_of_day = %#v, want it absent", day)
+				}
+				return
+			}
+			if day.String == nil || *day.String != c.wantDay {
+				t.Errorf("rule_basis_as_of_day = %#v, want %q", day, c.wantDay)
+			}
+		})
+	}
+}

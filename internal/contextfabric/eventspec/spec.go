@@ -2161,6 +2161,127 @@ var PullRequestProjectNativeFirst = Event{
 	},
 }
 
+var (
+	familyAgreementClassArr   = contextfabric.FamilyAgreementClassVocabulary()
+	familyRouteSourceArr      = contextfabric.FamilyRouteSourceVocabulary()
+	familyRouteDispositionArr = contextfabric.FamilyRouteDispositionVocabulary()
+	familyProjectionRowArr    = contextfabric.FamilyProjectionRowVocabulary()
+)
+
+func withEmptyToken(tokens []string) []string {
+	return append([]string{""}, tokens...)
+}
+
+func questionFamilyLineTokens() []string {
+	vocab := contextfabric.QuestionFamilyVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
+func questionFamilySourceLineTokens() []string {
+	vocab := contractsv1.ContextFabricQuestionFamilySourceVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
+// QuestionFamilyResolution is the Info line of the question family resolution (CHAOS-4579): the family served, where it came from, how the ensemble samples voted, the frame projection comparison and the routing decision. The per-sample rows ride as one bounded list; a sample past the ensemble bound is counted in samples_omitted. Closed values and counts only: no subject term, anchor or question text.
+var QuestionFamilyResolution = Event{
+	ID:                 "contextfabric.question_family_resolution",
+	Msg:                "context fabric question family resolution",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per interpretation; the sample list is bounded by the ensemble size (at most 7).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+		{Key: "source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: questionFamilySourceLineTokens()},
+		{Key: "ensemble_size", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "downgraded_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "consensus_field_divergence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "family_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", contextfabric.QuestionFamilyTableVersion}},
+		{Key: "sample_families", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: questionFamilyLineTokens()},
+		{Key: "samples", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contextfabric.QuestionFamilyEnsembleMax, Fields: []Field{
+			{Key: "shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(investigationShapeLineTokens())},
+			{Key: "attempted_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+			{Key: "resolved_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+			{Key: "row", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FamilyPrecedenceRowVocabulary()},
+			{Key: "incompatibility_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FamilyIncompatibilityReasonVocabulary()},
+			{Key: "group_kind_set", Type: FieldBool, Presence: PresenceRequired},
+			{Key: "scope_anchor_set", Type: FieldBool, Presence: PresenceRequired},
+		}},
+		{Key: "samples_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "shadow_frame_observed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_frame_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(frameValidationOutcomeTokens)},
+		{Key: "shadow_projection_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", contextfabric.QuestionFrameVersion}},
+		{Key: "shadow_projected_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+		{Key: "shadow_projected_row", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyProjectionRowArr[:]))},
+		{Key: "shadow_precedence_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+		{Key: "shadow_precedence_row", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FamilyPrecedenceRowVocabulary()},
+		{Key: "shadow_agreement_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyAgreementClassArr[:]))},
+		{Key: "shadow_agreed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "family_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyRouteSourceArr[:]))},
+		{Key: "route_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyAgreementClassArr[:]))},
+		{Key: "route_disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyRouteDispositionArr[:]))},
+		{Key: "route_switched", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// HealthDailyHealthCapCut is the Debug line of a health read whose daily_health display cap cut rows from one or more subjects' tables. The cut is also disclosed on the served fact (daily_health_omitted_count) and the read is marked truncated; this line carries counts and the closed subject-local flag only.
+var HealthDailyHealthCapCut = Event{
+	ID:                 "devhealthfacts.health_daily_health_cap_cut",
+	Msg:                "health daily_health display cap cut rows",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per health read with a cut daily_health table.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subjects_cut", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subjects", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_local", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// DeficiencyRuleBasisDayAbsent is the Info line of an operational_deficiencies read whose compounding-risk rule row parsed as a rule basis but names no score day, so the fact is served without rule_basis_as_of_day. The omission is also visible on the served fact (the field is absent); this line carries the org and the closed rule id only.
+var DeficiencyRuleBasisDayAbsent = Event{
+	ID:                 "devhealthfacts.rule_basis_day_absent",
+	Msg:                "devhealthfacts.rule_basis_day_absent",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per fired compounding-risk rule row without a day.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rule_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// DeficiencyRuleBasisDayInvalid is the Warn line of an operational_deficiencies read whose compounding-risk rule row names a score day that is not a calendar date, so the fact is served without rule_basis_as_of_day. The invalid text is sanitized before it is written.
+var DeficiencyRuleBasisDayInvalid = Event{
+	ID:                 "devhealthfacts.rule_basis_day_invalid",
+	Msg:                "devhealthfacts.rule_basis_day_invalid",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per fired compounding-risk rule row with an invalid day.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rule_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "day", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // FactBytesBoundExceeded is the Warn line of a producer that dropped an additive time series because it, with the legacy rows, passed the joint cell or byte bound of a dual-table fact. The drop is also disclosed on the served fact; producer and kind are closed values, never row content.
 var FactBytesBoundExceeded = Event{
 	ID:                 "devhealthfacts.fact_bytes_bound_exceeded",
@@ -4198,6 +4319,10 @@ var All = []Event{
 	TeamLinkedMixSet,
 	TeamPRLinkStateNativeFirst,
 	PullRequestProjectNativeFirst,
+	QuestionFamilyResolution,
+	HealthDailyHealthCapCut,
+	DeficiencyRuleBasisDayAbsent,
+	DeficiencyRuleBasisDayInvalid,
 	FactBytesBoundExceeded,
 	SubjectIDShapeRejected,
 	OwningTeamsTruncated,
