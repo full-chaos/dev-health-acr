@@ -7,11 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/llm"
 )
@@ -99,57 +103,82 @@ func TestConfiguredModelWinsOverThePackageDefault(t *testing.T) {
 	}
 }
 
-// TestInterpretRequestKeepsTheGenkitWireShape drives the real entry point
-// and pins the Chat Completions body the Genkit compat_oai plugin sent, plus
-// what the shared client changes on purpose: no temperature (GPT-5 models
-// refuse one), the sample seed as an exact integer, and no output cap.
-func TestInterpretRequestKeepsTheGenkitWireShape(t *testing.T) {
+// TestModelRequestsAreTheGenkitRequests drives the real entry point for
+// interpretation and synthesis and compares each request with the one the
+// Genkit transport sent for the same input. The golden bodies were captured
+// from the real Genkit path at the commit before the shared client replaced
+// it (testdata/genkit_wire): response_format json_object, the output schema
+// as text at the end of the system message, the sample seed on
+// interpretation only, and no other field.
+func TestModelRequestsAreTheGenkitRequests(t *testing.T) {
 	recorder := &bodyRecorder{}
 	cfg := testConfig(&providerServer{baseURL: recorder.server(t, validInterpretationJSON)})
 	runtime, err := New(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_test"}, testRequest()); err != nil {
-		t.Fatal(err)
+	_, _, _ = runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_test"}, testRequest())
+	_, _, _ = runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_test"}, liveSynthesisInput())
+	currentSystem := []string{interpretprompt.System(), synthesisprompt.System()}
+	for i, name := range []string{"interpret_request.json", "synthesize_request.json"} {
+		raw, err := os.ReadFile("testdata/genkit_wire/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var want map[string]any
+		if err := decoder.Decode(&want); err != nil {
+			t.Fatal(err)
+		}
+		got := recorder.body(t, i)
+		if !reflect.DeepEqual(sortedKeys(got), sortedKeys(want)) {
+			t.Errorf("%s: fields %v, Genkit sent %v", name, sortedKeys(got), sortedKeys(want))
+		}
+		for _, field := range []string{"model", "response_format", "seed"} {
+			if !reflect.DeepEqual(got[field], want[field]) {
+				t.Errorf("%s: %s = %v, Genkit sent %v", name, field, got[field], want[field])
+			}
+		}
+		gotMessages, wantMessages := got["messages"].([]any), want["messages"].([]any)
+		if len(gotMessages) != 2 || len(wantMessages) != 2 {
+			t.Fatalf("%s: messages %d, Genkit sent %d", name, len(gotMessages), len(wantMessages))
+		}
+		// The prompt text itself may have changed on main since the capture;
+		// what Genkit added is the instruction suffix, compared byte for byte,
+		// after the current system prompt.
+		gotSystem, wantSystem := gotMessages[0].(map[string]any)["content"].(string), wantMessages[0].(map[string]any)["content"].(string)
+		wantSuffix := wantSystem[strings.Index(wantSystem, genkitInstructionLead):]
+		if !strings.HasSuffix(gotSystem, wantSuffix) || strings.TrimSuffix(gotSystem, wantSuffix) != currentSystem[i] {
+			t.Errorf("%s: the system message is not the current prompt plus Genkit's instruction (%d vs %d bytes)", name, len(gotSystem), len(currentSystem[i])+len(wantSuffix))
+		}
+		if gotUser, wantUser := gotMessages[1].(map[string]any)["content"], messageText(wantMessages[1]); gotUser != wantUser {
+			t.Errorf("%s: the user message text differs from Genkit's", name)
+		}
 	}
-	body := recorder.body(t, 0)
+}
 
-	if _, present := body["temperature"]; present {
-		t.Errorf("temperature = %v, want none", body["temperature"])
+const genkitInstructionLead = "Output should be in JSON format and conform to the following schema:"
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
 	}
-	seed, ok := body["seed"].(json.Number)
-	if !ok {
-		t.Fatalf("seed = %#v, want a JSON integer", body["seed"])
+	sort.Strings(keys)
+	return keys
+}
+
+// messageText is a message's text whether it was sent as a string or, as
+// openai-go sent Genkit's user message, as text parts.
+func messageText(message any) string {
+	content := message.(map[string]any)["content"]
+	if text, ok := content.(string); ok {
+		return text
 	}
-	if _, err := seed.Int64(); err != nil {
-		t.Fatalf("seed %s is not an int64: %v", seed, err)
+	var out strings.Builder
+	for _, part := range content.([]any) {
+		out.WriteString(part.(map[string]any)["text"].(string))
 	}
-	if _, present := body["max_completion_tokens"]; present {
-		t.Errorf("max_completion_tokens = %v, want none (the Genkit transport sent no cap)", body["max_completion_tokens"])
-	}
-	messages, _ := body["messages"].([]any)
-	if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "user" {
-		t.Fatalf("messages = %v, want system then user", messages)
-	}
-	format, _ := body["response_format"].(map[string]any)
-	schemaFormat, _ := format["json_schema"].(map[string]any)
-	if format["type"] != "json_schema" || schemaFormat["name"] != "output" || schemaFormat["strict"] != true {
-		t.Fatalf("response_format = %v, want strict json_schema named output", format)
-	}
-	wantSchema, err := genkitruntime.InterpretationOutputSchema()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want, got any
-	if err := json.Unmarshal(wantSchema, &want); err != nil {
-		t.Fatal(err)
-	}
-	gotRaw, _ := json.Marshal(schemaFormat["schema"])
-	if err := json.Unmarshal(gotRaw, &got); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("schema sent differs from InterpretationOutputSchema()")
-	}
+	return out.String()
 }
