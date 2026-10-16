@@ -108,3 +108,21 @@ func TestProviderNamespacePicksTheClientAndItsSeedRule(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeKindsDefaultToTheirOwnEndpoint(t *testing.T) {
+	for provider, wantHost := range map[string]string{
+		"anthropic": "api.anthropic.com", "gemini": "generativelanguage.googleapis.com", "openai": "api.openai.com",
+	} {
+		clients, err := newLLMClients(Config{Provider: provider, Model: "m", APIKey: "sk-configured", Timeout: DefaultTimeout}, "m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(clients["m"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(wantHost)) || bytes.Contains(raw, []byte("sk-configured")) {
+			t.Errorf("%s client = %s, want base URL host %s and no key", provider, raw, wantHost)
+		}
+	}
+}

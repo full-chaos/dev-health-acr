@@ -41,14 +41,14 @@ func (s *scriptedLLM) Complete(_ context.Context, request llm.Request) (llm.Resu
 	s.requests = append(s.requests, request)
 	return reply.result, reply.err
 }
-func (s *scriptedLLM) Model() string  { return s.model }
+func (s *scriptedLLM) Model() string { return s.model }
 func (s *scriptedLLM) Kind() llm.Kind {
 	if s.kind == "" {
 		return llm.KindLocal
 	}
 	return s.kind
 }
-func (s *scriptedLLM) Close() error   { return nil }
+func (s *scriptedLLM) Close() error { return nil }
 
 func (s *scriptedLLM) request(i int) llm.Request {
 	s.mu.Lock()
