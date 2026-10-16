@@ -25,11 +25,11 @@ func TestContextPacketItemCauseEventIsOptionalAndBounded(t *testing.T) {
 	if strings.Contains(string(raw), "cause_event") {
 		t.Fatalf("an item without a cause event serializes one: %s", raw)
 	}
-	item.CauseEvent = &CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}
+	item.CauseEvent = CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}
 	if err := item.Validate(); err != nil {
 		t.Fatalf("item with cause_event: %v", err)
 	}
-	item.CauseEvent = &CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}
+	item.CauseEvent = CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}
 	item.Category = CategoryState
 	if err := item.Validate(); err == nil {
 		t.Errorf("a cause_event on a state item validates")
@@ -40,7 +40,7 @@ func TestContextPacketItemCauseEventIsOptionalAndBounded(t *testing.T) {
 		"no id":     {EntityType: "deployment", OccurredAt: at},
 		"zero time": {EntityType: "deployment", EntityID: "d-1"},
 	} {
-		item.CauseEvent = event
+		item.CauseEvent = *event
 		if err := item.Validate(); err == nil {
 			t.Errorf("%s: a cause_event that violates the bounds validates", name)
 		}
@@ -63,7 +63,7 @@ func TestContextPacketItemCauseEventSchemaMatchesValidator(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			item := validItem()
 			item.Category = tc.category
-			item.CauseEvent = &tc.event
+			item.CauseEvent = tc.event
 			goErr := item.Validate()
 			encoded, err := json.Marshal(item)
 			if err != nil {
@@ -130,5 +130,46 @@ func TestMCPResponseSchemasPinCauseEventType(t *testing.T) {
 		if found != 1 {
 			t.Errorf("%s: cause_event definitions = %d, want 1", rel, found)
 		}
+	}
+}
+
+func TestContextPacketItemCauseEventDecodeAgreesWithSchema(t *testing.T) {
+	item := validItem()
+	item.Category = CategoryCause
+	base, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		event string
+		valid bool
+	}{
+		{"object", `{"entity_type":"deployment","entity_id":"d-1","occurred_at":"2026-09-12T09:30:00Z"}`, true},
+		{"null", `null`, false},
+		{"empty object", `{}`, false},
+		{"missing time", `{"entity_type":"deployment","entity_id":"d-1"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(base, &doc); err != nil {
+				t.Fatal(err)
+			}
+			doc["cause_event"] = json.RawMessage(tc.event)
+			raw, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got ContextPacketItem
+			goErr := json.Unmarshal(raw, &got)
+			if goErr == nil {
+				goErr = got.ValidateRead()
+			}
+			schemaErr := contractcheck.ValidateSerialized("", "context_packet_item.v1.schema.json", raw)
+			if (goErr == nil) != tc.valid || (schemaErr == nil) != tc.valid {
+				t.Fatalf("want valid=%v: go=%v schema=%v", tc.valid, goErr, schemaErr)
+			}
+		})
 	}
 }

@@ -1,6 +1,11 @@
 package v1
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 const (
 	ContextPacketRequestSchema = "context_packet_request.v1"
@@ -162,7 +167,7 @@ type ContextPacketItem struct {
 	// CauseEvent names the stored event a cause item is tied to (the failed
 	// deployment that carried it) and when it happened. Absent for every
 	// other item.
-	CauseEvent *CauseEvent `json:"cause_event,omitempty"`
+	CauseEvent CauseEvent `json:"cause_event,omitzero"`
 }
 
 // CauseEvent is the dated event behind a cause item.
@@ -170,6 +175,24 @@ type CauseEvent struct {
 	EntityType string    `json:"entity_type"`
 	EntityID   string    `json:"entity_id"`
 	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// UnmarshalJSON rejects an explicit null and an object missing a member: the
+// schema requires an object with all three members whenever the key is present.
+func (e *CauseEvent) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("cause_event must be an object, not null")
+	}
+	type plain CauseEvent
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.EntityType == "" || decoded.EntityID == "" || decoded.OccurredAt.IsZero() {
+		return fmt.Errorf("cause_event requires entity_type, entity_id and occurred_at")
+	}
+	*e = CauseEvent(decoded)
+	return nil
 }
 
 type ValidityScope struct {
