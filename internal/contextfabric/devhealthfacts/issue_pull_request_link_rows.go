@@ -88,28 +88,18 @@ var issueLinkRowsSQL = issueLinkRowsAmongSQL("")
 // organization. Every row of a kept id, and every version of a kept pull
 // request, is still read, so the rule over a kept id is unchanged.
 func issueLinkRowsAmongSQL(candidates string) string {
-	return issueLinkRowsCoreSQL(candidates, false)
-}
-
-// issueLinkRowsCoreSQL is issueLinkRowsAmongSQL; nativeFirst applies the
-// fallback-only rule (nativeFirstLinkSQL) to the rows it returns.
-func issueLinkRowsCoreSQL(candidates string, nativeFirst bool) string {
 	workItems, pullRequests, among := `work_items AS wi FINAL`, `git_pull_requests AS pr FINAL`, ``
 	if candidates != "" {
 		workItems = `(SELECT org_id, work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `) AS wi`
 		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
 		among = ` AND l.work_item_id IN ` + candidates
 	}
-	covered, links := ``, `work_graph_issue_pr AS l FINAL`
-	if nativeFirst {
-		covered, links = ` AND `+nativeFirstLinkSQL(candidates), nativeFirstLinkSourceSQL(candidates)+` AS l`
-	}
 	return `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, l.provenance AS provenance, ` + linkTierRankSQL + ` AS link_rank
-  FROM ` + links + `
+  FROM work_graph_issue_pr AS l FINAL
   INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
   LEFT JOIN ` + workItems + ` ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
-  WHERE l.org_id = {org_id:String}` + among + covered + ` AND ` + workItemIsIssueSQL("wi") + `
+  WHERE l.org_id = {org_id:String}` + among + ` AND ` + workItemIsIssueSQL("wi") + `
 )`
 }
 
@@ -121,14 +111,6 @@ var admittedIssueLinksSQL = admittedIssueLinksAmongSQL("")
 // candidates names (see issueLinkRowsAmongSQL).
 func admittedIssueLinksAmongSQL(candidates string) string {
 	return `(SELECT work_item_id, pr_repo_id, pr_number, provenance, link_rank FROM ` + issueLinkRowsAmongSQL(candidates) + ` WHERE link_rank > 0)`
-}
-
-// nativeFirstIssueLinksAmongSQL is admittedIssueLinksAmongSQL under the
-// fallback-only rule: an explicit_text or heuristic row counts only where no
-// native row covers its pull request or its issue. The team project-reach
-// reads use it; candidates must name the work item ids being read.
-func nativeFirstIssueLinksAmongSQL(candidates string) string {
-	return `(SELECT work_item_id, pr_repo_id, pr_number, provenance, link_rank FROM ` + issueLinkRowsCoreSQL(candidates, true) + ` WHERE link_rank > 0)`
 }
 
 // issuesWithLinkedPullRequestSQL is the set of issue ids that have at least
