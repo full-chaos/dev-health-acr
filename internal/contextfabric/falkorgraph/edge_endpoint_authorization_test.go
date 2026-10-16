@@ -85,7 +85,7 @@ func TestHopWalkDoesNotCrossAnEdgeToAnInvisibleEndpoint(t *testing.T) {
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: endpointGranted}
 	a := newFakeAdapter(t, endpointFake(endpointGranted, endpointGranted, endpointDenied))
 	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:x", Label: "X"}
-	nodes, edges, _, filters, _, err := a.hopWalk(context.Background(), "k", "org-1", principal, contextfabric.RequestedScope{}, origin, 2, 25, temporalFilter{})
+	nodes, edges, _, filters, _, err := a.hopWalk(context.Background(), "k", "org-1", principal, contextfabric.RequestedScope{}, origin, 2, 25, temporalFilter{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
