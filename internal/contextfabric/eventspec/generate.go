@@ -252,6 +252,8 @@ func goVarName(e Event) string {
 		return "ProjectStatusDrivers"
 	case TeamBlockersDrivers.ID:
 		return "TeamBlockersDrivers"
+	case HealthDailyHealthCapCut.ID:
+		return "HealthDailyHealthCapCut"
 	case FactBytesBoundExceeded.ID:
 		return "FactBytesBoundExceeded"
 	case SubjectIDShapeRejected.ID:

@@ -9764,6 +9764,39 @@
     ]
   },
   {
+    "id": "devhealthfacts.health_daily_health_cap_cut",
+    "msg": "health daily_health display cap cut rows",
+    "level": "debug",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per health read with a cut daily_health table.",
+    "data_dependent_bound": "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subjects_cut",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subjects",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_local",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.owning_teams_truncated",
     "msg": "context_fabric_owning_teams_truncated",
     "level": "warn",
