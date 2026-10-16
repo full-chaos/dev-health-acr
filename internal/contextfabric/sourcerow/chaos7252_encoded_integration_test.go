@@ -86,6 +86,7 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		workItems(org, secretID,
 			[2]string{"jira:A", ""}, [2]string{"B:jira:C", ""},
 			[2]string{"jira:PARENT2", ""}, [2]string{"jira:SP", ""},
+			[2]string{"jira:S2", "jira:SP2"}, [2]string{"jira:SP2", ""},
 		),
 		// The foreign organization: the same repository UUID, the same ids.
 		workItems(foreign, grantedID, [2]string{"jira:A:B", ""}, [2]string{"jira:C", ""}, [2]string{"jira:P:Q", "jira:R"}, [2]string{"jira:R", ""}),
@@ -204,10 +205,17 @@ func rowCases() []rowCase {
 		{hierarchy, []string{grantedID, "jira:P:Q", "jira:R"}, true, true, "child=jira:P:Q, parent=jira:R", ""},
 		{hierarchy, []string{grantedID, "jira:P", "Q:jira:R"}, true, true, "child=jira:P, parent=Q:jira:R", ""},
 		{hierarchy, []string{grantedID, "jira:U", "V:jira:W"}, true, true, "child=jira:U, parent=V:jira:W", ""},
-		// A parent in two repositories: one row (no fan-out join).
-		{hierarchy, []string{grantedID, "jira:K", "jira:PARENT2"}, true, true, "child=jira:K", ""},
-		// A parent only in other-org/secret.
+		// A parent in two repositories (CHAOS-7252: one row, no fan-out join).
+		// CHAOS-9795 ruling (MCP): "jira:PARENT2" is a qualified key, held
+		// twice, so it names no parent and no producer mints a ref: asserted
+		// below.
+		// A parent only in other-org/secret: a qualified key held once names
+		// its parent org-wide, so the ref is minted and the gate refuses a
+		// granted-only caller (parent in the secret repository).
 		{hierarchy, []string{grantedID, "jira:S1", "jira:SP"}, false, true, "child=jira:S1", ""},
+		// Child and parent both in the secret repository: refused to a
+		// granted-only caller, served org-wide.
+		{hierarchy, []string{secretID, "jira:S2", "jira:SP2"}, false, true, "child=jira:S2", ""},
 		{hierarchy, []string{grantedID, "a%b:c", "jira:R"}, true, true, "child=a%b:c", ""},
 		// The ARI shift pair (the retired <repo>:<wi>:<team> join collided).
 		// The resolver here has no subject gate, so a restricted caller is
@@ -280,6 +288,10 @@ func TestEncodedRefsFromTheRealProducersExpandToTheirRow(t *testing.T) {
 		case !minted[ref]:
 			t.Errorf("no producer minted %s %q (%q)", row.kind, row.values, ref)
 		}
+	}
+	twiceHeldParent, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, grantedID, "jira:K", "jira:PARENT2")
+	if minted[twiceHeldParent] {
+		t.Errorf("a qualified parent key held under two repositories minted a hierarchy ref %q; it must name no parent (CHAOS-9795)", twiceHeldParent)
 	}
 	if groups["edge-1"] != 1 {
 		t.Errorf("the two rows under edge-1 minted %d refs, want exactly the one edge the projector keeps", groups["edge-1"])
