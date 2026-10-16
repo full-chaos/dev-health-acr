@@ -12,6 +12,11 @@ run-name: Release ${{ github.event.workflow_run.head_sha || github.event.inputs.
   # run on a runner of its own with a 3600 s deadline; on a saturated hosted
   # queue the run took longer (main ci 38799434459, 2026-10-15: 65 minutes)
   # and Release failed with the commit green. Tag pushes keep the push trigger.
+  #
+  # LEVEL LIMIT: ci -> Release (this workflow_run) -> promote-main-image-aliases
+  # (workflow_run of Release) is three workflow_run levels, GitHub's maximum.
+  # A workflow started by workflow_run of promote would never run: do not add a
+  # fourth level.
   push:
     tags: ["v*"]
   workflow_run:
@@ -217,6 +222,18 @@ jobs:
             printf 'commit=%s\n' "$commit"
             printf 'date=%s\n' "$(date -u -d "$(git show -s --format=%cI "$commit")" +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "$GITHUB_OUTPUT"
+          mkdir -p .tmp/release-commit
+          printf '%s\n' "$commit" > .tmp/release-commit/commit
+      # CHAOS-9918: the released commit as an artifact, so promote can check the
+      # commit it read from this run's name against what preflight resolved.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-commit
+          path: .tmp/release-commit/commit
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   # CHAOS-4855 R4 (codex round 2): Release and Mirror images both trigger on
   # the same `push`, with no cross-workflow `needs` (GitHub Actions has

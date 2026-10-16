@@ -250,6 +250,12 @@ check_release_trigger() {
   grep -qF "(github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'push')" "$promote" || return 1
   grep -qF '[[ "$RELEASE_TITLE" =~ ^Release\ ([0-9a-f]{40})$ ]]' "$promote" || return 1
   grep -qF '"$RELEASE_EVENT" == workflow_run' "$promote" || return 1
+  grep -qF 'LEVEL LIMIT: ci -> Release (this workflow_run) -> promote-main-image-aliases' "$wf" || return 1
+  grep -qxF "          printf '%s\\n' \"\$commit\" > .tmp/release-commit/commit" "$wf" || return 1
+  grep -qxF '          name: release-commit' "$wf" || return 1
+  grep -qF -- '--name release-commit' "$promote" || return 1
+  grep -qF '[[ "$recorded" == "$SOURCE_SHA" ]]' "$promote" || return 1
+  grep -qxF '  actions: read' "$promote" || return 1
 }
 promote_workflow="$root/.github/workflows/promote-main-image-aliases.yml"
 check_release_trigger "$release_workflow" "$promote_workflow"
@@ -269,6 +275,8 @@ mutant assemble-tip 's/^          ref: ${{ github.event.workflow_run.head_sha ||
 mutant concurrency-tip 's/ || github.event.workflow_run.head_sha || github.sha }}/ || github.sha }}/' release
 mutant reference-polls 's/\[ "$TRIGGER_HEAD_SHA" = "$COMMIT" \]/true/' release
 mutant promote-head-sha 's/"$RELEASE_EVENT" == workflow_run/"$RELEASE_EVENT" == never/' promote
+mutant no-commit-artifact 's/^          name: release-commit$/          name: release-commit-x/' release
+mutant promote-no-crosscheck 's/\[\[ "$recorded" == "$SOURCE_SHA" \]\]/true/' promote
 mutant promote-push-only "s/(github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'push')/github.event.workflow_run.event == 'push'/" promote
 grep -F 'tag="$commit"' "$release_workflow" >/dev/null
 grep -F -- '--derive-main-version "$commit"' "$release_workflow" >/dev/null

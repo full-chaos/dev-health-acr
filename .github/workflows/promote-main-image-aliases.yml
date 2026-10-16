@@ -20,6 +20,8 @@ name: Promote main image aliases
 permissions:
   contents: read
   packages: write
+  # CHAOS-9918: read the Release run's release-commit artifact.
+  actions: read
 
 concurrency:
   group: promote-main-image-aliases
@@ -47,12 +49,20 @@ jobs:
           # landed) keeps its own head sha.
           RELEASE_EVENT: ${{ github.event.workflow_run.event }}
           RELEASE_TITLE: ${{ github.event.workflow_run.display_title }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$RELEASE_EVENT" == workflow_run ]]; then
             [[ "$RELEASE_TITLE" =~ ^Release\ ([0-9a-f]{40})$ ]] \
               || { printf 'promote: Release run title %q does not name a commit\n' "$RELEASE_TITLE" >&2; exit 1; }
             SOURCE_SHA="${BASH_REMATCH[1]}"
+            # The run name is text; the preflight's own resolved commit is the
+            # record. They must agree, or nothing is promoted.
+            gh run download "$RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name release-commit --dir "$RUNNER_TEMP/release-commit" \
+              || { printf 'promote: Release run %s has no release-commit artifact\n' "$RELEASE_RUN_ID" >&2; exit 1; }
+            recorded="$(tr -d '[:space:]' < "$RUNNER_TEMP/release-commit/commit")"
+            [[ "$recorded" == "$SOURCE_SHA" ]] \
+              || { printf 'promote: Release run %s is named for %s but its preflight resolved %s\n' "$RELEASE_RUN_ID" "$SOURCE_SHA" "${recorded:-<empty>}" >&2; exit 1; }
           fi
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
