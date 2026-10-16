@@ -277,7 +277,7 @@ FactOperationalDeficiencies
     calls followed            1015
     calls accounted           14
     calls not_a_call          2
-    calls excluded_by_design  192
+    calls excluded_by_design  194
     calls leaked              21
   fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_score_unavailable_reason latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_as_of_day rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -138,8 +139,10 @@ ORDER BY team_id, rule_id`)
 				fields["rule_basis_severity"] = contextfabric.StringFactValue(basis.severity)
 				if basis.day != "" {
 					fields["rule_basis_as_of_day"] = contextfabric.StringFactValue(basis.day)
+				} else if basis.invalidDay != "" {
+					slog.Warn("devhealthfacts.rule_basis_day_invalid", eventspec.NewDeficiencyRuleBasisDayInvalidFields(orgID, ruleID, basis.invalidDay).SlogArgs()...)
 				} else {
-					slog.Info("devhealthfacts.rule_basis_day_absent", "rule_id", contextfabric.SanitizeLogAttr(ruleID))
+					slog.Info("devhealthfacts.rule_basis_day_absent", eventspec.NewDeficiencyRuleBasisDayAbsentFields(orgID, ruleID).SlogArgs()...)
 				}
 			} else {
 				fields["rule_basis_unavailable_reason"] = contextfabric.StringFactValue(ruleBasisUnavailableNotRuleSentence)
@@ -400,6 +403,9 @@ type ruleBasis struct {
 	// "Score as of <day>." that follows the score sentence. Empty for a rule
 	// row written before Ops named the day: the field is then not served.
 	day string
+	// invalidDay is a captured day sentence value that is not a calendar date.
+	// It is never served; the caller reports it.
+	invalidDay string
 }
 
 type basisFact struct {
@@ -424,8 +430,7 @@ func parseCompoundingRiskRationale(rationale string) (ruleBasis, bool) {
 	day := match[3]
 	if day != "" {
 		if _, dayErr := time.Parse("2006-01-02", day); dayErr != nil {
-			slog.Warn("devhealthfacts.rule_basis_day_invalid", "day", contextfabric.SanitizeLogAttr(day))
-			day = ""
+			return ruleBasis{score: score, severity: match[2], invalidDay: day}, true
 		}
 	}
 	return ruleBasis{score: score, severity: match[2], day: day}, true
