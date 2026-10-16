@@ -2161,6 +2161,23 @@ var PullRequestProjectNativeFirst = Event{
 	},
 }
 
+// HealthDailyHealthCapCut is the Debug line of a health read whose daily_health display cap cut rows from one or more subjects' tables. The cut is also disclosed on the served fact (daily_health_omitted_count) and the read is marked truncated; this line carries counts and the closed subject-local flag only.
+var HealthDailyHealthCapCut = Event{
+	ID:                 "devhealthfacts.health_daily_health_cap_cut",
+	Msg:                "health daily_health display cap cut rows",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per health read with a cut daily_health table.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subjects_cut", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subjects", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_local", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // FactBytesBoundExceeded is the Warn line of a producer that dropped an additive time series because it, with the legacy rows, passed the joint cell or byte bound of a dual-table fact. The drop is also disclosed on the served fact; producer and kind are closed values, never row content.
 var FactBytesBoundExceeded = Event{
 	ID:                 "devhealthfacts.fact_bytes_bound_exceeded",
@@ -4198,6 +4215,7 @@ var All = []Event{
 	TeamLinkedMixSet,
 	TeamPRLinkStateNativeFirst,
 	PullRequestProjectNativeFirst,
+	HealthDailyHealthCapCut,
 	FactBytesBoundExceeded,
 	SubjectIDShapeRejected,
 	OwningTeamsTruncated,
