@@ -124,7 +124,39 @@ FROM (
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0
+  WHERE l.org_id = {org_id:String} AND l.work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))) AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (
+    NOT (l.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))))))
+    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND (repo_id, pr_number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}))))))))
 ) AS l ON l.work_item_id = w.work_item_id
 ))))
 								OR hasAny(lookup_refs, (
@@ -208,7 +240,39 @@ FROM (
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0
+  WHERE l.org_id = {org_id:String} AND l.work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))) AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (
+    NOT (l.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))))))
+    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND (repo_id, pr_number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}))))))))
 ) AS l ON l.work_item_id = w.work_item_id
 ))) AS lp, lp.1 AS lp_repo, lp.2 AS lp_pr
 						) AS lx
@@ -333,7 +397,39 @@ WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin((SELECT gro
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0
+  WHERE l.org_id = {org_id:String} AND l.work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))) AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (
+    NOT (l.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))))))
+    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND (repo_id, pr_number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}))))))))
 ) AS l ON l.work_item_id = w.work_item_id
 ))) AS l))
 	)
@@ -417,7 +513,39 @@ INNER JOIN (SELECT l.1 AS pr_repo, l.2 AS pr_num, l.3 AS team_id FROM (SELECT ar
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0
+  WHERE l.org_id = {org_id:String} AND l.work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))) AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (
+    NOT (l.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})))))))
+    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND (repo_id, pr_number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+      AND cp.project_id IN (SELECT v FROM (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)})
+    UNION ALL
+    SELECT arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS v FROM projects FINAL
+    WHERE org_id = {org_id:String} AND (id IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}) OR ifNull(project_key, '') IN (SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}
+    UNION ALL
+    SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != '' AND valid_from <= now64(3) AND valid_to IS NULL AND team_id IN {ids:Array(String)}))))))))
 ) AS l ON l.work_item_id = w.work_item_id
 ))) AS l)) AS lr
 	ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num
