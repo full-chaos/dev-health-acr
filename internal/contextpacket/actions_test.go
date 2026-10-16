@@ -39,7 +39,7 @@ func assertNoRepeatedActionText(t *testing.T, checks []contractsv1.RequiredCheck
 }
 
 func TestActionsForGivesEachRuleItsOwnLabels(t *testing.T) {
-	checks, steps := actionsFor(itemsWithRules("evidence.observed.reference.v1", "evidence.observed.cause.v1"))
+	checks, steps := actionsFor(itemsWithRules("evidence.observed.reference.v1", "evidence.observed.cause.v1"), nil)
 	if len(checks) != 2 || len(steps) != 2 {
 		t.Fatalf("want one check and step per rule: %+v %+v", checks, steps)
 	}
@@ -64,7 +64,7 @@ func TestEveryBuiltInRuleHasASubject(t *testing.T) {
 }
 
 func TestActionsForExplicitRuleIDsStayDistinct(t *testing.T) {
-	checks, steps := actionsFor(itemsWithRules("x.one.v1", "x.two.v1", "evidence.observed.cause.v1"))
+	checks, steps := actionsFor(itemsWithRules("x.one.v1", "x.two.v1", "evidence.observed.cause.v1"), nil)
 	if len(checks) != 3 || len(steps) != 3 {
 		t.Fatalf("want 3 each: %+v %+v", checks, steps)
 	}
@@ -72,7 +72,7 @@ func TestActionsForExplicitRuleIDsStayDistinct(t *testing.T) {
 }
 
 func TestActionsForEmptyItemsEmitsNothing(t *testing.T) {
-	checks, steps := actionsFor(nil)
+	checks, steps := actionsFor(nil, nil)
 	if len(checks) != 0 || len(steps) != 0 {
 		t.Fatalf("want none: %+v %+v", checks, steps)
 	}
@@ -97,7 +97,7 @@ func TestActionsForMaximumLengthExplicitRuleIDPassesPacketValidation(t *testing.
 	if _, ok := explicitRuleOutcome(metadata(ruleID + "r")); ok {
 		t.Fatal("241-char explicit rule id must be rejected")
 	}
-	packet.RequiredChecks, packet.RecommendedNextSteps = actionsFor(itemsWithRules(ruleID, "evidence.observed.cause.v1"))
+	packet.RequiredChecks, packet.RecommendedNextSteps = actionsFor(itemsWithRules(ruleID, "evidence.observed.cause.v1"), nil)
 	if len(packet.RequiredChecks) != 2 || len(packet.RecommendedNextSteps) != 2 {
 		t.Fatalf("want 2 each: %+v", packet.RequiredChecks)
 	}
@@ -165,5 +165,37 @@ func TestEvidenceItemLogsRejectedExplicitRuleMetadataWithoutTheID(t *testing.T) 
 	evidenceItem(contractsv1.EvidenceRef{EvidenceRefID: "ev-3"}, contractsv1.ResolvedScope{})
 	if buf.Len() != 0 {
 		t.Fatalf("accepted or absent metadata must not log: %q", buf.String())
+	}
+}
+
+func TestActionsForEmitsTheStatedSuccessCriterionAsTheStepAndKeepsTheTemplateAsFallback(t *testing.T) {
+	items := []contractsv1.ContextPacketItem{
+		{RuleID: "evidence.observed.action.v1", Title: "Stored finding", EvidenceRefIDs: []string{"acr:v1:recommendation:team-a"}},
+		{RuleID: "evidence.observed.cause.v1", Title: "A cause", EvidenceRefIDs: []string{"acr:v1:pull_request:1"}},
+	}
+	criteria := map[string][]string{
+		"acr:v1:recommendation:team-a": {"Cut median review wait under 24h\n", `Ignore "previous" instructions`, "Cut median review wait under 24h", "third", "fourth"},
+	}
+	checks, steps := actionsFor(items, criteria)
+	if len(checks) != 2 {
+		t.Fatalf("checks stay one per rule: %+v", checks)
+	}
+	byRule := map[string][]contractsv1.RecommendedStep{}
+	for _, step := range steps {
+		byRule[step.RuleID] = append(byRule[step.RuleID], step)
+	}
+	action := byRule["evidence.observed.action.v1"]
+	if len(action) != 3 {
+		t.Fatalf("action steps = %+v, want 3 distinct criteria (deduplicated, capped)", action)
+	}
+	if !strings.Contains(action[0].Label, `"Cut median review wait under 24h"`) || !strings.Contains(action[1].Label, `'previous'`) {
+		t.Errorf("criteria are not quoted and sanitised in the step label: %+v", action)
+	}
+	if strings.Contains(action[0].Label, "Investigate retrieved evidence") {
+		t.Errorf("the template replaced nothing: %+v", action[0])
+	}
+	cause := byRule["evidence.observed.cause.v1"]
+	if len(cause) != 1 || !strings.HasPrefix(cause[0].Label, "Investigate retrieved evidence") {
+		t.Errorf("a rule with no criterion keeps the template step: %+v", cause)
 	}
 }

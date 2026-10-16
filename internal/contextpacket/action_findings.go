@@ -54,10 +54,10 @@ type ActionFindingsSource interface {
 
 var findingSeverityRank = map[string]int{"critical": 4, "high": 3, "medium": 2, "warning": 2, "low": 1, "info": 0}
 
-func actionFindingEvidence(team TeamActionFindings, observedFallback time.Time) (contractsv1.EvidenceRef, bool) {
-	if len(team.Findings) == 0 || team.EvidenceRefID == "" {
-		return contractsv1.EvidenceRef{}, false
-	}
+// maxNamedFindings is how many of a team's findings the action item names.
+const maxNamedFindings = 3
+
+func rankedFindings(team TeamActionFindings) []ActionFinding {
 	findings := append([]ActionFinding(nil), team.Findings...)
 	sort.SliceStable(findings, func(i, j int) bool {
 		ri, rj := findingSeverityRank[strings.ToLower(findings[i].Severity)], findingSeverityRank[strings.ToLower(findings[j].Severity)]
@@ -66,9 +66,32 @@ func actionFindingEvidence(team TeamActionFindings, observedFallback time.Time) 
 		}
 		return findings[i].RuleID < findings[j].RuleID
 	})
-	parts := make([]string, 0, 3)
+	return findings
+}
+
+// actionFindingCriteria are the stated success criteria of the findings the
+// action item names, in the order it names them.
+func actionFindingCriteria(team TeamActionFindings) []string {
+	var out []string
+	for index, finding := range rankedFindings(team) {
+		if index == maxNamedFindings {
+			break
+		}
+		if criterion := strings.TrimSpace(finding.SuccessCriterion); criterion != "" {
+			out = append(out, criterion)
+		}
+	}
+	return out
+}
+
+func actionFindingEvidence(team TeamActionFindings, observedFallback time.Time) (contractsv1.EvidenceRef, bool) {
+	if len(team.Findings) == 0 || team.EvidenceRefID == "" {
+		return contractsv1.EvidenceRef{}, false
+	}
+	findings := rankedFindings(team)
+	parts := make([]string, 0, maxNamedFindings)
 	for index, finding := range findings {
-		if index == 3 {
+		if index == maxNamedFindings {
 			break
 		}
 		text := strings.TrimSpace(finding.Title)
