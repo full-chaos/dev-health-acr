@@ -222,14 +222,30 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 // organization sizes, the lowest of five warm reads each, must not grow, and
 // the highest peak of those reads stays under the ceiling the package other rows use.
 func TestTeamPullRequestLinkStateCostIsFlatInTheOrganizationOnRealClickHouse(t *testing.T) {
+	assertTeamPullRequestLinkStateCostIsFlat(t, "org-pr-link-cost", false)
+}
+
+// The same measurement with a link on every pull request of the team: each
+// pull request's issue has a fallback link in the team's repository and a
+// native link in another one, so the issue lookup of the link-state statement
+// has 20 issue ids to find among the unrelated links of 400 repositories.
+func TestTeamPullRequestLinkStateCostIsFlatWithLinkedIssuesOnRealClickHouse(t *testing.T) {
+	assertTeamPullRequestLinkStateCostIsFlat(t, "org-pr-link-cost-linked", true)
+}
+
+func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIssues bool) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	const orgID = "org-pr-link-cost"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
 	s.team("team-cost", "repo-cost")
 	for n := uint32(1); n <= 20; n++ {
 		s.pullRequest("repo-cost", n, inWindow, nil)
+		if linkIssues {
+			issue := fmt.Sprintf("issue-cost-%d", n)
+			s.link("repo-cost", issue, n, "heuristic")
+			s.link("repo-holder", issue, 1000+n, "native")
+		}
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)

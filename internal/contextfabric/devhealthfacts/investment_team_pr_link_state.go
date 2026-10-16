@@ -21,11 +21,13 @@ const investmentTeamPRsWithoutLinkedWork = "investment_team_prs_without_linked_w
 // it did not. A pull request is in the window when it was created before the
 // window end and was not merged or closed before the window start (no window
 // on the current axis). A link is admitted when work_graph_issue_pr has a row
-// of a known provenance tier (native, explicit_text, heuristic) for it. The
+// of a known provenance tier (native, explicit_text, heuristic) for it, a text
+// or heuristic row counting only when its issue has no native row in any
+// repository (the fallback-only rule). The
 // type of the linked work item is not read: a work item id is not unique across
 // repositories, and a link to an item typed pr or merge_request still counts as
 // a link here, so the token is given less often, never wrongly.
-const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier for the pull request)"
+const investmentTeamPRsWithoutLinkedWorkRule = "no pull request in the window has an admitted link to tracked work (window: created before the end, not merged or closed before the start; admitted link: a work_graph_issue_pr row of a known provenance tier for the pull request, where an explicit_text or heuristic row counts only when its issue has no native row in any repository)"
 
 // teamNoLinkedWork is a team with pull requests in the window and none linked.
 type teamNoLinkedWork struct {
