@@ -203,3 +203,30 @@ func TestClassifyLLMErrorKeepsTheGenkitTaxonomy(t *testing.T) {
 		}
 	}
 }
+
+func TestLLMRequestCarriesTheConfiguredOutputCapAndLogsACutReply(t *testing.T) {
+	for _, tc := range []struct {
+		configured int
+		want       int
+	}{{0, DefaultMaxOutputTokens}, {8192, 8192}} {
+		var logs strings.Builder
+		client := &scriptedLLM{model: "m", replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput()), StopReason: "length", Usage: llm.Usage{OutputTokens: intp(77)}}}}}
+		runtime, err := NewWithLLM(Config{
+			Provider: "openai", Model: "m", MaxOutputTokens: tc.configured, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1", SchemaVersion: "schema-v1",
+			EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+		}, LLMClients{"m": client})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+			t.Fatal(err)
+		}
+		if got := client.request(0).MaxOutputTokens; got != tc.want {
+			t.Fatalf("MaxOutputTokens = %d, want %d", got, tc.want)
+		}
+		if !strings.Contains(logs.String(), "context fabric model reply hit the output cap") || !strings.Contains(logs.String(), "output_tokens=77") {
+			t.Fatalf("no cut-reply debug line: %s", logs.String())
+		}
+	}
+}

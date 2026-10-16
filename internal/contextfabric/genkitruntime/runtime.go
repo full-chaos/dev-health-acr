@@ -638,6 +638,9 @@ type Config struct {
 	// once after the primary has spent its draws.
 	SingleDraw bool
 	Fallback   contextfabric.ModelRuntime
+	// MaxOutputTokens is the output cap a shared-client call asks for where
+	// its client sends one; zero means DefaultMaxOutputTokens.
+	MaxOutputTokens int
 	// Logger receives the ACR-owned decision-event log line CHAOS-3889 emits
 	// once per model call (see logInterpretDecision/logSynthesizeDecision).
 	// Defaults to slog.Default() when nil, matching every other

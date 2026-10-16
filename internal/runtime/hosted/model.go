@@ -143,6 +143,10 @@ func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (stri
 		}
 		return nil, nil
 	}
+	if retired := modelprovider.RetiredVariables(lookup); len(retired) > 0 {
+		logger.Warn("context fabric model variable no longer has an effect; ignoring",
+			"variables", contextfabric.SanitizeLogStrings(retired))
+	}
 	modelConfig, err := contextFabricModelConfigFromEnv(lookup, telemetry, logger)
 	if err != nil {
 		return nil, err

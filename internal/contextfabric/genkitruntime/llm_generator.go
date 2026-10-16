@@ -23,6 +23,10 @@ const DefaultMaxOutputTokens = 32768
 // plugin always sent; kept so the wire request does not change.
 const outputFormatName = "output"
 
+// cutStopReasons are the stop reasons each client reports for a reply cut at
+// its output cap (Chat Completions, Messages, Responses).
+var cutStopReasons = map[string]bool{"length": true, "max_tokens": true, "max_output_tokens": true}
+
 // errOutputSchemaMismatch is the shared-client path's twin of Genkit's own
 // schema-mismatch error: a reply that is not JSON, or JSON that fails the
 // output schema. classifyModelError maps it to ErrModelOutput, as it maps
@@ -31,6 +35,7 @@ var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
 
 const (
 	llmCallFailedMessage  = "context fabric model call failed"
+	llmReplyCutMessage    = "context fabric model reply hit the output cap"
 	llmDrawRejectedReason = "context fabric model reply failed the output schema"
 )
 
@@ -84,7 +89,10 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 			return nil, fmt.Errorf("llm client keyed %q calls model %q", model, client.Model())
 		}
 	}
-	gen := llmGenerator{clients: clients, maxOutputTokens: DefaultMaxOutputTokens, logger: config.Logger}
+	gen := llmGenerator{clients: clients, maxOutputTokens: config.MaxOutputTokens, logger: config.Logger}
+	if gen.maxOutputTokens == 0 {
+		gen.maxOutputTokens = DefaultMaxOutputTokens
+	}
 	if gen.logger == nil {
 		gen.logger = slog.Default()
 	}
@@ -145,6 +153,15 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 		g.logger.DebugContext(ctx, llmCallFailedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "error_class", contextfabric.SanitizeLogAttr(string(class)))
 		return "", contextfabric.ModelUsage{}, err
+	}
+	if cutStopReasons[result.StopReason] {
+		outputTokens := 0
+		if result.Usage.OutputTokens != nil {
+			outputTokens = *result.Usage.OutputTokens
+		}
+		g.logger.DebugContext(ctx, llmReplyCutMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "stop_reason", contextfabric.SanitizeLogAttr(result.StopReason),
+			"output_tokens", outputTokens, "max_output_tokens", g.maxOutputTokens)
 	}
 	usage := llmUsage(result.Usage)
 	if result.Text != "" {

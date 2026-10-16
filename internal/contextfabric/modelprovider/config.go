@@ -64,6 +64,8 @@ const (
 	DefaultTimeout             = 45 * time.Second
 	DefaultMaxAttempts         = 2
 	DefaultMaxTransportRetries = 2
+	// DefaultMaxOutputTokens is EnvMaxOutputTokens's default.
+	DefaultMaxOutputTokens = 32768
 )
 
 const maximumProviderOrModelLength = 256
@@ -98,6 +100,10 @@ const (
 	// longer use it: the shared dev-health-go llm client they go through
 	// makes exactly one transport retry, inside the attempt's deadline.
 	EnvMaxTransportRetries = "ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES"
+	// EnvMaxOutputTokens is the output cap a model call asks for where its
+	// client sends one: the Anthropic Messages API, which requires a cap.
+	// The Chat Completions clients send none, as the Genkit transport did.
+	EnvMaxOutputTokens = "ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS"
 	// EnvAllowInsecureBaseURL permits a plaintext http:// base URL. It
 	// exists for a co-located BYO server reached over loopback or a
 	// private network; it is false by default and must never be set for a
@@ -117,7 +123,7 @@ var identityEnvVars = []string{
 // provider; none of them names a provider on its own, so none opts in
 // alone (see Configured's doc comment and IgnoredTuningVariables).
 var tuningEnvVars = []string{
-	EnvTimeout, EnvMaxAttempts, EnvMaxTransportRetries, EnvAllowInsecureBaseURL,
+	EnvTimeout, EnvMaxAttempts, EnvMaxTransportRetries, EnvAllowInsecureBaseURL, EnvMaxOutputTokens,
 }
 
 // Config is the provider-shaped model runtime configuration. Its fields are
@@ -154,6 +160,9 @@ type Config struct {
 	Timeout             time.Duration
 	MaxAttempts         int
 	MaxTransportRetries int
+	// MaxOutputTokens is the output cap where a client sends one; see
+	// EnvMaxOutputTokens. Zero means DefaultMaxOutputTokens.
+	MaxOutputTokens int
 	// AllowInsecureBaseURL permits a plaintext http:// BaseURL; see
 	// EnvAllowInsecureBaseURL.
 	AllowInsecureBaseURL bool
@@ -258,6 +267,9 @@ func (c Config) validate() error {
 	if c.MaxTransportRetries < 0 || c.MaxTransportRetries > 5 {
 		return fmt.Errorf("%s must be between zero and five", EnvMaxTransportRetries)
 	}
+	if c.MaxOutputTokens != 0 && (c.MaxOutputTokens < 1024 || c.MaxOutputTokens > 262144) {
+		return fmt.Errorf("%s must be between 1024 and 262144", EnvMaxOutputTokens)
+	}
 	return nil
 }
 
@@ -361,6 +373,21 @@ func IgnoredTuningVariables(lookup func(string) (string, bool)) []string {
 	return ignored
 }
 
+// RetiredVariables returns the names of the variables that are set
+// (nonblank) but no longer change any model call, so a caller can say so
+// once at startup instead of ignoring them silently.
+// EnvMaxTransportRetries is one: the shared llm client makes exactly one
+// transport retry inside each attempt's deadline.
+func RetiredVariables(lookup func(string) (string, bool)) []string {
+	var retired []string
+	for _, key := range []string{EnvMaxTransportRetries} {
+		if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
+			retired = append(retired, key)
+		}
+	}
+	return retired
+}
+
 // ConfigFromEnv builds a Config from the process environment. Callers own
 // deciding when to call it -- see Configured -- because a deployment that
 // did not opt into a model provider must never fail closed over it.
@@ -384,6 +411,9 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.MaxTransportRetries, err = envInt(lookup, EnvMaxTransportRetries, DefaultMaxTransportRetries); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxOutputTokens, err = envInt(lookup, EnvMaxOutputTokens, DefaultMaxOutputTokens); err != nil {
 		return Config{}, err
 	}
 	if cfg.AllowInsecureBaseURL, err = envBool(lookup, EnvAllowInsecureBaseURL, false); err != nil {

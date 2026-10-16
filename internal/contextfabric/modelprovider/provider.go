@@ -105,7 +105,7 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 		"provider", contextfabric.SanitizeLogAttr(cfg.Provider), "llm_kind", contextfabric.SanitizeLogAttr(string(llmKind)),
 		"model", contextfabric.SanitizeLogAttr(cfg.Model), "fallback_model", contextfabric.SanitizeLogAttr(cfg.FallbackModel),
 		"phrasing_model", contextfabric.SanitizeLogAttr(cfg.PhrasingModel), "temperature", contextfabric.SanitizeLogAttr("omitted"),
-		"output_cap", contextfabric.SanitizeLogAttr("omitted"))
+		"output_cap", contextfabric.SanitizeLogAttr("omitted"), "max_output_tokens", cfg.MaxOutputTokens)
 	return primary, nil
 }
 
@@ -196,11 +196,12 @@ func runtimeConfig(cfg Config, model string, fallback contextfabric.ModelRuntime
 		// Model is the bare id: it lands unqualified in every
 		// ModelExecutionReceipt (the receipt carries Provider separately),
 		// and it is the key of the model's shared-package client.
-		Model:       model,
-		Timeout:     cfg.Timeout,
-		MaxAttempts: cfg.MaxAttempts,
-		Fallback:    fallback,
-		Telemetry:   cfg.Telemetry,
+		Model:           model,
+		Timeout:         cfg.Timeout,
+		MaxAttempts:     cfg.MaxAttempts,
+		Fallback:        fallback,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+		Telemetry:       cfg.Telemetry,
 		// CHAOS-5380: copied straight through, unconditionally, exactly
 		// like Telemetry above it -- a nil here keeps genkitruntime's own
 		// documented slog.Default() fallback rather than a
