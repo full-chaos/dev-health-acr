@@ -440,6 +440,8 @@ var ProductionColumns = map[string][]Column{
 		{Name: "evidence", Type: "String"},
 		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+		// ops migration 131 (keyed by repository, one row for each pair): the higher link tier wins whatever the time.
+		{Name: "version_rank", Type: "UInt64 MATERIALIZED ((multiIf(source = 'native', 3, source = 'explicit_text', 2, source = 'heuristic', 1, 0) + 1) * 1125899906842624) + toUnixTimestamp64Milli(computed_at)"},
 	},
 	// From the ops migrations (009_raw_work_items.sql plus 024's org_id), not a
 	// live probe: only the columns the status-since reader selects and the
@@ -827,7 +829,7 @@ var EngineFull = map[string]string{
 	"team_repo_ownership":                  "ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192",
 	"teams":                                "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"work_graph_issue_pr":                  "ReplacingMergeTree(version_rank) ORDER BY (org_id, repo_id, work_item_id, pr_number) SETTINGS index_granularity = 8192",
-	"work_graph_deployment_incident_edges": "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192",
+	"work_graph_deployment_incident_edges": "ReplacingMergeTree(version_rank) ORDER BY (org_id, ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')), deployment_id, incident_id) SETTINGS index_granularity = 8192",
 	"work_item_transitions":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":               "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_relations_read":             "ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192",
