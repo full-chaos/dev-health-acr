@@ -102,7 +102,10 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 	}
 
 	keysIssue, keysPR := coveredFallbackKeys(t, ctx, direct, orgID)
-	if err := direct.Exec(ctx, `ALTER TABLE work_graph_issue_pr DELETE WHERE org_id = {org:String} AND provenance = 'explicit_text' AND (work_item_id IN {issues:Array(String)} OR concat(toString(repo_id), '|', toString(pr_number)) IN {prs:Array(String)}) SETTINGS mutations_sync = 2`,
+	// Merges are stopped on this table (the measurement keeps its parts), so an
+	// ALTER mutation would never finish; a lightweight delete masks the rows at
+	// once.
+	if err := direct.Exec(ctx, `DELETE FROM work_graph_issue_pr WHERE org_id = {org:String} AND provenance = 'explicit_text' AND (work_item_id IN {issues:Array(String)} OR concat(toString(repo_id), '|', toString(pr_number)) IN {prs:Array(String)}) SETTINGS lightweight_deletes_sync = 2`,
 		clickhouse.Named("org", orgID), clickhouse.Named("issues", keysIssue), clickhouse.Named("prs", keysPR)); err != nil {
 		t.Fatalf("delete the covered fallback rows: %v", err)
 	}
