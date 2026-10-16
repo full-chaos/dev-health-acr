@@ -2526,6 +2526,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
+    "max_lines_per_scope": 3,
     "fields": [
       {
         "key": "org_id",
@@ -2625,6 +2626,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
+    "max_lines_per_scope": 3,
     "fields": [
       {
         "key": "org_id",

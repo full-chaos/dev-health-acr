@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -215,4 +216,59 @@ func TestEngineFactGateLineIsCertifiableOncePerReadAndBounded(t *testing.T) {
 	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateInfo, "a Want that singles out two of the three reads", map[string]any{"decision": contextfabric.EngineFactGateClean})
 	telemetry.RecordEngineFactGate(ctx, principal, contextfabric.EngineFactGateDecision{Decision: contextfabric.EngineFactGateClean, FactsChecked: 8})
 	certifyRefused(t, buf.Bytes(), eventspec.EngineFactGateInfo, "a fourth read over the declared bound", map[string]any{"facts_checked": 8})
+}
+
+// TestEngineFactGateLinesOfBothLevelsInOneRequestCertifyEachAndAbsence drives a
+// request whose reads wrote the Info and the Warn variant of the one gate
+// message: each event certifies its own line, and absence is asserted per level.
+func TestEngineFactGateLinesOfBothLevelsInOneRequestCertifyEachAndAbsence(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry, ctx := cohortTelemetry(&buf)
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: make([]string, 2)}
+	withheld := contextfabric.EngineFactGateDecision{
+		Decision: contextfabric.EngineFactGateFiltered, Reason: contextfabric.EngineFactGateReasonUnseenSubjectsWithheld, FactsChecked: 4, FactsWithheldFrom: 1,
+	}
+	telemetry.RecordEngineFactGate(ctx, principal, withheld)
+	infoOnly := bytes.Clone(buf.Bytes())
+	withheld.FactsChecked = 5
+	withheld.Report.FieldsUndeclared = 2
+	telemetry.RecordEngineFactGate(ctx, principal, withheld)
+
+	certifyRequestLine(t, buf.Bytes(), eventspec.EngineFactGateInfo, map[string]any{"facts_checked": 4, "fields_undeclared": 0})
+	certifyRequestLine(t, buf.Bytes(), eventspec.EngineFactGateWarn, map[string]any{"facts_checked": 5, "fields_undeclared": 2})
+
+	log, err := certify.Parse(infoOnly)
+	if err != nil {
+		t.Fatalf("certify.Parse: %v", err)
+	}
+	if err := certify.CertifyAbsent(log, eventspec.EngineFactGateWarn, map[string]any{"request_id": factScopeCertifyRequestID}); err != nil {
+		t.Fatalf("a request with only the Info line must certify the Warn variant absent: %v", err)
+	}
+	log, err = certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse: %v", err)
+	}
+	if err := certify.CertifyAbsent(log, eventspec.EngineFactGateWarn, map[string]any{"request_id": factScopeCertifyRequestID}); err == nil {
+		t.Fatalf("a request that wrote the Warn variant must not certify it absent")
+	}
+}
+
+// TestFactRootRefusedReasonsAreExactlyTheDeniedSubset pins the partition of
+// the stored-result reasons: the denied subset certifies, every other member
+// of the closed set is refused.
+func TestFactRootRefusedReasonsAreExactlyTheDeniedSubset(t *testing.T) {
+	t.Parallel()
+	denied := map[contextfabric.StoredResultAuthorizationReason]bool{}
+	for _, reason := range contextfabric.StoredResultDecideDeniedReasonVocabulary() {
+		denied[reason] = true
+	}
+	for _, reason := range contextfabric.StoredResultAuthorizationReasonVocabulary() {
+		d := contextfabric.StoredResultAuthorization{Reason: reason, RefusedKinds: []string{}}
+		if denied[reason] {
+			certifyRequestLine(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, map[string]any{"reason": string(reason)})
+			continue
+		}
+		certifyRefused(t, recordFactRootRefused(d, 1), eventspec.FactRootRefused, "reason "+string(reason)+" outside the denied subset")
+	}
 }

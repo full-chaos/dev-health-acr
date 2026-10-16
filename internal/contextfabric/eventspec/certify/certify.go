@@ -77,6 +77,27 @@ func (l *Log) linesWithMsg(msg string) []Line {
 	return out
 }
 
+// linesOfEvent is the lines carrying ev's message, minus the lines written at
+// the level of a sibling event that shares the message under another level
+// (one message written at Warn or Info is two declared events); a line at any
+// other level stays in scope so validateLevel still refuses it.
+func (l *Log) linesOfEvent(ev eventspec.Event) []Line {
+	siblingLevels := map[string]bool{}
+	for _, other := range eventspec.All {
+		if other.Msg == ev.Msg && other.ID != ev.ID && other.Level != ev.Level {
+			siblingLevels[strings.ToUpper(string(other.Level))] = true
+		}
+	}
+	var out []Line
+	for _, line := range l.linesWithMsg(ev.Msg) {
+		if level, _ := line["level"].(string); siblingLevels[strings.ToUpper(level)] {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
 // LinesWithMsg is linesWithMsg, exported for a caller that needs to read a
 // line this package has not (yet) declared as an eventspec.Event -- a
 // decision-graph reconstruction that walks pre-entry/pre-decision/
@@ -282,7 +303,7 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		requestScope[attrKey] = a.Want[attrKey]
 	}
 	var scoped []Line
-	for _, line := range log.linesWithMsg(a.Event.Msg) {
+	for _, line := range log.linesOfEvent(a.Event) {
 		if scopeMatch(a.Event, requestScope, line) {
 			scoped = append(scoped, line)
 		}
@@ -722,7 +743,7 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	} else if _, ok := attribution["pass"]; ok {
 		return fmt.Errorf("certify: %s: attribution must NOT include \"pass\" -- a zero_or_one_per_request event has no pass concept, its absence is asserted for the whole request", ev.ID)
 	}
-	for _, line := range log.linesWithMsg(ev.Msg) {
+	for _, line := range log.linesOfEvent(ev) {
 		if scopeMatch(ev, attribution, line) {
 			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt (pass=%v), want 0 (asserted absent)", ev.ID, ev.Msg, attribution["pass"])
 		}

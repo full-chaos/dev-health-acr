@@ -886,7 +886,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// generated over every such event.
 	zeroOrOneRequestAbsentRows := 0
 	for _, ev := range eventspec.All {
-		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest {
 			continue
 		}
 		zeroOrOneRequestAbsentRows++
