@@ -911,6 +911,9 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			if !ok {
 				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=string_slice", eventID, field.Key, got, got)
 			}
+			if field.MaxItems > 0 && len(arr) > field.MaxItems {
+				return fmt.Errorf("certify: %s: %q carries %d elements, declared at most %d", eventID, field.Key, len(arr), field.MaxItems)
+			}
 			for i, elem := range arr {
 				elemStr, ok := elem.(string)
 				if !ok {
@@ -969,6 +972,9 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			if !ok {
 				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=object_slice", eventID, field.Key, got, got)
 			}
+			if field.MaxItems > 0 && len(arr) > field.MaxItems {
+				return fmt.Errorf("certify: %s: %q carries %d elements, declared at most %d", eventID, field.Key, len(arr), field.MaxItems)
+			}
 			for i, elem := range arr {
 				row, ok := elem.(map[string]any)
 				if !ok {
@@ -976,6 +982,11 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				}
 				if err := validateFields(field.Fields, row, eventID); err != nil {
 					return fmt.Errorf("%w (inside %q[%d])", err, field.Key, i)
+				}
+				for key := range row {
+					if !declaresKey(field.Fields, key) {
+						return fmt.Errorf("certify: %s: %q[%d] carries undeclared member %q -- an object_slice row's members are declared, never open", eventID, field.Key, i, key)
+					}
 				}
 			}
 		}
