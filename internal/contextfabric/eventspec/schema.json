@@ -2731,6 +2731,78 @@
     ]
   },
   {
+    "id": "contextfabric.fact_root_refused",
+    "msg": "context fabric fact root refused",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request: the fact-root re-check runs once after resolution commits its roots.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization_mismatch",
+          "subject_denied",
+          "subject_absent",
+          "group_unproven",
+          "graph_not_projected"
+        ]
+      },
+      {
+        "key": "refused_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "absent_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "refused_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.fact_scope_expansion_decision",
     "msg": "context fabric fact scope expansion outcome",
     "level": "info",
@@ -4778,6 +4850,99 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when error_class is graphql_errors: the first upstream GraphQL error message and path, bounded to 512 characters; untrusted upstream text"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.organization_subject_read",
+    "msg": "context fabric organization subject read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that resolved no subject and read the organization subject.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "investment",
+          "survey_no_members"
+        ]
+      },
+      {
+        "key": "survey_member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "organization_facts_read",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_fact_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
       },
       {
         "key": "request_id",
