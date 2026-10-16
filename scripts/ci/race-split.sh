@@ -16,7 +16,7 @@
 # factoracle splits two ways (heavy/rest/verify/partition only): its race jobs
 # run the heavy list with -run and everything else with -skip.
 #
-# devhealthfacts splits four ways, devhealthsource three ways (no fourth list): the race jobs split by these lists. race-mid-tests.txt and
+# devhealthfacts splits four ways, devhealthsource three ways (no fourth list; its plain unit legs run the same three parts: unit-heavy, unit-mid, unit-rest, checked by `partition`): the race jobs split by these lists. race-mid-tests.txt and
 # race-fourth-tests.txt name tests moved out of the heavy and rest halves into
 # a third and a fourth job. Lines starting with # are comments in every list.
 #   race-heavy  anchored regex of heavy-tests.txt minus the mid and fourth lists (-run)
@@ -67,6 +67,38 @@ race_fourth() { fourth_names | join_regex; }
 race_rest() { { names; mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
 both_lists() { LC_ALL=C comm -12 <(mid_names) <(fourth_names); }
 
+# devhealthsource's plain unit legs run three disjoint parts: heavy minus mid
+# (-run, leg 8), mid (-run, leg 9), and everything else (-skip of both, leg 6).
+unit_partition_three_way() {
+  local wf="$root/.github/workflows/ci.yml" want n all a b skipped c counted bad lost
+  for want in "race-split.sh $name unit-rest)" "race-split.sh $name unit-heavy)" "race-split.sh $name unit-mid)"; do
+    n="$(grep -cF -- "$want" "$wf" || true)"
+    [ "$n" -eq 1 ] || { printf 'ci.yml must use "%s" exactly once, found %s\n' "$want" "$n" >&2; return 1; }
+  done
+  # -run vs -skip decides whether a part selects or excludes its tests: swapping one
+  # keeps the selector text but doubles or drops tests.
+  for want in 'skip|unit-rest' 'run|unit-heavy' 'run|unit-mid'; do
+    flag="${want%%|*}"; mode="${want#*|}"
+    grep -qE -- "GOFLAGS=\"-trimpath -$flag=\\\$\(scripts/ci/race-split\.sh $name $mode\)\"" "$wf" \
+      || { printf 'ci.yml must pass "%s" to -%s\n' "$mode" "$flag" >&2; return 1; }
+  done
+  all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  skipped="$(go test -list "$(race_rest)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
+  counted="$(printf '%s\n%s\n%s\n' "$a" "$b" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
+  bad="$(printf '%s\n' "$counted" | awk '$1 != 1 {print $1, $2}')"
+  lost="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$counted" | awk '{print $2}' | LC_ALL=C sort -u))"
+  if [ -n "$bad" ] || [ -n "$lost" ] || [ -z "$a" ] || [ -z "$b" ] || [ -z "$c" ]; then
+    printf 'unit split is not a partition.\nrun more or less than once (count name):\n%s\nrun in no leg:\n%s\n' "$bad" "$lost" >&2
+    return 1
+  fi
+  printf 'unit split ok: %s tests = %s heavy + %s mid + %s rest\n' \
+    "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" \
+    "$(printf '%s\n' "$b" | wc -l | tr -d ' ')" "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
+}
+
 case "${2:-}" in
   heavy|rest) regex ;;
   partition)
@@ -75,8 +107,8 @@ case "${2:-}" in
     unit_mode=heavy
     unit_regex="$(regex)"
     if [ "$name" = devhealthsource ]; then
-      unit_mode=unit-heavy
-      unit_regex="$(race_heavy)"
+      unit_partition_three_way
+      exit $?
     fi
     for want in "race-split.sh $name rest)" "race-split.sh $name $unit_mode)"; do
       [ "$unit_mode" = unit-heavy ] && [ "$want" = "race-split.sh $name rest)" ] && want="race-split.sh $name unit-heavy)"
@@ -95,6 +127,8 @@ case "${2:-}" in
       "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
     ;;
   unit-heavy) race_heavy ;;
+  unit-mid) race_mid ;;
+  unit-rest) race_rest ;;
   race-heavy) race_heavy ;;
   race-mid) race_mid ;;
   race-fourth) race_fourth ;;

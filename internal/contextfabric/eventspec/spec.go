@@ -1815,6 +1815,45 @@ var ServerStatusShadowLine = Event{
 	},
 }
 
+// FactRootRefused is the Warn line of a fact-root re-check refusal: resolution committed a subject the caller may not see. Counts and kinds only, never ids or labels.
+var FactRootRefused = Event{
+	ID:                 "contextfabric.fact_root_refused",
+	Msg:                "context fabric fact root refused",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per request: the fact-root re-check runs once after resolution commits its roots.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultDeniedReasonArr[:])},
+		{Key: "refused_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// OrganizationSubjectRead is the Info line of a turn that resolved no subject and was answered from the caller's organization subject.
+var OrganizationSubjectRead = Event{
+	ID:                 "contextfabric.organization_subject_read",
+	Msg:                "context fabric organization subject read",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that resolved no subject and read the organization subject.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.OrganizationSubjectReadReasonVocabulary()},
+		{Key: "survey_member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RepairMemberKindTokenVocabulary()},
+		{Key: "organization_facts_read", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_fact_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+var organizationFactKindArr = contractsv1.ContextFabricFactKindVocabulary()
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -2765,6 +2804,7 @@ var (
 	storedResultSurfaceArr        = contextfabric.StoredResultSurfaceVocabulary()
 	storedResultDecisionArr       = contextfabric.StoredResultDecisionVocabulary()
 	storedResultReasonArr         = contextfabric.StoredResultAuthorizationReasonVocabulary()
+	storedResultDeniedReasonArr   = contextfabric.StoredResultDecideDeniedReasonVocabulary()
 	storedResultPrincipalScopeArr = contextfabric.StoredResultPrincipalScopeVocabulary()
 	storedResultSubjectKindArr    = contractsv1.ContextFabricSubjectKindVocabulary()
 )
@@ -3777,6 +3817,8 @@ var All = []Event{
 	InterpretationEnsembleGap,
 	InterpretationEnsembleResolved,
 	ServerStatusShadowLine,
+	FactRootRefused,
+	OrganizationSubjectRead,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
