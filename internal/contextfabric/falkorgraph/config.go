@@ -13,8 +13,9 @@
 // common Go scalar types, CallProcedure silently returns empty results
 // instead of an error when called with arguments, and GraphSchema has no
 // mutex despite being mutated during result parsing -- all independently
-// verified against the pinned v2.1.0. sdkConn calls db.Conn.Do(ctx, ...)
-// directly (a real go-redis call that DOES accept a context) and only reuses
+// verified against the pinned v2.1.0. sdkAPI calls Conn.Do(ctx, ...)
+// directly (a real go-redis call that DOES accept a context; reads honour the ctx deadline on the
+// network IO, writes do not, see sdkAPI) and only reuses
 // the client's exported, I/O-free QueryResultNew decoder and
 // BuildParamsHeader helper. Do not "simplify" this back to the client's
 // high-level API -- that would reintroduce every defect above.
@@ -162,7 +163,9 @@ type Config struct {
 	// ship time; the default of 25 is comfortably above 20), but this
 	// field is exactly where that coupling needs to be visible to anyone
 	// who later tunes it down.
-	MaxResults    int
+	MaxResults int
+	// PoolSize is the connection pool size of EACH of the two FalkorDB clients (reads and writes, see sdkAPI), so one
+	// process holds at most 2 x PoolSize connections.
 	PoolSize      int
 	AllowInsecure bool // permit TLS=false outside development; see validate()
 	// IncludeEmbedBodies is the CHAOS-3833 §3 body gate's EFFECTIVE value

@@ -18,11 +18,21 @@ import (
 // exactly why it never calls the client's high-level Graph.Query/
 // CallProcedure -- no context support, ToString panics, broken
 // CallProcedure, GraphSchema data race, all independently verified). Every
-// call here goes through db.Conn.Do(ctx, ...) directly, so a real ctx
-// (cancellation, deadline, the configured RequestTimeout) reaches the
-// server on every request.
+// call here goes through Conn.Do(ctx, ...) directly.
+//
+// Two clients share one Config. The READ client (read) honours the caller's
+// ctx deadline on the network IO: the deadline bounds dial, write and read, on
+// top of the configured RequestTimeout (go-redis ContextTimeoutEnabled); a
+// cancel is honoured before the call and while waiting for a pooled
+// connection, not by interrupting a socket wait already in progress. The
+// WRITE client (db) does not: its ctx only guards the call before it starts, and
+// a started write runs to the RequestTimeout, so a caller's deadline or cancel
+// can never cut a projection or purge write mid-command. Reads are query(readOnly=true)
+// and listGraphs; everything else is a write. Each client gets PoolSize
+// connections, so one process holds at most 2 x PoolSize.
 type sdkAPI struct {
 	db     *falkordb.FalkorDB
+	read   *falkordb.FalkorDB
 	config Config
 	// everConnected is set true the first time ANY command against this
 	// connection succeeds. classifyConnError's CHAOS-3809 TLS-handshake
@@ -37,22 +47,30 @@ func newSDKAPI(config Config) (conn, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	options := &falkordb.ConnectionOption{
-		Addr:         config.Addr,
-		Password:     config.Password,
-		PoolSize:     config.PoolSize,
-		DialTimeout:  config.RequestTimeout,
-		ReadTimeout:  config.RequestTimeout,
-		WriteTimeout: config.RequestTimeout,
+	newClient := func(contextTimeout bool) (*falkordb.FalkorDB, error) {
+		options := &falkordb.ConnectionOption{
+			Addr:                  config.Addr,
+			Password:              config.Password,
+			PoolSize:              config.PoolSize,
+			DialTimeout:           config.RequestTimeout,
+			ReadTimeout:           config.RequestTimeout,
+			WriteTimeout:          config.RequestTimeout,
+			ContextTimeoutEnabled: contextTimeout,
+		}
+		if config.TLS {
+			options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		return falkordb.FalkorDBNew(options)
 	}
-	if config.TLS {
-		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-	db, err := falkordb.FalkorDBNew(options)
+	db, err := newClient(false)
 	if err != nil {
 		return nil, safeDependencyError("connect to falkordb", err)
 	}
-	return &sdkAPI{db: db, config: config}, nil
+	read, err := newClient(true)
+	if err != nil {
+		return nil, safeDependencyError("connect to falkordb", err)
+	}
+	return &sdkAPI{db: db, read: read, config: config}, nil
 }
 
 // query is sdkAPI's only entry point for running Cypher. --compact is
@@ -73,12 +91,16 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	if readOnly {
 		command = "GRAPH.RO_QUERY"
 	}
-	raw, err := s.db.Conn.Do(ctx, command, graphKey, text, "--compact").Result()
+	client := s.db
+	if readOnly {
+		client = s.read
+	}
+	raw, err := client.Conn.Do(ctx, command, graphKey, text, "--compact").Result()
 	if err != nil {
 		return nil, s.classifyConnError("query context graph", err)
 	}
 	s.everConnected.Store(true)
-	g := s.db.SelectGraph(graphKey)
+	g := client.SelectGraph(graphKey)
 	result, err := falkordb.QueryResultNew(g, raw)
 	if err != nil {
 		return nil, safeDependencyError("decode falkordb result", err)
@@ -109,7 +131,7 @@ func (s *sdkAPI) deleteGraph(ctx context.Context, graphKey string) error {
 }
 
 func (s *sdkAPI) listGraphs(ctx context.Context) ([]string, error) {
-	names, err := s.db.Conn.Do(ctx, "GRAPH.LIST").StringSlice()
+	names, err := s.read.Conn.Do(ctx, "GRAPH.LIST").StringSlice()
 	if err != nil {
 		return nil, s.classifyConnError("list graphs", err)
 	}
