@@ -357,5 +357,20 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 		if _, ok := response.Facts[0].Tables["risk_breakdown"]; !ok {
 			t.Error("tables=omit dropped the drivers table of a served score")
 		}
+		if len(response.RequestNotes) != 1 || response.RequestNotes[0].Kind != "health" ||
+			!strings.Contains(response.RequestNotes[0].Note, "still serves the drivers table") || !strings.Contains(response.RequestNotes[0].Note, "risk_breakdown") {
+			t.Errorf("request notes = %+v, want one health note naming the kept drivers table", response.RequestNotes)
+		}
+		if len(response.Coverage) != 1 || response.Coverage[0].Outcome != OutcomeFactServed || len(response.Coverage[0].Withheld) != 0 {
+			t.Errorf("coverage = %+v, want fact_served and nothing withheld", response.Coverage)
+		}
+		include, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(include.RequestNotes) != 0 {
+			t.Errorf("tables include carried a note: %+v", include.RequestNotes)
+		}
 	})
 }
