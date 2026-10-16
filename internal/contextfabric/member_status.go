@@ -300,9 +300,33 @@ func organizationFactRead(facts CanonicalFactBundle, kind FactKind) bool {
 // subject, for the decision line.
 func organizationSubjectReadReason(frame *QuestionFrame) string {
 	if frame != nil && frame.OrganizationSurveyMemberKind != "" {
-		return "survey_no_members"
+		return OrganizationSubjectReadReasonSurveyNoMembers
 	}
-	return "investment"
+	return OrganizationSubjectReadReasonInvestment
+}
+
+const (
+	OrganizationSubjectReadReasonInvestment      = "investment"
+	OrganizationSubjectReadReasonSurveyNoMembers = "survey_no_members"
+)
+
+// RepairMemberKindTokenVocabulary is the closed set of values repairMemberKindToken
+// writes: "none" for no kind, "unclassified" for a kind outside the vocabulary,
+// else a subject kind.
+func RepairMemberKindTokenVocabulary() []string {
+	kinds := contractsv1.ContextFabricSubjectKindVocabulary()
+	out := make([]string, 0, len(kinds)+2)
+	out = append(out, "none", boundaryKindUnclassified)
+	for _, kind := range kinds {
+		out = append(out, string(kind))
+	}
+	return out
+}
+
+// OrganizationSubjectReadReasonVocabulary is the closed set of reasons an
+// organization-subject read line carries.
+func OrganizationSubjectReadReasonVocabulary() []string {
+	return []string{OrganizationSubjectReadReasonInvestment, OrganizationSubjectReadReasonSurveyNoMembers}
 }
 
 // callerOrganizationSubject is the caller's organization as a subject, in the
