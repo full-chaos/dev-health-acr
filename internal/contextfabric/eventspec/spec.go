@@ -2139,6 +2139,27 @@ var TeamPRLinkStateNativeFirst = Event{
 	},
 }
 
+// PullRequestProjectNativeFirst is the Info line of the fallback-only rule of the pull request project links: how many project rows and fallback links were read, how many links and rows a native link covers and were dropped, and, when a native cover was read, how many issues and pull requests it holds. Counts and a closed outcome only.
+var PullRequestProjectNativeFirst = Event{
+	ID:                       "devhealthfacts.pull_request_project_native_first",
+	Msg:                      "devhealthfacts.pull_request_project_native_first",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per pull request project links read, so the count follows the project reads a request makes; the line carries no request id.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{},
+	BoundedAggregation:       "one line per pull request project links read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_link_covered", "covered_fallback_links_dropped"}},
+		{Key: "project_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fallback_links", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_links", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
+		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
+	},
+}
+
 // FactBytesBoundExceeded is the Warn line of a producer that dropped an additive time series because it, with the legacy rows, passed the joint cell or byte bound of a dual-table fact. The drop is also disclosed on the served fact; producer and kind are closed values, never row content.
 var FactBytesBoundExceeded = Event{
 	ID:                 "devhealthfacts.fact_bytes_bound_exceeded",
@@ -4175,6 +4196,7 @@ var All = []Event{
 	TeamLinkedMixNativeFirst,
 	TeamLinkedMixSet,
 	TeamPRLinkStateNativeFirst,
+	PullRequestProjectNativeFirst,
 	FactBytesBoundExceeded,
 	SubjectIDShapeRejected,
 	OwningTeamsTruncated,

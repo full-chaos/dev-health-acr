@@ -9640,6 +9640,59 @@
     ]
   },
   {
+    "id": "devhealthfacts.pull_request_project_native_first",
+    "msg": "devhealthfacts.pull_request_project_native_first",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [],
+    "bounded_aggregation": "one line per pull request project links read.",
+    "data_dependent_bound": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries no request id.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_fallback_rows",
+          "no_fallback_link_covered",
+          "covered_fallback_links_dropped"
+        ]
+      },
+      {
+        "key": "project_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_links",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_links",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "native_cover_issues",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read held a fallback link, so a native cover was read"
+      },
+      {
+        "key": "native_cover_pull_requests",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read held a fallback link, so a native cover was read"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.subject_id_shape_rejected",
     "msg": "context_fabric_subject_id_shape_rejected",
     "level": "warn",

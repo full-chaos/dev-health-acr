@@ -59,6 +59,11 @@ WHERE org_id = {org_id:String} AND provenance = 'native'
 // nativeCover reads the native cover of the fallback rows of links; it reads
 // nothing when there is none.
 func (p *InvestmentProvider) nativeCover(ctx context.Context, orgID string, links []linkedSetRow) (nativeCover, error) {
+	return readNativeCover(ctx, p.facts.client, orgID, links)
+}
+
+// readNativeCover is nativeCover over any query client.
+func readNativeCover(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, links []linkedSetRow) (nativeCover, error) {
 	cover := nativeCover{issues: map[string]struct{}{}, pullRequests: map[string]struct{}{}}
 	issues, pullRequests := map[string]struct{}{}, map[string]struct{}{}
 	for _, l := range links {
@@ -73,7 +78,7 @@ func (p *InvestmentProvider) nativeCover(ctx context.Context, orgID string, link
 	}
 	rows := 0
 	var coveredIssues, coveredPullRequests []string
-	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamLinkedNativeCover", nativeCoverStatement, orgID, sortedKeys(issues), func(row contextpacket.ClickHouseRowScanner) error {
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamLinkedNativeCover", nativeCoverStatement, orgID, sortedKeys(issues), func(row contextpacket.ClickHouseRowScanner) error {
 		rows++
 		return row.Scan(&coveredIssues, &coveredPullRequests)
 	}, readers.Binding{Name: "pull_requests", Value: sortedKeys(pullRequests)})

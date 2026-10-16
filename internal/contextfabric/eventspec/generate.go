@@ -246,6 +246,8 @@ func goVarName(e Event) string {
 		return "TeamLinkedMixSet"
 	case TeamPRLinkStateNativeFirst.ID:
 		return "TeamPRLinkStateNativeFirst"
+	case PullRequestProjectNativeFirst.ID:
+		return "PullRequestProjectNativeFirst"
 	case FactBytesBoundExceeded.ID:
 		return "FactBytesBoundExceeded"
 	case SubjectIDShapeRejected.ID:

@@ -1234,7 +1234,13 @@ import (
 // carries a native link there no longer makes the pull request linked, so the
 // "pull requests without linked work" reason can be given where v239 held it
 // back. An answer saved under v239 can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v240"
+//
+// v240 -> v241: a project a pull request reaches only through explicit_text or
+// heuristic links that a native link covers (by the link's issue, or by the
+// pull request) is no longer served in its project_breakdown, and a project
+// kept by an uncovered fallback link is served at that link's tier. An answer
+// saved under v240 can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v241"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

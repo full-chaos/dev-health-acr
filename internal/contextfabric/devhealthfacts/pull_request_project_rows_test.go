@@ -40,8 +40,8 @@ func TestPullRequestFactCarriesTheProjectsItsLinkedIssuesReach(t *testing.T) {
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}, {"repo-1", uint32(8), "merged"}}},
 		{match: "FROM work_graph_issue_pr", rows: [][]any{
 			// pr_key, provider, project id, name, tier rank, strongest tier
-			{"repo-1:7", "jira", "P1", "Payments", uint8(3), "native"},
-			{"repo-1:7", "jira", "P2", "Search", uint8(1), "heuristic"},
+			{"repo-1:7", "jira", "P1", "Payments", uint8(3), "native", []string{}},
+			{"repo-1:7", "jira", "P2", "Search", uint8(1), "heuristic", []string{"1|heuristic|issue-p2"}},
 		}},
 	}}
 	result := readPullRequestFacts(t, client, pullRequestSubject("repo-1", "7"), pullRequestSubject("repo-1", "8"))
@@ -73,6 +73,60 @@ func TestPullRequestFactCarriesTheProjectsItsLinkedIssuesReach(t *testing.T) {
 	}
 	if got := *byID["pull_request:repo-1:8"].Fields["state"].String; got != "merged" {
 		t.Fatalf("state = %q", got)
+	}
+}
+
+// A project reached only through fallback links a native link covers (by the
+// issue, or by the pull request) is not served; a project that keeps an
+// uncovered fallback link is served at that link's tier, never a covered one's.
+func TestPullRequestProjectRowsDropFallbackLinksANativeLinkCovers(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}}},
+		{match: "FROM work_graph_issue_pr", rows: [][]any{
+			{"repo-1:7", "jira", "P1", "Payments", uint8(3), "native", []string{}},
+			// Covered by its issue.
+			{"repo-1:7", "jira", "P2", "Search", uint8(2), "explicit_text", []string{"2|explicit_text|issue-covered"}},
+			// An uncovered heuristic link beside a covered text link: served at heuristic.
+			{"repo-1:7", "jira", "P3", "Billing", uint8(2), "explicit_text", []string{"2|explicit_text|issue-covered", "1|heuristic|issue-free"}},
+			// Covered by the pull request's own native link elsewhere.
+			{"repo-1:7", "jira", "P4", "Mobile", uint8(1), "heuristic", []string{"1|heuristic|issue-other"}},
+		}},
+		{match: linkedNativeCoverMarker, rows: [][]any{{[]string{"issue-covered"}, []string{"repo-1|7"}}}},
+	}}
+	result := readPullRequestFacts(t, client, pullRequestSubject("repo-1", "7"))
+	linked := result.Facts[0].Fields["project_breakdown"]
+	if linked.Table == nil {
+		t.Fatalf("project_breakdown absent: %+v", result.Facts[0].Fields)
+	}
+	// repo-1|7 covers every fallback link of this pull request: only the native row stays.
+	if len(linked.Table.Rows) != 1 || *linked.Table.Rows[0].Fields["link_tier"].String != "native" {
+		t.Fatalf("project rows = %+v, want only the native project: the pull request has a native link, so every fallback link of it is covered", linked.Table.Rows)
+	}
+}
+
+// The same rows with the pull request not covered: only the issue side drops.
+func TestPullRequestProjectRowsDropOnlyTheCoveredIssuesWhenThePullRequestIsNotCovered(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}}},
+		{match: "FROM work_graph_issue_pr", rows: [][]any{
+			{"repo-1:7", "jira", "P2", "Search", uint8(2), "explicit_text", []string{"2|explicit_text|issue-covered"}},
+			{"repo-1:7", "jira", "P3", "Billing", uint8(2), "explicit_text", []string{"2|explicit_text|issue-covered", "1|heuristic|issue-free"}},
+		}},
+		{match: linkedNativeCoverMarker, rows: [][]any{{[]string{"issue-covered"}, []string{}}}},
+	}}
+	result := readPullRequestFacts(t, client, pullRequestSubject("repo-1", "7"))
+	linked := result.Facts[0].Fields["project_breakdown"]
+	if linked.Table == nil || len(linked.Table.Rows) != 1 {
+		t.Fatalf("project rows = %+v, want one (Billing at heuristic): Search is reached only by a covered link", linked)
+	}
+	row := linked.Table.Rows[0].Fields
+	if got, want := *row["scope_id"].String, projectCanonicalID(t, "jira", "P3"); got != want {
+		t.Fatalf("scope_id = %q, want %q", got, want)
+	}
+	if got := *row["link_tier"].String; got != "heuristic" {
+		t.Fatalf("link_tier = %q, want heuristic (the text link of the project is covered)", got)
 	}
 }
 
@@ -108,7 +162,7 @@ func TestPullRequestProjectRowsDropAnUnknownTier(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}}},
-		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:7", "jira", "P1", "Payments", uint8(1), "guess"}}},
+		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:7", "jira", "P1", "Payments", uint8(1), "guess", []string{"1|guess|issue-p1"}}}},
 	}}
 	result := readPullRequestFacts(t, client, pullRequestSubject("repo-1", "7"))
 	if _, present := result.Facts[0].Fields["project_breakdown"]; present {
@@ -120,7 +174,7 @@ func TestPullRequestProjectBreakdownReportsRowsItCapped(t *testing.T) {
 	t.Parallel()
 	var linked [][]any
 	for i := 0; i < 65; i++ {
-		linked = append(linked, []any{"repo-1:7", "jira", fmt.Sprintf("P%03d", i), "Project", uint8(3), "native"})
+		linked = append(linked, []any{"repo-1:7", "jira", fmt.Sprintf("P%03d", i), "Project", uint8(3), "native", []string{}})
 	}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(7), "open"}}},
