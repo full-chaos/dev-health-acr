@@ -89,3 +89,14 @@ func (e *Engine) recheckCommittedRoots(ctx context.Context, principal storage.Pr
 	})
 	return filtered, nil
 }
+
+// FactRootRefusedReasonVocabulary is the closed set of reasons the fact-root
+// refusal line carries: the Denied reasons decide gives for a set of committed
+// roots. group_unproven needs a result with groups and admitted, unavailable
+// and grant reasons never reach the recorder.
+func FactRootRefusedReasonVocabulary() [4]StoredResultAuthorizationReason {
+	return [4]StoredResultAuthorizationReason{
+		StoredResultReasonOrganizationMismatch, StoredResultReasonSubjectDenied,
+		StoredResultReasonSubjectAbsent, StoredResultReasonGraphNotProjected,
+	}
+}

@@ -114,6 +114,9 @@ func canonicalValueFor(f eventspec.Field) any {
 		if f.Key == "index" || f.Key == "total" {
 			return 1
 		}
+		if f.MaxInt != nil {
+			return *f.MaxInt
+		}
 		return 7
 	case eventspec.FieldFloat:
 		return 0.5
@@ -509,6 +512,15 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, mutate(badValue), Assertion{Event: ev, Want: wantFor(badValue)})
 		row.gotAccept = err == nil
 	case "boundary":
+		// An int field that declares MaxInt accepts its maximum and refuses
+		// one more.
+		if f.Type == eventspec.FieldInt && f.MaxInt != nil {
+			row.applicable, row.wantAccept = true, true
+			_, atMax := certifyRecovered(t, mutate(*f.MaxInt), Assertion{Event: ev, Want: wantFor(*f.MaxInt)})
+			_, overMax := certifyRecovered(t, mutate(*f.MaxInt+1), Assertion{Event: ev, Want: wantFor(*f.MaxInt + 1)})
+			row.gotAccept = atMax == nil && overMax != nil
+			return row
+		}
 		// A slice field that declares MaxItems accepts exactly that many
 		// elements and refuses one more.
 		if f.MaxItems <= 0 || (f.Type != eventspec.FieldStringSlice && f.Type != eventspec.FieldObjectSlice) {
@@ -583,7 +595,9 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		walk(ev.Fields, nil)
 	}
 
-	// The event-level "duplicate" cell: two identical lines in scope, per
+	// The event-level "duplicate" cell (two identical lines in scope are a
+	// legitimate payload only for zero_or_many_per_request, whose reads can
+	// write the same line): two identical lines in scope, per
 	// event, refused regardless of Multiplicity (already independently
 	// pinned by name -- TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent /
 	// TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent -- this row makes
@@ -601,7 +615,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			t.Fatalf("Parse() duplicate-line fixture for %s: %v", ev.ID, err)
 		}
 		_, err = certifyRecovered(t, log, Assertion{Event: ev, Want: attribution})
-		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "duplicate", applicable: true, wantAccept: false, gotAccept: err == nil})
+		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "duplicate", applicable: true, wantAccept: ev.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest, gotAccept: err == nil})
 	}
 
 	// r3: the multiplicity domain -- every event, generated from
@@ -886,7 +900,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// generated over every such event.
 	zeroOrOneRequestAbsentRows := 0
 	for _, ev := range eventspec.All {
-		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest {
 			continue
 		}
 		zeroOrOneRequestAbsentRows++
