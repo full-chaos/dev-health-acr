@@ -154,43 +154,40 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 	if spanSentinel {
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
-	return `			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
+	return `			SELECT *, unit_size_weight AS effort_value
+			FROM ` + sizedUnits(`SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id, {org_id:String} AS org_id,
 				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
-				any(parsed.effort_value) AS effort_value,
-				any(parsed.unit_issue_size) AS unit_issue_size,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
 				any(parsed.bugfix_share) AS bugfix_share,
-				any(parsed.span_from) AS span_from` + unitAgg + `
+				any(parsed.span_from) AS span_from`+unitAgg+`
 			FROM (
-				SELECT work_unit_id, effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from, win,` + unitCols + `
+				SELECT work_unit_id, theme_distribution_json, bugfix_share, span_from, win,`+unitCols+`
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
-					SELECT work_unit_id, repo_id, effort_value, unit_issue_size, theme_distribution_json, from_ts AS span_from,` + unitCols + `
-						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
-						` + wins + ` AS wins,
-						` + prRefsExpression + ` AS pr_refs,
-						` + repoRefsExpression + ` AS refs
+					SELECT work_unit_id, repo_id, theme_distribution_json, from_ts AS span_from,`+unitCols+`
+						ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0) AS bugfix_share,
+						`+wins+` AS wins,
+						`+prRefsExpression+` AS pr_refs,
+						`+repoRefsExpression+` AS refs
 					FROM (
 						SELECT work_unit_id,
 							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 							argMax(from_ts, computed_at) AS from_ts,
 							argMax(to_ts, computed_at) AS to_ts,
-							argMax(unit_size_weight, computed_at) AS effort_value,
-							argMax(unit_issue_size, computed_at) AS unit_issue_size,
 							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
-						FROM ` + sizedWorkUnitInvestments + `
-						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
+						FROM work_unit_investments
+						WHERE org_id = {org_id:String}`+supersededWorkUnitIDsFilter()+scope.filter()+`
 						GROUP BY work_unit_id
 					)
 				)
 				ARRAY JOIN wins AS win
 				ARRAY JOIN refs AS ref
 			) AS parsed
-			LEFT JOIN ` + repoLookupJoin + `
-			GROUP BY win, work_unit_id, repo_uuid
+			LEFT JOIN `+repoLookupJoin+`
+			GROUP BY win, work_unit_id, repo_uuid`) + `
 `
 }
 

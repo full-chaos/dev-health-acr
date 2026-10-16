@@ -21,19 +21,17 @@ const investmentMeasureIssueSize = "ISSUE_SIZE"
 // the project mixes, until they are read in issue size.
 const investmentMeasureCount = "COUNT"
 
-// sizedWorkUnitInvestments replaces the table name in a statement that reads
-// work_unit_investments: the organization's rows with unit_size_weight and
-// unit_issue_size added (readers.IssueSizedSource). The org predicate sits
-// inside so the join never reads another organization's rows; the statement
-// keeps its own predicates outside.
-var sizedWorkUnitInvestments = mustSizedWorkUnitInvestments()
-
-func mustSizedWorkUnitInvestments() string {
-	const alias = "work_unit_investments"
-	source, err := readers.IssueSizedSource(
-		"(SELECT * FROM work_unit_investments WHERE org_id = {org_id:String}) AS "+alias, alias)
+// sizedUnits adds unit_size_weight and unit_issue_size to a statement that
+// has already folded work_unit_investments to one row per work unit (it must
+// project work_unit_id and org_id): the join to the unit sizes
+// (readers.IssueSizedSource) runs over the folded units, never over the
+// table, so the read of the table keeps its plan and its memory. The result
+// is "(...) AS sized_units", ready for a FROM.
+func sizedUnits(folded string) string {
+	const alias = "sized_units"
+	source, err := readers.IssueSizedSource("("+folded+") AS "+alias, alias)
 	if err != nil {
-		panic(fmt.Sprintf("devhealthfacts: sized work unit source: %v", err))
+		panic(fmt.Sprintf("devhealthfacts: sized units: %v", err))
 	}
 	return source
 }

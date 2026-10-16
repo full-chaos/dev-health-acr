@@ -118,7 +118,7 @@ func TestInvestmentOrganizationForARepositoryBoundCallerIsALimitationNotAPartial
 func TestInvestmentOrganizationWithNoEffortServesNoFact(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{}, 0.0, uint64(0), uint64(0), 0.0, 0.0, time.Unix(0, 0).UTC()},
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), uint64(0), 0.0, 0.0, time.Unix(0, 0).UTC()},
 	}}}}
 	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
 	if len(result.Facts) != 0 {

@@ -27,8 +27,8 @@ func scopeFixture(t *testing.T) (*fakeClient, contextfabric.FactProvider, contex
 	repo := repoUUID("scope-a")
 	client := &fakeClient{tables: []fakeTable{
 		{match: scopeMixMatch, rows: [][]any{
-			{uint8(0), repo, map[string]float64{"feature_delivery": 4}, 0.0, uint64(2), clockSpanStart},
-			{uint8(255), repo, map[string]float64{}, 0.0, uint64(2), clockSpanStart},
+			{uint8(0), repo, map[string]float64{"feature_delivery": 4}, 0.0, uint64(2), []uint64{1, 2}, []uint64{}, clockSpanStart},
+			{uint8(255), repo, map[string]float64{}, 0.0, uint64(2), []uint64{1, 2}, []uint64{}, clockSpanStart},
 		}},
 		{match: scopeUnitsMatch, rows: [][]any{{[]string{"wu-1", "wu-2"}}}},
 		{match: scopeRunMatch, rows: [][]any{{"run-1"}}},

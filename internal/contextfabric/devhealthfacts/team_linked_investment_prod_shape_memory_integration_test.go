@@ -305,7 +305,8 @@ func readLinkedMixRows(t *testing.T, ctx context.Context, query contextpacket.Cl
 	if err := readers.QueryOrgScopedNamed(ctx, query, "LinkedMixDifferential", statement, orgID, teams, func(row readers.RowScanner) error {
 		var team string
 		var r linkedMixRow
-		if err := row.Scan(&team, &r.repos, &r.theme, &r.bugfix); err != nil {
+		var unitHashes, sizedHashes []uint64
+		if err := row.Scan(&team, &r.repos, &r.theme, &r.bugfix, &unitHashes, &sizedHashes); err != nil {
 			return err
 		}
 		out[team] = r
