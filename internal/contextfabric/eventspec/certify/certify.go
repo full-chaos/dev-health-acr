@@ -77,27 +77,6 @@ func (l *Log) linesWithMsg(msg string) []Line {
 	return out
 }
 
-// linesOfEvent is the lines carrying ev's message, minus the lines written at
-// the level of a sibling event that shares the message under another level
-// (one message written at Warn or Info is two declared events); a line at any
-// other level stays in scope so validateLevel still refuses it.
-func (l *Log) linesOfEvent(ev eventspec.Event) []Line {
-	siblingLevels := map[string]bool{}
-	for _, other := range eventspec.All {
-		if other.Msg == ev.Msg && other.ID != ev.ID && other.Level != ev.Level {
-			siblingLevels[strings.ToUpper(string(other.Level))] = true
-		}
-	}
-	var out []Line
-	for _, line := range l.linesWithMsg(ev.Msg) {
-		if level, _ := line["level"].(string); siblingLevels[strings.ToUpper(level)] {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
 // LinesWithMsg is linesWithMsg, exported for a caller that needs to read a
 // line this package has not (yet) declared as an eventspec.Event -- a
 // decision-graph reconstruction that walks pre-entry/pre-decision/
@@ -151,7 +130,7 @@ func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool,
 	switch m {
 	case eventspec.MultiplicityExactlyOnePerPass, eventspec.MultiplicityZeroOrOnePerPass:
 		return true, true
-	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest, eventspec.MultiplicityZeroOrManyPerRequest:
+	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest:
 		return false, true
 	default:
 		// MultiplicityBoundedManyPerPass is NOT handled here: whether it
@@ -303,7 +282,7 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		requestScope[attrKey] = a.Want[attrKey]
 	}
 	var scoped []Line
-	for _, line := range log.linesOfEvent(a.Event) {
+	for _, line := range log.linesWithMsg(a.Event.Msg) {
 		if scopeMatch(a.Event, requestScope, line) {
 			scoped = append(scoped, line)
 		}
@@ -337,31 +316,6 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			}
 			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want exactly 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
-		}
-		if a.Event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
-			if a.Event.MaxLinesPerScope <= 0 {
-				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares no MaxLinesPerScope bound", a.Event.ID)
-			}
-			if len(scoped) > a.Event.MaxLinesPerScope {
-				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q for this attempt, over the declared bound of %d", a.Event.ID, len(scoped), a.Event.Msg, a.Event.MaxLinesPerScope)
-			}
-			var matched []Line
-			for _, candidate := range scoped {
-				all := true
-				for key, want := range a.Want {
-					if !jsonEqual(want, candidate[key]) {
-						all = false
-						break
-					}
-				}
-				if all {
-					matched = append(matched, candidate)
-				}
-			}
-			if len(matched) != 1 {
-				return Result{}, fmt.Errorf("certify: %s: Want singles out %d of the %d lines with msg %q for this attempt, want exactly 1", a.Event.ID, len(matched), len(scoped), a.Event.Msg)
-			}
-			scoped = matched
 		}
 		if len(scoped) > 1 {
 			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
@@ -725,7 +679,7 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	if err := requireCanonicalEvent(ev); err != nil {
 		return err
 	}
-	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest {
+	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
 		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass or zero_or_one_per_request -- CertifyAbsent only applies to one of those two", ev.ID, ev.Multiplicity)
 	}
 	for _, attrKey := range ev.Attribution {
@@ -743,7 +697,7 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	} else if _, ok := attribution["pass"]; ok {
 		return fmt.Errorf("certify: %s: attribution must NOT include \"pass\" -- a zero_or_one_per_request event has no pass concept, its absence is asserted for the whole request", ev.ID)
 	}
-	for _, line := range log.linesOfEvent(ev) {
+	for _, line := range log.linesWithMsg(ev.Msg) {
 		if scopeMatch(ev, attribution, line) {
 			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt (pass=%v), want 0 (asserted absent)", ev.ID, ev.Msg, attribution["pass"])
 		}
