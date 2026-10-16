@@ -950,6 +950,26 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			if len(field.ClosedVocabulary) > 0 && !contains(field.ClosedVocabulary, gotStr) {
 				return fmt.Errorf("certify: %s: %q = %v is not in the declared closed vocabulary %v", eventID, field.Key, got, field.ClosedVocabulary)
 			}
+			if field.Pattern != "" {
+				matched, err := regexp.MatchString(field.Pattern, gotStr)
+				if err != nil {
+					return fmt.Errorf("certify: %s: %q declares an invalid pattern %q: %w", eventID, field.Key, field.Pattern, err)
+				}
+				if !matched {
+					return fmt.Errorf("certify: %s: %q = %q does not match the declared pattern %q", eventID, field.Key, gotStr, field.Pattern)
+				}
+			}
+			if len(field.JoinedMembers) > 0 && gotStr != "" {
+				members := strings.Split(gotStr, ",")
+				for i, member := range members {
+					if !contains(field.JoinedMembers, member) {
+						return fmt.Errorf("certify: %s: %q member %q is not in the declared member set %v", eventID, field.Key, member, field.JoinedMembers)
+					}
+					if i > 0 && members[i-1] >= member {
+						return fmt.Errorf("certify: %s: %q = %q is not sorted and unique", eventID, field.Key, gotStr)
+					}
+				}
+			}
 		case eventspec.FieldInt:
 			gotFloat, ok := got.(float64)
 			if !ok {

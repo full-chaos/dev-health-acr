@@ -17,10 +17,6 @@ import (
 // investmentMeasureIssueSize is the measure the mix is read in.
 const investmentMeasureIssueSize = "ISSUE_SIZE"
 
-// investmentMeasureCount is the measure of a mix whose units each weigh 1:
-// the project mixes, until they are read in issue size.
-const investmentMeasureCount = "COUNT"
-
 // sizedUnits adds unit_size_weight and unit_issue_size to a statement that
 // has already folded work_unit_investments to one row per work unit (it must
 // project work_unit_id and org_id): the join to the unit sizes

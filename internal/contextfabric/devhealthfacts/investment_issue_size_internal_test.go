@@ -102,6 +102,9 @@ func TestInvestmentStatementsWeighByTheSizedSource(t *testing.T) {
 		"team linked pull split":  linkedPullRequestSplitRows([]string{"if(1, 0, -1)"}, scope, linkedPullRequestsSent),
 		"requested split":         requestedSplitRows([]string{"if(1, 0, -1)"}, true, scope, true),
 		"whole organization core": repoSplitCore([]string{"if(1, 0, -1)"}, "", "", true),
+		"project roll-up themes":  projectRollupRepoThemesStatement(),
+		"project roll-up bugfix":  projectRollupRepoBugfixStatement(),
+		"project native values":   projectNativeThemeValuesStatement(),
 	} {
 		if strings.Contains(statement, "toFloat64(1) AS effort_value") {
 			t.Errorf("%s: a unit still weighs a constant 1 (effort_value)", name)
@@ -126,5 +129,25 @@ func TestUnitFactNamesItsIssueSize(t *testing.T) {
 	unsized := unitFact(team, unitRow{WorkUnitID: "u2", RepoID: "r", Share: 1, Effort: 1, Theme: map[string]float64{"risk": 1}}, "org-1")
 	if got := *unsized.Fields["unit_issue_size"].Number; got != 0 {
 		t.Errorf("an unsized unit serves unit_issue_size %v, want 0 (it counts 1 in unit_effort_value)", got)
+	}
+}
+
+// The sized source needs org_id on the folded units. In the SELECT that reads
+// work_unit_investments it must be the table's own column: an alias of the
+// same name there wins over the column in the WHERE and turns the org filter
+// into a constant true, which reads every organization's units.
+func TestProjectFoldsCarryTheOrgColumnNotAnAliasOfIt(t *testing.T) {
+	t.Parallel()
+	for name, statement := range map[string]string{
+		"project roll-up themes": projectRollupRepoThemesStatement(),
+		"project roll-up bugfix": projectRollupRepoBugfixStatement(),
+		"project native values":  projectNativeThemeValuesStatement(),
+	} {
+		if strings.Contains(statement, "{org_id:String} AS org_id") {
+			t.Errorf("%s: aliases org_id beside the org_id filter of work_unit_investments", name)
+		}
+		if !strings.Contains(statement, "GROUP BY work_unit_id, org_id") {
+			t.Errorf("%s: does not carry the table's org_id column through the fold", name)
+		}
 	}
 }

@@ -1223,13 +1223,18 @@ import (
 // longer counts a fallback link next to a native one. An answer saved under
 // v237 can differ.
 //
-// v238 -> v239: a pull request counts as linked in the investment team link
+// v238 -> v239: the project mixes (the owning-team roll-up and the project
+// native mix) weigh every work unit by its issue size and carry the same
+// measure and sizing coverage. An answer saved under v237 holds a project
+// share of the COUNT measure.
+//
+// v239 -> v240: a pull request counts as linked in the investment team link
 // state only through a link that is native or whose issue has no native link
-// in any repository; a fallback link of an issue that carries a native link no
-// longer makes the pull request linked, so the "pull requests without linked
-// work" reason can be given where v238 held it back. An answer saved under v238
-// can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v239"
+// in the repositories the read covers; a fallback link of an issue that
+// carries a native link there no longer makes the pull request linked, so the
+// "pull requests without linked work" reason can be given where v239 held it
+// back. An answer saved under v239 can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v240"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1359,6 +1364,7 @@ func mixReadFailure(action string, err error) error {
 		return &contextfabric.FactReadFailure{
 			State:  contextfabric.SourceUnavailable,
 			Reason: "devhealthfacts: " + action + " contended: its inputs changed during every read attempt; retry",
+			Class:  contextfabric.FactReadFailureContended,
 			Cause:  err,
 		}
 	}
@@ -1371,6 +1377,7 @@ func readFailure(action string, err error) error {
 		return &contextfabric.FactReadFailure{
 			State:  contextfabric.SourceUnavailable,
 			Reason: budgetRefusalReason(action, budget),
+			Class:  contextfabric.FactReadFailureBudgetExceeded,
 			Cause:  err,
 		}
 	}
@@ -1380,6 +1387,7 @@ func readFailure(action string, err error) error {
 	return &contextfabric.FactReadFailure{
 		State:  contextfabric.SourceUnavailable,
 		Reason: "devhealthfacts: " + action + " failed",
+		Class:  contextfabric.FactReadFailureReadFailed,
 		Cause:  err,
 	}
 }
@@ -1400,7 +1408,7 @@ func readFailure(action string, err error) error {
 func requireOrgID(orgID string) (string, error) {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		return "", &contextfabric.FactReadFailure{State: contextfabric.SourceUnavailable, Reason: "devhealthfacts: authenticated organization is required"}
+		return "", &contextfabric.FactReadFailure{State: contextfabric.SourceUnavailable, Reason: "devhealthfacts: authenticated organization is required", Class: contextfabric.FactReadFailureOrganizationRequired}
 	}
 	return orgID, nil
 }
