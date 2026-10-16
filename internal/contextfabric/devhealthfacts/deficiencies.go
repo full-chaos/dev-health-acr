@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -138,7 +139,7 @@ ORDER BY team_id, rule_id`)
 				if basis.day != "" {
 					fields["rule_basis_as_of_day"] = contextfabric.StringFactValue(basis.day)
 				} else {
-					slog.Debug("devhealthfacts.rule_basis_day_absent", "rule_id", contextfabric.SanitizeLogAttr(ruleID))
+					slog.Info("devhealthfacts.rule_basis_day_absent", "rule_id", contextfabric.SanitizeLogAttr(ruleID))
 				}
 			} else {
 				fields["rule_basis_unavailable_reason"] = contextfabric.StringFactValue(ruleBasisUnavailableNotRuleSentence)
@@ -420,7 +421,14 @@ func parseCompoundingRiskRationale(rationale string) (ruleBasis, bool) {
 	if err != nil {
 		return ruleBasis{}, false
 	}
-	return ruleBasis{score: score, severity: match[2], day: match[3]}, true
+	day := match[3]
+	if day != "" {
+		if _, dayErr := time.Parse("2006-01-02", day); dayErr != nil {
+			slog.Warn("devhealthfacts.rule_basis_day_invalid", "day", contextfabric.SanitizeLogAttr(day))
+			day = ""
+		}
+	}
+	return ruleBasis{score: score, severity: match[2], day: day}, true
 }
 
 type latestCompoundingRisk struct {

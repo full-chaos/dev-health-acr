@@ -19,6 +19,7 @@ func TestParseCompoundingRiskRationaleProducerSentences(t *testing.T) {
 		{"day, partial coverage", "Compounding Risk score is 0.739 (severity: high), computed from 50% of its inputs (churn, review latency). Score as of 2026-10-14. Churn is compounding above its tuned threshold.", "high", "2026-10-14", 0.739, true},
 		{"day, no drivers", "Compounding Risk score is 0.739 (severity: high). Score as of 2026-10-14.", "high", "2026-10-14", 0.739, true},
 		{"malformed day is not a day", "Compounding Risk score is 0.739 (severity: high). Score as of yesterday. " + full, "high", "", 0.739, true},
+		{"impossible calendar day is not a day", "Compounding Risk score is 0.739 (severity: high). Score as of 2026-02-31. " + full, "high", "", 0.739, true},
 		{"severity only", "Compounding Risk severity is high.", "", "", 0, false},
 		{"hotspot proxy", "Hotspot complexity delta is 0.2 (threshold: 0.1) and churn-complexity overlap is 0.3 (threshold: 0.2), indicating growing technical debt in the most actively-changed files.", "", "", 0, false},
 	}
