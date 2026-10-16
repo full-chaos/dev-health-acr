@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
@@ -49,7 +49,7 @@ func buildOrgModelConfigResolver(acrStore *pgmodelconfig.Store, entitlement enti
 		if logger != nil {
 			logger.Info("context fabric org model config source", "source", contextfabric.SanitizeLogAttr(orgLLMConfigSourceOps))
 		}
-		return opsOrgModelConfigs{source: source}, nil
+		return opsOrgModelConfigs{source: source, generations: &versionGenerations{}}, nil
 	default:
 		return nil, fmt.Errorf("%s must be empty or %q", EnvOrgLLMConfigSource, orgLLMConfigSourceOps)
 	}
@@ -61,7 +61,37 @@ func buildOrgModelConfigResolver(acrStore *pgmodelconfig.Store, entitlement enti
 // into "unavailable for this organization" and never uses the platform
 // model in its place.
 type opsOrgModelConfigs struct {
-	source orgLLMConfigSource
+	source      orgLLMConfigSource
+	generations *versionGenerations
+}
+
+// versionGenerations turns ops' opaque version (a digest over the org's
+// stored rows) into the per-organization number modelruntimeresolver keys
+// its built runtimes on: the same version keeps its number, and a version
+// that differs from the last one seen for the org gets a higher one.
+type versionGenerations struct {
+	mu   sync.Mutex
+	last map[string]generationEntry
+	next int64
+}
+
+type generationEntry struct {
+	version    string
+	generation int64
+}
+
+func (v *versionGenerations) generationFor(orgID, version string) int64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.last == nil {
+		v.last = map[string]generationEntry{}
+	}
+	if entry, ok := v.last[orgID]; ok && entry.version == version {
+		return entry.generation
+	}
+	v.next++
+	v.last[orgID] = generationEntry{version: version, generation: v.next}
+	return v.next
 }
 
 func (o opsOrgModelConfigs) ResolveOrgModelConfig(ctx context.Context, orgID string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
@@ -69,17 +99,13 @@ func (o opsOrgModelConfigs) ResolveOrgModelConfig(ctx context.Context, orgID str
 	if err != nil || !found {
 		return contextfabric.ResolvedOrgModelConfig{}, false, err
 	}
-	updated, err := time.Parse(time.RFC3339Nano, config.Version)
-	if err != nil {
-		return contextfabric.ResolvedOrgModelConfig{}, false, fmt.Errorf("%w: version is not RFC 3339", entitlements.ErrLLMConfigUnusable)
-	}
 	if config.APIKey == "" && config.BaseURL == "" {
 		return contextfabric.ResolvedOrgModelConfig{}, false, errors.Join(entitlements.ErrLLMConfigUnusable, errors.New("no credential for a hosted provider endpoint"))
 	}
 	return contextfabric.ResolvedOrgModelConfig{
 		Provider: config.Provider, BaseURL: config.BaseURL, Model: config.Model, Credential: config.APIKey,
 		// The cache key of the org's built runtime: it moves whenever ops'
-		// stored settings change.
-		Generation: updated.UnixNano(), UpdatedAt: updated,
+		// version (a digest over the stored rows) changes.
+		Generation: o.generations.generationFor(orgID, config.Version),
 	}, true, nil
 }
