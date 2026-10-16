@@ -2941,6 +2941,35 @@ census through assembly and `chaos4636_budget_stage3.go` excludes tuple ranking
 on retries. Save, reuse, by-id and response-owner boundaries remain those in §13.
 
 
+## 15 — Graph edge admission: which edges fit the path budget (graph-walk.v2)
+
+```mermaid
+flowchart TD
+  WALK["DiscoverContext walks each committed subject<br/>hopWalk collects a hop in questionEdgesFirst order:<br/>own edges the question names, then gate edges, then the rest"] --> TEXT["full-text arm: matched subjects<br/>RankEdgesByOrigin, no classes"]
+  WALK --> ATTR["attributeEdgesByFewestHops<br/>breadth-first over every resolved edge;<br/>tie: the earlier origin; own = one hop"]
+  TEXT --> ATTR
+  ATTR --> CLASS["committedEdgeClasses (committed subjects only)<br/>0 own + NamedByQuestion (fact kind in the question's<br/>fact_requirements, From kind the table names)<br/>1 gate edge: DriverSubject is the subject<br/>2 other own; 3 further out"]
+  CLASS --> RANK["RankEdgesByOrigin<br/>tier 1 committed (resolution order), tier 2 text matches<br/>per tier: runs of equal confidence; origins take turns per run<br/>per origin: class, then id"]
+  RANK --> ADMIT["AdmitEdges: paths up to MaxRelationshipPaths<br/>drivers only for drives=true types (BLOCKS)"]
+  ADMIT --> LOG["INFO context_fabric: shared edge budget<br/>(two or more origins, or a named edge)<br/>graph_walk_version, question_named_edges, counts only"]
+```
+
+One table decides both meanings of an edge type: `relationMeaningTable`
+(`graphrank/discover.go`). `drives` says whether the type makes a driver (only
+`BLOCKS`; `TestOnlyTheListedRelationshipTypesMakeDrivers` pins the set), and
+`factKind` + `namedFrom` say which question names it: `BLOCKS` for a `blockers`
+requirement, `OWNED_BY_TEAM` for an `identity` requirement when its From end is
+a project or a repository (ownership; a work item's `OWNED_BY_TEAM` is a team
+attribution and is never named). Naming an edge moves it within its own
+subject's turns only; it makes no driver and does not change the commit gate.
+`contextfabric.GraphWalkVersion` fences answer reuse across these rules.
+
+**Construction anchors:** `graphrank.NamedByQuestion`, `MakesDriver`,
+`RankEdgesByOrigin`, `InterleaveByOrigin` (`graphrank/discover.go`);
+`questionEdgesFirst` and `hopWalk` (`falkorgraph/queries.go`);
+`committedEdgeClasses`, `attributeEdgesByFewestHops`, `logSharedEdgeBudget` and
+the admission call in `DiscoverContext` (`falkorgraph/reader.go`).
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`

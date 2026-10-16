@@ -1,4 +1,4 @@
-# devhealthsource race job 3 (mid half): tests run only in race-devhealthsource-mid.
+# devhealthsource race job 3 (mid half), and plain unit leg 9 (CHAOS-9871): tests run only there.
 # Names are exact top-level test names of internal/contextfabric/devhealthsource, one per line.
 # Cut by measured seconds (non-race unit-leg 8 go-test.json, main run 38590971230): the
 # three slowest heavy tests, 211s of the 411s the heavy list sums to, so the heavy race job and
