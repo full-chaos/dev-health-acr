@@ -226,14 +226,17 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		if got := factInt(t, *fact, "work_unit_count"); got != 2 {
 			t.Errorf("work_unit_count = %d, want 2", got)
 		}
-		// The project mix is still read in COUNT: it says so and carries no
-		// sizing coverage until it is weighed by issue size.
-		if got := factString(t, *fact, "measure"); got != "COUNT" {
-			t.Errorf("measure = %q, want COUNT (project mixes are not read in issue size yet)", got)
+		// No size is seeded, so the mix is read in issue size with every unit
+		// unsized (each weighs 1) and says so.
+		if got := factString(t, *fact, "measure"); got != "ISSUE_SIZE" {
+			t.Errorf("measure = %q, want ISSUE_SIZE", got)
 		}
-		for _, name := range []string{"sizing_coverage", "unsized_unit_count", "sizing_note", "denominator"} {
-			if _, has := fact.Fields[name]; has {
-				t.Errorf("project fact serves %s; a COUNT mix carries no sizing coverage", name)
+		if got := factInt(t, *fact, "unsized_unit_count"); got != 2 {
+			t.Errorf("unsized_unit_count = %d, want 2", got)
+		}
+		for _, name := range []string{"sizing_coverage", "sizing_note", "denominator"} {
+			if _, has := fact.Fields[name]; !has {
+				t.Errorf("project fact does not serve %s", name)
 			}
 		}
 		if got := factInt(t, *fact, "work_units_without_repo_link"); got != 0 {

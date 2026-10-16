@@ -102,6 +102,9 @@ func TestInvestmentStatementsWeighByTheSizedSource(t *testing.T) {
 		"team linked pull split":  linkedPullRequestSplitRows([]string{"if(1, 0, -1)"}, scope, linkedPullRequestsSent),
 		"requested split":         requestedSplitRows([]string{"if(1, 0, -1)"}, true, scope, true),
 		"whole organization core": repoSplitCore([]string{"if(1, 0, -1)"}, "", "", true),
+		"project roll-up themes":  projectRollupRepoThemesStatement(),
+		"project roll-up bugfix":  projectRollupRepoBugfixStatement(),
+		"project native values":   projectNativeThemeValuesStatement(),
 	} {
 		if strings.Contains(statement, "toFloat64(1) AS effort_value") {
 			t.Errorf("%s: a unit still weighs a constant 1 (effort_value)", name)
