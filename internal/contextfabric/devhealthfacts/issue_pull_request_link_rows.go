@@ -22,20 +22,19 @@ const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'exp
 // The fallback-only rule of the link of record (ops
 // issueprlinks.NativeLinks.Outranks): an explicit_text or heuristic row counts
 // only when no native row covers its pull request (repo_id, pr_number) or its
-// issue; a native row always counts, wherever its pull request lies. Ops
-// retracts the covered rows at the source; the rule keeps a read right before
-// that build has run for an organization.
-//
-// Both sides read native rows of the table without FINAL: a native row is never
-// replaced by a lower tier (version_rank) and the table has no tombstone
-// column (a native row is only replaced by a newer native row), so any stored
-// native row is a current one. If ops adds an unlink path for native rows these
-// reads must use FINAL again.
+// issue; a native row always counts. Ops retracts the covered rows at the
+// source. These reads apply the ISSUE side: a fallback row of an issue that has
+// any native row, to any pull request, does not count; the native row counts
+// even when its pull request has no row. The PULL REQUEST side (a native link
+// from an issue of another project covering the same pull request) is not
+// applied: finding it needs the table's native rows by (repo_id, pr_number),
+// which is not a key prefix, and costs a read per candidate set. It is left to
+// the source retraction and to the shared readers follow-up, and a test pins
+// today's behaviour (native_first_link_known_gap_integration_test.go).
 //
 // The issue side costs no read: the rows of the checked issues are read once
-// (nativeFirstLinkSourceSQL) and a window over each issue's rows says whether
-// it carries a native one. The pull request side looks up native rows by the
-// repositories of the checked rows, a key prefix of the table.
+// (nativeFirstLinkSourceSQL) and a window over each issue's rows says whether it
+// carries a native one.
 
 // nativeFirstLinkSourceSQL is the link rows of the work item ids candidates (a
 // subquery; "" is every row of the organization) with issue_native, 1 when the
@@ -49,21 +48,8 @@ func nativeFirstLinkSourceSQL(candidates string) string {
 }
 
 // nativeFirstLinkSQL is the predicate over a row of nativeFirstLinkSourceSQL
-// (alias l) that applies the rule; candidates is the same set.
-func nativeFirstLinkSQL(candidates string) string {
-	repositories := ``
-	if candidates != "" {
-		repositories = ` AND repo_id IN (SELECT repo_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)`
-	}
-	return nativeFirstLinkRepositoriesSQL(repositories)
-}
-
-// nativeFirstLinkRepositoriesSQL is nativeFirstLinkSQL with the repository
-// restriction of the native pull request lookup given as a condition.
-func nativeFirstLinkRepositoriesSQL(repositories string) string {
-	return `(l.provenance = 'native' OR (l.issue_native = 0
-    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native'` + repositories + `)))`
-}
+// (alias l) that applies the issue side of the rule.
+const nativeFirstLinkSQL = `(l.provenance = 'native' OR l.issue_native = 0)`
 
 // linkedPullRequestOnSQL joins a link row (l) to the pull request (pr) it names.
 const linkedPullRequestOnSQL = `pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number`
@@ -133,6 +119,6 @@ func nativeFirstLinkedPullRequestRowsAmongSQL(candidates string) string {
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
   FROM ` + nativeFirstLinkSourceSQL(candidates) + ` AS l
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0 AND ` + nativeFirstLinkSQL(candidates) + `
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0 AND ` + nativeFirstLinkSQL + `
 )`
 }

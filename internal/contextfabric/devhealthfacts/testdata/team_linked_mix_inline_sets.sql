@@ -125,8 +125,7 @@ FROM (
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))) AS l
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (l.issue_native = 0
-    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND repo_id IN (SELECT repo_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))))))
+  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
 ) AS l ON l.work_item_id = w.work_item_id
 ))))
 								OR hasAny(lookup_refs, (
@@ -211,8 +210,7 @@ FROM (
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))) AS l
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (l.issue_native = 0
-    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND repo_id IN (SELECT repo_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))))))
+  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
 ) AS l ON l.work_item_id = w.work_item_id
 ))) AS lp, lp.1 AS lp_repo, lp.2 AS lp_pr
 						) AS lx
@@ -338,8 +336,7 @@ WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin((SELECT gro
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))) AS l
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (l.issue_native = 0
-    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND repo_id IN (SELECT repo_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))))))
+  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
 ) AS l ON l.work_item_id = w.work_item_id
 ))) AS l))
 	)
@@ -424,8 +421,7 @@ INNER JOIN (SELECT l.1 AS pr_repo, l.2 AS pr_num, l.3 AS team_id FROM (SELECT ar
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) AS link_rank
   FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))) AS l
   INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = l.org_id AND pr.repo_id = l.repo_id AND pr.number = l.pr_number
-  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR (l.issue_native = 0
-    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native' AND repo_id IN (SELECT repo_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN (SELECT arrayJoin(candidate_ids))))))
+  WHERE l.org_id = {org_id:String} AND multiIf(l.provenance = 'native', 3, l.provenance = 'explicit_text', 2, l.provenance = 'heuristic', 1, 0) > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
 ) AS l ON l.work_item_id = w.work_item_id
 ))) AS l)) AS lr
 	ON m.repo_uuid = lr.pr_repo AND m.pr_number = lr.pr_num

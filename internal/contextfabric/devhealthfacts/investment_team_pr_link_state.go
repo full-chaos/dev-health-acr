@@ -55,7 +55,7 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 		SELECT l.repo_id, l.pr_number
 		FROM `+nativeFirstLinkSourceSQL(`(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`)`)+` AS l
 		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
-			AND `+linkTierRankSQL+` > 0 AND `+nativeFirstLinkRepositoriesSQL(` AND repo_id IN `+teamPRLinkRepositorySet)+`
+			AND `+linkTierRankSQL+` > 0 AND `+nativeFirstLinkSQL+`
 	)) AS linked
 FROM git_pull_requests AS pr FINAL
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+
