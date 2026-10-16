@@ -468,6 +468,12 @@ type AnswerDisplayFields struct {
 	MaxEvidence            int
 	FloorCounts            int
 	RecordedCounts         int
+	MaxSerializedBytes     int
+	NarrativeByteAllowance int
+	LimitationsOmitted     int
+	WarningsOmitted        int
+	LimitationsByteCut     int
+	WarningsByteCut        int
 	CountBasis             string
 	ProjectionTruncated    bool
 	MarkdownRendered       bool
@@ -485,7 +491,7 @@ type AnswerDisplayFields struct {
 
 // NewAnswerDisplayFields is the generated constructor for AnswerDisplayFields -- every
 // field AnswerDisplay.Fields declares is a required parameter.
-func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers int, projectedMembers int, canonicalEligibleFacts int, projectedFacts int, factsOmitted int, membersOmitted int, evidenceOmitted int, maxFacts int, maxMembers int, maxEvidence int, floorCounts int, recordedCounts int, countBasis string, projectionTruncated bool, markdownRendered bool, markdownTruncated bool) AnswerDisplayFields {
+func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers int, projectedMembers int, canonicalEligibleFacts int, projectedFacts int, factsOmitted int, membersOmitted int, evidenceOmitted int, maxFacts int, maxMembers int, maxEvidence int, floorCounts int, recordedCounts int, maxSerializedBytes int, narrativeByteAllowance int, limitationsOmitted int, warningsOmitted int, limitationsByteCut int, warningsByteCut int, countBasis string, projectionTruncated bool, markdownRendered bool, markdownTruncated bool) AnswerDisplayFields {
 	return AnswerDisplayFields{
 		RequestID:              requestID,
 		Surface:                surface,
@@ -501,6 +507,12 @@ func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers i
 		MaxEvidence:            maxEvidence,
 		FloorCounts:            floorCounts,
 		RecordedCounts:         recordedCounts,
+		MaxSerializedBytes:     maxSerializedBytes,
+		NarrativeByteAllowance: narrativeByteAllowance,
+		LimitationsOmitted:     limitationsOmitted,
+		WarningsOmitted:        warningsOmitted,
+		LimitationsByteCut:     limitationsByteCut,
+		WarningsByteCut:        warningsByteCut,
 		CountBasis:             countBasis,
 		ProjectionTruncated:    projectionTruncated,
 		MarkdownRendered:       markdownRendered,
@@ -536,6 +548,12 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 		"max_evidence", f.MaxEvidence,
 		"floor_counts", f.FloorCounts,
 		"recorded_counts", f.RecordedCounts,
+		"max_serialized_bytes", f.MaxSerializedBytes,
+		"narrative_byte_allowance", f.NarrativeByteAllowance,
+		"limitations_omitted", f.LimitationsOmitted,
+		"warnings_omitted", f.WarningsOmitted,
+		"limitations_byte_cut", f.LimitationsByteCut,
+		"warnings_byte_cut", f.WarningsByteCut,
 		"count_basis", contextfabric.SanitizeLogAttr(f.CountBasis),
 		"projection_truncated", f.ProjectionTruncated,
 		"markdown_rendered", f.MarkdownRendered,
@@ -5926,6 +5944,8 @@ type AliasLookupFields struct {
 	Complete         bool
 	IdentityLookup   string
 	MatchedClaimants int
+	TermCount        int
+	MatchedKinds     []string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every AliasLookupFields uniformly, set ONLY by NewAliasLookupFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5939,13 +5959,19 @@ type AliasLookupFields struct {
 
 // NewAliasLookupFields is the generated constructor for AliasLookupFields -- every
 // field AliasLookup.Fields declares is a required parameter.
-func NewAliasLookupFields(requestID string, complete bool, identityLookup string, matchedClaimants int) AliasLookupFields {
+func NewAliasLookupFields(requestID string, complete bool, identityLookup string, matchedClaimants int, termCount int, matchedKinds []string) AliasLookupFields {
+	valid := true
+	if matchedKinds == nil {
+		valid = false
+	}
 	return AliasLookupFields{
 		RequestID:        requestID,
 		Complete:         complete,
 		IdentityLookup:   identityLookup,
 		MatchedClaimants: matchedClaimants,
-		constructed:      true,
+		TermCount:        termCount,
+		MatchedKinds:     matchedKinds,
+		constructed:      valid,
 	}
 }
 
@@ -5967,6 +5993,8 @@ func (f AliasLookupFields) SlogArgs() []any {
 		"complete", f.Complete,
 		"identity_lookup", contextfabric.SanitizeLogAttr(f.IdentityLookup),
 		"matched_claimants", f.MatchedClaimants,
+		"term_count", f.TermCount,
+		"matched_kinds", contextfabric.SanitizeLogStrings(f.MatchedKinds),
 	}
 }
 
@@ -6541,6 +6569,7 @@ type DecisionFields struct {
 	TiedStatisticalTop       bool
 	SearchCandidateLimit     int
 	PopulationBasis          string
+	OfferedUnderWindowGate   bool
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every DecisionFields uniformly, set ONLY by NewDecisionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6554,7 +6583,7 @@ type DecisionFields struct {
 
 // NewDecisionFields is the generated constructor for DecisionFields -- every
 // field Decision.Fields declares is a required parameter.
-func NewDecisionFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, outcome string, winningMechanism string, commitGate string, aliasIdentityComplete bool, identityTrustGateBlocked bool, searchTruncated bool, commitBasis string, tiedStatisticalTop bool, searchCandidateLimit int, populationBasis string) DecisionFields {
+func NewDecisionFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, outcome string, winningMechanism string, commitGate string, aliasIdentityComplete bool, identityTrustGateBlocked bool, searchTruncated bool, commitBasis string, tiedStatisticalTop bool, searchCandidateLimit int, populationBasis string, offeredUnderWindowGate bool) DecisionFields {
 	return DecisionFields{
 		RequestID:                requestID,
 		Pass:                     pass,
@@ -6572,6 +6601,7 @@ func NewDecisionFields(requestID string, pass int, index int, total int, subject
 		TiedStatisticalTop:       tiedStatisticalTop,
 		SearchCandidateLimit:     searchCandidateLimit,
 		PopulationBasis:          populationBasis,
+		OfferedUnderWindowGate:   offeredUnderWindowGate,
 		constructed:              true,
 	}
 }
@@ -6606,6 +6636,7 @@ func (f DecisionFields) SlogArgs() []any {
 		"tied_statistical_top", f.TiedStatisticalTop,
 		"search_candidate_limit", f.SearchCandidateLimit,
 		"population_basis", contextfabric.SanitizeLogAttr(f.PopulationBasis),
+		"offered_under_window_gate", f.OfferedUnderWindowGate,
 	}
 }
 
@@ -6903,6 +6934,11 @@ type EvidenceRoundFields struct {
 	ShadowHandleInsensitivityEvaluated bool
 	ShadowHandleInsensitivityOutcome   string
 	ShadowCallerHintShortCircuit       bool
+	ShadowSurvivorExcludedReason       string
+	ShadowTrigger                      string
+	ShadowCallerNarrowing              string
+	ShadowNarrowedFrom                 int
+	ShadowNarrowedTo                   int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every EvidenceRoundFields uniformly, set ONLY by NewEvidenceRoundFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6916,7 +6952,7 @@ type EvidenceRoundFields struct {
 
 // NewEvidenceRoundFields is the generated constructor for EvidenceRoundFields -- every
 // field EvidenceRound.Fields declares is a required parameter.
-func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool) EvidenceRoundFields {
+func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool, shadowSurvivorExcludedReason string, shadowTrigger string, shadowCallerNarrowing string, shadowNarrowedFrom int, shadowNarrowedTo int) EvidenceRoundFields {
 	return EvidenceRoundFields{
 		RequestID:                          requestID,
 		ShadowOutcome:                      shadowOutcome,
@@ -6935,6 +6971,11 @@ func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason
 		ShadowHandleInsensitivityEvaluated: shadowHandleInsensitivityEvaluated,
 		ShadowHandleInsensitivityOutcome:   shadowHandleInsensitivityOutcome,
 		ShadowCallerHintShortCircuit:       shadowCallerHintShortCircuit,
+		ShadowSurvivorExcludedReason:       shadowSurvivorExcludedReason,
+		ShadowTrigger:                      shadowTrigger,
+		ShadowCallerNarrowing:              shadowCallerNarrowing,
+		ShadowNarrowedFrom:                 shadowNarrowedFrom,
+		ShadowNarrowedTo:                   shadowNarrowedTo,
 		constructed:                        true,
 	}
 }
@@ -6970,6 +7011,11 @@ func (f EvidenceRoundFields) SlogArgs() []any {
 		"shadow_handle_insensitivity_evaluated", f.ShadowHandleInsensitivityEvaluated,
 		"shadow_handle_insensitivity_outcome", contextfabric.SanitizeLogAttr(f.ShadowHandleInsensitivityOutcome),
 		"shadow_caller_hint_short_circuit", f.ShadowCallerHintShortCircuit,
+		"shadow_survivor_excluded_reason", contextfabric.SanitizeLogAttr(f.ShadowSurvivorExcludedReason),
+		"shadow_trigger", contextfabric.SanitizeLogAttr(f.ShadowTrigger),
+		"shadow_caller_narrowing", contextfabric.SanitizeLogAttr(f.ShadowCallerNarrowing),
+		"shadow_narrowed_from", f.ShadowNarrowedFrom,
+		"shadow_narrowed_to", f.ShadowNarrowedTo,
 	}
 }
 
