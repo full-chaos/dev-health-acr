@@ -791,6 +791,36 @@ make coverage-cobertura" || status=1
   return "$status"
 }
 
+# CHAOS-9950: draft PRs skip the heavy lanes. Every job NOT in the light set
+# must `needs: plan` and carry exactly the plan-output `if:`, so a new job
+# defaults to heavy (skipped on a draft) and cannot quietly run on every draft
+# push; and verify must READ plan.outputs.heavy and reject a missing value.
+light_jobs=' plan mirror-preflight scripts lint docs-mermaid unit reports verify '
+check_heavy_jobs_gated() {
+  local file="$1" job block status=0
+  while IFS= read -r job; do
+    case "$light_jobs" in *" $job "*) continue ;; esac
+    block="$(job_block "$file" "$job")"
+    if ! grep -qxF "    if: needs.plan.outputs.heavy == 'true'" <<<"$block" \
+       || ! list_needs <<<"$block" | grep -qx plan; then
+      printf 'heavy job "%s" is not gated on needs.plan.outputs.heavy\n' "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
+check_verify_reads_plan() {
+  local file="$1" block
+  block="$(job_block "$file" verify)"
+  grep -qF '.plan.outputs.heavy // "missing"' <<<"$block" || {
+    printf 'verify does not read plan.outputs.heavy\n' >&2; return 1; }
+  grep -qF 'plan output heavy is' <<<"$block" || {
+    printf 'verify does not fail on a missing plan output\n' >&2; return 1; }
+  grep -qE '"\$result" = skipped' <<<"$block" || {
+    printf 'verify has no draft-skip allowance\n' >&2; return 1; }
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -810,6 +840,8 @@ run_all_checks() {
   check_pin_binds_checkout_ref "$file"
   check_race_runner_uses_variable "$file"
   check_testcontainers_needs_mirror_preflight "$file"
+  check_heavy_jobs_gated "$file"
+  check_verify_reads_plan "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -1257,6 +1289,19 @@ sed 's/vars\.CI_RACE_RUNNER/vars.CI_RUNNER_RACE/g' "$workflow" > "$race_runner_w
 assert_check_fails 'renamed the CI_RACE_RUNNER variable in the runs-on expression' \
   check_race_runner_uses_variable "$race_runner_wrong_var"
 
+# (w) CHAOS-9950: a heavy job loses its plan gate; verify stops reading plan.
+heavy_ungated="$tmpdir/heavy-ungated.yml"
+awk '
+  /^  build:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  build:$/ { in_job=0 }
+  in_job && /needs\.plan\.outputs\.heavy/ { next }
+  { print }
+' "$workflow" > "$heavy_ungated"
+assert_check_fails 'removed the plan gate from the build job' check_heavy_jobs_gated "$heavy_ungated"
+verify_ignores_plan="$tmpdir/verify-ignores-plan.yml"
+sed 's/plan\.outputs\.heavy \/\/ "missing"/plan.outputs.other \/\/ "missing"/' "$workflow" > "$verify_ignores_plan"
+assert_check_fails 'verify stopped reading plan.outputs.heavy' check_verify_reads_plan "$verify_ignores_plan"
+
 # (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
 # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX env in place -- the exact shape that
 # lets a job pull a mirrored image before the preflight confirms it resolves.
@@ -1265,6 +1310,7 @@ awk '
   /^  race-devhealthfacts:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthfacts:$/ { in_job=0 }
   in_job && /^ {4}needs: *mirror-preflight *$/ { next }
+  in_job && /^ {6}- *mirror-preflight *$/ { next }
   { print }
 ' "$workflow" > "$dedicated_job_missing_needs"
 assert_check_fails 'dropped race-devhealthfacts'"'"'s needs: mirror-preflight while keeping its TESTCONTAINERS env' \

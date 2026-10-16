@@ -3,6 +3,10 @@ name: ci
 
 "on":
   pull_request:
+    # ready_for_review is NOT a default pull_request type; without it a draft
+    # marked ready would never start the heavy jobs the draft skipped.
+    # labeled/unlabeled start a run when the `ci-full` opt-in label moves.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -45,6 +49,32 @@ env:
   GOFLAGS: -trimpath
 
 jobs:
+  # Decides whether the heavy lanes (every race job, build, contracts,
+  # container-*) run. Draft pull requests run only the light lanes (plan,
+  # mirror-preflight, scripts, lint, docs-mermaid, unit, reports); a ready PR,
+  # a push to main, and a draft carrying the `ci-full` label run everything.
+  # Heavy jobs `needs: plan` and gate on this output; `verify` reads the same
+  # output to decide which jobs may report `skipped`.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      heavy: ${{ steps.decide.outputs.heavy }}
+    steps:
+      - name: Decide whether the heavy lanes run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          heavy=true
+          if [ "$EVENT" = pull_request ] && [ "$DRAFT" = true ] \
+             && ! printf '%s' "$LABELS" | jq -e 'index("ci-full")' >/dev/null; then
+            heavy=false
+          fi
+          printf 'event=%s draft=%s labels=%s heavy=%s\n' "$EVENT" "$DRAFT" "$LABELS" "$heavy"
+          printf 'heavy=%s\n' "$heavy" >> "$GITHUB_OUTPUT"
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
   # triggered by the SAME push, with no cross-workflow `needs` (GitHub
   # Actions has none). The introducing PR hit this directly: mirror-images.yml
@@ -581,7 +611,10 @@ jobs:
   race:
     # See `unit`'s comment: mirror-preflight is one job again, so a plain
     # `needs:` is correct here too.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -693,6 +726,9 @@ jobs:
   race-devhealthschema:
     name: race (devhealthschema, isolated scope)
     # Same CI_RACE_RUNNER contract as the `race` job above.
+    needs:
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -751,7 +787,10 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -788,7 +827,10 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -823,7 +865,10 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -858,7 +903,10 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -910,7 +958,10 @@ jobs:
     name: race (devhealthsource, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -945,7 +996,10 @@ jobs:
     name: race (devhealthsource heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -982,7 +1036,10 @@ jobs:
     name: race (devhealthsource mid, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1027,7 +1084,10 @@ jobs:
     name: race (factoracle, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1062,7 +1122,10 @@ jobs:
     name: race (factoracle heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1097,7 +1160,10 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     env:
       # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
       # which starts real postgres/clickhouse testcontainers fixtures
@@ -1133,6 +1199,9 @@ jobs:
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
   contracts:
+    needs:
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -1306,7 +1375,10 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     env:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
@@ -1386,7 +1458,10 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -1454,7 +1529,10 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -1565,8 +1643,13 @@ jobs:
     # existed to reach is gone, so the pairs, their mutually exclusive `if:`
     # gates, and the aggregator logic that tolerated a `skipped` member are
     # all removed. A `skipped` lane here is now a defect, and reads as one.
+    #
+    # CHAOS-9950 exception: when the plan job reports heavy=false (a draft PR
+    # without the `ci-full` label) the heavy lanes must be exactly `skipped`;
+    # the step below reads plan.outputs.heavy and allows nothing else.
     if: '!cancelled()'
     needs:
+      - plan
       - mirror-preflight
       - scripts
       - lint
@@ -1598,12 +1681,30 @@ jobs:
           set -euo pipefail
           failed=0
 
-          # Every lane must be a literal success. No exemptions: with the v1.6
-          # pairs gone there is no job that legitimately reports `skipped`, so
-          # a `skipped` result now fails this gate instead of being tolerated.
+          # The plan job's `heavy` output is READ here, never inferred from the
+          # event or from which jobs happened to skip. A missing or non-boolean
+          # value fails the gate, so a plan that never ran cannot read green.
+          heavy="$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.heavy // "missing"')"
+          case "$heavy" in
+            true | false) ;;
+            *) printf 'plan output heavy is %s, expected true or false\n' "$heavy" >&2; exit 1 ;;
+          esac
+          printf 'plan heavy=%s\n' "$heavy"
+
+          # LIGHT lanes run on every event and must be a literal success.
+          # Every other lane is heavy: a literal success when heavy=true, and
+          # when heavy=false (a draft PR without the ci-full label) it must be
+          # exactly `skipped` -- a failed or cancelled heavy lane never passes.
+          light=" plan mirror-preflight scripts lint docs-mermaid unit reports "
           while IFS=$'\t' read -r job result; do
             printf '%s: %s\n' "$job" "$result"
-            if [ "$result" != success ]; then failed=1; fi
+            if [ "$result" != success ]; then
+              if [ "$heavy" = false ] && [ "$result" = skipped ] \
+                 && [[ "$light" != *" $job "* ]]; then
+                continue
+              fi
+              failed=1
+            fi
           done < <(printf '%s' "$NEEDS" | jq -r 'to_entries[] | [.key, .value.result] | @tsv')
 
           test "$(printf '%s' "$NEEDS" | jq -r 'length')" -gt 0 || {
