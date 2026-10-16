@@ -9550,6 +9550,153 @@
     ]
   },
   {
+    "id": "devhealthfacts.fact_bytes_bound_exceeded",
+    "msg": "context_fabric_fact_bytes_bound_exceeded",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "producer",
+      "kind"
+    ],
+    "bounded_aggregation": "one line per dropped time series of a dual-table fact.",
+    "data_dependent_bound": "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+    "fields": [
+      {
+        "key": "producer",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "flow"
+        ]
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
+      },
+      {
+        "key": "combined_cells_max",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "combined_bytes_max",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.owning_teams_truncated",
+    "msg": "context_fabric_owning_teams_truncated",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "producer"
+    ],
+    "bounded_aggregation": "one line per identity read with truncated owning teams.",
+    "data_dependent_bound": "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "fields": [
+      {
+        "key": "producer",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "devhealthfacts.identity"
+        ]
+      },
+      {
+        "key": "omitted",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.subject_id_shape_rejected",
+    "msg": "context_fabric_subject_id_shape_rejected",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "producer",
+      "kind"
+    ],
+    "bounded_aggregation": "one line per provider read with a positive rejected count.",
+    "data_dependent_bound": "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "fields": [
+      {
+        "key": "producer",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^devhealthfacts\\.[a-z_]+$"
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
+      },
+      {
+        "key": "rejected",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.team_linked_mix_native_first",
     "msg": "devhealthfacts.team_linked_mix_native_first",
     "level": "info",

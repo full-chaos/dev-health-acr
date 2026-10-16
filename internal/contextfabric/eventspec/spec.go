@@ -2081,13 +2081,14 @@ var FactReadFailed = Event{
 
 // TeamLinkedMixNativeFirst is the Info line of the fallback-only rule of the team linked mix: how many link rows were read, how many came from fallback links, how many of those a native link covers and was dropped. Counts and a closed outcome only.
 var TeamLinkedMixNativeFirst = Event{
-	ID:                 "devhealthfacts.team_linked_mix_native_first",
-	Msg:                "devhealthfacts.team_linked_mix_native_first",
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
-	Attribution:        []string{"request_id"},
-	BoundedAggregation: "one line per team chunk of a team linked mix read.",
+	ID:                       "devhealthfacts.team_linked_mix_native_first",
+	Msg:                      "devhealthfacts.team_linked_mix_native_first",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per team chunk of a team linked mix read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_row_covered", "covered_fallback_rows_dropped"}},
 		{Key: "link_rows", Type: FieldInt, Presence: PresenceRequired},
@@ -2101,13 +2102,14 @@ var TeamLinkedMixNativeFirst = Event{
 
 // TeamLinkedMixSet is the Info line of the linked pull request set a team linked mix chunk sends: how many teams and linked pull requests, and the membership scope mode the read resolved (an ids scope is sent to the query as a table, the line reports the resolved mode).
 var TeamLinkedMixSet = Event{
-	ID:                 "devhealthfacts.team_linked_mix_set",
-	Msg:                "devhealthfacts.team_linked_mix_set",
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
-	Attribution:        []string{"request_id"},
-	BoundedAggregation: "one line per team chunk of a team linked mix read.",
+	ID:                       "devhealthfacts.team_linked_mix_set",
+	Msg:                      "devhealthfacts.team_linked_mix_set",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per team chunk of a team linked mix read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"sent", "empty_set_mix_skipped"}},
 		{Key: "teams", Type: FieldInt, Presence: PresenceRequired, MaxInt: intPtr(100)},
@@ -2119,13 +2121,14 @@ var TeamLinkedMixSet = Event{
 
 // TeamPRLinkStateNativeFirst is the Info line of the fallback-only rule of the team pull request link state: how many pull requests and linked ones the repositories read hold, and how many a fallback link suppressed.
 var TeamPRLinkStateNativeFirst = Event{
-	ID:                 "devhealthfacts.team_pr_link_state_native_first",
-	Msg:                "devhealthfacts.team_pr_link_state_native_first",
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
-	Attribution:        []string{"request_id"},
-	BoundedAggregation: "one line per team pull request link state read.",
+	ID:                       "devhealthfacts.team_pr_link_state_native_first",
+	Msg:                      "devhealthfacts.team_pr_link_state_native_first",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per team pull request link state read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_link_suppressed", "covered_fallback_links_suppressed"}},
 		{Key: "repositories", Type: FieldInt, Presence: PresenceRequired},
@@ -2133,6 +2136,54 @@ var TeamPRLinkStateNativeFirst = Event{
 		{Key: "linked", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "suppressed_pull_requests", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactBytesBoundExceeded is the Warn line of a producer that dropped an additive time series because it, with the legacy rows, passed the joint cell or byte bound of a dual-table fact. The drop is also disclosed on the served fact; producer and kind are closed values, never row content.
+var FactBytesBoundExceeded = Event{
+	ID:                 "devhealthfacts.fact_bytes_bound_exceeded",
+	Msg:                "context_fabric_fact_bytes_bound_exceeded",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+	Attribution:        []string{"producer", "kind"},
+	BoundedAggregation: "one line per dropped time series of a dual-table fact.",
+	Fields: []Field{
+		{Key: "producer", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"flow"}},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "combined_cells_max", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "combined_bytes_max", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// SubjectIDShapeRejected is the Warn line of a provider that could not match requested subjects to its row-key shape; the rejected subjects are disclosed on the served result as an omitted count and a truncated state. A count only, never a subject id.
+var SubjectIDShapeRejected = Event{
+	ID:                 "devhealthfacts.subject_id_shape_rejected",
+	Msg:                "context_fabric_subject_id_shape_rejected",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+	Attribution:        []string{"producer", "kind"},
+	BoundedAggregation: "one line per provider read with a positive rejected count.",
+	Fields: []Field{
+		{Key: "producer", Type: FieldString, Presence: PresenceRequired, Pattern: `^devhealthfacts\.[a-z_]+$`, PatternExample: "devhealthfacts.flow"},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "rejected", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// OwningTeamsTruncated is the Warn line of an identity read that had more owning teams for a repository than its table carries; the omitted count is also on the served fact and result.
+var OwningTeamsTruncated = Event{
+	ID:                 "devhealthfacts.owning_teams_truncated",
+	Msg:                "context_fabric_owning_teams_truncated",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+	Attribution:        []string{"producer"},
+	BoundedAggregation: "one line per identity read with truncated owning teams.",
+	Fields: []Field{
+		{Key: "producer", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"devhealthfacts.identity"}},
+		{Key: "omitted", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 
@@ -4124,6 +4175,9 @@ var All = []Event{
 	TeamLinkedMixNativeFirst,
 	TeamLinkedMixSet,
 	TeamPRLinkStateNativeFirst,
+	FactBytesBoundExceeded,
+	SubjectIDShapeRejected,
+	OwningTeamsTruncated,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

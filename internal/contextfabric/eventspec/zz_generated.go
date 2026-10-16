@@ -78,6 +78,9 @@ var ByID = map[string]Event{
 	"contextfabric.work_item_reuse":                  WorkItemReuse,
 	"contextfabric.work_item_stored_serving":         WorkItemStoredServing,
 	"contextfabric.work_item_tuple_admission":        WorkItemTupleAdmission,
+	"devhealthfacts.fact_bytes_bound_exceeded":       FactBytesBoundExceeded,
+	"devhealthfacts.owning_teams_truncated":          OwningTeamsTruncated,
+	"devhealthfacts.subject_id_shape_rejected":       SubjectIDShapeRejected,
 	"devhealthfacts.team_linked_mix_native_first":    TeamLinkedMixNativeFirst,
 	"devhealthfacts.team_linked_mix_set":             TeamLinkedMixSet,
 	"devhealthfacts.team_pr_link_state_native_first": TeamPRLinkStateNativeFirst,
@@ -5652,6 +5655,147 @@ func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
 	}
 }
 
+// FactBytesBoundExceededFields is devhealthfacts.fact_bytes_bound_exceeded's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactBytesBoundExceeded.Fields declares in spec.go.
+type FactBytesBoundExceededFields struct {
+	Producer         string
+	Kind             string
+	CombinedCellsMax int
+	CombinedBytesMax int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactBytesBoundExceededFields uniformly, set ONLY by NewFactBytesBoundExceededFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactBytesBoundExceededFields is the generated constructor for FactBytesBoundExceededFields -- every
+// field FactBytesBoundExceeded.Fields declares is a required parameter.
+func NewFactBytesBoundExceededFields(producer string, kind string, combinedCellsMax int, combinedBytesMax int) FactBytesBoundExceededFields {
+	return FactBytesBoundExceededFields{
+		Producer:         producer,
+		Kind:             kind,
+		CombinedCellsMax: combinedCellsMax,
+		CombinedBytesMax: combinedBytesMax,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactBytesBoundExceededFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactBytesBoundExceededFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactBytesBoundExceeded's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactBytesBoundExceededFields) SlogArgs() []any {
+	return []any{
+		"producer", contextfabric.SanitizeLogAttr(f.Producer),
+		"kind", contextfabric.SanitizeLogAttr(f.Kind),
+		"combined_cells_max", f.CombinedCellsMax,
+		"combined_bytes_max", f.CombinedBytesMax,
+	}
+}
+
+// OwningTeamsTruncatedFields is devhealthfacts.owning_teams_truncated's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OwningTeamsTruncated.Fields declares in spec.go.
+type OwningTeamsTruncatedFields struct {
+	Producer string
+	Omitted  int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OwningTeamsTruncatedFields uniformly, set ONLY by NewOwningTeamsTruncatedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOwningTeamsTruncatedFields is the generated constructor for OwningTeamsTruncatedFields -- every
+// field OwningTeamsTruncated.Fields declares is a required parameter.
+func NewOwningTeamsTruncatedFields(producer string, omitted int) OwningTeamsTruncatedFields {
+	return OwningTeamsTruncatedFields{
+		Producer:    producer,
+		Omitted:     omitted,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOwningTeamsTruncatedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OwningTeamsTruncatedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OwningTeamsTruncated's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OwningTeamsTruncatedFields) SlogArgs() []any {
+	return []any{
+		"producer", contextfabric.SanitizeLogAttr(f.Producer),
+		"omitted", f.Omitted,
+	}
+}
+
+// SubjectIDShapeRejectedFields is devhealthfacts.subject_id_shape_rejected's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SubjectIDShapeRejected.Fields declares in spec.go.
+type SubjectIDShapeRejectedFields struct {
+	Producer string
+	Kind     string
+	Rejected int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SubjectIDShapeRejectedFields uniformly, set ONLY by NewSubjectIDShapeRejectedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSubjectIDShapeRejectedFields is the generated constructor for SubjectIDShapeRejectedFields -- every
+// field SubjectIDShapeRejected.Fields declares is a required parameter.
+func NewSubjectIDShapeRejectedFields(producer string, kind string, rejected int) SubjectIDShapeRejectedFields {
+	return SubjectIDShapeRejectedFields{
+		Producer:    producer,
+		Kind:        kind,
+		Rejected:    rejected,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSubjectIDShapeRejectedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SubjectIDShapeRejectedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SubjectIDShapeRejected's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SubjectIDShapeRejectedFields) SlogArgs() []any {
+	return []any{
+		"producer", contextfabric.SanitizeLogAttr(f.Producer),
+		"kind", contextfabric.SanitizeLogAttr(f.Kind),
+		"rejected", f.Rejected,
+	}
+}
+
 // TeamLinkedMixNativeFirstFields is devhealthfacts.team_linked_mix_native_first's generated typed construction interface
 // (CHAOS-5516): one Go field per Field TeamLinkedMixNativeFirst.Fields declares in spec.go.
 type TeamLinkedMixNativeFirstFields struct {
@@ -5661,7 +5805,6 @@ type TeamLinkedMixNativeFirstFields struct {
 	DroppedRows             int
 	NativeCoverIssues       int
 	NativeCoverPullRequests int
-	RequestID               string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamLinkedMixNativeFirstFields uniformly, set ONLY by NewTeamLinkedMixNativeFirstFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5675,7 +5818,7 @@ type TeamLinkedMixNativeFirstFields struct {
 
 // NewTeamLinkedMixNativeFirstFields is the generated constructor for TeamLinkedMixNativeFirstFields -- every
 // field TeamLinkedMixNativeFirst.Fields declares is a required parameter.
-func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRows int, droppedRows int, nativeCoverIssues int, nativeCoverPullRequests int, requestID string) TeamLinkedMixNativeFirstFields {
+func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRows int, droppedRows int, nativeCoverIssues int, nativeCoverPullRequests int) TeamLinkedMixNativeFirstFields {
 	return TeamLinkedMixNativeFirstFields{
 		Outcome:                 outcome,
 		LinkRows:                linkRows,
@@ -5683,7 +5826,6 @@ func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRow
 		DroppedRows:             droppedRows,
 		NativeCoverIssues:       nativeCoverIssues,
 		NativeCoverPullRequests: nativeCoverPullRequests,
-		RequestID:               requestID,
 		constructed:             true,
 	}
 }
@@ -5707,7 +5849,6 @@ func (f TeamLinkedMixNativeFirstFields) SlogArgs() []any {
 		"dropped_rows", f.DroppedRows,
 		"native_cover_issues", f.NativeCoverIssues,
 		"native_cover_pull_requests", f.NativeCoverPullRequests,
-		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
@@ -5718,7 +5859,6 @@ type TeamLinkedMixSetFields struct {
 	Teams              int
 	LinkedPullRequests int
 	ScopeMode          string
-	RequestID          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamLinkedMixSetFields uniformly, set ONLY by NewTeamLinkedMixSetFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5732,13 +5872,12 @@ type TeamLinkedMixSetFields struct {
 
 // NewTeamLinkedMixSetFields is the generated constructor for TeamLinkedMixSetFields -- every
 // field TeamLinkedMixSet.Fields declares is a required parameter.
-func NewTeamLinkedMixSetFields(outcome string, teams int, linkedPullRequests int, scopeMode string, requestID string) TeamLinkedMixSetFields {
+func NewTeamLinkedMixSetFields(outcome string, teams int, linkedPullRequests int, scopeMode string) TeamLinkedMixSetFields {
 	return TeamLinkedMixSetFields{
 		Outcome:            outcome,
 		Teams:              teams,
 		LinkedPullRequests: linkedPullRequests,
 		ScopeMode:          scopeMode,
-		RequestID:          requestID,
 		constructed:        true,
 	}
 }
@@ -5760,7 +5899,6 @@ func (f TeamLinkedMixSetFields) SlogArgs() []any {
 		"teams", f.Teams,
 		"linked_pull_requests", f.LinkedPullRequests,
 		"scope_mode", contextfabric.SanitizeLogAttr(f.ScopeMode),
-		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
@@ -5772,7 +5910,6 @@ type TeamPRLinkStateNativeFirstFields struct {
 	PullRequests           int
 	Linked                 int
 	SuppressedPullRequests int
-	RequestID              string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamPRLinkStateNativeFirstFields uniformly, set ONLY by NewTeamPRLinkStateNativeFirstFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5786,14 +5923,13 @@ type TeamPRLinkStateNativeFirstFields struct {
 
 // NewTeamPRLinkStateNativeFirstFields is the generated constructor for TeamPRLinkStateNativeFirstFields -- every
 // field TeamPRLinkStateNativeFirst.Fields declares is a required parameter.
-func NewTeamPRLinkStateNativeFirstFields(outcome string, repositories int, pullRequests int, linked int, suppressedPullRequests int, requestID string) TeamPRLinkStateNativeFirstFields {
+func NewTeamPRLinkStateNativeFirstFields(outcome string, repositories int, pullRequests int, linked int, suppressedPullRequests int) TeamPRLinkStateNativeFirstFields {
 	return TeamPRLinkStateNativeFirstFields{
 		Outcome:                outcome,
 		Repositories:           repositories,
 		PullRequests:           pullRequests,
 		Linked:                 linked,
 		SuppressedPullRequests: suppressedPullRequests,
-		RequestID:              requestID,
 		constructed:            true,
 	}
 }
@@ -5816,7 +5952,6 @@ func (f TeamPRLinkStateNativeFirstFields) SlogArgs() []any {
 		"pull_requests", f.PullRequests,
 		"linked", f.Linked,
 		"suppressed_pull_requests", f.SuppressedPullRequests,
-		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
