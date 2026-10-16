@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func fulltextIndexRow(status string) indexStatus {
@@ -132,5 +133,67 @@ func TestFulltextQueryReadsTheStatusOnEveryQueryAndKeepsNoMemoOfAnEarlierOperati
 	}
 	if len(script.queryAts) != 2 || script.queryAts[0] != 1 || script.queryAts[1] != 3 {
 		t.Fatalf("status reads before each query = %v, want [1 3]: the first query found the index operational, then the status reads under construction and the second query must wait: the status is read on every query, an earlier OPERATIONAL is not remembered", script.queryAts)
+	}
+}
+
+func TestFulltextQueryStillHasTimeAfterAWaitUnderACallerDeadline(t *testing.T) {
+	logs := captureSlog(t)
+	var queryCtxErr error
+	queried := false
+	fake := &fakeConn{
+		indexesFunc: func(context.Context, string) ([]indexStatus, error) {
+			return []indexStatus{fulltextIndexRow("[Indexing] 1/2: UNDER CONSTRUCTION")}, nil
+		},
+		queryFunc: func(ctx context.Context, _, _ string, _ map[string]interface{}, _ bool) ([]row, error) {
+			queried = true
+			queryCtxErr = ctx.Err()
+			return nil, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	if _, _, err := adapter.fulltextSearchNodes(ctx, "graph", "org-1", "escalation", 10, temporalFilter{}); err != nil {
+		t.Fatalf("the query failed after the wait: %v", err)
+	}
+	if !queried || queryCtxErr != nil {
+		t.Fatalf("queried=%v, context error at the query = %v: the wait used up the caller's deadline", queried, queryCtxErr)
+	}
+	if spent := time.Since(began); spent > 300*time.Millisecond {
+		t.Fatalf("the wait took %v of a 400ms deadline, want at most half", spent)
+	}
+	if !strings.Contains(logs.String(), "still not operational") {
+		t.Fatalf("the bound was reached without the WARN:\n%s", logs.String())
+	}
+}
+
+func TestFulltextWaitBoundHoldsWhenTheStatusReadHangs(t *testing.T) {
+	logs := captureSlog(t)
+	queried := false
+	fake := &fakeConn{
+		indexesFunc: func(ctx context.Context, _ string) ([]indexStatus, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) {
+			queried = true
+			return nil, nil
+		},
+	}
+	adapter := newFakeAdapter(t, fake)
+	began := time.Now()
+	if _, _, err := adapter.fulltextSearchNodes(context.Background(), "graph", "org-1", "escalation", 10, temporalFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	spent := time.Since(began)
+	if !queried {
+		t.Fatal("the query did not run after a status read that never answered")
+	}
+	if spent < 900*time.Millisecond || spent > 1500*time.Millisecond {
+		t.Fatalf("the wait took %v with a 1s request timeout, want about 1s (the status read is inside the bound)", spent)
+	}
+	if !strings.Contains(logs.String(), "still not operational") {
+		t.Fatalf("the bound was reached without the WARN:\n%s", logs.String())
 	}
 }
