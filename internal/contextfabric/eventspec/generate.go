@@ -226,6 +226,20 @@ func goVarName(e Event) string {
 		return "EngineFactGateInfo"
 	case OrganizationSubjectRead.ID:
 		return "OrganizationSubjectRead"
+	case FactRead.ID:
+		return "FactRead"
+	case FactEvaluationCoverage.ID:
+		return "FactEvaluationCoverage"
+	case FactTableDeclaration.ID:
+		return "FactTableDeclaration"
+	case FactTableDeclarationsCapped.ID:
+		return "FactTableDeclarationsCapped"
+	case FactTableDeclarationRejected.ID:
+		return "FactTableDeclarationRejected"
+	case FactResultRejected.ID:
+		return "FactResultRejected"
+	case FactReadFailed.ID:
+		return "FactReadFailed"
 	case CohortRanked.ID:
 		return "CohortRanked"
 	case CohortDriverNarration.ID:
@@ -511,6 +525,8 @@ type jsonField struct {
 	Nullable         bool        `json:"nullable,omitempty"`
 	MaxItems         int         `json:"max_items,omitempty"`
 	MaxInt           *int        `json:"max_int,omitempty"`
+	JoinedMembers    []string    `json:"joined_members,omitempty"`
+	Pattern          string      `json:"pattern,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -537,6 +553,8 @@ func toJSONFields(fs []Field) []jsonField {
 			Nullable:         f.Nullable,
 			MaxItems:         f.MaxItems,
 			MaxInt:           f.MaxInt,
+			JoinedMembers:    f.JoinedMembers,
+			Pattern:          f.Pattern,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

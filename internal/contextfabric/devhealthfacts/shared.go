@@ -1357,6 +1357,7 @@ func mixReadFailure(action string, err error) error {
 		return &contextfabric.FactReadFailure{
 			State:  contextfabric.SourceUnavailable,
 			Reason: "devhealthfacts: " + action + " contended: its inputs changed during every read attempt; retry",
+			Class:  contextfabric.FactReadFailureContended,
 			Cause:  err,
 		}
 	}
@@ -1369,6 +1370,7 @@ func readFailure(action string, err error) error {
 		return &contextfabric.FactReadFailure{
 			State:  contextfabric.SourceUnavailable,
 			Reason: budgetRefusalReason(action, budget),
+			Class:  contextfabric.FactReadFailureBudgetExceeded,
 			Cause:  err,
 		}
 	}
@@ -1378,6 +1380,7 @@ func readFailure(action string, err error) error {
 	return &contextfabric.FactReadFailure{
 		State:  contextfabric.SourceUnavailable,
 		Reason: "devhealthfacts: " + action + " failed",
+		Class:  contextfabric.FactReadFailureReadFailed,
 		Cause:  err,
 	}
 }
@@ -1398,7 +1401,7 @@ func readFailure(action string, err error) error {
 func requireOrgID(orgID string) (string, error) {
 	orgID = strings.TrimSpace(orgID)
 	if orgID == "" {
-		return "", &contextfabric.FactReadFailure{State: contextfabric.SourceUnavailable, Reason: "devhealthfacts: authenticated organization is required"}
+		return "", &contextfabric.FactReadFailure{State: contextfabric.SourceUnavailable, Reason: "devhealthfacts: authenticated organization is required", Class: contextfabric.FactReadFailureOrganizationRequired}
 	}
 	return orgID, nil
 }
