@@ -2,7 +2,6 @@ package contextfabric
 
 import (
 	"context"
-	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -196,24 +195,13 @@ type InterpretationEnsembleEvent struct {
 	QuorumMet bool
 }
 
-// sortedFamilyDistribution renders SampleFamilies as a stable, sorted
-// slice of alternating family/count pairs for logging.
-//
-// Sorted because a map's iteration order is randomized in Go: logging it
-// directly would make two identical resolutions produce different log
-// lines, which breaks both grep-based operations and any log-diffing
-// regression check. Flat pairs rather than a nested object because slog's
-// JSON handler renders a []any of scalars as a plain array an operator can
-// read, without a per-event type.
-func sortedFamilyDistribution(distribution map[QuestionFamily]int) []any {
-	families := make([]QuestionFamily, 0, len(distribution))
-	for family := range distribution {
-		families = append(families, family)
-	}
-	sort.Slice(families, func(a, b int) bool { return families[a] < families[b] })
-	out := make([]any, 0, len(families)*2)
-	for _, family := range families {
-		out = append(out, string(family), distribution[family])
+// sampleFamilyCounts renders SampleFamilies as the family-to-count object the
+// question family resolution line carries (the JSON encoder orders object keys,
+// so two identical resolutions write identical lines).
+func sampleFamilyCounts(distribution map[QuestionFamily]int) map[string]int {
+	out := make(map[string]int, len(distribution))
+	for family, count := range distribution {
+		out[SanitizeLogAttr(string(family))] = count
 	}
 	return out
 }
