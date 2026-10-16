@@ -2161,6 +2161,49 @@ var PullRequestProjectNativeFirst = Event{
 	},
 }
 
+// ProjectStatusDrivers is the Info line of one project status driver decision: how many drivers were emitted or skipped, and which fact kinds were missing or partial and in which state. Counts and closed names only, never a value or a subject.
+var ProjectStatusDrivers = Event{
+	ID:                 "contextfabric.project_status_drivers",
+	Msg:                "context fabric project status drivers",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that builds project status drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_budget", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_id_clash", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverKindVocabulary()},
+		{Key: "missing_states", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverMissingStateVocabulary()},
+		{Key: "partial_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverKindVocabulary()},
+		{Key: "partial_states", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverPartialStateVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// TeamBlockersDrivers is the Info line of one team blockers driver decision: closed counts only, never a team, a count value or an id.
+var TeamBlockersDrivers = Event{
+	ID:                 "contextfabric.team_blockers_drivers",
+	Msg:                "context fabric team blockers drivers",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that builds team blockers drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_missing", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_zero", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_budget", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_id_clash", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_stale", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_duplicate", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 var (
 	familyAgreementClassArr   = contextfabric.FamilyAgreementClassVocabulary()
 	familyRouteSourceArr      = contextfabric.FamilyRouteSourceVocabulary()
@@ -4319,6 +4362,8 @@ var All = []Event{
 	TeamLinkedMixSet,
 	TeamPRLinkStateNativeFirst,
 	PullRequestProjectNativeFirst,
+	ProjectStatusDrivers,
+	TeamBlockersDrivers,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
