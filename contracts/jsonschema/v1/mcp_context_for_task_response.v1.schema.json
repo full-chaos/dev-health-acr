@@ -700,20 +700,6 @@
         }
       },
       "allOf": [
-          {
-            "if": {
-              "required": [
-                "cause_event"
-              ]
-            },
-            "then": {
-              "properties": {
-                "category": {
-                  "const": "cause"
-                }
-              }
-            }
-          },
         {
           "if": {
             "properties": {
@@ -726,6 +712,20 @@
             "properties": {
               "evidence_ref_ids": {
                 "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cause_event"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "cause"
               }
             }
           }
