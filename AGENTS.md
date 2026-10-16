@@ -172,9 +172,10 @@ make fullstack-opencode-e2e  # Live gate: Dev Health slice + ACR + real headless
 
 CI (`.github/workflows/ci.yml`) runs the same gates as `make verify` on pull requests and pushes
 to `main`, split across parallel jobs (`mirror-preflight`, `scripts`, `lint`, `docs-mermaid`,
-`unit` (five shards) with `reports`, `race` (four shards), the isolated race jobs `race-devhealthschema`,
+`unit` (nine shards), `race` (four shards), the isolated race jobs `race-devhealthschema`,
 `race-devhealthfacts`, `race-devhealthsource` and `race-factoracle`, `build`, `contracts`, and three
-container jobs) behind a single required `verify` gate job that checks every other job succeeded.
+container jobs) behind a single required `verify` gate job that merges the unit shards' coverage and
+JUnit reports and checks every other job succeeded.
 `devhealthfacts` and `devhealthsource` each race in two jobs, `-heavy` and the rest, split by test
 name through `scripts/ci/race-split.sh` (the heavy lists live beside it; the `rest` half skips them,
 so a new test cannot drop out). `docs-mermaid` renders every fenced mermaid block under `docs/**`;
