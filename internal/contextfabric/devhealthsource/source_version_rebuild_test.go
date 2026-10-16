@@ -51,7 +51,7 @@ func TestACheckpointFromThePreviousSourceVersionDemandsARebuild(t *testing.T) {
 		name, held string
 		want       bool
 	}{
-		{"the previous version", "devhealthsource.clickhouse.v13", true},
+		{"the previous version", "devhealthsource.clickhouse.v14", true},
 		{"the current version", devhealthsource.ClickHouseSourceVersion, false},
 	} {
 		backend := &versionCountingBackend{}
