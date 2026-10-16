@@ -51,12 +51,15 @@ GROUP BY lr.team_id
 ORDER BY lr.team_id`, limit)
 }
 
-// linkedPullRequestSetStatement is the distinct (repository id, PR number,
-// team id) of the pull requests linked to the issues of the {ids} teams' owned
-// projects, as three parallel arrays in one row.
+// linkedPullRequestSetStatement is the distinct link rows of the pull requests
+// linked to the issues of the {ids} teams' owned projects, as five parallel
+// arrays in one row: repository id, PR number, team id, the issue id of a row
+// below native (empty for a native row, whose issue is not needed) and the
+// row's tier rank. The fallback-only rule drops covered rows in Go
+// (dropCoveredLinks) before the set is sent.
 func linkedPullRequestSetStatement(bound factTimeBound) string {
-	return `SELECT groupArray(r), groupArray(n), groupArray(t) FROM (
-	SELECT DISTINCT toString(pr_repo_id) AS r, toString(pr_number) AS n, team_id AS t FROM ` + teamProjectLinkRowsSQL("ids", bound) + `
+	return `SELECT groupArray(r), groupArray(n), groupArray(t), groupArray(i), groupArray(k) FROM (
+	SELECT DISTINCT toString(pr_repo_id) AS r, toString(pr_number) AS n, team_id AS t, if(link_rank < 3, work_item_id, '') AS i, toUInt8(link_rank) AS k FROM ` + teamProjectLinkRowsSQL("ids", bound) + `
 )`
 }
 
