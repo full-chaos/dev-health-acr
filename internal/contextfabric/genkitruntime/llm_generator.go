@@ -36,6 +36,7 @@ var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
 const (
 	llmCallFailedMessage  = "context fabric model call failed"
 	llmReplyCutMessage    = "context fabric model reply hit the output cap"
+	llmSeedDroppedMessage = "context fabric model call sent without its seed"
 	llmDrawRejectedReason = "context fabric model reply failed the output schema"
 )
 
@@ -118,6 +119,13 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 	return runtime, nil
 }
 
+// seedAccepted reports whether the shared client of kind sends a seed: the
+// Chat Completions client does for local and Qwen; the Anthropic and Gemini
+// clients refuse one before any call.
+func seedAccepted(kind llm.Kind) bool {
+	return kind == llm.KindLocal || kind == llm.KindQwen
+}
+
 // seedOf reads the decoding seed out of generationRequest.Config, which
 // carries it in the shape chaos4631InterpretDecodingConfig builds.
 func seedOf(config any) *int64 {
@@ -141,12 +149,20 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 	if !ok {
 		return "", contextfabric.ModelUsage{}, fmt.Errorf("%w: no client for the requested model", contextfabric.ErrModelUnavailable)
 	}
+	seed := seedOf(request.Config)
+	if seed != nil && !seedAccepted(client.Kind()) {
+		// The client would refuse the whole call; the interpretation runs
+		// unseeded instead, as it would on a provider that ignores seed.
+		g.logger.DebugContext(ctx, llmSeedDroppedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())))
+		seed = nil
+	}
 	result, err := client.Complete(ctx, llm.Request{
 		System:          request.System,
 		Prompt:          request.Prompt,
 		Format:          &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire},
 		MaxOutputTokens: g.maxOutputTokens,
-		Seed:            seedOf(request.Config),
+		Seed:            seed,
 	})
 	if err != nil {
 		class, _ := llm.ClassOf(err)

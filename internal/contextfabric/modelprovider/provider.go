@@ -102,7 +102,7 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 		return nil, fmt.Errorf("initialize model runtime: %w", err)
 	}
 	logger.InfoContext(ctx, modelClientsBuiltMessage,
-		"provider", contextfabric.SanitizeLogAttr(cfg.Provider), "llm_kind", contextfabric.SanitizeLogAttr(string(llmKind)),
+		"provider", contextfabric.SanitizeLogAttr(cfg.Provider), "llm_kind", contextfabric.SanitizeLogAttr(string(kindFor(cfg.Provider))),
 		"model", contextfabric.SanitizeLogAttr(cfg.Model), "fallback_model", contextfabric.SanitizeLogAttr(cfg.FallbackModel),
 		"phrasing_model", contextfabric.SanitizeLogAttr(cfg.PhrasingModel), "temperature", contextfabric.SanitizeLogAttr("omitted"),
 		"output_cap", contextfabric.SanitizeLogAttr("omitted"), "max_output_tokens", cfg.MaxOutputTokens)
@@ -113,11 +113,23 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 // kind and models a model runtime was built with.
 const modelClientsBuiltMessage = "context fabric model clients built"
 
-// llmKind is the shared dev-health-go client every Provider namespace is
-// served by: the OpenAI-compatible Chat Completions client, the API the
-// Genkit compat_oai plugin spoke before it. Provider stays a namespace
-// recorded verbatim on receipts; it does not pick the wire API.
-const llmKind = llm.KindLocal
+// kindFor picks the shared dev-health-go client a Provider namespace is
+// served by. The namespaces that name a provider API the package has a
+// native client for get that client; every other namespace ("openai", a BYO
+// gateway name) gets the OpenAI-compatible Chat Completions client, the API
+// the Genkit compat_oai plugin spoke before it. Provider is still recorded
+// verbatim on receipts.
+func kindFor(provider string) llm.Kind {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case string(llm.KindAnthropic):
+		return llm.KindAnthropic
+	case string(llm.KindGemini):
+		return llm.KindGemini
+	case string(llm.KindQwen):
+		return llm.KindQwen
+	}
+	return llm.KindLocal
+}
 
 // newLLMClients builds one shared-package client per distinct non-empty
 // model, all on cfg's endpoint and credential. The configured model is
@@ -129,8 +141,10 @@ const llmKind = llm.KindLocal
 // times out with the per-attempt bound; the attempt's own context deadline
 // still governs first.
 func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, error) {
+	kind := kindFor(cfg.Provider)
 	baseURL := cfg.BaseURL
-	if baseURL == "" {
+	if baseURL == "" && kind == llm.KindLocal {
+		// A native kind with no BaseURL uses its provider's public endpoint.
 		baseURL = DefaultBaseURL
 	}
 	clients := genkitruntime.LLMClients{}
@@ -142,7 +156,7 @@ func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, erro
 			continue
 		}
 		client, err := llm.New(llm.Config{
-			Kind:        llmKind,
+			Kind:        kind,
 			APIKey:      llm.NewSecret(cfg.APIKey),
 			BaseURL:     baseURL,
 			Model:       model,

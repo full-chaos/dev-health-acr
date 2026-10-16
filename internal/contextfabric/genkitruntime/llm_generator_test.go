@@ -27,6 +27,7 @@ type llmReply struct {
 // i-th with replies[i], repeating the last.
 type scriptedLLM struct {
 	model   string
+	kind    llm.Kind
 	replies []llmReply
 
 	mu       sync.Mutex
@@ -41,7 +42,12 @@ func (s *scriptedLLM) Complete(_ context.Context, request llm.Request) (llm.Resu
 	return reply.result, reply.err
 }
 func (s *scriptedLLM) Model() string  { return s.model }
-func (s *scriptedLLM) Kind() llm.Kind { return llm.KindLocal }
+func (s *scriptedLLM) Kind() llm.Kind {
+	if s.kind == "" {
+		return llm.KindLocal
+	}
+	return s.kind
+}
 func (s *scriptedLLM) Close() error   { return nil }
 
 func (s *scriptedLLM) request(i int) llm.Request {
@@ -228,5 +234,25 @@ func TestLLMRequestCarriesTheConfiguredOutputCapAndLogsACutReply(t *testing.T) {
 		if !strings.Contains(logs.String(), "context fabric model reply hit the output cap") || !strings.Contains(logs.String(), "output_tokens=77") {
 			t.Fatalf("no cut-reply debug line: %s", logs.String())
 		}
+	}
+}
+
+func TestLLMInterpretSendsTheSeedOnlyToKindsThatTakeOne(t *testing.T) {
+	for _, tc := range []struct {
+		kind     llm.Kind
+		wantSeed bool
+	}{
+		{llm.KindLocal, true}, {llm.KindQwen, true}, {llm.KindGemini, false}, {llm.KindAnthropic, false}, {llm.KindOpenAI, false},
+	} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			client := &scriptedLLM{model: "gpt-5.6-luna", kind: tc.kind, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+			runtime := llmRuntime(t, LLMClients{"gpt-5.6-luna": client}, "")
+			if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if got := client.request(0).Seed != nil; got != tc.wantSeed {
+				t.Fatalf("seed sent = %v, want %v", got, tc.wantSeed)
+			}
+		})
 	}
 }
