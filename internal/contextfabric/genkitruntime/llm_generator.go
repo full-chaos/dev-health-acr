@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -18,6 +19,14 @@ import (
 // client sends one (the Anthropic Messages API requires a cap). The Chat
 // Completions clients are built to send none, as the Genkit transport did.
 const DefaultMaxOutputTokens = 32768
+
+// outputFormatName is the json_schema name the Genkit OpenAI-compatible
+// plugin always sent; kept so the wire request does not change.
+const outputFormatName = "output"
+
+// loggedFormatPaths remembers which operation/kind/path/reason was already
+// logged at Info in this process.
+var loggedFormatPaths sync.Map
 
 // cutStopReasons are the stop reasons each client reports for a reply cut at
 // its output cap (Chat Completions, Messages, Responses).
@@ -32,6 +41,8 @@ var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
 const (
 	llmCallFailedMessage  = "context fabric model call failed"
 	llmReplyCutMessage    = "context fabric model reply hit the output cap"
+	llmFormatPathMessage  = "context fabric model answer format path"
+	llmSeedDroppedMessage = "context fabric model call sent without its seed"
 	llmDrawRejectedReason = "context fabric model reply failed the output schema"
 )
 
@@ -118,6 +129,13 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 	return runtime, nil
 }
 
+// seedAccepted reports whether the shared client of kind sends a seed: the
+// Chat Completions client does for local and Qwen; the Anthropic and Gemini
+// clients refuse one before any call.
+func seedAccepted(kind llm.Kind) bool {
+	return kind == llm.KindLocal || kind == llm.KindQwen
+}
+
 // seedOf reads the decoding seed out of generationRequest.Config, which
 // carries it in the shape chaos4631InterpretDecodingConfig builds.
 func seedOf(config any) *int64 {
@@ -141,21 +159,50 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 	if !ok {
 		return "", contextfabric.ModelUsage{}, fmt.Errorf("%w: no client for the requested model", contextfabric.ErrModelUnavailable)
 	}
-	// The request Genkit sent, byte for byte: no schema on the wire (a JSON
-	// object answer), and the schema as text at the end of the system
-	// message. acr's output schemas use keywords OpenAI's strict mode does not
-	// support, so a strict json_schema changed the model's answers.
-	result, err := client.Complete(ctx, llm.Request{
-		System:          request.System + schema.instructions,
-		Prompt:          request.Prompt,
-		MaxOutputTokens: g.maxOutputTokens,
-		Seed:            seedOf(request.Config),
-	})
+	seed := seedOf(request.Config)
+	if seed != nil && !seedAccepted(client.Kind()) {
+		// The client would refuse the whole call; the interpretation runs
+		// unseeded instead, as it would on a provider that ignores seed.
+		g.logger.DebugContext(ctx, llmSeedDroppedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())))
+		seed = nil
+	}
+	if seed != nil && client.Kind() == llm.KindQwen {
+		// DashScope takes a seed in [0, 2^31) and Workers AI's Qwen models
+		// cap it too; folding keeps it derived from the question and the
+		// sample, so the ensemble's samples still draw distinct seeds.
+		folded := *seed % (1 << 31)
+		seed = &folded
+	}
+	call := llm.Request{Prompt: request.Prompt, MaxOutputTokens: g.maxOutputTokens, Seed: seed}
+	if client.Kind() == llm.KindAnthropic {
+		// Anthropic: the schema itself, as structured outputs or one tool
+		// call, picked by the client before the call.
+		call.System = request.System
+		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire}
+	} else {
+		// Chat Completions: the request Genkit sent, byte for byte. No schema
+		// on the wire (a JSON object answer) and the schema as text at the
+		// end of the system message: acr's output schemas use keywords
+		// OpenAI's strict mode refuses.
+		call.System = request.System + schema.instructions
+		call.Format = &llm.JSONFormat{Type: llm.FormatTypeJSONObject}
+	}
+	result, err := client.Complete(ctx, call)
 	if err != nil {
 		class, _ := llm.ClassOf(err)
 		g.logger.DebugContext(ctx, llmCallFailedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "error_class", contextfabric.SanitizeLogAttr(string(class)))
 		return "", contextfabric.ModelUsage{}, err
+	}
+	formatArgs := []any{"operation", contextfabric.SanitizeLogAttr(operation),
+		"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "format_path", contextfabric.SanitizeLogAttr(result.FormatPath),
+		"format_reason", contextfabric.SanitizeLogAttr(result.FormatReason)}
+	g.logger.DebugContext(ctx, llmFormatPathMessage, formatArgs...)
+	if _, seen := loggedFormatPaths.LoadOrStore(operation+"\x00"+string(client.Kind())+"\x00"+result.FormatPath+"\x00"+result.FormatReason, true); !seen {
+		// Once per process per operation and mode: which mode each
+		// provider and schema actually uses is visible at the default level.
+		g.logger.InfoContext(ctx, llmFormatPathMessage, formatArgs...)
 	}
 	if cutStopReasons[result.StopReason] {
 		outputTokens := 0
@@ -190,6 +237,7 @@ func llmUsage(usage llm.Usage) contextfabric.ModelUsage {
 func (g llmGenerator) check(ctx context.Context, operation, text string, schema outputSchema) (string, error) {
 	candidate := extractGenkitJSON(text)
 	reason := ""
+	var violations []string
 	switch {
 	case candidate == "":
 		reason = "empty"
@@ -201,14 +249,29 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 			reason = "not_json"
 		} else if !result.Valid() {
 			reason = "schema"
+			violations = schemaViolations(result)
 		}
 	}
 	if reason == "" {
 		return candidate, nil
 	}
 	g.logger.DebugContext(ctx, llmDrawRejectedReason, "operation", contextfabric.SanitizeLogAttr(operation),
-		"reason", contextfabric.SanitizeLogAttr(reason), "reply_bytes", len(text))
+		"reason", contextfabric.SanitizeLogAttr(reason), "reply_bytes", len(text),
+		"violations", contextfabric.SanitizeLogStrings(violations))
 	return candidate, fmt.Errorf("%w: %s", errOutputSchemaMismatch, reason)
+}
+
+// schemaViolations names where a reply broke the output schema: the JSON
+// path and the rule only, never a value, at most five.
+func schemaViolations(result *gojsonschema.Result) []string {
+	var out []string
+	for _, violation := range result.Errors() {
+		if len(out) == 5 {
+			break
+		}
+		out = append(out, violation.Field()+":"+violation.Type())
+	}
+	return out
 }
 
 func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
