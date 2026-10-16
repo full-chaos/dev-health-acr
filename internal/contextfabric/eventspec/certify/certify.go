@@ -329,6 +329,9 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
+		if err := validateNoUndeclaredKeys(a.Event, l); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 		if err := validateLevel(a.Event, l); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
@@ -549,6 +552,9 @@ func certifyBoundedMany(log *Log, a Assertion) (Result, error) {
 		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
+		if err := validateNoUndeclaredKeys(a.Event, l); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 		if err := validateLevel(a.Event, l); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
@@ -695,6 +701,9 @@ func CertifyBoundedManyCount(log *Log, ev eventspec.Event, scope map[string]any)
 		// selects a single line to check, so without its own loop-covered
 		// check every bounded-many line's own production visibility went
 		// completely unverified by this entry point.
+		if err := validateNoUndeclaredKeys(ev, l); err != nil {
+			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 		if err := validateLevel(ev, l); err != nil {
 			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
@@ -895,6 +904,19 @@ func requireScopeValueTypes(ev eventspec.Event, m map[string]any) error {
 // FIRST place. Called from the SAME per-line loop as validateFields in
 // every one of the three call sites below, so a caller can never reach one
 // check without the other.
+func validateNoUndeclaredKeys(ev eventspec.Event, line Line) error {
+	declared := map[string]bool{"time": true, "level": true, "msg": true}
+	for _, field := range ev.Fields {
+		declared[field.Key] = true
+	}
+	for key := range line {
+		if !declared[key] {
+			return fmt.Errorf("certify: %s: the line carries key %q, which the declaration does not list -- a line may carry only declared keys", ev.ID, key)
+		}
+	}
+	return nil
+}
+
 func validateLevel(ev eventspec.Event, line Line) error {
 	wantLevel := strings.ToUpper(string(ev.Level))
 	gotLevel, _ := line["level"].(string)
