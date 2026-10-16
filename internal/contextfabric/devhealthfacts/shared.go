@@ -1246,7 +1246,12 @@ import (
 // the loss (daily_health_omitted_count) and read_facts marks only that subject
 // truncated, and only when the table is served. An answer saved under v241
 // can carry a truncated state for every team of the read.
-const QueryVersion = "devhealthfacts.clickhouse.v242"
+//
+// v242 -> v243: the compounding-risk operational-deficiency fact serves
+// rule_basis_as_of_day, the calendar day of the score the rule read, when the
+// rule's rationale names it. An answer saved under v242 states the rule basis
+// without that day.
+const QueryVersion = "devhealthfacts.clickhouse.v243"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
