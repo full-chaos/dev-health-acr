@@ -250,6 +250,8 @@ func goVarName(e Event) string {
 		return "PullRequestProjectNativeFirst"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
+	case HealthDailyHealthCapCut.ID:
+		return "HealthDailyHealthCapCut"
 	case FactBytesBoundExceeded.ID:
 		return "FactBytesBoundExceeded"
 	case SubjectIDShapeRejected.ID:
