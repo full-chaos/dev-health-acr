@@ -55,7 +55,8 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 		SELECT l.repo_id, l.pr_number
 		FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native
 			FROM work_graph_issue_pr FINAL
-			WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`) AS l
+			WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr
+				WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`)) AS l
 		WHERE l.repo_id IN `+teamPRLinkRepositorySet+`
 			AND `+linkTierRankSQL+` > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
 	)) AS linked

@@ -117,6 +117,12 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	s.pullRequest("repo-coveredelsewhere", 1, inWindow, nil)
 	s.link("repo-coveredelsewhere", "issue-covered-elsewhere", 1, "explicit_text")
 	s.link("repo-holder", "issue-covered-elsewhere", 7, "native")
+	// A pull request with a native link and a heuristic link counts once, as
+	// linked (the reader asks whether the pull request has any admitted link).
+	s.team("team-bothtiers", "repo-bothtiers")
+	s.pullRequest("repo-bothtiers", 1, inWindow, nil)
+	s.link("repo-bothtiers", "issue-both-native", 1, "native")
+	s.link("repo-bothtiers", "issue-both-heuristic", 1, "heuristic")
 	// A fallback-only issue still links its pull request.
 	s.team("team-fallbackonly", "repo-fallbackonly")
 	s.pullRequest("repo-fallbackonly", 1, inWindow, nil)
@@ -128,7 +134,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 	}
 	seam := &seamCapture{registry: registry.WithoutScopeExpansion()}
 	reader := directread.NewFactsReader(directread.NewSubjectGate(admitAllGraph{}, nil), directread.NewFactReader(seam), nil)
-	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly", "team-coveredhere", "team-coveredelsewhere", "team-fallbackonly"}
+	teams := []string{"team-nolink", "team-partial", "team-quiet", "team-oldpr", "team-prtyped", "team-badtier", "team-open", "team-staleonly", "team-coveredhere", "team-coveredelsewhere", "team-fallbackonly", "team-bothtiers"}
 	requested := make([]directread.RequestSubject, 0, len(teams))
 	for _, team := range teams {
 		requested = append(requested, directread.RequestSubject{Kind: "team", CanonicalID: teamSubject(team).CanonicalID})
@@ -162,6 +168,7 @@ func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoun
 		"team-coveredhere":      {token, "1 pull request"},
 		"team-coveredelsewhere": {token, "1 pull request"},
 		"team-fallbackonly":     {old, ""},
+		"team-bothtiers":        {old, ""},
 	}
 	reasons := map[string]string{}
 	for _, row := range response.Coverage {
