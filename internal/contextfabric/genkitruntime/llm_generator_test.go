@@ -276,3 +276,23 @@ func TestLLMInterpretFoldsTheQwenSeedIntoDashScopesRange(t *testing.T) {
 		t.Fatalf("qwen seed = %v, want %d folded to [0, 2^31)", sent, full)
 	}
 }
+
+func TestLLMSchemaRejectionLogsWhereTheReplyBrokeTheSchemaWithoutItsText(t *testing.T) {
+	var logs strings.Builder
+	gen := llmGenerator{logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	var err error
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "SECRET_REPLY_VALUE"
+	gen.clients = LLMClients{"m": &scriptedLLM{model: "m", replies: []llmReply{{result: llm.Result{Text: `{"shape":"` + secret + `"}`}}}}}
+	if _, _, err := gen.Interpret(context.Background(), generationRequest{Model: "m"}); err == nil {
+		t.Fatal("an invalid reply was accepted")
+	}
+	if !strings.Contains(logs.String(), "violations=") || !strings.Contains(logs.String(), "(root):required") || !strings.Contains(logs.String(), "shape:") {
+		t.Fatalf("no violation paths in: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), secret) {
+		t.Fatalf("the reply's text reached the log: %s", logs.String())
+	}
+}

@@ -210,6 +210,7 @@ func llmUsage(usage llm.Usage) contextfabric.ModelUsage {
 func (g llmGenerator) check(ctx context.Context, operation, text string, schema outputSchema) (string, error) {
 	candidate := extractGenkitJSON(text)
 	reason := ""
+	var violations []string
 	switch {
 	case candidate == "":
 		reason = "empty"
@@ -221,14 +222,29 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 			reason = "not_json"
 		} else if !result.Valid() {
 			reason = "schema"
+			violations = schemaViolations(result)
 		}
 	}
 	if reason == "" {
 		return candidate, nil
 	}
 	g.logger.DebugContext(ctx, llmDrawRejectedReason, "operation", contextfabric.SanitizeLogAttr(operation),
-		"reason", contextfabric.SanitizeLogAttr(reason), "reply_bytes", len(text))
+		"reason", contextfabric.SanitizeLogAttr(reason), "reply_bytes", len(text),
+		"violations", contextfabric.SanitizeLogStrings(violations))
 	return candidate, fmt.Errorf("%w: %s", errOutputSchemaMismatch, reason)
+}
+
+// schemaViolations names where a reply broke the output schema: the JSON
+// path and the rule only, never a value, at most five.
+func schemaViolations(result *gojsonschema.Result) []string {
+	var out []string
+	for _, violation := range result.Errors() {
+		if len(out) == 5 {
+			break
+		}
+		out = append(out, violation.Field()+":"+violation.Type())
+	}
+	return out
 }
 
 func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
