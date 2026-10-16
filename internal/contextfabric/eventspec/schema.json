@@ -10077,6 +10077,57 @@
     ]
   },
   {
+    "id": "devhealthfacts.rule_basis_day_absent",
+    "msg": "devhealthfacts.rule_basis_day_absent",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per fired compounding-risk rule row without a day.",
+    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rule_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.rule_basis_day_invalid",
+    "msg": "devhealthfacts.rule_basis_day_invalid",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per fired compounding-risk rule row with an invalid day.",
+    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rule_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "day",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.subject_id_shape_rejected",
     "msg": "context_fabric_subject_id_shape_rejected",
     "level": "warn",
