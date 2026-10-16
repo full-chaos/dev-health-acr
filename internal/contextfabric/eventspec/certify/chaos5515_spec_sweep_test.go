@@ -583,7 +583,9 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		walk(ev.Fields, nil)
 	}
 
-	// The event-level "duplicate" cell: two identical lines in scope, per
+	// The event-level "duplicate" cell (two identical lines in scope are a
+	// legitimate payload only for zero_or_many_per_request, whose reads can
+	// write the same line): two identical lines in scope, per
 	// event, refused regardless of Multiplicity (already independently
 	// pinned by name -- TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent /
 	// TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent -- this row makes
@@ -601,7 +603,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			t.Fatalf("Parse() duplicate-line fixture for %s: %v", ev.ID, err)
 		}
 		_, err = certifyRecovered(t, log, Assertion{Event: ev, Want: attribution})
-		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "duplicate", applicable: true, wantAccept: false, gotAccept: err == nil})
+		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "duplicate", applicable: true, wantAccept: ev.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest, gotAccept: err == nil})
 	}
 
 	// r3: the multiplicity domain -- every event, generated from
@@ -886,7 +888,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// generated over every such event.
 	zeroOrOneRequestAbsentRows := 0
 	for _, ev := range eventspec.All {
-		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest {
 			continue
 		}
 		zeroOrOneRequestAbsentRows++

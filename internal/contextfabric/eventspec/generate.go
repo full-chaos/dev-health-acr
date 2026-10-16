@@ -220,6 +220,10 @@ func goVarName(e Event) string {
 		return "FactScopeExpansionDecision"
 	case FactRootRefused.ID:
 		return "FactRootRefused"
+	case EngineFactGateWarn.ID:
+		return "EngineFactGateWarn"
+	case EngineFactGateInfo.ID:
+		return "EngineFactGateInfo"
 	case OrganizationSubjectRead.ID:
 		return "OrganizationSubjectRead"
 	case CohortRanked.ID:
@@ -516,6 +520,7 @@ type jsonEvent struct {
 	Multiplicity       string      `json:"multiplicity"`
 	Attribution        []string    `json:"attribution"`
 	BoundedAggregation string      `json:"bounded_aggregation"`
+	MaxLinesPerScope   int         `json:"max_lines_per_scope,omitempty"`
 	Fields             []jsonField `json:"fields"`
 }
 
@@ -548,6 +553,7 @@ func generateSchema() ([]byte, error) {
 			Multiplicity:       string(e.Multiplicity),
 			Attribution:        e.Attribution,
 			BoundedAggregation: e.BoundedAggregation,
+			MaxLinesPerScope:   e.MaxLinesPerScope,
 			Fields:             toJSONFields(e.Fields),
 		})
 	}

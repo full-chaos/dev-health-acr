@@ -77,6 +77,39 @@ func (l *Log) linesWithMsg(msg string) []Line {
 	return out
 }
 
+// linesOfEvent is the lines carrying ev's message, minus the lines that belong
+// to a sibling event: one message written at two levels is two declared events,
+// and a line written at a sibling's level that satisfies the sibling's own
+// declaration is the sibling's line. A sibling-level line that does not satisfy
+// the sibling's declaration stays in scope, so a misleveled line is refused
+// (Certify) or counted as present (CertifyAbsent) rather than hidden.
+func (l *Log) linesOfEvent(ev eventspec.Event) []Line {
+	var siblings []eventspec.Event
+	for _, other := range eventspec.All {
+		if other.Msg == ev.Msg && other.ID != ev.ID && other.Level != ev.Level {
+			siblings = append(siblings, other)
+		}
+	}
+	var out []Line
+	for _, line := range l.linesWithMsg(ev.Msg) {
+		if belongsToSibling(siblings, line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func belongsToSibling(siblings []eventspec.Event, line Line) bool {
+	level, _ := line["level"].(string)
+	for _, sibling := range siblings {
+		if strings.EqualFold(level, string(sibling.Level)) && validateFields(sibling.Fields, line, sibling.ID) == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // LinesWithMsg is linesWithMsg, exported for a caller that needs to read a
 // line this package has not (yet) declared as an eventspec.Event -- a
 // decision-graph reconstruction that walks pre-entry/pre-decision/
@@ -130,7 +163,7 @@ func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool,
 	switch m {
 	case eventspec.MultiplicityExactlyOnePerPass, eventspec.MultiplicityZeroOrOnePerPass:
 		return true, true
-	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest:
+	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest, eventspec.MultiplicityZeroOrManyPerRequest:
 		return false, true
 	default:
 		// MultiplicityBoundedManyPerPass is NOT handled here: whether it
@@ -282,7 +315,7 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		requestScope[attrKey] = a.Want[attrKey]
 	}
 	var scoped []Line
-	for _, line := range log.linesWithMsg(a.Event.Msg) {
+	for _, line := range log.linesOfEvent(a.Event) {
 		if scopeMatch(a.Event, requestScope, line) {
 			scoped = append(scoped, line)
 		}
@@ -316,6 +349,36 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			}
 			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want exactly 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
+		}
+		if a.Event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
+			if a.Event.MaxLinesPerScope <= 0 {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares no MaxLinesPerScope bound", a.Event.ID)
+			}
+			if len(scoped) > a.Event.MaxLinesPerScope {
+				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q for this attempt, over the declared bound of %d", a.Event.ID, len(scoped), a.Event.Msg, a.Event.MaxLinesPerScope)
+			}
+			var matched []Line
+			for _, candidate := range scoped {
+				all := true
+				for key, want := range a.Want {
+					if !jsonEqual(want, candidate[key]) {
+						all = false
+						break
+					}
+				}
+				if all {
+					matched = append(matched, candidate)
+				}
+			}
+			if len(matched) == 0 {
+				return Result{}, fmt.Errorf("certify: %s: Want matches none of the %d lines with msg %q for this attempt", a.Event.ID, len(scoped), a.Event.Msg)
+			}
+			for _, other := range matched[1:] {
+				if !samePayload(matched[0], other) {
+					return Result{}, fmt.Errorf("certify: %s: Want singles out %d different lines of the %d with msg %q for this attempt, want one payload", a.Event.ID, len(matched), len(scoped), a.Event.Msg)
+				}
+			}
+			scoped = matched[:1]
 		}
 		if len(scoped) > 1 {
 			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
@@ -679,7 +742,7 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	if err := requireCanonicalEvent(ev); err != nil {
 		return err
 	}
-	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest {
 		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass or zero_or_one_per_request -- CertifyAbsent only applies to one of those two", ev.ID, ev.Multiplicity)
 	}
 	for _, attrKey := range ev.Attribution {
@@ -697,7 +760,7 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	} else if _, ok := attribution["pass"]; ok {
 		return fmt.Errorf("certify: %s: attribution must NOT include \"pass\" -- a zero_or_one_per_request event has no pass concept, its absence is asserted for the whole request", ev.ID)
 	}
-	for _, line := range log.linesWithMsg(ev.Msg) {
+	for _, line := range log.linesOfEvent(ev) {
 		if scopeMatch(ev, attribution, line) {
 			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt (pass=%v), want 0 (asserted absent)", ev.ID, ev.Msg, attribution["pass"])
 		}
@@ -1054,4 +1117,22 @@ func declaresKey(fields []eventspec.Field, key string) bool {
 		}
 	}
 	return false
+}
+
+// samePayload reports whether two lines carry the same values for every key but
+// the timestamp: reads that wrote identical lines are one payload to certify.
+func samePayload(a, b Line) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if key == "time" {
+			continue
+		}
+		other, ok := b[key]
+		if !ok || !reflect.DeepEqual(value, other) {
+			return false
+		}
+	}
+	return true
 }

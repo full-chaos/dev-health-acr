@@ -2518,6 +2518,208 @@
     ]
   },
   {
+    "id": "contextfabric.engine_fact_gate_info",
+    "msg": "context fabric engine fact gate",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
+    "max_lines_per_scope": 3,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "engine_fact_read"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "clean",
+          "filtered"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "unseen_subjects_withheld"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_withheld_from",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.engine_fact_gate_warn",
+    "msg": "context fabric engine fact gate",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per gated engine fact read of a restricted caller: the main read, the group read and the period delta read, so at most engineFactGateReadsPerRequest lines per request.",
+    "max_lines_per_scope": 3,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "engine_fact_read"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "filtered",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unseen_subjects_withheld",
+          "undeclared_fields_removed",
+          "authorization_failed",
+          "canceled"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_withheld_from",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.evidence_expansion",
     "msg": "context fabric evidence expansion",
     "level": "info",
@@ -2753,7 +2955,6 @@
           "organization_mismatch",
           "subject_denied",
           "subject_absent",
-          "group_unproven",
           "graph_not_projected"
         ]
       },
