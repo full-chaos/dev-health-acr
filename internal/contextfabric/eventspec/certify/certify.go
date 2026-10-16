@@ -354,8 +354,11 @@ func Certify(log *Log, a Assertion) (Result, error) {
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
 		if a.Event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
-			if a.Event.MaxLinesPerScope <= 0 {
-				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares no MaxLinesPerScope bound", a.Event.ID)
+			if a.Event.MaxLinesPerScope <= 0 && a.Event.DataDependentBound == "" {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares neither MaxLinesPerScope nor DataDependentBound", a.Event.ID)
+			}
+			if a.Event.MaxLinesPerScope > 0 && a.Event.DataDependentBound != "" {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares both MaxLinesPerScope and DataDependentBound", a.Event.ID)
 			}
 			family := 0
 			for _, line := range log.linesWithMsg(a.Event.Msg) {
@@ -363,10 +366,10 @@ func Certify(log *Log, a Assertion) (Result, error) {
 					family++
 				}
 			}
-			if family > a.Event.MaxLinesPerScope {
+			if a.Event.MaxLinesPerScope > 0 && family > a.Event.MaxLinesPerScope {
 				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q (every level) for this attempt, over the declared bound of %d", a.Event.ID, family, a.Event.Msg, a.Event.MaxLinesPerScope)
 			}
-			if len(scoped) > a.Event.MaxLinesPerScope {
+			if a.Event.MaxLinesPerScope > 0 && len(scoped) > a.Event.MaxLinesPerScope {
 				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q for this attempt, over the declared bound of %d", a.Event.ID, len(scoped), a.Event.Msg, a.Event.MaxLinesPerScope)
 			}
 			var matched []Line

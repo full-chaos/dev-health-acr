@@ -121,7 +121,7 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 	if suppressed > 0 {
 		outcome = "covered_fallback_links_suppressed"
 	}
-	slog.InfoContext(ctx, "devhealthfacts.team_pr_link_state_native_first", "outcome", contextfabric.SanitizeLogAttr(outcome), "repositories", len(sorted), "pull_requests", totalPullRequests, "linked", totalLinked, "suppressed_pull_requests", suppressed)
+	slog.InfoContext(ctx, "devhealthfacts.team_pr_link_state_native_first", append([]any{"outcome", contextfabric.SanitizeLogAttr(outcome), "repositories", len(sorted), "pull_requests", totalPullRequests, "linked", totalLinked, "suppressed_pull_requests", suppressed}, requestIDLogAttrs(ctx)...)...)
 	return pullRequests, linked, nil
 }
 
