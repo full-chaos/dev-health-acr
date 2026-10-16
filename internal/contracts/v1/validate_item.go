@@ -28,7 +28,7 @@ func (i ContextPacketItem) validate(open bool) error {
 	if !validItemEnums(i, open) || !validScope(i.ValidityScope) || !validRelatedEntities(i.RelatedEntities) || !validEvidenceIDs(i.EvidenceRefIDs) {
 		return fmt.Errorf("context packet item violates v1 bounds")
 	}
-	if e := i.CauseEvent; e != nil && (!stringLengthBetween(e.EntityType, 1, 100) || !stringLengthBetween(e.EntityID, 1, 1024) || e.OccurredAt.IsZero()) {
+	if e := i.CauseEvent; e != nil && (i.Category != CategoryCause || !stringLengthBetween(e.EntityType, 1, 100) || !stringLengthBetween(e.EntityID, 1, 1024) || e.OccurredAt.IsZero()) {
 		return fmt.Errorf("context packet item cause_event violates v1 bounds")
 	}
 	if i.ClaimKind == ClaimObserved && len(i.EvidenceRefIDs) == 0 {

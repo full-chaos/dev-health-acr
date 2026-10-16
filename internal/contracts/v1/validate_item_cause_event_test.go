@@ -25,6 +25,12 @@ func TestContextPacketItemCauseEventIsOptionalAndBounded(t *testing.T) {
 	if err := item.Validate(); err != nil {
 		t.Fatalf("item with cause_event: %v", err)
 	}
+	item.CauseEvent = &CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}
+	item.Category = CategoryState
+	if err := item.Validate(); err == nil {
+		t.Errorf("a cause_event on a state item validates")
+	}
+	item.Category = CategoryCause
 	for name, event := range map[string]*CauseEvent{
 		"no type":   {EntityID: "d-1", OccurredAt: at},
 		"no id":     {EntityType: "deployment", OccurredAt: at},

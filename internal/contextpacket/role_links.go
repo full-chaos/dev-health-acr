@@ -1,6 +1,7 @@
 package contextpacket
 
 import (
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -363,6 +364,13 @@ func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 		cause.why, cause.claim, cause.cites, cause.subRank, cause.event = link.why, link.claim, link.cites, link.subRank, link.event
 		resolver[id] = cause
 	}
+	withEvent := 0
+	for _, cause := range resolver {
+		if cause.event != nil {
+			withEvent++
+		}
+	}
+	slog.Info("context packet cause events", "event", "cause_events_attached", "causes", len(resolver), "with_event", withEvent)
 	for id := range activeBlockerRefs(evidence) {
 		resolver[id] = pressureRule()
 	}
