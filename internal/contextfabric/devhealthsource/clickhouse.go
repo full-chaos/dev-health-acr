@@ -143,11 +143,12 @@ const SourceName = "dev_health_clickhouse"
 // mappings that ended before the roll are behind every checkpoint; the
 // rebuild re-projects both.)
 //
-// (v14, one PART_OF edge per work item: a re-parent, a cleared parent and a
-// parent id that stops naming one parent left the old edge open, and the
-// producer now retracts it per child (falkorgraph retractOpenEdges). Edges
-// projected before the roll are behind every checkpoint; the rebuild
-// re-asserts each child and removes the stale ones.)
+// (v14, deployment-incident edges per repository: the CORRELATED_WITH_INCIDENT
+// edge id derives from the deployment's canonical id, which names its
+// repository (identity.RelationshipFamilyDeploymentIncident), not from the
+// ops edge_id, which two repositories that share a deployment_id share. The
+// source table is keyed by repository as well, one row for each pair.
+// Already-projected edges carry the old id; the rebuild re-projects them.)
 const ClickHouseSourceVersion = "devhealthsource.clickhouse.v14"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps

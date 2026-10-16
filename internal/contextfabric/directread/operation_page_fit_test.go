@@ -442,7 +442,7 @@ func TestEveryOperationIsClassifiedForTheBudgetRule(t *testing.T) {
 		"catalogValues":                  "",
 		"cognitiveLoad":                  "",
 		"compoundingRisk":                "",
-		"home":                           "",
+		"home":                           "home.signals",
 		"investmentBreakdown":            "",
 		"investmentFull":                 "",
 		"recommendations":                "",

@@ -223,7 +223,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		"operational_incidents":                "incident:incident-parity-1",
 		"work_item_dependencies":               workItemDependencyRelationshipID,
 		"work_items_hierarchy":                 workItemHierarchyRelationshipID,
-		"work_graph_deployment_incident_edges": "relationship:deployment_incident:edge-parity-1",
+		"work_graph_deployment_incident_edges": identity.DeriveRelationship(identity.RelationshipFamilyDeploymentIncident, "deployment.v2:"+repoID+":deploy-parity-1", "incident:incident-parity-1", "CORRELATED_WITH_INCIDENT"),
 		"git_pull_request_reviews":             "pull_request_review.v2:" + repoID + ":4242:review-parity-1",
 		"ci_pipeline_runs":                     "ci_pipeline_run.v2:" + repoID + ":run-parity-1",
 	}

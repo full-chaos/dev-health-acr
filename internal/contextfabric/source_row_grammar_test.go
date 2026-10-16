@@ -588,8 +588,8 @@ func TestSourceRowGrammarsAreInjective(t *testing.T) {
 }
 
 // The key check sees a dropped key column: deployment-incident.v2 without
-// its source would name one ref for a native and a heuristic row of one
-// (deployment, incident). Planted here, seen failing.
+// its deployment id would name one ref for every deployment of an incident in
+// a repository. Planted here, seen failing.
 func TestSourceRowKeyCheckSeesADroppedKeyColumn(t *testing.T) {
 	for _, g := range producerGrammars() {
 		if g.kind != contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2 || g.shape != "mint/4" {
@@ -598,12 +598,12 @@ func TestSourceRowKeyCheckSeesADroppedKeyColumn(t *testing.T) {
 		if ok, why := passes(t, g); !ok {
 			t.Fatalf("the real grammar fails: %s", why)
 		}
-		g.keyColumns = []string{"repo_id", "deployment_id", "incident_id"}
-		if gaps := keyGaps(t, g); len(gaps) != 1 || gaps[0] != "source" {
-			t.Fatalf("a grammar without source: gaps %v, want [source]", gaps)
+		g.keyColumns = []string{"repo_id", "incident_id", "source"}
+		if gaps := keyGaps(t, g); len(gaps) != 1 || gaps[0] != "deployment_id" {
+			t.Fatalf("a grammar without deployment_id: gaps %v, want [deployment_id]", gaps)
 		}
 		if ok, _ := passes(t, g); ok {
-			t.Fatal("a grammar without source passed")
+			t.Fatal("a grammar without deployment_id passed")
 		}
 		return
 	}

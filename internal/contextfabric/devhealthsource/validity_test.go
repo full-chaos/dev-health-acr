@@ -458,7 +458,7 @@ func TestF4_DeploymentIncidentEdgeDerivesItsWindowFromBothEndpoints(t *testing.T
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:deployment_incident:edge-1")
+	edge := relationshipByID(t, batch, identity.DeriveRelationship(identity.RelationshipFamilyDeploymentIncident, "deployment.v2:repo-1:deploy-1", "incident:incident-1", "CORRELATED_WITH_INCIDENT"))
 	requireWindow(t, "deployment_incident", edge.ValidFrom, edge.ValidTo, &incidentStarted, &incidentResolved)
 }
 
@@ -481,7 +481,7 @@ func TestF4_DeploymentIncidentEdgeStaysUnboundedWhenEndpointsDoNotResolve(t *tes
 	}
 	batch := projectOneBatch(t, tables)
 
-	edge := relationshipByID(t, batch, "relationship:deployment_incident:edge-1")
+	edge := relationshipByID(t, batch, identity.DeriveRelationship(identity.RelationshipFamilyDeploymentIncident, "deployment.v2:repo-1:deploy-1", "incident:incident-1", "CORRELATED_WITH_INCIDENT"))
 	requireWindow(t, "deployment_incident", edge.ValidFrom, edge.ValidTo, nil, nil)
 }
 

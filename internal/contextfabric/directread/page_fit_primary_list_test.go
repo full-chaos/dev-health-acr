@@ -262,10 +262,7 @@ func TestTheDataCatalogNamesThePrimaryListOfAMultiListOperation(t *testing.T) {
 	}
 	got := directread.BuildDataCatalog(cat, caller, parsed)
 	for _, op := range got.Operations.Operations {
-		want := ""
-		if op.Name == "hotspots" {
-			want = "hotspots.rows"
-		}
+		want := map[string]string{"hotspots": "hotspots.rows", "home": "home.signals"}[op.Name]
 		if op.PrimaryList != want {
 			t.Fatalf("%s: primary_list %q, want %q", op.Name, op.PrimaryList, want)
 		}
