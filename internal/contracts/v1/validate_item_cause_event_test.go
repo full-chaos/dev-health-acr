@@ -2,9 +2,13 @@ package v1
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 )
 
 func TestContextPacketItemCauseEventIsOptionalAndBounded(t *testing.T) {
@@ -39,6 +43,92 @@ func TestContextPacketItemCauseEventIsOptionalAndBounded(t *testing.T) {
 		item.CauseEvent = event
 		if err := item.Validate(); err == nil {
 			t.Errorf("%s: a cause_event that violates the bounds validates", name)
+		}
+	}
+}
+
+func TestContextPacketItemCauseEventSchemaMatchesValidator(t *testing.T) {
+	at := time.Date(2026, 9, 12, 9, 30, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		category PacketCategory
+		event    CauseEvent
+		valid    bool
+	}{
+		{"cause deployment", CategoryCause, CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}, true},
+		{"cause repository", CategoryCause, CauseEvent{EntityType: "repository", EntityID: "r-1", OccurredAt: at}, false},
+		{"state deployment", CategoryState, CauseEvent{EntityType: "deployment", EntityID: "d-1", OccurredAt: at}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := validItem()
+			item.Category = tc.category
+			item.CauseEvent = &tc.event
+			goErr := item.Validate()
+			encoded, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schemaErr := contractcheck.ValidateSerialized("", "context_packet_item.v1.schema.json", encoded)
+			if (goErr == nil) != tc.valid || (schemaErr == nil) != tc.valid {
+				t.Fatalf("valid=%v want %v: go=%v schema=%v", tc.valid, tc.name, goErr, schemaErr)
+			}
+		})
+	}
+}
+
+func TestMCPResponseSchemasPinCauseEventType(t *testing.T) {
+	for _, rel := range []string{
+		filepath.Join("..", "..", "..", "contracts", "jsonschema", "v1", "mcp_context_for_task_response.v1.schema.json"),
+		filepath.Join("..", "..", "mcp", "schemas", "mcp_context_for_task_response.v1.schema.json"),
+	} {
+		raw, err := os.ReadFile(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		found, conditionals := 0, 0
+		var walk func(v any)
+		walk = func(v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				if ce, ok := x["cause_event"].(map[string]any); ok {
+					found++
+					props, _ := ce["properties"].(map[string]any)
+					et, _ := props["entity_type"].(map[string]any)
+					if et["const"] != "deployment" {
+						t.Errorf("%s: cause_event.entity_type not pinned to deployment: %v", rel, et)
+					}
+				}
+				if cond, ok := x["if"].(map[string]any); ok {
+					if req, _ := cond["required"].([]any); len(req) == 1 && req[0] == "cause_event" {
+						conditionals++
+						then, _ := x["then"].(map[string]any)
+						props, _ := then["properties"].(map[string]any)
+						cat, _ := props["category"].(map[string]any)
+						if cat["const"] != "cause" {
+							t.Errorf("%s: cause_event conditional does not require category cause: %v", rel, cat)
+						}
+					}
+				}
+				for _, c := range x {
+					walk(c)
+				}
+			case []any:
+				for _, c := range x {
+					walk(c)
+				}
+			}
+		}
+		walk(doc)
+		if conditionals != 1 {
+			t.Errorf("%s: cause_event conditionals = %d, want 1", rel, conditionals)
+		}
+		if found != 1 {
+			t.Errorf("%s: cause_event definitions = %d, want 1", rel, found)
 		}
 	}
 }

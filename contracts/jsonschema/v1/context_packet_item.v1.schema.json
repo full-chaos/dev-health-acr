@@ -189,9 +189,7 @@
       ],
       "properties": {
         "entity_type": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 100
+          "const": "deployment"
         },
         "entity_id": {
           "type": "string",
@@ -207,6 +205,20 @@
   },
   "$id": "https://contracts.fullchaos.dev/acr/v1/context_packet_item.v1.schema.json",
   "allOf": [
+      {
+        "if": {
+          "required": [
+            "cause_event"
+          ]
+        },
+        "then": {
+          "properties": {
+            "category": {
+              "const": "cause"
+            }
+          }
+        }
+      },
     {
       "if": {
         "properties": {

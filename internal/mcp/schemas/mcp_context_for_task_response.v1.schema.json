@@ -685,9 +685,7 @@
           ],
           "properties": {
             "entity_type": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 100
+              "const": "deployment"
             },
             "entity_id": {
               "type": "string",
@@ -702,6 +700,20 @@
         }
       },
       "allOf": [
+          {
+            "if": {
+              "required": [
+                "cause_event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "category": {
+                  "const": "cause"
+                }
+              }
+            }
+          },
         {
           "if": {
             "properties": {
