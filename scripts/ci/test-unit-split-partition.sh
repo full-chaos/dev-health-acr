@@ -54,7 +54,7 @@ expect_fail 'a workflow wiring unit-mid twice' "$dir"
 
 # A leg's -run swapped for -skip: the selector text stays, the tests double.
 dir="$(fixture swapped-flag)"
-sed 's/-run=\$(scripts\/ci\/race-split\.sh devhealthsource unit-mid)/-skip=$(scripts\/ci\/race-split.sh devhealthsource unit-mid)/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
+sed 's/-run=\(.*devhealthsource unit-mid)\)/-skip=\1/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
 cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: swapped-flag" >&2; exit 1; }
 mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
 expect_fail 'leg 9 using -skip instead of -run' "$dir"
