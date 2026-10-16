@@ -242,6 +242,10 @@ func TestTheTeamLinkLinesCarryNoRequestIDWithoutOne(t *testing.T) {
 			_, _, _, err := p.readLinkedPullRequestSet(context.Background(), "org-1", []string{"t1"}, factTimeBound{})
 			return err
 		},
+		"project links": func(p *InvestmentProvider) error {
+			_, err := dropCoveredProjectLinks(context.Background(), p.facts.client, "org-1", []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "native", rank: 3}})
+			return err
+		},
 		"mix set": func(p *InvestmentProvider) error {
 			seeded := context.WithValue(context.Background(), loadedMembershipScopeKey{}, loadedMembershipScope{orgID: "org-1", runID: "run-1", scope: membershipScope{mode: membershipScopeNone}})
 			_, err := p.readLinkedPullRequestMixRows(seeded, "org-1", []string{"t1"}, factTimeBound{})
@@ -347,7 +351,7 @@ func TestTheGeneratedSlogArgsOfTheTeamLinkLinesOmitTheRequestID(t *testing.T) {
 // dropCoveredProjectLinks through every outcome of the fallback-only rule and
 // certifies each line, including the shape without a native cover.
 func TestThePullRequestProjectLineCertifiesThroughItsProducer(t *testing.T) {
-	ctx := context.Background()
+	ctx := observability.WithRequestID(context.Background(), linkLineRequestID)
 	native := []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "native", rank: 3}}
 	fallback := func(issue string) []pullRequestProjectLinkRow {
 		return []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "text", rank: 1, fallbacks: []string{"1|text|" + issue}}}

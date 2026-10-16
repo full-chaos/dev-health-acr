@@ -2145,9 +2145,9 @@ var PullRequestProjectNativeFirst = Event{
 	Msg:                      "devhealthfacts.pull_request_project_native_first",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per pull request project links read, so the count follows the project reads a request makes; the line carries no request id.",
+	DataDependentBound:       "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
 	RequiredOnlyConstruction: true,
-	Attribution:              []string{},
+	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per pull request project links read.",
 	Fields: []Field{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_link_covered", "covered_fallback_links_dropped"}},
@@ -2157,6 +2157,7 @@ var PullRequestProjectNativeFirst = Event{
 		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
 		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
 

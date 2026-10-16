@@ -9644,9 +9644,11 @@
     "msg": "devhealthfacts.pull_request_project_native_first",
     "level": "info",
     "multiplicity": "zero_or_many_per_request",
-    "attribution": [],
+    "attribution": [
+      "request_id"
+    ],
     "bounded_aggregation": "one line per pull request project links read.",
-    "data_dependent_bound": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries no request id.",
+    "data_dependent_bound": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
     "fields": [
       {
         "key": "outcome",
@@ -9689,6 +9691,12 @@
         "type": "int",
         "presence": "conditional",
         "applicability": "written when the read held a fallback link, so a native cover was read"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },
