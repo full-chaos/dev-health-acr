@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -22,6 +23,10 @@ const DefaultMaxOutputTokens = 32768
 // outputFormatName is the json_schema name the Genkit OpenAI-compatible
 // plugin always sent; kept so the wire request does not change.
 const outputFormatName = "output"
+
+// loggedFormatPaths remembers which operation/kind/path/reason was already
+// logged at Info in this process.
+var loggedFormatPaths sync.Map
 
 // cutStopReasons are the stop reasons each client reports for a reply cut at
 // its output cap (Chat Completions, Messages, Responses).
@@ -178,14 +183,15 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "error_class", contextfabric.SanitizeLogAttr(string(class)))
 		return "", contextfabric.ModelUsage{}, err
 	}
-	formatLevel := slog.LevelDebug
-	if result.FormatPath != "" && result.FormatPath != llm.FormatPathSchema {
-		// The provider refused the strict schema and the answer came by a
-		// fallback path: worth seeing at the default level.
-		formatLevel = slog.LevelInfo
+	formatArgs := []any{"operation", contextfabric.SanitizeLogAttr(operation),
+		"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "format_path", contextfabric.SanitizeLogAttr(result.FormatPath),
+		"format_reason", contextfabric.SanitizeLogAttr(result.FormatReason)}
+	g.logger.DebugContext(ctx, llmFormatPathMessage, formatArgs...)
+	if _, seen := loggedFormatPaths.LoadOrStore(operation+"\x00"+string(client.Kind())+"\x00"+result.FormatPath+"\x00"+result.FormatReason, true); !seen {
+		// Once per process per operation and mode: which mode each
+		// provider and schema actually uses is visible at the default level.
+		g.logger.InfoContext(ctx, llmFormatPathMessage, formatArgs...)
 	}
-	g.logger.Log(ctx, formatLevel, llmFormatPathMessage, "operation", contextfabric.SanitizeLogAttr(operation),
-		"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "format_path", contextfabric.SanitizeLogAttr(result.FormatPath))
 	if cutStopReasons[result.StopReason] {
 		outputTokens := 0
 		if result.Usage.OutputTokens != nil {
