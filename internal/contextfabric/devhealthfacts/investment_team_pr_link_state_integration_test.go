@@ -284,7 +284,23 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 		}
 		return lowRows, lowPeak, highPeak
 	}
+	if linkIssues {
+		// The key-prefix read of a repository floors at the granule its rows share
+		// with their neighbours (8,192 rows) whatever the organization's size. A base
+		// table below one granule would read as flat against that floor, or as growth
+		// once any bulk exists; so the base already holds unrelated rows of other
+		// repositories and another organization above one granule.
+		for _, org := range []string{orgID, orgID + "-other"} {
+			s.exec(fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
+SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 40), 12, '0'))), '%s', toUInt32(number + 5000000), 'pr', 'open', now(), now() - INTERVAL 20 DAY, NULL, NULL, 'feature', '' FROM numbers(12000)`, org))
+			s.exec(fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 40), 12, '0'))), concat('prefill-', toString(number)), toUInt32(number + 5000000), 1, 'native', '', now(), '%s' FROM numbers(12000)`, org))
+		}
+	}
 	baseRows, baseLowPeak, baseHighPeak := measure()
+	if linkIssues && baseRows <= 8192 {
+		t.Fatalf("base read_rows %d is not above one granule (8192): the pre-fill no longer lifts the base over the granule floor, so a flat read would be told from growth wrongly", baseRows)
+	}
 	const ceiling = 64 << 20
 	for _, step := range []int{50_000, 150_000} {
 		s.exec(fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body)
