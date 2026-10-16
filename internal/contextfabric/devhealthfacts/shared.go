@@ -1227,7 +1227,13 @@ import (
 // native mix) weigh every work unit by its issue size and carry the same
 // measure and sizing coverage. An answer saved under v237 holds a project
 // share of the COUNT measure.
-const QueryVersion = "devhealthfacts.clickhouse.v239"
+//
+// v239 -> v240: a health read no longer marks the whole kind truncated because
+// one team's daily_health table lost rows to the display cap; the fact names
+// the loss (daily_health_omitted_count) and read_facts marks only that subject
+// truncated, and only when the table is served. An answer saved under v239
+// can carry a truncated state for every team of the read.
+const QueryVersion = "devhealthfacts.clickhouse.v240"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

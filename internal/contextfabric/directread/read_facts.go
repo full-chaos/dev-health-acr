@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"sort"
@@ -86,6 +87,14 @@ const (
 var providerMemberStates = map[string]bool{
 	"fired": true, "measured_zero": true, "stale": true, "before_range": true,
 	"never_evaluated": true, "withheld_capped_read": true,
+}
+
+// subjectLocalCutTables lists the served tables whose own row cut marks only
+// the subject that lost rows as truncated; the provider leaves the kind
+// complete for every other subject. A table not served (tables omit) cuts
+// nothing, so it marks nothing.
+var subjectLocalCutTables = map[string]map[string]bool{
+	string(contextfabric.FactHealth): {"daily_health": true},
 }
 
 // Withheld reasons on a fact or a coverage row.
@@ -1146,6 +1155,14 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 	for _, fact := range facts {
 		served[fact.Kind+"\x00"+fact.Subject.Kind+"\x00"+fact.Subject.CanonicalID] = true
 	}
+	cutTables := map[string]string{}
+	for _, fact := range facts {
+		for name, table := range fact.Tables {
+			if table.TruncatedBy != "" && subjectLocalCutTables[fact.Kind][name] {
+				cutTables[fact.Kind+"\x00"+fact.Subject.Kind+"\x00"+fact.Subject.CanonicalID] = name
+			}
+		}
+	}
 	rows := make([]CoverageRow, 0, len(plan.kinds)*len(subjects))
 	for _, kind := range plan.kinds {
 		capability := capabilities[kind]
@@ -1216,6 +1233,11 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
+				if cut, ok := cutTables[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID]; ok && row.Outcome == OutcomeFactServed {
+					row.Outcome = OutcomeTruncated
+					row.Reason = joinReason(row.Reason, cut+" lost rows to the provider row cap")
+					slog.Debug("read_facts subject truncated by served table", "kind", string(kind), "table", cut)
+				}
 				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				notRun := expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable
 				ownCut := expanded && !notRun && (share.shared || expansionCut(share.expansion.outcome))

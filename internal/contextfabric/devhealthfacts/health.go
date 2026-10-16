@@ -164,11 +164,11 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	repoIDs, repoBySubject, repoRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), repositoryPrefix)
 	rejectedCount += repoRejected
 	if len(repoIDs) > 0 {
-		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, contractsv1.ContextFabricEvidenceEntityRepository, &facts, timeBound)
+		rowCount, _, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, contractsv1.ContextFabricEvidenceEntityRepository, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository health", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || dailyOmitted > 0
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
 	var teamOwned map[string][]teamOwnedRepo
@@ -180,11 +180,11 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
 		}
 		teamOwned = owned
-		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, contractsv1.ContextFabricEvidenceEntityTeam, &facts, timeBound)
+		rowCount, _, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, contractsv1.ContextFabricEvidenceEntityTeam, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team health", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || dailyOmitted > 0
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
@@ -892,7 +892,6 @@ ORDER BY project_key, scope, scope_id`)
 		if dailyTable, ok, dailyOmitted := healthDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
 			fields["daily_health"] = dailyTable
 			if dailyOmitted > 0 {
-				breakdownTruncated = true
 				fields["daily_health_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
 			}
 			// CHAOS-4681: same gap as readProjectWorkload's identical note --
