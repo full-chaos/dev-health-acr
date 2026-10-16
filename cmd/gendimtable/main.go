@@ -16,3 +16,5 @@ func main() {
 	rows := contextfabric.GenerateDimensionFactKindRankingFamilyTable(capabilities)
 	fmt.Print(contextfabric.RenderDimensionFactKindRankingFamilyMarkdown(rows))
 }
+
+// proof: comment-only change
