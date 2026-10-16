@@ -31,7 +31,7 @@ jobs:
       github.repository == 'full-chaos/dev-health-acr' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
+        (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'push') &&
         github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-24.04
     steps:
@@ -40,8 +40,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.event.workflow_run.head_sha }}
+          # CHAOS-9918: a main Release is started by its ci run's completion, so
+          # its head sha is the main TIP, not the commit it released. Release
+          # names that commit in its run name ("Release <sha>"); read it there.
+          # A push-started Release (one still in flight when that change
+          # landed) keeps its own head sha.
+          RELEASE_EVENT: ${{ github.event.workflow_run.event }}
+          RELEASE_TITLE: ${{ github.event.workflow_run.display_title }}
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$RELEASE_EVENT" == workflow_run ]]; then
+            [[ "$RELEASE_TITLE" =~ ^Release\ ([0-9a-f]{40})$ ]] \
+              || { printf 'promote: Release run title %q does not name a commit\n' "$RELEASE_TITLE" >&2; exit 1; }
+            SOURCE_SHA="${BASH_REMATCH[1]}"
+          fi
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
           SOURCE_SHA="${SOURCE_SHA:-$current_main}"
