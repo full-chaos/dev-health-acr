@@ -51,6 +51,18 @@ func TestReadFactsProjectReachIgnoresFallbackLinksCoveredByANativeLink(t *testin
 	}
 	fallback("i-1", "repo-x", 7, "heuristic", true)
 	fallback("i-5", "repo-a", 1, "explicit_text", false)
+	// The covering native link may sit outside everything the read reaches: an
+	// issue whose native link names a pull request that has no row (repo-q),
+	// and a pull request whose native link comes from an issue of no owned
+	// project (i-ext). Both still cover the fallback rows below.
+	for _, id := range []string{"i-6", "i-7"} {
+		exec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+			id, repoUUID("repo-a"), orgID, "title "+id, at, "proj-1")
+	}
+	fallback("i-6", "repo-x", 8, "heuristic", true)
+	fallback("i-6", "repo-q", 1, "native", false)
+	fallback("i-7", "repo-x", 9, "explicit_text", true)
+	fallback("i-ext", "repo-x", 9, "native", false)
 
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -95,7 +107,7 @@ func TestReadFactsProjectReachIgnoresFallbackLinksCoveredByANativeLink(t *testin
 		tiers[id] = tier
 	}
 	if len(tiers) != 2 || tiers[repoUUID("repo-a")] != "native" || tiers[repoUUID("repo-r")] != "heuristic" {
-		t.Fatalf("project_reached_repositories = %v, want repo-a native (a fallback row on its native pull request does not weaken it), repo-r heuristic (no native link on either side), and no repo-x (its only link is a fallback on a native issue)", tiers)
+		t.Fatalf("project_reached_repositories = %v, want repo-a native (a fallback row on its native pull request does not weaken it), repo-r heuristic (no native link on either side), and no repo-x (its only links are fallbacks that a native link covers, one on the issue and one on the pull request, the native rows lying outside the read)", tiers)
 	}
 	if got, _ := investment.Fields["repository_link_basis"].(string); got != "heuristic" {
 		t.Fatalf("repository_link_basis = %#v, want heuristic from repo-r's fallback-only links", investment.Fields["repository_link_basis"])
