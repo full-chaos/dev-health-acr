@@ -230,6 +230,14 @@ type Field struct {
 	// MaxInt, when set, bounds an int field from above: the certifier refuses
 	// a line whose value exceeds it.
 	MaxInt *int
+	// JoinedMembers (FieldString only), when non-empty, declares the string a
+	// sorted, unique, comma-joined list of members of this set; the empty
+	// string is the empty list.
+	JoinedMembers []string
+	// Pattern (FieldString only), when set, is an anchored regular expression
+	// the value must match; PatternExample is a value that matches it.
+	Pattern        string
+	PatternExample string
 	// Nullable (FieldCountMap only) says the field may carry JSON null: the
 	// producer leaves the map nil when nothing was counted.
 	Nullable bool
@@ -1921,6 +1929,148 @@ var OrganizationSubjectRead = Event{
 }
 
 var organizationFactKindArr = contractsv1.ContextFabricFactKindVocabulary()
+
+// FactRead is the Info line of one planned capability's read (the diagnosis-in-artifacts ledger): the branch that minted its coverage entry, the state, the subject kinds asked about and the fact count. Counts and closed values only.
+var FactRead = Event{
+	ID:                 "contextfabric.fact_read",
+	Msg:                "context fabric fact read",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "one line per planned capability per fact read, so at most one per kind for each of the main, group and period delta reads of a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactReadOutcomeVocabulary()},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactReadStateVocabulary()},
+		{Key: "subjects", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kinds", Type: FieldString, Presence: PresenceRequired, JoinedMembers: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "facts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactEvaluationCoverage is the Info line of the evidence behind a measured zero: how many subjects a producer's evaluation covered, was stale for or never reached. Written only when the producer reports coverage.
+var FactEvaluationCoverage = Event{
+	ID:                 "contextfabric.fact_evaluation_coverage",
+	Msg:                "context fabric evaluation coverage",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read that reports evaluation coverage.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "evaluated_covered", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evaluated_fired", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evaluated_stale", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evaluated_before_range", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "never_evaluated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "measured_zero_credited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rules_evaluated", Type: FieldInt, Presence: PresenceRequired},
+		// A date or date and time, empty when none was seen, or "invalid" for any other provider value.
+		{Key: "latest_window_end", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.FactLatestWindowEndPattern, PatternExample: "2026-10-15"},
+		{Key: "freshness_window_days", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "withheld_capped_read", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactTableDeclaration is the Info line of one table-shaped value a read returned: its shape, key arity and measure count.
+var FactTableDeclaration = Event{
+	ID:                 "contextfabric.fact_table_declaration",
+	Msg:                "context fabric fact table declaration",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.FactTableDeclarationsPerReadCap * contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "one line per declared table of the facts a read returns, at most FactTableDeclarationsPerReadCap per read (the bundle fact cap), for each of the main, group and period delta reads.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactTableShapeVocabulary()},
+		{Key: "key_arity", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "measure_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactTableDeclarationsCapped is the Info summary line written when a read carries more table declarations than the cap: how many lines were not written.
+var FactTableDeclarationsCapped = Event{
+	ID:                 "contextfabric.fact_table_declarations_capped",
+	Msg:                contextfabric.FactTableDeclarationsCappedLogMessage,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read, written only when the read's table declarations exceed the cap.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "table_lines_dropped", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cap", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactTableDeclarationRejected is the Warn line written when a read carries tables whose shape is outside the vocabulary: a closed reason and a count, no table content.
+var FactTableDeclarationRejected = Event{
+	ID:                 "contextfabric.fact_table_declaration_rejected",
+	Msg:                contextfabric.FactTableDeclarationRejectedLogMessage,
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read, written only when a table has a shape outside the vocabulary.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{contextfabric.FactTableRejectedInvalidShape}},
+		{Key: "tables", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactResultRejected is the Warn line of a provider result the merge refused, naming the closed check that refused it.
+var FactResultRejected = Event{
+	ID:                 "contextfabric.fact_result_rejected",
+	Msg:                "context fabric fact result rejected",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "rejection_cause", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactResultRejectionCauseVocabulary()},
+		{Key: "subjects", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kinds", Type: FieldString, Presence: PresenceRequired, JoinedMembers: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "facts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactReadFailed is the Warn line of a failed or refused fact read. It carries no org_id, and the failure class in place of the provider's wording.
+var FactReadFailed = Event{
+	ID:                 "contextfabric.fact_read_failed",
+	Msg:                "context fabric fact read failed",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read.",
+	Fields: []Field{
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		// The Go type name of the error (%T), never its text.
+		{Key: "error_type", Type: FieldString, Presence: PresenceRequired},
+		{Key: "provider_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactReadFailureClassVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
 
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
@@ -3889,6 +4039,13 @@ var All = []Event{
 	EngineFactGateWarn,
 	EngineFactGateInfo,
 	OrganizationSubjectRead,
+	FactRead,
+	FactEvaluationCoverage,
+	FactTableDeclaration,
+	FactTableDeclarationsCapped,
+	FactTableDeclarationRejected,
+	FactResultRejected,
+	FactReadFailed,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

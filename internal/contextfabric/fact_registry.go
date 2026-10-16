@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -48,6 +49,18 @@ const CanonicalFactRegistryVersion = "context-fabric-facts.v2"
 // multi-kind investigation is never truncated by it -- this is a backstop
 // against pathological fanout, not a routine budget.
 const maxCanonicalFactsPerBundle = 2000
+
+// FactTableDeclarationsCappedLogMessage is the Info summary line written when a read's table declarations exceed the cap.
+const FactTableDeclarationsCappedLogMessage = "context fabric fact table declarations capped"
+
+// FactTableDeclarationRejectedLogMessage is the Warn line written when a read carries tables with a shape outside the vocabulary.
+const FactTableDeclarationRejectedLogMessage = "context fabric fact table declaration rejected"
+
+// FactTableRejectedInvalidShape is the one reason class of that line; it names no table content.
+const FactTableRejectedInvalidShape = "invalid_shape"
+
+// FactTableDeclarationsPerReadCap is the most table declaration lines one fact read writes: one per fact the merge could keep, the same cap the bundle applies. Tables over the cap are counted on one summary line, and tables with a shape outside the vocabulary on one Warn line.
+const FactTableDeclarationsPerReadCap = maxCanonicalFactsPerBundle
 
 // FactRole is declared in chaos4632_question_family_registry.go (S2,
 // §3.1's family table) -- reused here verbatim rather than redeclared, per
@@ -444,9 +457,47 @@ type FactPrerequisiteLoader interface {
 // ran past its deadline; classifyFactReadError turns it into the served sentence.
 const factReadTimedOutReason = "canonical fact capability timed out"
 
+// FactReadFailureClass is the closed class of a failed fact read. It is what
+// the read-failed log line carries in place of the reason text, so a provider's
+// own wording never reaches a log line.
+type FactReadFailureClass string
+
+const (
+	FactReadFailureTimedOut             FactReadFailureClass = "timed_out"
+	FactReadFailureResultRejected       FactReadFailureClass = "result_rejected"
+	FactReadFailureBudgetExceeded       FactReadFailureClass = "budget_exceeded"
+	FactReadFailureContended            FactReadFailureClass = "contended"
+	FactReadFailureReadFailed           FactReadFailureClass = "read_failed"
+	FactReadFailureOrganizationRequired FactReadFailureClass = "organization_required"
+	// FactReadFailureUnclassified is a FactReadFailure whose provider set no class.
+	FactReadFailureUnclassified FactReadFailureClass = "unclassified"
+	// FactReadFailureNotTyped is a failed read whose error is not a FactReadFailure.
+	FactReadFailureNotTyped FactReadFailureClass = "none"
+)
+
+// FactReadFailureClassVocabulary is the closed set of classes the read-failed line carries.
+func FactReadFailureClassVocabulary() []string {
+	return []string{
+		string(FactReadFailureTimedOut), string(FactReadFailureResultRejected), string(FactReadFailureBudgetExceeded),
+		string(FactReadFailureContended), string(FactReadFailureReadFailed), string(FactReadFailureOrganizationRequired),
+		string(FactReadFailureUnclassified), string(FactReadFailureNotTyped),
+	}
+}
+
+func knownFactReadFailureClass(class FactReadFailureClass) bool {
+	for _, member := range FactReadFailureClassVocabulary() {
+		if member == string(class) && class != FactReadFailureNotTyped {
+			return true
+		}
+	}
+	return false
+}
+
 type FactReadFailure struct {
 	State  SourceState
 	Reason string
+	// Class is the closed class of the failure; the log line carries it, never Reason.
+	Class FactReadFailureClass
 	// Cause is the error the read failed with. It is for logs and tests only:
 	// Error() returns Reason alone, so a served answer never carries it.
 	Cause error
@@ -1207,6 +1258,50 @@ const (
 	factReadCancelled factReadOutcome = "cancelled"
 )
 
+// FactLatestWindowEndPattern is the shape of the latest_window_end value a log line carries: empty, a date, a date and time, or "invalid" for any other provider value.
+const FactLatestWindowEndPattern = `^(\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?|invalid)?$`
+
+var factWindowEndShape = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$`)
+
+// latestWindowEndLogValue keeps a provider-supplied string out of the log: only a date or a date and time is written, anything else is the closed word "invalid".
+func latestWindowEndLogValue(value string) string {
+	if value == "" || factWindowEndShape.MatchString(value) {
+		return value
+	}
+	return "invalid"
+}
+
+// FactReadOutcomeVocabulary is the closed set of outcomes the fact read line carries.
+func FactReadOutcomeVocabulary() []string {
+	return []string{
+		string(factReadUnconfigured), string(factReadScopeGap), string(factReadPruned), string(factReadFailed),
+		string(factReadCompleted), string(factReadRejected), string(factReadRejectedNonNumericMeasure), string(factReadCancelled),
+	}
+}
+
+// FactReadStateVocabulary is the closed set of source states the fact read line carries, with the empty state of a read that minted no observation first.
+func FactReadStateVocabulary() []string {
+	return []string{
+		"", string(SourceAvailable), string(SourceStale), string(SourceUnavailable), string(SourceUnconfigured),
+		string(SourceUnauthorized), string(SourceNoData), string(SourceTruncated), string(SourceConflicted), string(SourceNotApplicable), string(SourcePruned),
+	}
+}
+
+// FactResultRejectionCauseVocabulary is the closed set of causes the fact result rejected line carries.
+func FactResultRejectionCauseVocabulary() []string {
+	return []string{
+		string(factResultRejectedSourceState), string(factResultRejectedObservedAt), string(factResultRejectedVersion),
+		string(factResultRejectedStateCarriesFacts), string(factResultRejectedEvaluatedSubject), string(factResultRejectedFactKind),
+		string(factResultRejectedFactSubjectOutsideSet), string(factResultRejectedFactSubject), string(factResultRejectedFactSourceState),
+		string(factResultRejectedFactStateCarriesFacts), string(factResultRejectedFact),
+	}
+}
+
+// FactTableShapeVocabulary is the closed set of declared table shapes.
+func FactTableShapeVocabulary() []string {
+	return []string{string(FactTableTimeSeries), string(FactTableBreakdown), string(FactTableRanking)}
+}
+
 // recordFactRead emits one decision-basis record per PLANNED capability
 // (CHAOS-4521, the diagnosis-in-artifacts rule in acr/AGENTS.md).
 //
@@ -1268,7 +1363,7 @@ func (r *FactCapabilityRegistry) recordEvaluationCoverage(ctx context.Context, p
 		"never_evaluated", coverage.NeverEvaluated,
 		"measured_zero_credited", credited,
 		"rules_evaluated", coverage.RulesEvaluated,
-		"latest_window_end", SanitizeLogAttr(coverage.LatestWindowEnd),
+		"latest_window_end", SanitizeLogAttr(latestWindowEndLogValue(coverage.LatestWindowEnd)),
 		"freshness_window_days", coverage.FreshnessWindowDays,
 		"withheld_capped_read", coverage.Withheld,
 	}
@@ -1325,7 +1420,7 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	result, err := registered.provider.ReadFacts(providerCtx, principal, query)
 	if err != nil {
 		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
-			return FactProviderResult{}, &FactReadFailure{State: SourceUnavailable, Reason: factReadTimedOutReason}
+			return FactProviderResult{}, &FactReadFailure{State: SourceUnavailable, Reason: factReadTimedOutReason, Class: FactReadFailureTimedOut}
 		}
 		return FactProviderResult{}, err
 	}
@@ -1349,11 +1444,27 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 	if r == nil || r.logger == nil {
 		return
 	}
+	written, dropped, invalid := 0, 0, 0
 	for _, fact := range facts {
-		for _, value := range fact.Fields {
+		names := make([]string, 0, len(fact.Fields))
+		for name := range fact.Fields {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			value := fact.Fields[name]
 			if value.Table == nil {
 				continue
 			}
+			if !validFactTableShape(value.Table.Shape) {
+				invalid++
+				continue
+			}
+			if written >= FactTableDeclarationsPerReadCap {
+				dropped++
+				continue
+			}
+			written++
 			attrs := []any{
 				"org_id", SanitizeLogAttr(principal.OrgID),
 				"kind", SanitizeLogAttr(string(kind)),
@@ -1364,6 +1475,26 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 			attrs = append(attrs, requestIDLogAttrs(ctx)...)
 			r.logger.InfoContext(ctx, "context fabric fact table declaration", attrs...)
 		}
+	}
+	if dropped > 0 {
+		attrs := []any{
+			"org_id", SanitizeLogAttr(principal.OrgID),
+			"kind", SanitizeLogAttr(string(kind)),
+			"table_lines_dropped", dropped,
+			"cap", FactTableDeclarationsPerReadCap,
+		}
+		attrs = append(attrs, requestIDLogAttrs(ctx)...)
+		r.logger.InfoContext(ctx, FactTableDeclarationsCappedLogMessage, attrs...)
+	}
+	if invalid > 0 {
+		attrs := []any{
+			"org_id", SanitizeLogAttr(principal.OrgID),
+			"kind", SanitizeLogAttr(string(kind)),
+			"reason", FactTableRejectedInvalidShape,
+			"tables", invalid,
+		}
+		attrs = append(attrs, requestIDLogAttrs(ctx)...)
+		r.logger.WarnContext(ctx, FactTableDeclarationRejectedLogMessage, attrs...)
 	}
 }
 
@@ -1491,7 +1622,7 @@ type factResultRejection struct {
 func rejectFactResult(cause factResultRejectionCause, err error) *factResultRejection {
 	return &factResultRejection{
 		cause:   cause,
-		failure: &FactReadFailure{State: SourceUnavailable, Reason: factResultRejectedReason},
+		failure: &FactReadFailure{State: SourceUnavailable, Reason: factResultRejectedReason, Class: FactReadFailureResultRejected},
 		err:     err,
 	}
 }
@@ -2021,14 +2152,17 @@ func (r *FactCapabilityRegistry) logFactReadFailure(ctx context.Context, kind Fa
 		return
 	}
 	var failure *FactReadFailure
-	reason := ""
+	class := FactReadFailureNotTyped
 	if errors.As(err, &failure) {
-		reason = failure.Reason
+		class = failure.Class
+		if !knownFactReadFailureClass(class) {
+			class = FactReadFailureUnclassified
+		}
 	}
 	attrs := []any{
 		"kind", SanitizeLogAttr(string(kind)),
 		"error_type", SanitizeLogAttr(fmt.Sprintf("%T", err)),
-		"provider_reason", SanitizeLogAttr(reason),
+		"provider_reason", SanitizeLogAttr(string(class)),
 	}
 	attrs = append(attrs, requestIDLogAttrs(ctx)...)
 	r.logger.WarnContext(ctx, "context fabric fact read failed", attrs...)
