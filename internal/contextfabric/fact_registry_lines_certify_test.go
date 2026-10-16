@@ -30,7 +30,9 @@ var (
 	factResultRejectedLegacyKeys   = []string{
 		"time", "level", "msg", "org_id", "kind", "rejection_cause", "subjects", "subject_kinds", "facts", "request_id",
 	}
-	factReadFailedLegacyKeys = []string{"time", "level", "msg", "kind", "error_type", "provider_reason", "request_id"}
+	factTableDeclarationsCappedKeys  = []string{"time", "level", "msg", "org_id", "kind", "table_lines_dropped", "cap", "request_id"}
+	factTableDeclarationRejectedKeys = []string{"time", "level", "msg", "org_id", "kind", "reason", "tables", "request_id"}
+	factReadFailedLegacyKeys         = []string{"time", "level", "msg", "kind", "error_type", "provider_reason", "request_id"}
 )
 
 type registryProviderStub struct {
@@ -444,9 +446,10 @@ func TestFactRegistryLinesRefuseOpenText(t *testing.T) {
 }
 
 // TestFactTableDeclarationLinesAreCappedPerRead drives a provider that returns
-// more table-carrying facts than the bundle cap keeps: the registry writes at
-// most FactTableDeclarationsPerReadCap lines for the read, and the declared
-// per-scope bound covers the three reads a request can make.
+// more table-carrying facts than the cap: the registry writes at most
+// FactTableDeclarationsPerReadCap lines for the read plus one summary line that
+// counts the lines dropped, and the declared per-scope bound covers the three
+// reads a request can make.
 func TestFactTableDeclarationLinesAreCappedPerRead(t *testing.T) {
 	t.Parallel()
 	status := contextfabric.FactStatus
@@ -467,6 +470,14 @@ func TestFactTableDeclarationLinesAreCappedPerRead(t *testing.T) {
 		t.Fatalf("the declared scope bound %d is below the cap times the reads per request", eventspec.FactTableDeclaration.MaxLinesPerScope)
 	}
 	certifyRegistryLine(t, lines[0], eventspec.FactTableDeclaration, map[string]any{"org_id": "org_1", "kind": "status", "shape": "breakdown", "key_arity": 1, "measure_count": 1})
+	capped := linesOf(t, raw, contextfabric.FactTableDeclarationsCappedLogMessage)
+	if len(capped) != 1 {
+		t.Fatalf("a read over the cap wrote %d summary lines, want exactly one", len(capped))
+	}
+	pinKeys(t, bytes.NewBuffer(capped[0]), factTableDeclarationsCappedKeys, 1)
+	certifyRegistryLine(t, capped[0], eventspec.FactTableDeclarationsCapped, map[string]any{
+		"org_id": "org_1", "kind": "status", "table_lines_dropped": len(facts) - contextfabric.FactTableDeclarationsPerReadCap, "cap": contextfabric.FactTableDeclarationsPerReadCap,
+	})
 }
 
 // TestRegistryLinesNeverCarryProviderControlledText: a failure class outside
@@ -498,4 +509,10 @@ func TestRegistryLinesNeverCarryProviderControlledText(t *testing.T) {
 	if n := len(linesOf(t, raw, "context fabric fact table declaration")); n != 0 {
 		t.Fatalf("a table with an unknown shape wrote %d declaration lines", n)
 	}
+	rejected := linesOf(t, raw, contextfabric.FactTableDeclarationRejectedLogMessage)
+	if len(rejected) != 1 {
+		t.Fatalf("a table with an unknown shape wrote %d rejection lines, want exactly one: %s", len(rejected), raw)
+	}
+	pinKeys(t, bytes.NewBuffer(rejected[0]), factTableDeclarationRejectedKeys, 1)
+	certifyRegistryLine(t, rejected[0], eventspec.FactTableDeclarationRejected, map[string]any{"org_id": "org_1", "kind": "status", "reason": "invalid_shape", "tables": 1})
 }

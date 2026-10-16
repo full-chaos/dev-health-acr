@@ -4063,6 +4063,143 @@
     ]
   },
   {
+    "id": "contextfabric.fact_table_declaration_rejected",
+    "msg": "context fabric fact table declaration rejected",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id",
+      "kind"
+    ],
+    "bounded_aggregation": "at most one line per capability per fact read, written only when a table has a shape outside the vocabulary.",
+    "max_lines_per_scope": 3,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "invalid_shape"
+        ]
+      },
+      {
+        "key": "tables",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.fact_table_declarations_capped",
+    "msg": "context fabric fact table declarations capped",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id",
+      "kind"
+    ],
+    "bounded_aggregation": "at most one line per capability per fact read, written only when the read's table declarations exceed the cap.",
+    "max_lines_per_scope": 3,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
+      },
+      {
+        "key": "table_lines_dropped",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "cap",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.frame_validation",
     "msg": "context fabric frame validation",
     "level": "info",

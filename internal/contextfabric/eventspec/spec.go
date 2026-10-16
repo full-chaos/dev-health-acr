@@ -1994,6 +1994,42 @@ var FactTableDeclaration = Event{
 	},
 }
 
+// FactTableDeclarationsCapped is the Info summary line written when a read carries more table declarations than the cap: how many lines were not written.
+var FactTableDeclarationsCapped = Event{
+	ID:                 "contextfabric.fact_table_declarations_capped",
+	Msg:                contextfabric.FactTableDeclarationsCappedLogMessage,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read, written only when the read's table declarations exceed the cap.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "table_lines_dropped", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cap", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// FactTableDeclarationRejected is the Warn line written when a read carries tables whose shape is outside the vocabulary: a closed reason and a count, no table content.
+var FactTableDeclarationRejected = Event{
+	ID:                 "contextfabric.fact_table_declaration_rejected",
+	Msg:                contextfabric.FactTableDeclarationRejectedLogMessage,
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:   contextfabric.EngineFactGateReadsPerRequest,
+	Attribution:        []string{"request_id", "kind"},
+	BoundedAggregation: "at most one line per capability per fact read, written only when a table has a shape outside the vocabulary.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{contextfabric.FactTableRejectedInvalidShape}},
+		{Key: "tables", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // FactResultRejected is the Warn line of a provider result the merge refused, naming the closed check that refused it.
 var FactResultRejected = Event{
 	ID:                 "contextfabric.fact_result_rejected",
@@ -4002,6 +4038,8 @@ var All = []Event{
 	FactRead,
 	FactEvaluationCoverage,
 	FactTableDeclaration,
+	FactTableDeclarationsCapped,
+	FactTableDeclarationRejected,
 	FactResultRejected,
 	FactReadFailed,
 	ConfirmedNeedLedger,

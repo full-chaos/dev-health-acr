@@ -49,7 +49,16 @@ const CanonicalFactRegistryVersion = "context-fabric-facts.v2"
 // against pathological fanout, not a routine budget.
 const maxCanonicalFactsPerBundle = 2000
 
-// FactTableDeclarationsPerReadCap is the most table declaration lines one fact read writes: one per fact the merge could keep, the same cap the bundle applies. A table with a shape outside the vocabulary is rejected by the merge and writes no line.
+// FactTableDeclarationsCappedLogMessage is the Info summary line written when a read's table declarations exceed the cap.
+const FactTableDeclarationsCappedLogMessage = "context fabric fact table declarations capped"
+
+// FactTableDeclarationRejectedLogMessage is the Warn line written when a read carries tables with a shape outside the vocabulary.
+const FactTableDeclarationRejectedLogMessage = "context fabric fact table declaration rejected"
+
+// FactTableRejectedInvalidShape is the one reason class of that line; it names no table content.
+const FactTableRejectedInvalidShape = "invalid_shape"
+
+// FactTableDeclarationsPerReadCap is the most table declaration lines one fact read writes: one per fact the merge could keep, the same cap the bundle applies. Tables over the cap are counted on one summary line, and tables with a shape outside the vocabulary on one Warn line.
 const FactTableDeclarationsPerReadCap = maxCanonicalFactsPerBundle
 
 // FactRole is declared in chaos4632_question_family_registry.go (S2,
@@ -1421,14 +1430,19 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 	if r == nil || r.logger == nil {
 		return
 	}
-	written := 0
+	written, dropped, invalid := 0, 0, 0
 	for _, fact := range facts {
 		for _, value := range fact.Fields {
-			if value.Table == nil || !validFactTableShape(value.Table.Shape) {
+			if value.Table == nil {
+				continue
+			}
+			if !validFactTableShape(value.Table.Shape) {
+				invalid++
 				continue
 			}
 			if written >= FactTableDeclarationsPerReadCap {
-				return
+				dropped++
+				continue
 			}
 			written++
 			attrs := []any{
@@ -1441,6 +1455,26 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 			attrs = append(attrs, requestIDLogAttrs(ctx)...)
 			r.logger.InfoContext(ctx, "context fabric fact table declaration", attrs...)
 		}
+	}
+	if dropped > 0 {
+		attrs := []any{
+			"org_id", SanitizeLogAttr(principal.OrgID),
+			"kind", SanitizeLogAttr(string(kind)),
+			"table_lines_dropped", dropped,
+			"cap", FactTableDeclarationsPerReadCap,
+		}
+		attrs = append(attrs, requestIDLogAttrs(ctx)...)
+		r.logger.InfoContext(ctx, FactTableDeclarationsCappedLogMessage, attrs...)
+	}
+	if invalid > 0 {
+		attrs := []any{
+			"org_id", SanitizeLogAttr(principal.OrgID),
+			"kind", SanitizeLogAttr(string(kind)),
+			"reason", FactTableRejectedInvalidShape,
+			"tables", invalid,
+		}
+		attrs = append(attrs, requestIDLogAttrs(ctx)...)
+		r.logger.WarnContext(ctx, FactTableDeclarationRejectedLogMessage, attrs...)
 	}
 }
 

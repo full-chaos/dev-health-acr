@@ -232,6 +232,10 @@ func goVarName(e Event) string {
 		return "FactEvaluationCoverage"
 	case FactTableDeclaration.ID:
 		return "FactTableDeclaration"
+	case FactTableDeclarationsCapped.ID:
+		return "FactTableDeclarationsCapped"
+	case FactTableDeclarationRejected.ID:
+		return "FactTableDeclarationRejected"
 	case FactResultRejected.ID:
 		return "FactResultRejected"
 	case FactReadFailed.ID:
