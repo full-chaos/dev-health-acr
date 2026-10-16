@@ -47,29 +47,31 @@ func TestLiveFulltextSecondProjectionBecomesSearchable(t *testing.T) {
 		t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 		key := graphKey(adapter.config.GraphPrefix, orgID)
 
-		apply(orgID, "batch_first", contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_first", Label: "First Project"}, "firstneedle alpha")
+		firstFound := false
+		apply(orgID, "batch_first", contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_first", Label: "First Project"}, "first escalation search term")
 		deadline := time.Now().Add(20 * time.Second)
 		for time.Now().Before(deadline) {
-			hits, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "firstneedle", 10, temporalFilter{})
+			hits, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "escalation", 10, temporalFilter{})
 			if err == nil && len(hits) == 1 {
+				firstFound = true
 				break
 			}
 			time.Sleep(25 * time.Millisecond)
 		}
 
-		apply(orgID, "batch_second", contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_second", Label: "Second Project"}, "secondneedle beta")
+		apply(orgID, "batch_second", contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_second", Label: "Second Project"}, "second mitigation search term")
 		statusAfter := fulltextIndexStatus(ctx, adapter, key)
-		first, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "secondneedle", 10, temporalFilter{})
+		first, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "mitigation", 10, temporalFilter{})
 		if err != nil {
 			t.Fatalf("iteration %d: fulltextSearchNodes() error = %v", i, err)
 		}
-		line := fmt.Sprintf("iteration %02d: status right after the second apply=%s, first read hits=%d", i, statusAfter, len(first))
+		line := fmt.Sprintf("iteration %02d: first subject found=%v, status right after the second apply=%s, first read of the new term hits=%d", i, firstFound, statusAfter, len(first))
 		if len(first) != 1 {
 			began := time.Now()
 			found := false
 			var seen []string
 			for time.Since(began) < 15*time.Second {
-				hits, _, queryErr := adapter.fulltextSearchNodes(ctx, key, orgID, "secondneedle", 10, temporalFilter{})
+				hits, _, queryErr := adapter.fulltextSearchNodes(ctx, key, orgID, "mitigation", 10, temporalFilter{})
 				if queryErr == nil && len(hits) == 1 {
 					found = true
 					break
@@ -82,6 +84,9 @@ func TestLiveFulltextSecondProjectionBecomesSearchable(t *testing.T) {
 			if !found {
 				notFound++
 			}
+			byLabel, _, _ := adapter.fulltextSearchNodes(ctx, key, orgID, "second", 10, temporalFilter{})
+			both, _, _ := adapter.fulltextSearchNodes(ctx, key, orgID, "search", 10, temporalFilter{})
+			line += fmt.Sprintf("; term second hits=%d, term search hits=%d", len(byLabel), len(both))
 			line += fmt.Sprintf("; searchable after %dms found=%v statuses seen while waiting=%s", time.Since(began).Milliseconds(), found, strings.Join(seen, " | "))
 		}
 		report = append(report, line)
