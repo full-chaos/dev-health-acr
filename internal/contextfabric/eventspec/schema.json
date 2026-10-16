@@ -9550,6 +9550,134 @@
     ]
   },
   {
+    "id": "devhealthfacts.team_linked_mix_native_first",
+    "msg": "devhealthfacts.team_linked_mix_native_first",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [],
+    "bounded_aggregation": "one line per team chunk of a team linked mix read.",
+    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_fallback_rows",
+          "no_fallback_row_covered",
+          "covered_fallback_rows_dropped"
+        ]
+      },
+      {
+        "key": "link_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "native_cover_issues",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "native_cover_pull_requests",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.team_linked_mix_set",
+    "msg": "devhealthfacts.team_linked_mix_set",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [],
+    "bounded_aggregation": "one line per team chunk of a team linked mix read.",
+    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "sent",
+          "empty_set_mix_skipped"
+        ]
+      },
+      {
+        "key": "teams",
+        "type": "int",
+        "presence": "required",
+        "max_int": 100
+      },
+      {
+        "key": "linked_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_mode",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "ids",
+          "ids_table",
+          "subquery"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.team_pr_link_state_native_first",
+    "msg": "devhealthfacts.team_pr_link_state_native_first",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [],
+    "bounded_aggregation": "one line per team pull request link state read.",
+    "data_dependent_bound": "one line per link state read of a team rollup, so the count follows the number of rollups a request makes.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_fallback_link_suppressed",
+          "covered_fallback_links_suppressed"
+        ]
+      },
+      {
+        "key": "repositories",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "linked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_pull_requests",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "genkitruntime.model_interpret_decision",
     "msg": "context fabric model decision",
     "level": "info",

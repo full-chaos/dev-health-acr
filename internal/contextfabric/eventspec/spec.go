@@ -310,6 +310,10 @@ type Event struct {
 	// MaxLinesPerScope bounds the lines one scope may carry for
 	// MultiplicityZeroOrManyPerRequest; zero for every other multiplicity.
 	MaxLinesPerScope int
+	// DataDependentBound states why a MultiplicityZeroOrManyPerRequest event
+	// has no fixed MaxLinesPerScope: the count follows the data a read covers.
+	// Exactly one of the two is declared.
+	DataDependentBound string
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -2072,6 +2076,60 @@ var FactReadFailed = Event{
 		{Key: "error_type", Type: FieldString, Presence: PresenceRequired},
 		{Key: "provider_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactReadFailureClassVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// TeamLinkedMixNativeFirst is the Info line of the fallback-only rule of the team linked mix: how many link rows were read, how many came from fallback links, how many of those a native link covers and was dropped. Counts and a closed outcome only.
+var TeamLinkedMixNativeFirst = Event{
+	ID:                 "devhealthfacts.team_linked_mix_native_first",
+	Msg:                "devhealthfacts.team_linked_mix_native_first",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
+	Attribution:        []string{},
+	BoundedAggregation: "one line per team chunk of a team linked mix read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_row_covered", "covered_fallback_rows_dropped"}},
+		{Key: "link_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fallback_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// TeamLinkedMixSet is the Info line of the linked pull request set a team linked mix chunk sends: how many teams and linked pull requests, and how the membership scope was applied.
+var TeamLinkedMixSet = Event{
+	ID:                 "devhealthfacts.team_linked_mix_set",
+	Msg:                "devhealthfacts.team_linked_mix_set",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the read covers.",
+	Attribution:        []string{},
+	BoundedAggregation: "one line per team chunk of a team linked mix read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"sent", "empty_set_mix_skipped"}},
+		{Key: "teams", Type: FieldInt, Presence: PresenceRequired, MaxInt: intPtr(100)},
+		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"none", "ids", "ids_table", "subquery"}},
+	},
+}
+
+// TeamPRLinkStateNativeFirst is the Info line of the fallback-only rule of the team pull request link state: how many pull requests and linked ones the repositories read hold, and how many a fallback link suppressed.
+var TeamPRLinkStateNativeFirst = Event{
+	ID:                 "devhealthfacts.team_pr_link_state_native_first",
+	Msg:                "devhealthfacts.team_pr_link_state_native_first",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per link state read of a team rollup, so the count follows the number of rollups a request makes.",
+	Attribution:        []string{},
+	BoundedAggregation: "one line per team pull request link state read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_link_suppressed", "covered_fallback_links_suppressed"}},
+		{Key: "repositories", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "linked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "suppressed_pull_requests", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 
@@ -4060,6 +4118,9 @@ var All = []Event{
 	FactTableDeclarationRejected,
 	FactResultRejected,
 	FactReadFailed,
+	TeamLinkedMixNativeFirst,
+	TeamLinkedMixSet,
+	TeamPRLinkStateNativeFirst,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
