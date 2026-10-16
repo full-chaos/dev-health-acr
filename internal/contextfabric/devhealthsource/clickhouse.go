@@ -142,7 +142,14 @@ const SourceName = "dev_health_clickhouse"
 // changes. Already-projected incident edges carry the old per-incident id, and
 // mappings that ended before the roll are behind every checkpoint; the
 // rebuild re-projects both.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v13"
+//
+// (v14, deployment-incident edges per repository: the CORRELATED_WITH_INCIDENT
+// edge id derives from the deployment's canonical id, which names its
+// repository (identity.RelationshipFamilyDeploymentIncident), not from the
+// ops edge_id, which two repositories that share a deployment_id share. The
+// source table is keyed by repository as well, one row for each pair.
+// Already-projected edges carry the old id; the rebuild re-projects them.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v14"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
