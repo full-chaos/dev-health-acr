@@ -164,6 +164,12 @@ func t4Cases() []t4Case {
 		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
 		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-07-03", uint8(1), uint8(1)}}},
 	}})
+	dayDeficiency := deficiencyRow("CHAOS")
+	dayDeficiency[5] = ruleBasisRationale[:strings.Index(ruleBasisRationale, ". ")+1] + " Score as of 2026-07-03. " + ruleBasisRationale[strings.Index(ruleBasisRationale, ". ")+2:]
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_as_of_day", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{dayDeficiency}},
+		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-07-03", uint8(1), uint8(1)}}},
+	}})
 	staleLatest := []fakeTable{
 		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
 		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-05-01", uint8(1), uint8(0)}}},
