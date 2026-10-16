@@ -107,7 +107,7 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 		}
 	}
 	for _, tombstone := range batch.Tombstones {
-		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges {
+		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges || tombstone.Kind == contextfabric.TombstoneKindPartOfEdges {
 			continue
 		}
 		if err := a.applyTombstone(ctx, key, batch.OrgID, tombstone); err != nil {
@@ -115,6 +115,9 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 		}
 	}
 	if err := a.retractColumnProjectEdges(ctx, key, batch); err != nil {
+		return contextfabric.ProjectionReceipt{}, err
+	}
+	if err := a.retractPartOfEdges(ctx, key, batch); err != nil {
 		return contextfabric.ProjectionReceipt{}, err
 	}
 	// CHAOS-3778: attach vectors AFTER every node write in this batch, so a
@@ -893,36 +896,65 @@ func classifyProjectionError(operation string, err error) error {
 	return safeDependencyError(operation, err)
 }
 
-// retractColumnProjectEdges keeps one open column-arm BELONGS_TO_PROJECT edge
-// per work item. A work item's edge id names its project, so a column project
-// that changes writes a new id and leaves the old edge open. Two statements per
-// batch, whatever its size: the work items whose column edge the batch
-// asserts lose every other open column edge, and the work items the batch
-// retracts (a column project that is unresolved or ambiguous, or history that
-// supersedes the column) lose all of them. A tombstone leaves a stored edge
-// newer than itself, as every tombstone does; the asserting row is the current
-// truth, so it removes the other edges whatever their stamps.
+// edgeRetraction states, for one relationship type, the rule retractOpenEdges
+// applies: a work item keeps one open edge of the type, because the edge id
+// names the other end and an end that changes writes a new id.
+type edgeRetraction struct {
+	operation     string
+	relationship  contractsv1.ContextFabricRelationshipType
+	tombstoneKind string
+	// columnArmOnly limits the rule to the edges with no validity interval
+	// (the column arm of BELONGS_TO_PROJECT); an interval edge is history.
+	columnArmOnly bool
+}
+
+var (
+	columnProjectRetraction = edgeRetraction{operation: "retract column project edges", relationship: contractsv1.ContextFabricRelationshipBelongsToProject, tombstoneKind: contextfabric.TombstoneKindColumnProjectEdges, columnArmOnly: true}
+	partOfRetraction        = edgeRetraction{operation: "retract part_of edges", relationship: contractsv1.ContextFabricRelationshipPartOf, tombstoneKind: contextfabric.TombstoneKindPartOfEdges}
+)
+
 func (a *Adapter) retractColumnProjectEdges(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
+	return a.retractOpenEdges(ctx, key, batch, columnProjectRetraction)
+}
+
+func (a *Adapter) retractPartOfEdges(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
+	return a.retractOpenEdges(ctx, key, batch, partOfRetraction)
+}
+
+// retractOpenEdges keeps one open edge of the rule's type per work item. A
+// work item's edge id names its other end, so an end that changes writes a new
+// id and leaves the old edge open. Two statements per batch, whatever its
+// size: the work items whose edge the batch asserts lose every other open edge
+// of the type, and the work items the batch retracts (an end that is
+// unresolved or ambiguous, or history that supersedes it) lose all of them. A
+// tombstone leaves a stored edge newer than itself, as every tombstone does;
+// the asserting row is the current truth, so it removes the other edges
+// whatever their stamps.
+func (a *Adapter) retractOpenEdges(ctx context.Context, key string, batch contextfabric.ProjectionBatch, rule edgeRetraction) error {
 	var keeps, drops []interface{}
 	for _, relationship := range batch.Relationships {
-		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject && relationship.ValidFrom == nil && relationship.From.Kind == contextfabric.SubjectWorkItem {
+		if relationship.Type == rule.relationship && (!rule.columnArmOnly || relationship.ValidFrom == nil) && relationship.From.Kind == contextfabric.SubjectWorkItem {
 			keeps = append(keeps, map[string]interface{}{"kind": string(relationship.From.Kind), "sid": relationship.From.CanonicalID, "rid": relationship.RelationshipID, "ns": nsTimestamp(relationship.ObservedAt), "guard": false})
 		}
 	}
 	for _, tombstone := range batch.Tombstones {
-		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges {
+		if tombstone.Kind == rule.tombstoneKind {
 			drops = append(drops, map[string]interface{}{"kind": string(contextfabric.SubjectWorkItem), "sid": tombstone.CanonicalID, "rid": "", "ns": nsTimestamp(tombstone.EffectiveAt), "guard": true})
 		}
 	}
-	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:row.kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel AND r.%s IS NULL AND r.%s <> row.rid AND (NOT row.guard OR r.%s IS NULL OR r.%s <= row.ns) DELETE r",
-		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propValidFromNs, propRelationshipID, propObservedAtNs, propObservedAtNs)
+	openArm := ""
+	if rule.columnArmOnly {
+		openArm = fmt.Sprintf(" AND r.%s IS NULL", propValidFromNs)
+	}
+	statement := fmt.Sprintf("UNWIND $rows AS row MATCH (a:%s {%s:$org, %s:row.kind, %s:row.sid})-[r:%s]->() WHERE r.%s = $rel%s AND r.%s <> row.rid AND (NOT row.guard OR r.%s IS NULL OR r.%s <= row.ns) DELETE r",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, openArm, propRelationshipID, propObservedAtNs, propObservedAtNs)
 	for _, rows := range [][]interface{}{keeps, drops} {
 		if len(rows) == 0 {
 			continue
 		}
-		params := map[string]interface{}{"rows": rows, "org": batch.OrgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipBelongsToProject))}
+		params := map[string]interface{}{"rows": rows, "org": batch.OrgID, "rel": graphrank.NormalizeRelation(string(rule.relationship))}
 		if _, err := a.api.query(ctx, key, statement, params, false); err != nil {
-			return classifyProjectionError("retract column project edges", err)
+			return classifyProjectionError(rule.operation, err)
 		}
 	}
 	return nil
