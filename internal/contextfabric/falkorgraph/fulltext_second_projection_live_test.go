@@ -13,10 +13,9 @@ import (
 const fulltextSecondProjectionRepeats = 10
 
 // TestLiveFulltextSecondProjectionBecomesSearchable projects a first batch, reads until the fulltext index answers,
-// then projects a second batch that adds a subject carrying a new term and reads that term at once. Every iteration
-// records the index status right after the second apply, the first read's hit count, and how long the new subject took
-// to become searchable with the status seen while waiting: it shows whether an existing index goes back under
-// construction after new writes, and whether a subject written after the index was operational is found at all.
+// then projects a second batch that adds a subject carrying a new word and reads that word at once. Every iteration
+// records the index status right after the second apply and the first read's hit count; a subject that is not found
+// within the wait fails the test. It holds that a subject written after the index was operational is searchable.
 func TestLiveFulltextSecondProjectionBecomesSearchable(t *testing.T) {
 	ctx := context.Background()
 	adapter, _ := newLiveFalkorAdapter(t, ctx)

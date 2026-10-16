@@ -122,7 +122,7 @@ func TestFulltextQueryRunsWhenTheIndexStatusCannotBeRead(t *testing.T) {
 	}
 }
 
-func TestFulltextQueryWaitsAgainWhenTheIndexReturnsToConstructionAfterNewWrites(t *testing.T) {
+func TestFulltextQueryReadsTheStatusOnEveryQueryAndKeepsNoMemoOfAnEarlierOperational(t *testing.T) {
 	script := &fulltextReadyScript{statuses: []string{"OPERATIONAL", "[Indexing] 3/3: UNDER CONSTRUCTION", "OPERATIONAL"}}
 	adapter := newFakeAdapter(t, script.fake(nil))
 	for i := 0; i < 2; i++ {
@@ -131,6 +131,6 @@ func TestFulltextQueryWaitsAgainWhenTheIndexReturnsToConstructionAfterNewWrites(
 		}
 	}
 	if len(script.queryAts) != 2 || script.queryAts[0] != 1 || script.queryAts[1] != 3 {
-		t.Fatalf("status reads before each query = %v, want [1 3]: the first query found the index operational, then new writes put it back under construction and the second query must wait again (no memo of an earlier OPERATIONAL)", script.queryAts)
+		t.Fatalf("status reads before each query = %v, want [1 3]: the first query found the index operational, then the status reads under construction and the second query must wait: the status is read on every query, an earlier OPERATIONAL is not remembered", script.queryAts)
 	}
 }
