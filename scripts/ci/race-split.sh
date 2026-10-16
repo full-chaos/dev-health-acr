@@ -75,6 +75,13 @@ unit_partition_three_way() {
     n="$(grep -cF -- "$want" "$wf" || true)"
     [ "$n" -eq 1 ] || { printf 'ci.yml must use "%s" exactly once, found %s\n' "$want" "$n" >&2; return 1; }
   done
+  # -run vs -skip decides whether a part selects or excludes its tests: swapping one
+  # keeps the selector text but doubles or drops tests.
+  for want in 'skip|unit-rest' 'run|unit-heavy' 'run|unit-mid'; do
+    flag="${want%%|*}"; mode="${want#*|}"
+    grep -qE -- "GOFLAGS=\"-trimpath -$flag=\\\$\(scripts/ci/race-split\.sh $name $mode\)\"" "$wf" \
+      || { printf 'ci.yml must pass "%s" to -%s\n' "$mode" "$flag" >&2; return 1; }
+  done
   all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"

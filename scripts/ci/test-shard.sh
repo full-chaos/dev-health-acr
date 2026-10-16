@@ -189,7 +189,8 @@ unit_dedicated_packages=(
 # leg is split in two by scripts/ci/<name>-heavy-tests.txt (see
 # race-split.sh): the dedicated leg runs the rest half, and one extra leg per
 # entry, at index total+len(unit_dedicated_packages)+K, emits the SAME package
-# again and runs the heavy half. The two halves are disjoint by construction
+# again and runs one further part (the heavy half; for devhealthsource's
+# second entry, the mid part). The parts are disjoint by construction
 # (-skip vs -run of one regex), so these extra legs add no coverage to the
 # union of `go list ./...` and the closure proof does not count them.
 # Why: devhealthfacts ran 1539s of the 1800s package budget in one binary
