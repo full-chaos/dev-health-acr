@@ -835,6 +835,7 @@ check_verify_reads_plan() {
     printf 'verify does not read plan.outputs.heavy\n' >&2; return 1; }
   grep -qF 'plan output heavy is' <<<"$block" || {
     printf 'verify does not fail on a missing plan output\n' >&2; return 1; }
+  # shellcheck disable=SC2016
   grep -qE '"\$result" = skipped' <<<"$block" || {
     printf 'verify has no draft-skip allowance\n' >&2; return 1; }
 }
