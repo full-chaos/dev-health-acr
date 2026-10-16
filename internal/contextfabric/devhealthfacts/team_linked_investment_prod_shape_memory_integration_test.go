@@ -176,7 +176,7 @@ SELECT repos_arr[1 + number % ?], ?, toUInt32(1 + intDiv(number, ?)), 'pr', 'mer
 		uint64(s.ownedRepos), orgID, uint64(s.ownedRepos), at, at, uint64(s.pullRequests))
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 WITH `+repoArr+` AS repos_arr
-SELECT repos_arr[1 + pr % ?], concat('wi-', toString(k % ?)), toUInt32(1 + intDiv(pr, ?)), 1, if(k % 3 = 0, 'explicit_text', 'native'), '', ?, ?
+SELECT repos_arr[1 + pr % ?], concat('wi-', toString(k % ?)), toUInt32(1 + intDiv(pr, ?)), 1, 'native', '', ?, ?
 FROM (SELECT number AS k, (number * 7) % ? AS pr FROM numbers(?))`,
 		uint64(s.ownedRepos), uint64(s.linkedItems), uint64(s.ownedRepos), at, orgID, uint64(s.pullRequests), uint64(s.links))
 	// One insert per version: a single insert block would collapse the two

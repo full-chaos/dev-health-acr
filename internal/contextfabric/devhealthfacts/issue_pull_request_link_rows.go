@@ -23,7 +23,9 @@ const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'exp
 // issueprlinks.NativeLinks.Outranks): an explicit_text or heuristic row counts
 // only when no native row covers its pull request (repo_id, pr_number) or its
 // issue. A native row always counts. l is the work_graph_issue_pr alias. Ops
-// retracts the covered rows at the source; this keeps a read right before that
+// retracts the covered rows at the source; the native sets are read without
+// FINAL because a native row is never replaced by a lower tier (version_rank),
+// so any stored native row is a current one; this keeps a read right before that
 // build has run for an organization.
 //
 // scope is a condition over the unaliased work_graph_issue_pr columns that
@@ -38,8 +40,8 @@ func nativeFirstLinkSQL(scope string) string {
 		pullRequestScope = ` AND (repo_id, pr_number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr` + checked
 	}
 	return `(l.provenance = 'native' OR (
-    l.work_item_id NOT IN (SELECT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND provenance = 'native'` + issueScope + `)
-    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String} AND provenance = 'native'` + pullRequestScope + `)))`
+    NOT (l.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native'` + issueScope + `))
+    AND (l.repo_id, l.pr_number) NOT IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native'` + pullRequestScope + `)))`
 }
 
 // linkedPullRequestOnSQL joins a link row (l) to the pull request (pr) it names.
