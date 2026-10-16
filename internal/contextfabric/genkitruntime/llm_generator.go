@@ -157,6 +157,13 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())))
 		seed = nil
 	}
+	if seed != nil && client.Kind() == llm.KindQwen {
+		// DashScope takes a seed in [0, 2^31) and Workers AI's Qwen models
+		// cap it too; folding keeps it derived from the question and the
+		// sample, so the ensemble's samples still draw distinct seeds.
+		folded := *seed % (1 << 31)
+		seed = &folded
+	}
 	result, err := client.Complete(ctx, llm.Request{
 		System:          request.System,
 		Prompt:          request.Prompt,

@@ -256,3 +256,23 @@ func TestLLMInterpretSendsTheSeedOnlyToKindsThatTakeOne(t *testing.T) {
 		})
 	}
 }
+
+func TestLLMInterpretFoldsTheQwenSeedIntoDashScopesRange(t *testing.T) {
+	client := &scriptedLLM{model: "qwen-plus", kind: llm.KindQwen, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+	runtime, err := NewWithLLM(Config{
+		Provider: "qwen", Model: "qwen-plus", InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1",
+		SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	}, LLMClients{"qwen-plus": client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validRequest()
+	if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatal(err)
+	}
+	full := chaos4631InterpretSeedFor(contextfabric.QuestionHash(request.Question), 0)
+	sent := client.request(0).Seed
+	if sent == nil || *sent != full%(1<<31) || *sent < 0 || *sent >= 1<<31 {
+		t.Fatalf("qwen seed = %v, want %d folded to [0, 2^31)", sent, full)
+	}
+}
