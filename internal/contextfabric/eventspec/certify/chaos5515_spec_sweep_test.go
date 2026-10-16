@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -443,8 +444,14 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		// rules are independent and both must hold, so they conjoin: the
 		// cross-line index/total constraint is not a vocabulary and no
 		// membership test can satisfy it.
+		patternAccepts := true
+		if f.Pattern != "" {
+			if text, isString := v.(string); isString {
+				patternAccepts = regexp.MustCompile(f.Pattern).MatchString(text)
+			}
+		}
 		row.wantAccept = (len(f.ClosedVocabulary) == 0 || vocabularyContainsValue(f.ClosedVocabulary, v)) &&
-			f.Key != "index" && f.Key != "total"
+			patternAccepts && f.Key != "index" && f.Key != "total"
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "empty_container":

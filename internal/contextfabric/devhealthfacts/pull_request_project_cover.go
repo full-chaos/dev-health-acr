@@ -63,7 +63,7 @@ func dropCoveredProjectLinks(ctx context.Context, client contextpacket.ClickHous
 		}
 	}
 	if len(all) == 0 {
-		slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", "outcome", contextfabric.SanitizeLogAttr("no_fallback_rows"), "project_rows", len(rows), "fallback_links", 0, "dropped_links", 0, "dropped_rows", 0)
+		slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", append([]any{"outcome", contextfabric.SanitizeLogAttr("no_fallback_rows"), "project_rows", len(rows), "fallback_links", 0, "dropped_links", 0, "dropped_rows", 0}, requestIDLogAttrs(ctx)...)...)
 		return rows, nil
 	}
 	cover, err := readNativeCover(ctx, client, orgID, links)
@@ -100,6 +100,6 @@ func dropCoveredProjectLinks(ctx context.Context, client contextpacket.ClickHous
 	if droppedLinks > 0 {
 		outcome = "covered_fallback_links_dropped"
 	}
-	slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", "outcome", contextfabric.SanitizeLogAttr(outcome), "project_rows", len(rows), "fallback_links", len(all), "dropped_links", droppedLinks, "dropped_rows", droppedRows, "native_cover_issues", len(cover.issues), "native_cover_pull_requests", len(cover.pullRequests))
+	slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", append([]any{"outcome", contextfabric.SanitizeLogAttr(outcome), "project_rows", len(rows), "fallback_links", len(all), "dropped_links", droppedLinks, "dropped_rows", droppedRows, "native_cover_issues", len(cover.issues), "native_cover_pull_requests", len(cover.pullRequests)}, requestIDLogAttrs(ctx)...)...)
 	return out, nil
 }
