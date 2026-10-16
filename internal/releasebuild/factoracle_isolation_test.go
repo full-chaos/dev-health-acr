@@ -75,7 +75,7 @@ func TestFactoracleIsolation_ownRaceJobAndBudget(t *testing.T) {
 	}
 	for _, want := range []string{
 		"name: race (factoracle, isolated scope)",
-		"needs: mirror-preflight",
+		"- mirror-preflight",
 		"TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX",
 		"isolated-dedicated factoracle",
 		"scripts/ci/run-isolated-budget.sh",
@@ -99,7 +99,7 @@ func TestFactoracleIsolation_ownRaceJobAndBudget(t *testing.T) {
 		heavy = heavy[:next[0]+3]
 	}
 	for _, want := range []string{
-		"needs: mirror-preflight",
+		"- mirror-preflight",
 		"isolated-dedicated factoracle",
 		"scripts/ci/run-isolated-budget.sh",
 		"race-split.sh factoracle heavy)",
