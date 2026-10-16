@@ -1,16 +1,19 @@
 SELECT lr.team_id AS team_id,
 	uniqExact(m.repo_uuid) AS repos,
 	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
-	sum(m.bugfix_share * m.effort) AS bugfix_effort
+	sum(m.bugfix_share * m.effort) AS bugfix_effort,
+	arraySort(groupUniqArray(cityHash64(m.work_unit_id))) AS unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), m.unit_issue_size > 0)) AS sized_unit_hashes
 FROM (
-	SELECT repo_uuid, pr_number, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
+	SELECT work_unit_id, repo_uuid, pr_number, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share
 	FROM (
 SELECT win, work_unit_id, rp.1 AS repo_uuid, rp.2 AS pr_number,
 	1 AS c, n,
-	effort_value, theme_distribution_json, bugfix_share, span_from
+	unit_size_weight AS effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from
 FROM (
-	SELECT work_unit_id,
-		any(effort_value) AS effort_value,
+            SELECT sized_unit.*, if(unit_size.issue_size > 0, unit_size.issue_size, 1.0) AS unit_size_weight,
+                if(unit_size.issue_size > 0, unit_size.issue_size, 0.0) AS unit_issue_size
+            FROM (SELECT work_unit_id, {org_id:String} AS org_id,
 		any(theme_distribution_json) AS theme_distribution_json,
 		any(bugfix_share) AS bugfix_share,
 		any(span_from) AS span_from,
@@ -19,23 +22,23 @@ FROM (
 		groupUniqArray((ref_repo, if(ref_repo = '', ref_text, concat(ref_repo, '#', pr_number)))) AS pairs,
 		length(pairs) AS n
 	FROM (
-		SELECT parsed.work_unit_id AS work_unit_id, parsed.effort_value AS effort_value,
+		SELECT parsed.work_unit_id AS work_unit_id,
 			parsed.theme_distribution_json AS theme_distribution_json, parsed.bugfix_share AS bugfix_share,
 			parsed.span_from AS span_from, parsed.from_ts AS from_ts, parsed.to_ts AS to_ts, parsed.wins AS wins,
 			parsed.pr_number AS pr_number, parsed.ref_text AS ref_text,
 			ifNull(if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')), '') AS ref_repo
 		FROM (
-			SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins,
+			SELECT work_unit_id, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins,
 				ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 			FROM (
-				SELECT work_unit_id, latest.1 AS repo_id, latest.2 AS from_ts, latest.3 AS to_ts, latest.4 AS effort_value,
-					latest.5 AS theme_distribution_json, latest.6 AS bugfix_share, latest.7 AS pr_refs,
+				SELECT work_unit_id, latest.1 AS repo_id, latest.2 AS from_ts, latest.3 AS to_ts,
+					latest.4 AS theme_distribution_json, latest.5 AS bugfix_share, latest.6 AS pr_refs,
 					arrayFilter(w -> w >= 0, [if(1, 0, -1)]) AS wins
 				FROM (
 					SELECT work_unit_id,
-						argMaxIf(tuple(repo_id, from_ts, to_ts, effort_value, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest
+						argMaxIf(tuple(repo_id, from_ts, to_ts, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest
 					FROM (
-						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, toFloat64(1) AS effort_value, theme_distribution_json,
+						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, theme_distribution_json,
 							ifNull(subcategory_distribution_json['quality.bugfix'], 0.0) AS unit_bugfix_share,
 							arrayMap(r -> (substring(r, 1, 36), substring(r, 40)),
 								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))) AS direct_refs,
@@ -250,8 +253,16 @@ FROM (
 				GROUP BY id
 			) AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo
 	)
-	GROUP BY work_unit_id
-)
+	GROUP BY work_unit_id) AS sized_unit
+            LEFT JOIN (
+                SELECT org_id, work_unit_id, argMax(issue_size, computed_at) AS issue_size
+                FROM work_unit_issue_size
+                WHERE org_id = {org_id:String}
+                GROUP BY org_id, work_unit_id
+            ) AS unit_size
+                ON unit_size.org_id = sized_unit.org_id
+                AND unit_size.work_unit_id = sized_unit.work_unit_id
+        ) AS sized_units
 ARRAY JOIN repo_prs AS rp
 ARRAY JOIN wins AS win
 WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin((SELECT groupUniqArray((toString(pr_repo_id), toString(pr_number), team_id)) FROM (

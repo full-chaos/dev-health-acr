@@ -502,10 +502,11 @@ func (t SeedTarget) query(ctx context.Context, database, statement string, body 
 // reaches repositories through an owned project; the venue's teams own none, so it
 // is created empty. git_pull_requests and work_graph_issue_pr are read to name why a
 // team without a work unit has none (pull requests with no admitted link); empty, no team is moved
-// to that reason.
+// to that reason. work_unit_issue_size is read by the investment weight; empty, every unit weighs 1,
+// the weight the pairs were recorded under.
 //
 // devhealthschema:not-a-production-replica the name indexes devhealthschema.ProductionColumns; nothing physical is declared here.
-var seededEmptyTables = []string{"work_item_measure_capability", "team_project_ownership", "git_pull_requests", "work_graph_issue_pr"}
+var seededEmptyTables = []string{"work_item_measure_capability", "team_project_ownership", "git_pull_requests", "work_graph_issue_pr", "work_unit_issue_size"}
 
 // Seed creates the database and the extract tables, with the declared
 // production types and engines, and loads the rows. ClickHouse parses its own
