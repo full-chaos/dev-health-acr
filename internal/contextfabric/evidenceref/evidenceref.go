@@ -90,8 +90,10 @@ var grammars = map[contractsv1.ContextFabricEvidenceEntityType]Grammar{
 		{Column: "team_id", Form: Encoded},
 		{Column: "source", Form: Encoded},
 	}},
-	// The work_graph_deployment_incident_edges row, keyed (org_id,
-	// deployment_id, incident_id, source), in the repository it names.
+	// The work_graph_deployment_incident_edges row, keyed (org_id, repo_id,
+	// deployment_id, incident_id), in the repository it names. The ref also
+	// carries the row's source: it names the tier the row had when the ref was
+	// minted, and a ref of a tier the pair no longer has resolves to no row.
 	contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: {Segments: []Segment{
 		{Column: "repo_id", Form: UUID},
 		{Column: "deployment_id", Form: Encoded},

@@ -301,6 +301,11 @@ type OperationPolicy struct {
 	Disclosure            []DisclosureField `json:"disclosure"`
 	Notes                 []string          `json:"notes,omitempty"`
 	PrimaryListPath       string            `json:"primary_list,omitempty"`
+	// KeptLists are top-level lists a cut page never empties: the answer is
+	// refused instead. They say what the answer cannot see (caveats, missing
+	// sources) or carry its verdict, so an answer without them would read
+	// healthier than the full one.
+	KeptLists []string `json:"kept_lists,omitempty"`
 
 	variables map[string]int
 	outputs   map[string]OutputLeaf
@@ -683,6 +688,16 @@ func validateOperation(op *OperationPolicy) error {
 		if !lists[op.PrimaryListPath] {
 			return fmt.Errorf("primary_list %q is not a top-level list output of the operation", op.PrimaryListPath)
 		}
+	}
+	if len(op.KeptLists) > 0 && op.PrimaryListPath == "" {
+		return errors.New("kept_lists needs a primary_list: only a cut page drops a list")
+	}
+	keptSeen := map[string]bool{}
+	for _, kept := range op.KeptLists {
+		if !op.topLevelLists()[kept] || kept == op.PrimaryListPath || keptSeen[kept] {
+			return fmt.Errorf("kept list %q is not a distinct top-level list output other than the primary list", kept)
+		}
+		keptSeen[kept] = true
 	}
 	op.variables = map[string]int{}
 	for i, v := range op.Variables {

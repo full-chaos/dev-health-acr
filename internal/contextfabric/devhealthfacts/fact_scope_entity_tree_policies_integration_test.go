@@ -417,10 +417,12 @@ func TestPolicyTree_ProjectTeamFanoutIsTruncatedByDistinctTeams(t *testing.T) {
 	}
 }
 
-// An edge superseded by a newer row of the same key reads as the newer one:
-// the incident whose edge moved from an unauthorized repository to an
-// authorized one is admitted, not dropped for the stale row.
-func TestPolicyTree_SupersededIncidentEdgeReadsAsTheLatest(t *testing.T) {
+// The edge table is keyed by repository (one row for each repository,
+// deployment and incident): a newer row of repository A does not supersede
+// the row of repository B for the same deployment id. The incident keeps both
+// edges, and an incident that names a repository the caller was never granted
+// is dropped whole -- admitting it would expose that repository.
+func TestPolicyTree_IncidentEdgeOfAnotherRepositoryDoesNotSupersede(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
 	at := time.Now().UTC()
@@ -441,14 +443,10 @@ func TestPolicyTree_SupersededIncidentEdgeReadsAsTheLatest(t *testing.T) {
 	result := policyTreeExpand(t, ctx, expander, storage.Principal{OrgID: policyTreeOrgID, RepositoryScopes: []string{policyTreeSlugA}},
 		contextfabric.FactScopePolicyProjectIssuePullRequestIncidents, contextfabric.FactIncidents,
 		policyTreeProjectOrigin(t), contextfabric.SubjectIncident)
-	found := false
 	for _, target := range result.Targets {
 		if target.CanonicalID == "incident:INC-MOVED" {
-			found = true
+			t.Fatalf("targets = %v, want no incident:INC-MOVED: it also has an edge in a repository the caller was not granted", policyTreeLabels(result.Targets))
 		}
-	}
-	if !found {
-		t.Fatalf("targets = %v, want incident:INC-MOVED: its latest edge names an authorized repository", policyTreeLabels(result.Targets))
 	}
 }
 
