@@ -6355,6 +6355,349 @@
     ]
   },
   {
+    "id": "contextfabric.question_family_resolution",
+    "msg": "context fabric question family resolution",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per interpretation; the sample list is bounded by the ensemble size (at most 7).",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "model_consensus",
+          "model",
+          "model_plurality_rejected",
+          "carried",
+          "structure_precedence",
+          "fallback",
+          "none"
+        ]
+      },
+      {
+        "key": "ensemble_size",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "downgraded_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consensus_field_divergence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "family_version",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "question-family.v4"
+        ]
+      },
+      {
+        "key": "sample_families",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "samples",
+        "type": "object_slice",
+        "presence": "required",
+        "max_items": 7,
+        "fields": [
+          {
+            "key": "shape",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "single_subject",
+              "explicit_cohort",
+              "discovered_cohort",
+              "open"
+            ]
+          },
+          {
+            "key": "attempted_family",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "subject_investigation",
+              "discovered_cohort_ranking",
+              "scoped_cohort_status",
+              "grouped_cohort_status",
+              "explicit_comparison",
+              "trend",
+              "investment_allocation",
+              "unclassified"
+            ]
+          },
+          {
+            "key": "resolved_family",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "subject_investigation",
+              "discovered_cohort_ranking",
+              "scoped_cohort_status",
+              "grouped_cohort_status",
+              "explicit_comparison",
+              "trend",
+              "investment_allocation",
+              "unclassified"
+            ]
+          },
+          {
+            "key": "row",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "group_kind_set",
+              "scope_anchor_asymmetry",
+              "comparison_terms",
+              "cohort_shape",
+              "single_subject_shape",
+              "no_row_matched"
+            ]
+          },
+          {
+            "key": "incompatibility_reason",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "unrecognized_family",
+              "structural_mismatch",
+              "declared_unreachable"
+            ]
+          },
+          {
+            "key": "group_kind_set",
+            "type": "bool",
+            "presence": "required"
+          },
+          {
+            "key": "scope_anchor_set",
+            "type": "bool",
+            "presence": "required"
+          }
+        ]
+      },
+      {
+        "key": "samples_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_frame_observed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_frame_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "valid",
+          "repaired",
+          "refused_invalid",
+          "refused_kind_change"
+        ]
+      },
+      {
+        "key": "shadow_projection_version",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "question-frame.v1"
+        ]
+      },
+      {
+        "key": "shadow_projected_family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "shadow_projected_row",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "topology_grouped",
+          "topology_scoped",
+          "topology_explicit",
+          "topology_discovered",
+          "single_subject_investment",
+          "single_subject_trend",
+          "single_subject_default",
+          "no_row_matched"
+        ]
+      },
+      {
+        "key": "shadow_precedence_family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "shadow_precedence_row",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "group_kind_set",
+          "scope_anchor_asymmetry",
+          "comparison_terms",
+          "cohort_shape",
+          "single_subject_shape",
+          "no_row_matched"
+        ]
+      },
+      {
+        "key": "shadow_agreement_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "agreed",
+          "projection_unclassified",
+          "precedence_unclassified",
+          "goal_row_unreachable_in_precedence",
+          "precedence_comparison_row",
+          "organization_route",
+          "shape_divergence",
+          "unexplained"
+        ]
+      },
+      {
+        "key": "shadow_agreed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "family_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "projected",
+          "precedence",
+          "carried"
+        ]
+      },
+      {
+        "key": "route_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "agreed",
+          "projection_unclassified",
+          "precedence_unclassified",
+          "goal_row_unreachable_in_precedence",
+          "precedence_comparison_row",
+          "organization_route",
+          "shape_divergence",
+          "unexplained"
+        ]
+      },
+      {
+        "key": "route_disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "identical",
+          "intended_change",
+          "switched_additive_unobserved",
+          "declined_withdrawn_claim",
+          "declined_not_observed",
+          "declined_indistinguishable",
+          "declined_projection_silent",
+          "declined_unexplained",
+          "no_frame_observed",
+          "carried_from_prior_turn"
+        ]
+      },
+      {
+        "key": "route_switched",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.remembered_window_axis",
     "msg": "context fabric remembered window axis",
     "level": "info",

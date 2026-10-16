@@ -1275,20 +1275,30 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 		"downgraded_count", event.DowngradedCount,
 		"consensus_field_divergence", event.ConsensusFieldDivergence,
 		"family_version", SanitizeLogAttr(event.FamilyVersion),
-		"sample_families", sortedFamilyDistribution(event.SampleFamilies),
+		"sample_families", sampleFamilyCounts(event.SampleFamilies),
 	}
-	for i, sample := range event.Samples {
-		prefix := "sample_" + strconv.Itoa(i) + "_"
-		args = append(args,
-			prefix+"shape", string(sample.Shape),
-			prefix+"attempted_family", string(sample.AttemptedFamily),
-			prefix+"resolved_family", string(sample.ResolvedFamily),
-			prefix+"row", string(sample.Row),
-			prefix+"incompatibility_reason", string(sample.Reason),
-			prefix+"group_kind_set", sample.GroupKindSet,
-			prefix+"scope_anchor_set", sample.ScopeAnchorSet,
-		)
+	// The per-sample rows ride as ONE bounded list (never more than
+	// QuestionFamilyEnsembleMax, the bound of N); a sample past the bound is cut
+	// from the list and counted in samples_omitted, never dropped silently.
+	rows := event.Samples
+	omitted := 0
+	if len(rows) > QuestionFamilyEnsembleMax {
+		omitted = len(rows) - QuestionFamilyEnsembleMax
+		rows = rows[:QuestionFamilyEnsembleMax]
 	}
+	samples := make([]map[string]any, 0, len(rows))
+	for _, sample := range rows {
+		samples = append(samples, map[string]any{
+			"shape":                  SanitizeLogAttr(string(sample.Shape)),
+			"attempted_family":       SanitizeLogAttr(string(sample.AttemptedFamily)),
+			"resolved_family":        SanitizeLogAttr(string(sample.ResolvedFamily)),
+			"row":                    SanitizeLogAttr(string(sample.Row)),
+			"incompatibility_reason": SanitizeLogAttr(string(sample.Reason)),
+			"group_kind_set":         sample.GroupKindSet,
+			"scope_anchor_set":       sample.ScopeAnchorSet,
+		})
+	}
+	args = append(args, "samples", samples, "samples_omitted", omitted)
 	// The SHADOW comparison. Every field, on the same sink discipline as
 	// the rest of this line: a field populated on the struct and never
 	// logged is not telemetry, it is a field.
