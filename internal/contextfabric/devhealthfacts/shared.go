@@ -1222,7 +1222,12 @@ import (
 // request, before the linked set is sent; a team's project-reached mix no
 // longer counts a fallback link next to a native one. An answer saved under
 // v237 can differ.
-const QueryVersion = "devhealthfacts.clickhouse.v238"
+//
+// v238 -> v239: the project mixes (the owning-team roll-up and the project
+// native mix) weigh every work unit by its issue size and carry the same
+// measure and sizing coverage. An answer saved under v237 holds a project
+// share of the COUNT measure.
+const QueryVersion = "devhealthfacts.clickhouse.v239"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
