@@ -195,38 +195,15 @@ func TestNew_rejectsGenkitDevEnvironment(t *testing.T) {
 	}
 }
 
-// TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath is the
-// CHAOS-3770 F1 residual probe (codex round 2, point b): genkit logs
-// generation content at Debug level in more than one place --
-// ai/generate.go's DefineGenerateAction closure logs full request/response
-// JSON directly, but that closure is registered as the "generate" ACTION
-// and is reachable only through action-dispatch/reflection callers (never
-// through genkit.GenerateData's actual call chain: ai.Generate ->
-// GenerateWithRequest directly, bypassing action dispatch entirely --
-// confirmed by reading the vendored source, not assumed, and corroborated
-// below: the captured log never contains a "GenerateAction" record). The
-// schema-mismatch branch IS on our reachable path
-// (ai/generate.go:465) and logs a JSON-parse error -- but empirically
-// (see below) that error's own text is a generic parser message ("data is
-// not valid JSON: invalid character ...", encoding/json's own format),
-// never the offending content itself.
-//
-// core/logger/logger.go's FromContext falls back to slog.Default() when
-// no context-scoped logger is present -- and genkit exposes no API to
-// install one, so that fallback is unconditional. ACR never calls
-// logger.SetLevel (the only thing that elevates slog.Default() to Debug)
-// or slog.SetDefault anywhere in this repository (grepped, not assumed),
-// so slog.Default() stays at its stdlib zero-value level (Info) in
-// production, silently dropping every Debug call before any I/O happens.
-//
-// This test proves the stronger, level-independent property empirically:
-// capture EVERY log line genkit produces -- at Debug, the most verbose
-// level reachable by any means -- across both a successful call (prompt
-// content) and a failing one (malformed model output), and confirm
-// neither secret appears anywhere in the captured output. That is worst
-// case for content leakage; production (Info level, nothing elevated)
-// only logs less.
-func TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath(t *testing.T) {
+// TestDebugLoggingNeverCarriesGenerationContentOnACRsPath is the CHAOS-3770
+// F1 residual probe, carried onto the shared llm client: capture EVERY log
+// line at Debug, the most verbose level reachable by any means, across both
+// a successful call (prompt content) and a failing one (malformed model
+// output), and confirm neither secret appears anywhere in the captured
+// output. That is worst case for content leakage; production (Info level,
+// nothing elevated) only logs less. The schema-mismatch line must fire, or
+// the malformed case proves nothing.
+func TestDebugLoggingNeverCarriesGenerationContentOnACRsPath(t *testing.T) {
 	captureAtDebug := func(t *testing.T, handler http.HandlerFunc, request func() contextfabric.InvestigationRequest) string {
 		t.Helper()
 		var buf bytes.Buffer
@@ -241,9 +218,6 @@ func TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath(t *testing.T)
 			t.Fatal(err)
 		}
 		_, _, _ = runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_test"}, request())
-		if strings.Contains(buf.String(), "GenerateAction") {
-			t.Fatal("captured log contains a \"GenerateAction\" record -- genkit.GenerateData is no longer bypassing action dispatch as assumed; re-derive this test's premise from the current vendored source before trusting it")
-		}
 		return buf.String()
 	}
 
@@ -264,7 +238,7 @@ func TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath(t *testing.T)
 		captured := captureAtDebug(t, chatCompletion(t, secretModelOutput), func() contextfabric.InvestigationRequest {
 			return testRequest()
 		})
-		if !strings.Contains(captured, "model failed to generate output matching expected schema") {
+		if !strings.Contains(captured, "context fabric model reply failed the output schema") {
 			t.Fatalf("sanity check failed: the schema-mismatch log line never fired, so this test proves nothing; got: %s", captured)
 		}
 		if strings.Contains(captured, secretModelOutput) {
@@ -273,45 +247,14 @@ func TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath(t *testing.T)
 	})
 }
 
-// TestActionRunDebugLoggingNeverCarriesProviderResponseBody is the
-// CHAOS-3770 F1(b) residual probe (codex round 3): the refutation in
-// TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath was correct
-// about DefineGenerateAction's closure being unreachable, but missed a
-// SECOND Debug logging path that IS on our call chain and IS reachable for
-// a genuine provider transport error (not just a malformed-but-200
-// response): core/action.go's Action.Run wraps every action invocation,
-// including the model action itself
-// (GenerateWithRequest -> Model.Generate -> Action.Run, ai/generate.go:882),
-// and its deferred log records the RAW error verbatim:
-//
-//	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name(), "err", err)
-//
-// For a provider transport failure, that err is compat_oai's own
-// fmt.Errorf("failed to create completion: %w", err)-wrapped openai-go
-// SDK error, whose Error() method embeds the raw response body verbatim
-// (openai-go/internal/apierror.Error.Error(), aliased as openai.Error --
-// see retryable's doc comment in genkitruntime/runtime.go). slog formats
-// an error-typed attribute via its Error() method, so this log line
-// carries the raw provider response body whenever the model action
-// itself fails -- a case
-// TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath never
-// exercised (its malformed-output case is a 200 OK with unparseable JSON
-// content, not a transport error, so the model ACTION succeeds and
-// Action.Run logs err=<nil>).
-//
-// The fix sanitizes at the transport boundary this package already owns
-// (newClientOptions, via option.WithMiddleware) rather than trying to
-// mute genkit's logger: a provider response body is replaced with a
-// fixed, content-free shape -- preserving the HTTP status (so
-// classifyModelError's existing status-based classification, including
-// its "429" substring check for rate limiting, is unaffected -- see the
-// composition assertion below and TestNew_classifiesRecordedProviderFailures)
-// -- before the openai-go SDK ever constructs an *openai.Error from it.
-// That closes the leak at its source: Action.Run's debug log, genkit's
-// metrics errorMessage attribute (F1(a)), and any other current or future
-// consumer of the error all see the sanitized text, unconditionally,
-// regardless of log level or provider configuration.
-func TestActionRunDebugLoggingNeverCarriesProviderResponseBody(t *testing.T) {
+// TestModelCallFailureDebugLoggingNeverCarriesProviderResponseBody is the
+// CHAOS-3770 F1(b) residual probe, carried onto the shared llm client: a
+// provider transport failure whose response body echoes request content must
+// not reach any log line, at Debug, the most verbose level. The shared client
+// keeps a provider body out of every error it returns; the runtime's own
+// failure line carries the error class only. Its sanity check is that the
+// failure line fired at all.
+func TestModelCallFailureDebugLoggingNeverCarriesProviderResponseBody(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -331,16 +274,13 @@ func TestActionRunDebugLoggingNeverCarriesProviderResponseBody(t *testing.T) {
 	}
 
 	captured := buf.String()
-	// Sanity check first: the model action's own Action.Run debug log must
-	// actually have fired with a non-nil err, or this test proves nothing
-	// (the difference between this test and the earlier refutation is
-	// exactly that the MODEL ACTION ITSELF fails here, not a later parse
-	// step).
-	if !strings.Contains(captured, "Action.Run") || !strings.Contains(captured, "name=openai/"+DefaultModel) {
-		t.Fatalf("sanity check failed: the model action's Action.Run debug log never fired; got: %s", captured)
+	// Sanity check first: the runtime's own model-call failure line must have
+	// fired, or this test proves nothing.
+	if !strings.Contains(captured, "context fabric model call failed") || !strings.Contains(captured, "error_class=invalid_request") {
+		t.Fatalf("sanity check failed: the model call failure debug log never fired; got: %s", captured)
 	}
 	if strings.Contains(captured, secret) {
-		t.Fatalf("Action.Run's debug log carried the raw provider response body: %s", captured)
+		t.Fatalf("a debug log carried the raw provider response body: %s", captured)
 	}
 }
 

@@ -94,13 +94,9 @@ const (
 	EnvAPIKey        = "ACR_CONTEXT_FABRIC_MODEL_API_KEY"
 	EnvTimeout       = "ACR_CONTEXT_FABRIC_MODEL_TIMEOUT"
 	EnvMaxAttempts   = "ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS"
-	// EnvMaxTransportRetries bounds the OpenAI-compatible SDK's own
-	// in-client retry loop, which is a second retry layer underneath
-	// genkitruntime's MaxAttempts. Both are bounded by genkitruntime's
-	// per-attempt deadline, so this exists to make the total call budget
-	// explicit rather than inherited: set it to 0 to make genkitruntime
-	// the single retry owner (recommended for a local BYO server, where a
-	// transport retry buys nothing).
+	// EnvMaxTransportRetries is still read and validated, but model calls no
+	// longer use it: the shared dev-health-go llm client they go through
+	// makes exactly one transport retry, inside the attempt's deadline.
 	EnvMaxTransportRetries = "ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES"
 	// EnvAllowInsecureBaseURL permits a plaintext http:// base URL. It
 	// exists for a co-located BYO server reached over loopback or a
@@ -152,9 +148,9 @@ type Config struct {
 	// set (a local BYO server may not authenticate at all); reaching a
 	// hosted provider on the default base URL always requires it.
 	APIKey string
-	// Timeout bounds one generation attempt, MaxAttempts bounds how many
-	// attempts genkitruntime makes, and MaxTransportRetries bounds the
-	// SDK's own retry loop within one attempt.
+	// Timeout bounds one generation attempt and MaxAttempts bounds how many
+	// attempts genkitruntime makes. MaxTransportRetries is validated but not
+	// used by model calls (see EnvMaxTransportRetries).
 	Timeout             time.Duration
 	MaxAttempts         int
 	MaxTransportRetries int

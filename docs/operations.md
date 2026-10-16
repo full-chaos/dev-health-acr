@@ -850,7 +850,7 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_PHRASING` | *(unset)* | Distinct model for the SECOND bounded offer-phrasing call (CHAOS-4171 PR2, `internal/contextfabric/chaos4171_offer_phrasing.go`), which rewrites each structure offer's presentation-facing wording under a closed-vocabulary guard. Unset shares the primary `ACR_CONTEXT_FABRIC_MODEL`; set to route phrasing to a smaller/cheaper model. |
 | `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (`Config.validate`, 1s–2m, `internal/contextfabric/modelprovider/config.go`). A TUNING variable: it applies only once a provider is identified by one of `ACR_CONTEXT_FABRIC_MODEL_PROVIDER`/`_BASE_URL`/`ACR_CONTEXT_FABRIC_MODEL`/`_FALLBACK`/`_PHRASING`/`_API_KEY`. Setting it alone, with none of those, is ignored (a startup WARN names it) rather than opting the process into provider validation -- `modelprovider.Configured` does NOT treat a tuning-only variable as an opt-in signal (CHAOS-4986, superseding the CHAOS-3770 F5 decision for this subset; the 2026-09-03 prod crash loop this replaces set only this variable). If a deployment does set it alongside a provider identity variable, raising it changes the worst-case math in the retry-topology section below -- recompute `per_attempt`/`per_leg`/`worst_case` before also touching `ACR_REQUEST_TIMEOUT`; this change does not. |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). A TUNING variable; see `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` above -- alone, with no provider identity variable set, it is ignored (logged) rather than opting in. |
-| `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | The OpenAI SDK's own retry loop *within* one attempt (0–5). Set `0` to make `genkitruntime` the single retry owner — the right choice for a local BYO server. A TUNING variable; see `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` above -- alone, with no provider identity variable set, it is ignored (logged) rather than opting in. |
+| `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | `2` | Validated (0–5) but no longer used by model calls: they go through the shared dev-health-go `llm` client, which makes exactly one transport retry of a transient failure (rate limit, 5xx, timeout, transport) inside the attempt's own `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` deadline. A TUNING variable; see `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` above -- alone, with no provider identity variable set, it is ignored (logged) rather than opting in. |
 | `ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Only for a loopback or private-network BYO server: the credential travels as a bearer token on every request. A TUNING variable; see `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` above -- alone, with no provider identity variable set, it is ignored (logged) rather than opting in. |
 
 ### Per-organization BYO LLM (CHAOS-3775)
@@ -1336,46 +1336,39 @@ it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_
   configured (opt-in; not the default since CHAOS-3855 — see below) this
   roughly DOUBLES the worst case per operation, not zero: primary
   attempts, then fallback attempts.
-- **`ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` adds real wall-clock
-  time beyond `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`, not inside it.** The
-  OpenAI SDK's own retry loop
-  (`openai-go/internal/requestconfig.RequestConfig.Execute`) sleeps
-  between retries with a plain `time.Sleep`, which is NOT bounded by the
-  request's context deadline — so a transport retry's backoff can run
-  past the moment `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` would otherwise have
-  fired. Ordinarily that backoff is capped at 8s per retry (exponential,
-  jittered), but the SDK honors a provider's `Retry-After` header up to
-  just under 60s per retry when present, so a provider that returns long
-  `Retry-After` values can push this considerably higher than the 8s
-  figure below.
+- **The transport retry runs inside `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`.**
+  Model calls go through the shared dev-health-go `llm` Chat Completions
+  client, which retries a transient failure once and sleeps (honouring a
+  provider `Retry-After` up to 60s) on the attempt's own context, so the
+  retry and its backoff end when the attempt's deadline does.
+  `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` no longer applies to
+  model calls (the OpenAI SDK retry loop it tuned, whose backoff could run
+  past the deadline, is no longer on this path).
 - **Genuinely transient failures repeat this at every one of
   `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` genkitruntime-level attempts**,
   each of which gets its own fresh `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`
-  budget plus its own transport-retry backoff on top.
+  budget.
 
 The honest worst case, per leg (primary or fallback) per operation:
 
 ```text
-per_attempt  = ACR_CONTEXT_FABRIC_MODEL_TIMEOUT + ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES × 8s
+per_attempt  = ACR_CONTEXT_FABRIC_MODEL_TIMEOUT
 per_leg      = ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS × per_attempt
 per_operation = per_leg × (2 if a fallback is configured, else 1)
 worst_case    = per_operation × 2   # interpret, then synthesize, sequentially
 ```
 
-With the documented defaults (`45s` timeout, `2` attempts, `2` transport
-retries): `per_attempt` = 45 + 2×8 = 61s, `per_leg` = 2×61 = 122s. As of
-CHAOS-3855 the default deployment has no fallback configured, so
-`per_operation` = 122, `worst_case` = 122×2 = **~245s**. If an operator
-opts a fallback back in, `per_operation` doubles to 244 and `worst_case`
-doubles to **~490s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
+With the documented defaults (`45s` timeout, `2` attempts): `per_attempt` =
+45s, `per_leg` = 2×45 = 90s. As of CHAOS-3855 the default deployment has no
+fallback configured, so `per_operation` = 90, `worst_case` = 90×2 = **~180s**.
+If an operator opts a fallback back in, `per_operation` doubles to 180 and
+`worst_case` doubles to **~360s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
 deployment's actual configuration, plus headroom. The model call itself never
 runs into the last 5 s of the request (`SynthesisCompositionReserveSeconds`):
 that slice composes and stores the degraded answer when a transient call end
 (timeout, cancel, rate limit, unavailable) uses up the runtime's attempts or the
 reserve ends the call. The service refuses to start investigations when
-`ACR_REQUEST_TIMEOUT` is not above it. Treat the 8s
-per-transport-retry term as a floor, not a ceiling, if the configured
-provider is known to return long `Retry-After` values. The timeout is
+`ACR_REQUEST_TIMEOUT` is not above it. The timeout is
 global to the API, not per-route, so raising it also loosens the bound on
 every other route; a per-route timeout is the cleaner fix and is not
 implemented yet.

@@ -3333,6 +3333,12 @@ func classifyModelErrorKind(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
+	if errors.Is(err, errOutputSchemaMismatch) {
+		return fmt.Errorf("%w: model output did not match the expected schema", contextfabric.ErrModelOutput)
+	}
+	if classified, ok := classifyLLMError(err); ok {
+		return classified
+	}
 	var genkitErr *core.GenkitError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {

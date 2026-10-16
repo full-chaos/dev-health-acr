@@ -9,7 +9,7 @@ import "testing"
 func TestRuntimeConfigWithPhrasingPropagatesResynthesisAttempts(t *testing.T) {
 	cfg := Config{Provider: "test-provider", Model: "test-model", MaxSynthesisResynthesisAttempts: 3}
 
-	if got := runtimeConfigWithPhrasing(nil, cfg, cfg.Model, nil); got.MaxSynthesisResynthesisAttempts != 3 {
+	if got := runtimeConfigWithPhrasing(cfg, cfg.Model, nil); got.MaxSynthesisResynthesisAttempts != 3 {
 		t.Fatalf("runtimeConfigWithPhrasing().MaxSynthesisResynthesisAttempts = %d, want 3", got.MaxSynthesisResynthesisAttempts)
 	}
 }
@@ -25,7 +25,7 @@ func TestRuntimeConfigWithPhrasingPropagatesResynthesisAttempts(t *testing.T) {
 func TestRuntimeConfigLeavesResynthesisAttemptsUnsetForTheFallbackLeg(t *testing.T) {
 	cfg := Config{Provider: "test-provider", Model: "test-model", MaxSynthesisResynthesisAttempts: 3}
 
-	if got := runtimeConfig(nil, cfg, cfg.Model, nil); got.MaxSynthesisResynthesisAttempts != 0 {
+	if got := runtimeConfig(cfg, cfg.Model, nil); got.MaxSynthesisResynthesisAttempts != 0 {
 		t.Fatalf("runtimeConfig().MaxSynthesisResynthesisAttempts = %d, want 0 (unset) -- the fallback leg must never inherit the primary's resynthesis bound", got.MaxSynthesisResynthesisAttempts)
 	}
 }
@@ -37,7 +37,7 @@ func TestRuntimeConfigLeavesResynthesisAttemptsUnsetForTheFallbackLeg(t *testing
 // which genkitruntime.New defaults to 1.
 func TestRuntimeConfigWithPhrasingLeavesResynthesisAttemptsZeroWhenConfigDoesNotSetIt(t *testing.T) {
 	cfg := Config{Provider: "test-provider", Model: "test-model"}
-	if got := runtimeConfigWithPhrasing(nil, cfg, cfg.Model, nil); got.MaxSynthesisResynthesisAttempts != 0 {
+	if got := runtimeConfigWithPhrasing(cfg, cfg.Model, nil); got.MaxSynthesisResynthesisAttempts != 0 {
 		t.Fatalf("runtimeConfigWithPhrasing().MaxSynthesisResynthesisAttempts = %d, want 0", got.MaxSynthesisResynthesisAttempts)
 	}
 }
