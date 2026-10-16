@@ -292,8 +292,8 @@ FactPullRequests
     leak unresolvable         2
     calls followed            1071
     calls accounted           14
-    calls not_a_call          12
-    calls excluded_by_design  335
+    calls not_a_call          13
+    calls excluded_by_design  338
     calls leaked              22
   fields             link_tier link_tier_breakdown owned_repositories owned_repositories_omitted_count owned_repository_count project_breakdown project_reached_repository_count pull_request_count pull_request_link_basis pull_requests_by_state pull_requests_by_state_basis pull_requests_by_state_omitted_count pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_open_current pull_requests_opened_window pull_requests_without_state_count reach_basis repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis scope scope_id scope_name state window_basis window_end window_start
 

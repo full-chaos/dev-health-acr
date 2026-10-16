@@ -19,6 +19,7 @@ type pullRequestProjectLinkRow struct {
 	key, provider, id, name, tier string
 	rank                          uint8
 	fallbacks                     []string
+	fallbackCount                 uint64
 }
 
 // dropCoveredProjectLinks applies the fallback-only rule (ops
@@ -40,8 +41,17 @@ func dropCoveredProjectLinks(ctx context.Context, client contextpacket.ClickHous
 	}
 	var all []fallback
 	var links []linkedSetRow
+	overflow := make([]bool, len(rows))
+	overflowRows := 0
 	for i, r := range rows {
 		if r.rank >= nativeRank {
+			continue
+		}
+		if r.fallbackCount > uint64(len(r.fallbacks)) {
+			// The statement carried only the first links of this row: cover cannot
+			// be proved for all of them, so the row keeps the tier it was read at.
+			overflow[i] = true
+			overflowRows++
 			continue
 		}
 		at := strings.LastIndex(r.key, ":")
@@ -63,7 +73,7 @@ func dropCoveredProjectLinks(ctx context.Context, client contextpacket.ClickHous
 		}
 	}
 	if len(all) == 0 {
-		slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", "outcome", contextfabric.SanitizeLogAttr("no_fallback_rows"), "project_rows", len(rows), "fallback_links", 0, "dropped_links", 0, "dropped_rows", 0)
+		slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", "outcome", contextfabric.SanitizeLogAttr("no_fallback_rows"), "project_rows", len(rows), "fallback_links", 0, "dropped_links", 0, "dropped_rows", 0, "overflow_rows", overflowRows)
 		return rows, nil
 	}
 	cover, err := readNativeCover(ctx, client, orgID, links)
@@ -87,7 +97,7 @@ func dropCoveredProjectLinks(ctx context.Context, client contextpacket.ClickHous
 	out := make([]pullRequestProjectLinkRow, 0, len(rows))
 	droppedRows := 0
 	for i, r := range rows {
-		if r.rank < nativeRank {
+		if r.rank < nativeRank && !overflow[i] {
 			if best[i] == nil {
 				droppedRows++
 				continue
@@ -100,6 +110,6 @@ func dropCoveredProjectLinks(ctx context.Context, client contextpacket.ClickHous
 	if droppedLinks > 0 {
 		outcome = "covered_fallback_links_dropped"
 	}
-	slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", "outcome", contextfabric.SanitizeLogAttr(outcome), "project_rows", len(rows), "fallback_links", len(all), "dropped_links", droppedLinks, "dropped_rows", droppedRows, "native_cover_issues", len(cover.issues), "native_cover_pull_requests", len(cover.pullRequests))
+	slog.InfoContext(ctx, "devhealthfacts.pull_request_project_native_first", "outcome", contextfabric.SanitizeLogAttr(outcome), "project_rows", len(rows), "fallback_links", len(all), "dropped_links", droppedLinks, "dropped_rows", droppedRows, "overflow_rows", overflowRows, "native_cover_issues", len(cover.issues), "native_cover_pull_requests", len(cover.pullRequests))
 	return out, nil
 }

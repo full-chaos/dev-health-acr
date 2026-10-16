@@ -33,11 +33,18 @@ const pullRequestProjectRowCap = 5000
 
 const pullRequestProjectRowLimit = "5001"
 
+// pullRequestProjectFallbackBound is the most below-native links one
+// (pull request, project) row carries to Go. A row with more is not evaluated
+// for cover (fail closed: it keeps the tier it was read at, never a tier the
+// links do not support) and is counted in the decision-basis log.
+const pullRequestProjectFallbackBound = "64"
+
 var pullRequestProjectLinksSQL = `SELECT concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number)) AS pr_key,
        pj.provider, pj.id, any(pj.name),
        toUInt8(max(lk.link_rank)),
        argMax(lk.provenance, lk.link_rank),
-       groupUniqArrayIf(concat(toString(lk.link_rank), '|', lk.provenance, '|', lk.work_item_id), lk.link_rank < 3)
+       groupUniqArrayIf(` + pullRequestProjectFallbackBound + `)(concat(toString(lk.link_rank), '|', lk.provenance, '|', lk.work_item_id), lk.link_rank < 3),
+       uniqExactIf(concat(toString(lk.link_rank), '|', lk.provenance, '|', lk.work_item_id), lk.link_rank < 3)
 FROM ` + admittedIssueLinksSQL + ` AS lk
 INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = lk.work_item_id
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
@@ -76,7 +83,7 @@ func (p *PullRequestsProvider) readPullRequestProjects(ctx context.Context, orgI
 			skipped++
 			return nil
 		}
-		if err := row.Scan(&r.key, &r.provider, &r.id, &r.name, &rank, &r.tier, &r.fallbacks); err != nil {
+		if err := row.Scan(&r.key, &r.provider, &r.id, &r.name, &rank, &r.tier, &r.fallbacks, &r.fallbackCount); err != nil {
 			return err
 		}
 		r.rank = rank
