@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -64,7 +65,13 @@ func teamPRLinkStatement(bound factTimeBound, limit int) string {
 			WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`) AS l
 		WHERE l.repo_id IN `+teamPRLinkRepositorySet+`
 			AND `+linkTierRankSQL+` > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
-	)) AS linked
+	)) AS linked,
+	countIf((pr.repo_id, pr.number) IN (
+		SELECT l.repo_id, l.pr_number
+		FROM work_graph_issue_pr AS l FINAL
+		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
+			AND `+linkTierRankSQL+` > 0
+	)) AS with_any_link
 FROM git_pull_requests AS pr FINAL
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+
 		themeInvestmentRangePredicate(bound, "pr.created_at", "ifNull(pr.merged_at, ifNull(pr.closed_at, toDateTime64('2999-12-31 00:00:00', 6, 'UTC')))")+`
@@ -82,18 +89,22 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 	sorted := append([]string(nil), repoIDs...)
 	sort.Strings(sorted)
 	statement := teamPRLinkStatement(bound, teamPRLinkChunk+1)
+	var totalPullRequests, totalLinked, totalWithAnyLink uint64
 	for start := 0; start < len(sorted); start += teamPRLinkChunk {
 		chunk := sorted[start:min(start+teamPRLinkChunk, len(sorted))]
 		got := 0
 		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamPullRequestLinkState", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 			var repoID string
-			var prs, links uint64
-			if err := row.Scan(&repoID, &prs, &links); err != nil {
+			var prs, links, withAnyLink uint64
+			if err := row.Scan(&repoID, &prs, &links, &withAnyLink); err != nil {
 				return err
 			}
 			got++
 			pullRequests[repoID] = int64(prs)
 			linked[repoID] = int64(links)
+			totalPullRequests += prs
+			totalLinked += links
+			totalWithAnyLink += withAnyLink
 			return nil
 		}, boundReaderBindings(bound)...)
 		if err != nil {
@@ -103,6 +114,16 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 			return nil, nil, fmt.Errorf("team pull request link state returned %d rows for %d repositories", got, len(chunk))
 		}
 	}
+	// The fallback-only rule decides here whether a pull request counts as
+	// linked: a pull request whose only links are fallback links of issues that
+	// carry a native link in the repositories read (with_any_link counts it,
+	// linked does not) is reported as unlinked.
+	suppressed := totalWithAnyLink - min(totalLinked, totalWithAnyLink)
+	outcome := "no_fallback_link_suppressed"
+	if suppressed > 0 {
+		outcome = "covered_fallback_links_suppressed"
+	}
+	slog.InfoContext(ctx, "devhealthfacts.team_pr_link_state_native_first", "outcome", contextfabric.SanitizeLogAttr(outcome), "repositories", len(sorted), "pull_requests", totalPullRequests, "linked", totalLinked, "suppressed_pull_requests", suppressed)
 	return pullRequests, linked, nil
 }
 
