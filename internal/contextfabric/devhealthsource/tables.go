@@ -1388,10 +1388,7 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, hierarchyCursorExpr, 
 	})
 	for reason, count := range notResolved {
 		level := slog.LevelWarn
-		switch reason {
-		case "part_of_parent_cleared":
-			level = slog.LevelDebug
-		case "part_of_parent_unresolved":
+		if reason == "part_of_parent_cleared" || reason == "part_of_parent_unresolved" {
 			level = slog.LevelInfo
 		}
 		startLogger(ctx).Log(ctx, level, "devhealthsource part_of parent not resolved",

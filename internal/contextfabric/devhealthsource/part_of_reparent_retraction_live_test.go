@@ -166,7 +166,7 @@ func partOfParentResolution(t *testing.T, adapter *falkorgraph.Adapter) {
 	const org = "97950000-0000-4000-8000-000000000002"
 	w := newEdgeWorld(t, adapter, org)
 	var logs bytes.Buffer
-	w.source.(*devhealthsource.ClickHouseProjectionSource).WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	w.source.(*devhealthsource.ClickHouseProjectionSource).WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	const repoA, repoB, repoC = "97950000-0000-4000-8000-0000000000b1", "97950000-0000-4000-8000-0000000000b2", "97950000-0000-4000-8000-0000000000b3"
 	w.repo(repoA, "acme/a")
 	w.repo(repoB, "acme/b")
