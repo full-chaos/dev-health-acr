@@ -6,11 +6,11 @@ import (
 )
 
 func TestAdmittedLinkedPullRequestRowsReadNoWorkItems(t *testing.T) {
-	fragment := nativeFirstLinkedPullRequestRowsAmongSQL("(SELECT 1)")
+	fragment := admittedLinkedPullRequestRowsSQL
 	if strings.Contains(fragment, "work_items") {
 		t.Fatalf("the shared link-row fragment reads work_items, want a join key only:\n%s", fragment)
 	}
-	for _, want := range []string{"work_graph_issue_pr FINAL", "git_pull_requests AS pr FINAL", linkedPullRequestOnSQL, linkTierRankSQL + " > 0", "l.org_id = {org_id:String}", "provenance = 'native'"} {
+	for _, want := range []string{"work_graph_issue_pr AS l FINAL", "git_pull_requests AS pr FINAL", linkedPullRequestOnSQL, linkTierRankSQL + " > 0", "l.org_id = {org_id:String}"} {
 		if !strings.Contains(fragment, want) {
 			t.Fatalf("the shared link-row fragment lacks %q:\n%s", want, fragment)
 		}
@@ -22,7 +22,7 @@ func TestTeamProjectLinkRowsReadWorkItemsForTheOwnedProjectsInTwoPasses(t *testi
 	if got := strings.Count(statement, "FROM work_items"); got != 2 {
 		t.Fatalf("team project link rows read work_items %d times, want 2 (unmerged candidates, then FINAL):\n%s", got, statement)
 	}
-	for _, want := range []string{"work_graph_issue_pr FINAL", "provenance = 'native'", "cp.work_item_id IN " + linkedWorkItemIDsSQL, "cw.work_item_id IN (", "cw.project_id IN (SELECT v FROM", "cp.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{admittedLinkedPullRequestRowsSQL, "cp.work_item_id IN " + linkedWorkItemIDsSQL, "cw.work_item_id IN (", "cw.project_id IN (SELECT v FROM", "cp.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}

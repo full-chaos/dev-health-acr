@@ -3,8 +3,8 @@ package devhealthfacts
 // The issue <> pull request link of record is work_graph_issue_pr, one row per
 // (pull request repository, issue, pull request number) carrying a provenance
 // tier: native 3 > explicit_text 2 > heuristic 1. The team project-reach reads
-// count a lower tier only where no native row covers its pull request or its
-// issue (nativeFirstLinkSQL). Every reader of the link in
+// and the investment link-state read count a lower tier only where the issue
+// has no native row (nativeFirstOverSQL, nativeFirstLinkSQL). Every reader of the link in
 // this package reads it through issueLinkRowsSQL (or its admitted subset), so
 // one rule decides whether a row counts:
 //
@@ -23,18 +23,14 @@ const linkTierRankSQL = `multiIf(l.provenance = 'native', 3, l.provenance = 'exp
 // issueprlinks.NativeLinks.Outranks): an explicit_text or heuristic row counts
 // only when no native row covers its pull request (repo_id, pr_number) or its
 // issue; a native row always counts. Ops retracts the covered rows at the
-// source. These reads apply the ISSUE side: a fallback row of an issue that has
-// any native row, to any pull request, does not count; the native row counts
-// even when its pull request has no row. The PULL REQUEST side (a native link
-// from an issue of another project covering the same pull request) is not
-// applied: finding it needs the table's native rows by (repo_id, pr_number),
-// which is not a key prefix, and costs a read per candidate set. It is left to
-// the source retraction and to the shared readers follow-up, and a test pins
-// today's behaviour (native_first_link_known_gap_integration_test.go).
-//
-// The issue side costs no read: the rows of the checked issues are read once
-// (nativeFirstLinkSourceSQL) and a window over each issue's rows says whether it
-// carries a native one.
+// source. These reads apply the ISSUE side, over the rows they already read: a
+// fallback row of an issue that has a native row among them does not count.
+// Two cases differ from ops and are left to the source retraction and to the
+// shared readers follow-up, each pinned by a known-gap test
+// (native_first_link_integration_test.go): a native link from an issue of
+// another project covering the same pull request (finding it needs the table's
+// native rows by (repo_id, pr_number), not a key prefix), and a native link whose
+// pull request has no row (the existence join drops it before the rule runs).
 
 // nativeFirstLinkSourceSQL is the link rows of the work item ids candidates (a
 // subquery; "" is every row of the organization) with issue_native, 1 when the
@@ -108,17 +104,27 @@ var issuesWithLinkedPullRequestSQL = `(SELECT work_item_id FROM ` + admittedIssu
 // work items, used to prune work_items by primary key before a join to them.
 const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
 
-// nativeFirstLinkedPullRequestRowsAmongSQL is the admitted link rows (known
-// tier, native-first) of the work item ids candidates (a subquery) names whose
+// admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
 // without reading work_items: a caller that has already restricted the work
 // items to issues joins it on work_item_id, and so reads the work item table
 // once.
-func nativeFirstLinkedPullRequestRowsAmongSQL(candidates string) string {
-	return `(
+var admittedLinkedPullRequestRowsSQL = `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
-  FROM ` + nativeFirstLinkSourceSQL(candidates) + ` AS l
+  FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0 AND ` + nativeFirstLinkSQL + `
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
+)`
+
+// nativeFirstOverSQL applies the issue side of the fallback-only rule to a
+// derived table that has columns work_item_id and link_rank (3 is native): a
+// row below native is dropped when the same issue has a native row among the
+// rows. It runs over the rows already joined, so it reads nothing more and
+// holds only those rows.
+func nativeFirstOverSQL(rows string) string {
+	return `(
+  SELECT * EXCEPT (issue_native) FROM (
+    SELECT *, max(link_rank = 3) OVER (PARTITION BY work_item_id) AS issue_native FROM ` + rows + `
+  ) WHERE link_rank = 3 OR issue_native = 0
 )`
 }

@@ -166,19 +166,16 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	// read below holds only those candidates, not every linked work item.
 	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
       AND cp.project_id IN ` + keys + `)`
-	// The candidate ids are read once (a scalar array), then every reference
-	// below unpacks it: the statement reads work_items twice, not once per use.
-	candidateIDs := `(SELECT arrayJoin(candidate_ids))`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidateIDs + `
+    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
       AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
-	return `(
-  WITH (SELECT groupUniqArray(work_item_id) FROM ` + candidates + `) AS candidate_ids
+	// The fallback-only rule over the rows already joined (nativeFirstOverSQL).
+	return nativeFirstOverSQL(`(
   SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
   FROM ` + owned + ` AS o
   INNER JOIN ` + issues + ` AS w ON w.provider = o.provider AND w.project_id = o.join_key
-  INNER JOIN ` + nativeFirstLinkedPullRequestRowsAmongSQL(candidateIDs) + ` AS l ON l.work_item_id = w.work_item_id
-)`
+  INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
+)`)
 }
 
 // teamOwnedResolvedProjectsSQL is (team_id, provider, join_key) of every

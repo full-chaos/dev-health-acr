@@ -48,13 +48,12 @@ func TestReadFactsProjectReachIgnoresFallbackLinksCoveredByANativeLink(t *testin
 		}
 	}
 	fallback("i-1", "repo-x", 7, "heuristic", true)
-	// The covering native link may sit outside everything the read reaches: an
-	// issue whose native link names a pull request that has no row (repo-q)
-	// still covers its fallback row.
+	// A native link to a pull request in a repository the read does not report
+	// (repo-q) covers the issue's fallback row all the same.
 	exec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
 		"i-6", repoUUID("repo-a"), orgID, "title i-6", at, "proj-1")
 	fallback("i-6", "repo-x", 8, "heuristic", true)
-	fallback("i-6", "repo-q", 1, "native", false)
+	fallback("i-6", "repo-q", 1, "native", true)
 
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -99,19 +98,21 @@ func TestReadFactsProjectReachIgnoresFallbackLinksCoveredByANativeLink(t *testin
 		tiers[id] = tier
 	}
 	if len(tiers) != 2 || tiers[repoUUID("repo-a")] != "native" || tiers[repoUUID("repo-r")] != "heuristic" {
-		t.Fatalf("project_reached_repositories = %v, want repo-a native, repo-r heuristic (no native link on either side), and no repo-x (its only links are fallbacks on issues that carry a native link, one natively linked to a pull request inside the read and one to a pull request that has no row)", tiers)
+		t.Fatalf("project_reached_repositories = %v, want repo-a native, repo-r heuristic (no native link on either side), and no repo-x (its only links are fallbacks on issues that carry a native link, one natively linked to a pull request in repo-a and one to a pull request in another repository)", tiers)
 	}
 	if got, _ := investment.Fields["repository_link_basis"].(string); got != "heuristic" {
 		t.Fatalf("repository_link_basis = %#v, want heuristic from repo-r's fallback-only links", investment.Fields["repository_link_basis"])
 	}
 }
 
-// KNOWN GAP, pinned on purpose. The fallback-only rule has two sides (ops
+// KNOWN GAPS, pinned on purpose. The fallback-only rule has two sides (ops
 // issueprlinks.NativeLinks.Outranks): a native link covers the issue, and a
-// native link covers the pull request. These reads apply the issue side only.
-// A text link of an owned project's issue to a pull request that another
-// project's issue links natively still reaches the repository, at its own
-// fallback tier, until the source retraction removes the row. The shared
+// native link covers the pull request. These reads apply the issue side only,
+// over the rows the read already joins. Two cases therefore still count a
+// fallback link, at its own tier, until the source retraction removes the row:
+// a text link of an owned project's issue to a pull request that another
+// project's issue links natively, and a text link of an issue whose native link
+// names a pull request that has no row. The shared
 // readers follow-up (a key-prefix or read-once link set design) closes it; when
 // it does, this test turns red on purpose and is rewritten to expect no reach.
 func TestReadFactsProjectReachKnownGapFallbackOnAPullRequestAnotherProjectLinksNatively(t *testing.T) {
@@ -141,6 +142,15 @@ func TestReadFactsProjectReachKnownGapFallbackOnAPullRequestAnotherProjectLinksN
 		repoUUID("repo-x"), "i-other-project", uint32(9), float32(1), "native", "", at, orgID)
 	exec("pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
 		repoUUID("repo-x"), orgID, uint32(9), "pr", "open", at, at, "feature", "")
+	exec("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("repo-y"), orgID, "acme/repo-y", "github", at)
+	exec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at) VALUES (?, ?, ?, ?, 'open', '', ?, '', 'linear', ?, NULL)`,
+		"i-8", repoUUID("repo-a"), orgID, "title i-8", at, "proj-1")
+	exec("link", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoUUID("repo-y"), "i-8", uint32(4), float32(1), "heuristic", "", at, orgID)
+	exec("link", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoUUID("repo-q"), "i-8", uint32(1), float32(1), "native", "", at, orgID)
+	exec("pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		repoUUID("repo-y"), orgID, uint32(4), "pr", "open", at, at, "feature", "")
 
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
@@ -183,5 +193,8 @@ func TestReadFactsProjectReachKnownGapFallbackOnAPullRequestAnotherProjectLinksN
 	}
 	if tiers[repoUUID("repo-x")] != "explicit_text" {
 		t.Fatalf("known gap changed: project_reached_repositories = %v, want repo-x still reached at explicit_text (the pull request side of the rule is not applied here); if this now holds no repo-x, the gap is closed: rewrite this test", tiers)
+	}
+	if tiers[repoUUID("repo-y")] != "heuristic" {
+		t.Fatalf("known gap changed: project_reached_repositories = %v, want repo-y still reached at heuristic (the native link of the issue names a pull request that has no row); if this now holds no repo-y, the gap is closed: rewrite this test", tiers)
 	}
 }
