@@ -10,7 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
-const fulltextFirstReadRepeats = 20
+const fulltextFirstReadRepeats = 200
 
 // TestLiveFulltextFirstReadAfterApplySeesEveryProjectedNode repeats, on fresh organization graphs of one FalkorDB, the
 // shape that the kind-filter and score-order live tests share: apply a batch whose two nodes carry one search term,
