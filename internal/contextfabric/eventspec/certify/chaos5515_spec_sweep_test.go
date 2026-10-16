@@ -101,6 +101,9 @@ func canonicalValueFor(f eventspec.Field) any {
 		if len(f.ClosedVocabulary) > 0 {
 			return f.ClosedVocabulary[0]
 		}
+		if len(f.JoinedMembers) > 0 {
+			return f.JoinedMembers[0]
+		}
 		return "sweep_canonical_string"
 	case eventspec.FieldInt:
 		// CHAOS-5517: "index"/"total" are the ONE pair of int fields whose
@@ -494,7 +497,7 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		_, err := certifyRecovered(t, mutate(0.5), Assertion{Event: ev, Want: wantFor(0.5)})
 		row.gotAccept = err == nil
 	case "out_of_vocabulary":
-		if len(f.ClosedVocabulary) == 0 {
+		if len(f.ClosedVocabulary) == 0 && len(f.JoinedMembers) == 0 {
 			return row
 		}
 		row.applicable, row.wantAccept = true, false

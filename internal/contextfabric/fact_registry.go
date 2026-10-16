@@ -444,9 +444,38 @@ type FactPrerequisiteLoader interface {
 // ran past its deadline; classifyFactReadError turns it into the served sentence.
 const factReadTimedOutReason = "canonical fact capability timed out"
 
+// FactReadFailureClass is the closed class of a failed fact read. It is what
+// the read-failed log line carries in place of the reason text, so a provider's
+// own wording never reaches a log line.
+type FactReadFailureClass string
+
+const (
+	FactReadFailureTimedOut             FactReadFailureClass = "timed_out"
+	FactReadFailureResultRejected       FactReadFailureClass = "result_rejected"
+	FactReadFailureBudgetExceeded       FactReadFailureClass = "budget_exceeded"
+	FactReadFailureContended            FactReadFailureClass = "contended"
+	FactReadFailureReadFailed           FactReadFailureClass = "read_failed"
+	FactReadFailureOrganizationRequired FactReadFailureClass = "organization_required"
+	// FactReadFailureUnclassified is a FactReadFailure whose provider set no class.
+	FactReadFailureUnclassified FactReadFailureClass = "unclassified"
+	// FactReadFailureNotTyped is a failed read whose error is not a FactReadFailure.
+	FactReadFailureNotTyped FactReadFailureClass = "none"
+)
+
+// FactReadFailureClassVocabulary is the closed set of classes the read-failed line carries.
+func FactReadFailureClassVocabulary() []string {
+	return []string{
+		string(FactReadFailureTimedOut), string(FactReadFailureResultRejected), string(FactReadFailureBudgetExceeded),
+		string(FactReadFailureContended), string(FactReadFailureReadFailed), string(FactReadFailureOrganizationRequired),
+		string(FactReadFailureUnclassified), string(FactReadFailureNotTyped),
+	}
+}
+
 type FactReadFailure struct {
 	State  SourceState
 	Reason string
+	// Class is the closed class of the failure; the log line carries it, never Reason.
+	Class FactReadFailureClass
 	// Cause is the error the read failed with. It is for logs and tests only:
 	// Error() returns Reason alone, so a served answer never carries it.
 	Cause error
@@ -1207,6 +1236,37 @@ const (
 	factReadCancelled factReadOutcome = "cancelled"
 )
 
+// FactReadOutcomeVocabulary is the closed set of outcomes the fact read line carries.
+func FactReadOutcomeVocabulary() []string {
+	return []string{
+		string(factReadUnconfigured), string(factReadScopeGap), string(factReadPruned), string(factReadFailed),
+		string(factReadCompleted), string(factReadRejected), string(factReadRejectedNonNumericMeasure), string(factReadCancelled),
+	}
+}
+
+// FactReadStateVocabulary is the closed set of source states the fact read line carries, with the empty state of a read that minted no observation first.
+func FactReadStateVocabulary() []string {
+	return []string{
+		"", string(SourceAvailable), string(SourceStale), string(SourceUnavailable), string(SourceUnconfigured),
+		string(SourceUnauthorized), string(SourceNoData), string(SourceTruncated), string(SourceConflicted), string(SourceNotApplicable), string(SourcePruned),
+	}
+}
+
+// FactResultRejectionCauseVocabulary is the closed set of causes the fact result rejected line carries.
+func FactResultRejectionCauseVocabulary() []string {
+	return []string{
+		string(factResultRejectedSourceState), string(factResultRejectedObservedAt), string(factResultRejectedVersion),
+		string(factResultRejectedStateCarriesFacts), string(factResultRejectedEvaluatedSubject), string(factResultRejectedFactKind),
+		string(factResultRejectedFactSubjectOutsideSet), string(factResultRejectedFactSubject), string(factResultRejectedFactSourceState),
+		string(factResultRejectedFactStateCarriesFacts), string(factResultRejectedFact),
+	}
+}
+
+// FactTableShapeVocabulary is the closed set of declared table shapes.
+func FactTableShapeVocabulary() []string {
+	return []string{string(FactTableTimeSeries), string(FactTableBreakdown), string(FactTableRanking)}
+}
+
 // recordFactRead emits one decision-basis record per PLANNED capability
 // (CHAOS-4521, the diagnosis-in-artifacts rule in acr/AGENTS.md).
 //
@@ -1325,7 +1385,7 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 	result, err := registered.provider.ReadFacts(providerCtx, principal, query)
 	if err != nil {
 		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
-			return FactProviderResult{}, &FactReadFailure{State: SourceUnavailable, Reason: factReadTimedOutReason}
+			return FactProviderResult{}, &FactReadFailure{State: SourceUnavailable, Reason: factReadTimedOutReason, Class: FactReadFailureTimedOut}
 		}
 		return FactProviderResult{}, err
 	}
@@ -1491,7 +1551,7 @@ type factResultRejection struct {
 func rejectFactResult(cause factResultRejectionCause, err error) *factResultRejection {
 	return &factResultRejection{
 		cause:   cause,
-		failure: &FactReadFailure{State: SourceUnavailable, Reason: factResultRejectedReason},
+		failure: &FactReadFailure{State: SourceUnavailable, Reason: factResultRejectedReason, Class: FactReadFailureResultRejected},
 		err:     err,
 	}
 }
@@ -2021,14 +2081,17 @@ func (r *FactCapabilityRegistry) logFactReadFailure(ctx context.Context, kind Fa
 		return
 	}
 	var failure *FactReadFailure
-	reason := ""
+	class := FactReadFailureNotTyped
 	if errors.As(err, &failure) {
-		reason = failure.Reason
+		class = failure.Class
+		if class == "" {
+			class = FactReadFailureUnclassified
+		}
 	}
 	attrs := []any{
 		"kind", SanitizeLogAttr(string(kind)),
 		"error_type", SanitizeLogAttr(fmt.Sprintf("%T", err)),
-		"provider_reason", SanitizeLogAttr(reason),
+		"provider_reason", SanitizeLogAttr(string(class)),
 	}
 	attrs = append(attrs, requestIDLogAttrs(ctx)...)
 	r.logger.WarnContext(ctx, "context fabric fact read failed", attrs...)

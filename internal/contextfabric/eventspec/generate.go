@@ -226,6 +226,16 @@ func goVarName(e Event) string {
 		return "EngineFactGateInfo"
 	case OrganizationSubjectRead.ID:
 		return "OrganizationSubjectRead"
+	case FactRead.ID:
+		return "FactRead"
+	case FactEvaluationCoverage.ID:
+		return "FactEvaluationCoverage"
+	case FactTableDeclaration.ID:
+		return "FactTableDeclaration"
+	case FactResultRejected.ID:
+		return "FactResultRejected"
+	case FactReadFailed.ID:
+		return "FactReadFailed"
 	case CohortRanked.ID:
 		return "CohortRanked"
 	case CohortDriverNarration.ID:
@@ -511,6 +521,7 @@ type jsonField struct {
 	Nullable         bool        `json:"nullable,omitempty"`
 	MaxItems         int         `json:"max_items,omitempty"`
 	MaxInt           *int        `json:"max_int,omitempty"`
+	JoinedMembers    []string    `json:"joined_members,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -522,6 +533,7 @@ type jsonEvent struct {
 	Attribution        []string    `json:"attribution"`
 	BoundedAggregation string      `json:"bounded_aggregation"`
 	MaxLinesPerScope   int         `json:"max_lines_per_scope,omitempty"`
+	DataDependentBound string      `json:"data_dependent_bound,omitempty"`
 	Fields             []jsonField `json:"fields"`
 }
 
@@ -537,6 +549,7 @@ func toJSONFields(fs []Field) []jsonField {
 			Nullable:         f.Nullable,
 			MaxItems:         f.MaxItems,
 			MaxInt:           f.MaxInt,
+			JoinedMembers:    f.JoinedMembers,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}
@@ -556,6 +569,7 @@ func generateSchema() ([]byte, error) {
 			Attribution:        e.Attribution,
 			BoundedAggregation: e.BoundedAggregation,
 			MaxLinesPerScope:   e.MaxLinesPerScope,
+			DataDependentBound: e.DataDependentBound,
 			Fields:             toJSONFields(e.Fields),
 		})
 	}
