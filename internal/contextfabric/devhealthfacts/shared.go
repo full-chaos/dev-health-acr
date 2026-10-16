@@ -1216,7 +1216,13 @@ import (
 // the same way and names unit_issue_size. The project mixes still read in
 // COUNT and say so (measure). An answer saved under v236 holds shares of the
 // old measure.
-const QueryVersion = "devhealthfacts.clickhouse.v237"
+//
+// v237 -> v238: the team linked pull request mix drops an explicit_text or
+// heuristic link that a native link covers, by its issue or by its pull
+// request, before the linked set is sent; a team's project-reached mix no
+// longer counts a fallback link next to a native one. An answer saved under
+// v237 can differ.
+const QueryVersion = "devhealthfacts.clickhouse.v238"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
