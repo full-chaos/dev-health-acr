@@ -30,7 +30,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgclarification"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructurepriors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructureselection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
@@ -188,8 +187,12 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
 	}
+	orgModelConfigResolver, err := buildOrgModelConfigResolver(orgModelConfigStore, entitlement, os.LookupEnv, request.options.Logger)
+	if err != nil {
+		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config source: %w", err))
+	}
 	request.sourceHealthOperations = devhealthfacts.NewOperationHolder()
-	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigStore)
+	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigResolver)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -641,7 +644,7 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	return graphReader, embedRetrievalIdentity, nil
 }
 
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigStore *pgmodelconfig.Store) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, *pgstructureselection.Sink, error) {
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigs contextfabric.OrgModelConfigResolver) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, *pgstructureselection.Sink, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil, nil, nil, nil, nil
 	}
@@ -843,7 +846,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			return nil, nil, nil, nil, nil, nil, err
 		}
 	}
-	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv, engineTelemetry, request.options.Logger)
+	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigs, os.LookupEnv, engineTelemetry, request.options.Logger)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
@@ -863,17 +866,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if phrasingRuntime != nil {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
-	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil
-	// -- the same typed-nil-interface trap open()'s own conversion guards
-	// against (see its doc comment) applies here too: assigning a nil
-	// *pgmodelconfig.Store directly into an interface-typed field would
-	// produce a non-nil interface wrapping nil, so
-	// contextFabricReuseModelIdentityResolver's own `configs == nil` check
-	// would never see it as absent.
-	var reuseModelIdentityConfigs contextfabric.OrgModelConfigResolver
-	if orgModelConfigStore != nil {
-		reuseModelIdentityConfigs = orgModelConfigStore
-	}
+	// orgModelConfigs is already an interface value that is nil when no
+	// per-organization source is configured (buildOrgModelConfigResolver
+	// never returns a typed nil).
+	reuseModelIdentityConfigs := orgModelConfigs
 	// CHAOS-3859 (capture-only phase): unconditional, independent of
 	// reuseEnabled -- capture only needs PriorSubjectReceipts resolution
 	// (e.results != nil, i.e. the investigator itself being composed),
