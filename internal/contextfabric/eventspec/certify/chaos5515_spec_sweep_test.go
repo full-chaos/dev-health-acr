@@ -900,6 +900,19 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "count_mismatch", applicable: true, wantAccept: false, gotAccept: err == nil})
 	}
 
+	// The event-level "undeclared_key" cell: the canonical line plus one key
+	// the declaration does not list is refused, for every event.
+	undeclaredKeyRows := 0
+	for _, ev := range eventspec.All {
+		base := canonicalLineFor(ev)
+		attribution := attributionWant(ev, base)
+		extra := deepCopyLine(t, base)
+		extra["sweep_undeclared_key"] = "x"
+		_, err := certifyRecovered(t, marshalJoinLines(t, ev.ID, extra), Assertion{Event: ev, Want: attribution})
+		undeclaredKeyRows++
+		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "undeclared_key", applicable: true, wantAccept: false, gotAccept: err == nil})
+	}
+
 	// CHAOS-5517 (hosted battery finding: G20 survived): CertifyAbsent must
 	// refuse an attribution map that includes "pass" for a
 	// zero_or_one_per_request event (it has no pass concept at all) --
@@ -986,10 +999,10 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// pass-keying guard, and the typed-construction refusal guard, not a
 	// silently-truncated subset.
 	const constructionRefusalRows = 1
-	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows + boundedManyExtraRows + zeroOrOneRequestAbsentRows
+	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows + boundedManyExtraRows + zeroOrOneRequestAbsentRows + undeclaredKeyRows
 	if len(rows) != wantRows {
-		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows + %d bounded-many rows + %d zero-or-one-per-request absent rows)",
-			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows, boundedManyExtraRows, zeroOrOneRequestAbsentRows)
+		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows + %d bounded-many rows + %d zero-or-one-per-request absent rows + %d undeclared-key rows)",
+			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows, boundedManyExtraRows, zeroOrOneRequestAbsentRows, undeclaredKeyRows)
 	}
 }
 
