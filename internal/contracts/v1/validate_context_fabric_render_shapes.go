@@ -220,25 +220,39 @@ func renderCellValue(cell ContextFabricScalarValue, source ContextFabricRenderPo
 	}
 }
 
-func validContextFabricRenderKind(kind ContextFabricRenderKind) bool {
-	switch kind {
-	case ContextFabricRenderKindSeries, ContextFabricRenderKindTable, ContextFabricRenderKindQuadrant,
+// ContextFabricRenderKindVocabulary and ContextFabricRenderPresentationVocabulary
+// are the closed vocabularies the validators below check against, exported so a
+// log declaration reads the same list instead of copying it.
+func ContextFabricRenderKindVocabulary() []ContextFabricRenderKind {
+	return []ContextFabricRenderKind{
+		ContextFabricRenderKindSeries, ContextFabricRenderKindTable, ContextFabricRenderKindQuadrant,
 		ContextFabricRenderKindTreemap, ContextFabricRenderKindSunburst, ContextFabricRenderKindSankey,
-		ContextFabricRenderKindBurndown, ContextFabricRenderKindForecast:
-		return true
-	default:
-		return false
+		ContextFabricRenderKindBurndown, ContextFabricRenderKindForecast,
 	}
 }
 
-func validContextFabricRenderPresentation(presentation ContextFabricRenderPresentation) bool {
-	switch presentation {
-	case ContextFabricRenderPresentationBars, ContextFabricRenderPresentationStackedBars,
-		ContextFabricRenderPresentationLine:
-		return true
-	default:
-		return false
+func ContextFabricRenderPresentationVocabulary() []ContextFabricRenderPresentation {
+	return []ContextFabricRenderPresentation{
+		ContextFabricRenderPresentationBars, ContextFabricRenderPresentationStackedBars, ContextFabricRenderPresentationLine,
 	}
+}
+
+func validContextFabricRenderKind(kind ContextFabricRenderKind) bool {
+	for _, member := range ContextFabricRenderKindVocabulary() {
+		if member == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func validContextFabricRenderPresentation(presentation ContextFabricRenderPresentation) bool {
+	for _, member := range ContextFabricRenderPresentationVocabulary() {
+		if member == presentation {
+			return true
+		}
+	}
+	return false
 }
 
 func validContextFabricRenderAxisKind(kind ContextFabricRenderAxisKind) bool {

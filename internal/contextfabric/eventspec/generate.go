@@ -222,6 +222,16 @@ func goVarName(e Event) string {
 		return "CohortRanked"
 	case CohortDriverNarration.ID:
 		return "CohortDriverNarration"
+	case RenderShapeSelectionSummary.ID:
+		return "RenderShapeSelectionSummary"
+	case RenderShapeRuleSkipped.ID:
+		return "RenderShapeRuleSkipped"
+	case InterpretationEnsembleGap.ID:
+		return "InterpretationEnsembleGap"
+	case InterpretationEnsembleResolved.ID:
+		return "InterpretationEnsembleResolved"
+	case ServerStatusShadowLine.ID:
+		return "ServerStatusShadowLine"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
@@ -491,6 +501,7 @@ type jsonField struct {
 	ClosedVocabulary []string    `json:"closed_vocabulary,omitempty"`
 	Applicability    string      `json:"applicability,omitempty"`
 	Nullable         bool        `json:"nullable,omitempty"`
+	MaxItems         int         `json:"max_items,omitempty"`
 	Fields           []jsonField `json:"fields,omitempty"`
 }
 
@@ -514,6 +525,7 @@ func toJSONFields(fs []Field) []jsonField {
 			ClosedVocabulary: f.ClosedVocabulary,
 			Applicability:    f.Applicability,
 			Nullable:         f.Nullable,
+			MaxItems:         f.MaxItems,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

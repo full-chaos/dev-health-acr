@@ -932,3 +932,24 @@ func renderKindNoun(kind contractsv1.ContextFabricSubjectKind) string {
 	}
 	return string(kind)
 }
+
+// RenderShapeSkipReasonLineVocabulary is every value the render_shape_skip_reason
+// key of the rule-skipped line can carry: the RenderShapeSkip* constants.
+func RenderShapeSkipReasonLineVocabulary() []string {
+	return []string{
+		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),
+		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
+		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),
+		string(RenderShapeSkipNoPlottableMeasure), string(RenderShapeSkipShapeBudgetSpent), string(RenderShapeSkipNotPlanAuthorized),
+	}
+}
+
+// RenderShapeRuleLineVocabulary is every rule the selector evaluates, read from
+// the selector's own rule list: the values render_shape_rule can carry.
+func RenderShapeRuleLineVocabulary() []string {
+	out := make([]string, 0, len(renderShapeRules))
+	for _, rule := range renderShapeRules {
+		out = append(out, string(rule))
+	}
+	return out
+}
