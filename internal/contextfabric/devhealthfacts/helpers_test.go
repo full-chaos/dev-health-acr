@@ -41,6 +41,9 @@ type capturedQuery struct {
 	bindings  []contextpacket.ClickHouseBinding
 }
 
+// linkedNativeCoverMarker is in the native cover statement of fallback links and no other.
+const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id IN {ids:Array(String)}"
+
 type fakeClient struct {
 	tables  []fakeTable
 	queries []capturedQuery
@@ -63,6 +66,16 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 			}
 		}
 		return &fakeScanner{}, nil
+	}
+	// The native cover of fallback links (one row of two arrays) is read only
+	// when a fallback link exists; a test that did not seed it gets none covered.
+	if strings.Contains(statement, linkedNativeCoverMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, linkedNativeCoverMarker) {
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{rows: [][]any{{[]string{}, []string{}}}}, nil
 	}
 	for _, table := range c.tables {
 		if strings.Contains(statement, table.match) {
