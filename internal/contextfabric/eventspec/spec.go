@@ -1815,6 +1815,94 @@ var ServerStatusShadowLine = Event{
 	},
 }
 
+// FactRootRefused is the Warn line of a fact-root re-check refusal: resolution committed a subject the caller may not see. Counts and kinds only, never ids or labels.
+var FactRootRefused = Event{
+	ID:                 "contextfabric.fact_root_refused",
+	Msg:                "context fabric fact root refused",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per request: the fact-root re-check runs once after resolution commits its roots.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
+		{Key: "refused_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+func engineFactGateFields(decisions, reasons []string) []Field {
+	return []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"engine_fact_read"}},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: decisions},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: reasons},
+		{Key: "repository_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_undeclared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_withheld_from", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "references_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "references_refused", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fields_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evidence_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fields_undeclared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	}
+}
+
+// EngineFactGateWarn is the Warn line of the embedded-subject gate on a restricted caller's engine fact read that failed closed or removed a field its capability does not declare. Counts and closed values only, never the id or label of a withheld subject.
+var EngineFactGateWarn = Event{
+	ID:                 "contextfabric.engine_fact_gate_warn",
+	Msg:                "context fabric engine fact gate",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "one line per gated engine fact read of a restricted caller; a request that reads facts more than once (main read, group read, period delta) carries one line per read, so a certification asserts a request that makes one read.",
+	Fields: engineFactGateFields(
+		[]string{contextfabric.EngineFactGateFiltered, contextfabric.EngineFactGateUnavailable},
+		[]string{
+			contextfabric.EngineFactGateReasonUnseenSubjectsWithheld, contextfabric.EngineFactGateReasonUndeclaredFieldsRemoved,
+			contextfabric.EngineFactGateReasonAuthorizationFailed, contextfabric.EngineFactGateReasonCanceled,
+		}),
+}
+
+// EngineFactGateInfo is the Info line of the same gate for a clean read or one that only withheld subjects the caller may not see.
+var EngineFactGateInfo = Event{
+	ID:                 "contextfabric.engine_fact_gate_info",
+	Msg:                "context fabric engine fact gate",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "one line per gated engine fact read of a restricted caller; a request that reads facts more than once (main read, group read, period delta) carries one line per read, so a certification asserts a request that makes one read.",
+	Fields: engineFactGateFields(
+		[]string{contextfabric.EngineFactGateClean, contextfabric.EngineFactGateFiltered},
+		[]string{"", contextfabric.EngineFactGateReasonUnseenSubjectsWithheld}),
+}
+
+// OrganizationSubjectRead is the Info line of a turn that resolved no subject and was answered from the caller's organization subject.
+var OrganizationSubjectRead = Event{
+	ID:                 "contextfabric.organization_subject_read",
+	Msg:                "context fabric organization subject read",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that resolved no subject and read the organization subject.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.OrganizationSubjectReadReasonVocabulary()},
+		{Key: "survey_member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RepairMemberKindTokenVocabulary()},
+		{Key: "organization_facts_read", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_fact_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+var organizationFactKindArr = contractsv1.ContextFabricFactKindVocabulary()
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -3777,6 +3865,10 @@ var All = []Event{
 	InterpretationEnsembleGap,
 	InterpretationEnsembleResolved,
 	ServerStatusShadowLine,
+	FactRootRefused,
+	EngineFactGateWarn,
+	EngineFactGateInfo,
+	OrganizationSubjectRead,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

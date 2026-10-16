@@ -2518,6 +2518,206 @@
     ]
   },
   {
+    "id": "contextfabric.engine_fact_gate_info",
+    "msg": "context fabric engine fact gate",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per gated engine fact read of a restricted caller; a request that reads facts more than once (main read, group read, period delta) carries one line per read, so a certification asserts a request that makes one read.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "engine_fact_read"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "clean",
+          "filtered"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "unseen_subjects_withheld"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_withheld_from",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.engine_fact_gate_warn",
+    "msg": "context fabric engine fact gate",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per gated engine fact read of a restricted caller; a request that reads facts more than once (main read, group read, period delta) carries one line per read, so a certification asserts a request that makes one read.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "engine_fact_read"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "filtered",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unseen_subjects_withheld",
+          "undeclared_fields_removed",
+          "authorization_failed",
+          "canceled"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_withheld_from",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "references_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fields_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.evidence_expansion",
     "msg": "context fabric evidence expansion",
     "level": "info",
@@ -2721,6 +2921,85 @@
           "internal"
         ],
         "applicability": "written when the search, a read, the authorization, a source-row read or the built expansion failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.fact_root_refused",
+    "msg": "context fabric fact root refused",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request: the fact-root re-check runs once after resolution commits its roots.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_subjects",
+          "unrestricted_principal",
+          "subjects_admitted",
+          "organization_mismatch",
+          "subject_denied",
+          "subject_absent",
+          "group_unproven",
+          "graph_not_projected",
+          "grant_mismatch",
+          "grant_unrecorded",
+          "authorizer_missing",
+          "graph_read_failed"
+        ]
+      },
+      {
+        "key": "refused_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "absent_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "refused_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
       },
       {
         "key": "request_id",
@@ -4778,6 +5057,99 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when error_class is graphql_errors: the first upstream GraphQL error message and path, bounded to 512 characters; untrusted upstream text"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.organization_subject_read",
+    "msg": "context fabric organization subject read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that resolved no subject and read the organization subject.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "investment",
+          "survey_no_members"
+        ]
+      },
+      {
+        "key": "survey_member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "organization_facts_read",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_fact_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
       },
       {
         "key": "request_id",

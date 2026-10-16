@@ -51,6 +51,33 @@ const (
 	AggregateScopeAllOwnedRepositories = "all_owned_repositories"
 )
 
+// The closed values of an engine fact-read gate decision and its reason. The
+// reason is empty for a clean read.
+const (
+	EngineFactGateClean       = "clean"
+	EngineFactGateFiltered    = "filtered"
+	EngineFactGateUnavailable = "unavailable"
+
+	EngineFactGateReasonUnseenSubjectsWithheld  = "unseen_subjects_withheld"
+	EngineFactGateReasonUndeclaredFieldsRemoved = "undeclared_fields_removed"
+	EngineFactGateReasonAuthorizationFailed     = "authorization_failed"
+	EngineFactGateReasonCanceled                = "canceled"
+)
+
+// EngineFactGateDecisionVocabulary is the closed set of gate decisions.
+func EngineFactGateDecisionVocabulary() []string {
+	return []string{EngineFactGateClean, EngineFactGateFiltered, EngineFactGateUnavailable}
+}
+
+// EngineFactGateReasonVocabulary is the closed set of gate reasons, with the
+// empty reason of a clean read first.
+func EngineFactGateReasonVocabulary() []string {
+	return []string{
+		"", EngineFactGateReasonUnseenSubjectsWithheld, EngineFactGateReasonUndeclaredFieldsRemoved,
+		EngineFactGateReasonAuthorizationFailed, EngineFactGateReasonCanceled,
+	}
+}
+
 // EngineFactGateDecision is one engine fact-read gate decision. Counts only;
 // never the id or label of a withheld subject.
 type EngineFactGateDecision struct {
@@ -119,7 +146,7 @@ func (r *gatedFactReader) ReadFacts(ctx context.Context, principal storage.Princ
 }
 
 func (r *gatedFactReader) filter(ctx context.Context, principal storage.Principal, request CanonicalFactRequest, facts []CanonicalFact) ([]CanonicalFact, EngineFactGateDecision, error) {
-	decision := EngineFactGateDecision{Decision: "clean", FactsChecked: len(facts)}
+	decision := EngineFactGateDecision{Decision: EngineFactGateClean, FactsChecked: len(facts)}
 	capabilities := map[FactKind]FactCapability{}
 	for _, capability := range r.Capabilities() {
 		capabilities[capability.Kind] = capability
@@ -148,9 +175,9 @@ func (r *gatedFactReader) filter(ctx context.Context, principal storage.Principa
 	gated, report, err := FilterEmbeddedSubjects(ctx, EmbeddedFilterOptions{Restricted: true}, requestRoots(request), declared, capabilities, authorize)
 	decision.Report = report
 	if err != nil {
-		decision.Decision, decision.Reason = "unavailable", "authorization_failed"
+		decision.Decision, decision.Reason = EngineFactGateUnavailable, EngineFactGateReasonAuthorizationFailed
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			decision.Reason = "canceled"
+			decision.Reason = EngineFactGateReasonCanceled
 		}
 		return nil, decision, err
 	}
@@ -168,12 +195,12 @@ func (r *gatedFactReader) filter(ctx context.Context, principal storage.Principa
 	}
 	switch {
 	case decision.FactsWithheldFrom > 0:
-		decision.Decision, decision.Reason = "filtered", "unseen_subjects_withheld"
+		decision.Decision, decision.Reason = EngineFactGateFiltered, EngineFactGateReasonUnseenSubjectsWithheld
 	case report.FieldsUndeclared > 0:
 		// A declared kind emitted a field or column its capability does not
 		// declare: removed, never served, and logged at Warn (a catalogue
 		// defect, since the catalogue-truth test forbids it).
-		decision.Decision, decision.Reason = "filtered", "undeclared_fields_removed"
+		decision.Decision, decision.Reason = EngineFactGateFiltered, EngineFactGateReasonUndeclaredFieldsRemoved
 	}
 	return out, decision, nil
 }

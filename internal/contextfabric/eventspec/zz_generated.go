@@ -32,7 +32,10 @@ var ByID = map[string]Event{
 	"contextfabric.direct_read":                      DirectRead,
 	"contextfabric.direct_read_authorization":        DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":        DirectRelationshipsRead,
+	"contextfabric.engine_fact_gate_info":            EngineFactGateInfo,
+	"contextfabric.engine_fact_gate_warn":            EngineFactGateWarn,
 	"contextfabric.evidence_expansion":               EvidenceExpansion,
+	"contextfabric.fact_root_refused":                FactRootRefused,
 	"contextfabric.fact_scope_expansion_decision":    FactScopeExpansionDecision,
 	"contextfabric.fact_scope_expansion_gap":         FactScopeExpansionGap,
 	"contextfabric.frame_validation":                 FrameValidation,
@@ -40,6 +43,7 @@ var ByID = map[string]Event{
 	"contextfabric.interpretation_ensemble_gap":      InterpretationEnsembleGap,
 	"contextfabric.interpretation_ensemble_resolved": InterpretationEnsembleResolved,
 	"contextfabric.operation_read":                   OperationRead,
+	"contextfabric.organization_subject_read":        OrganizationSubjectRead,
 	"contextfabric.ownership_routing":                OwnershipRouting,
 	"contextfabric.plan_carry":                       PlanCarry,
 	"contextfabric.plan_carry_outcome":               PlanCarryOutcome,
@@ -1555,6 +1559,172 @@ func (f DirectRelationshipsReadFields) SlogArgs() []any {
 	}
 }
 
+// EngineFactGateInfoFields is contextfabric.engine_fact_gate_info's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EngineFactGateInfo.Fields declares in spec.go.
+type EngineFactGateInfoFields struct {
+	OrgID                string
+	Surface              string
+	Decision             string
+	Reason               string
+	RepositoryScopeCount int
+	FactsChecked         int
+	FactsUndeclared      int
+	FactsWithheldFrom    int
+	ReferencesChecked    int
+	ReferencesRefused    int
+	RowsWithheld         int
+	FieldsWithheld       int
+	EvidenceWithheld     int
+	FieldsUndeclared     int
+	RequestID            string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EngineFactGateInfoFields uniformly, set ONLY by NewEngineFactGateInfoFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEngineFactGateInfoFields is the generated constructor for EngineFactGateInfoFields -- every
+// field EngineFactGateInfo.Fields declares is a required parameter.
+func NewEngineFactGateInfoFields(orgID string, surface string, decision string, reason string, repositoryScopeCount int, factsChecked int, factsUndeclared int, factsWithheldFrom int, referencesChecked int, referencesRefused int, rowsWithheld int, fieldsWithheld int, evidenceWithheld int, fieldsUndeclared int, requestID string) EngineFactGateInfoFields {
+	return EngineFactGateInfoFields{
+		OrgID:                orgID,
+		Surface:              surface,
+		Decision:             decision,
+		Reason:               reason,
+		RepositoryScopeCount: repositoryScopeCount,
+		FactsChecked:         factsChecked,
+		FactsUndeclared:      factsUndeclared,
+		FactsWithheldFrom:    factsWithheldFrom,
+		ReferencesChecked:    referencesChecked,
+		ReferencesRefused:    referencesRefused,
+		RowsWithheld:         rowsWithheld,
+		FieldsWithheld:       fieldsWithheld,
+		EvidenceWithheld:     evidenceWithheld,
+		FieldsUndeclared:     fieldsUndeclared,
+		RequestID:            requestID,
+		constructed:          true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEngineFactGateInfoFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EngineFactGateInfoFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EngineFactGateInfo's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EngineFactGateInfoFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"repository_scope_count", f.RepositoryScopeCount,
+		"facts_checked", f.FactsChecked,
+		"facts_undeclared", f.FactsUndeclared,
+		"facts_withheld_from", f.FactsWithheldFrom,
+		"references_checked", f.ReferencesChecked,
+		"references_refused", f.ReferencesRefused,
+		"rows_withheld", f.RowsWithheld,
+		"fields_withheld", f.FieldsWithheld,
+		"evidence_withheld", f.EvidenceWithheld,
+		"fields_undeclared", f.FieldsUndeclared,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// EngineFactGateWarnFields is contextfabric.engine_fact_gate_warn's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EngineFactGateWarn.Fields declares in spec.go.
+type EngineFactGateWarnFields struct {
+	OrgID                string
+	Surface              string
+	Decision             string
+	Reason               string
+	RepositoryScopeCount int
+	FactsChecked         int
+	FactsUndeclared      int
+	FactsWithheldFrom    int
+	ReferencesChecked    int
+	ReferencesRefused    int
+	RowsWithheld         int
+	FieldsWithheld       int
+	EvidenceWithheld     int
+	FieldsUndeclared     int
+	RequestID            string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EngineFactGateWarnFields uniformly, set ONLY by NewEngineFactGateWarnFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEngineFactGateWarnFields is the generated constructor for EngineFactGateWarnFields -- every
+// field EngineFactGateWarn.Fields declares is a required parameter.
+func NewEngineFactGateWarnFields(orgID string, surface string, decision string, reason string, repositoryScopeCount int, factsChecked int, factsUndeclared int, factsWithheldFrom int, referencesChecked int, referencesRefused int, rowsWithheld int, fieldsWithheld int, evidenceWithheld int, fieldsUndeclared int, requestID string) EngineFactGateWarnFields {
+	return EngineFactGateWarnFields{
+		OrgID:                orgID,
+		Surface:              surface,
+		Decision:             decision,
+		Reason:               reason,
+		RepositoryScopeCount: repositoryScopeCount,
+		FactsChecked:         factsChecked,
+		FactsUndeclared:      factsUndeclared,
+		FactsWithheldFrom:    factsWithheldFrom,
+		ReferencesChecked:    referencesChecked,
+		ReferencesRefused:    referencesRefused,
+		RowsWithheld:         rowsWithheld,
+		FieldsWithheld:       fieldsWithheld,
+		EvidenceWithheld:     evidenceWithheld,
+		FieldsUndeclared:     fieldsUndeclared,
+		RequestID:            requestID,
+		constructed:          true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEngineFactGateWarnFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EngineFactGateWarnFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EngineFactGateWarn's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EngineFactGateWarnFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"repository_scope_count", f.RepositoryScopeCount,
+		"facts_checked", f.FactsChecked,
+		"facts_undeclared", f.FactsUndeclared,
+		"facts_withheld_from", f.FactsWithheldFrom,
+		"references_checked", f.ReferencesChecked,
+		"references_refused", f.ReferencesRefused,
+		"rows_withheld", f.RowsWithheld,
+		"fields_withheld", f.FieldsWithheld,
+		"evidence_withheld", f.EvidenceWithheld,
+		"fields_undeclared", f.FieldsUndeclared,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // EvidenceExpansionFields is contextfabric.evidence_expansion's generated typed construction interface
 // (CHAOS-5516): one Go field per Field EvidenceExpansion.Fields declares in spec.go.
 type EvidenceExpansionFields struct {
@@ -1646,6 +1816,69 @@ func (f EvidenceExpansionFields) SlogArgs() []any {
 		"source_admitted", f.SourceAdmitted,
 		"source_rows", f.SourceRows,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// FactRootRefusedFields is contextfabric.fact_root_refused's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactRootRefused.Fields declares in spec.go.
+type FactRootRefusedFields struct {
+	OrgID        string
+	Reason       string
+	RefusedCount int
+	DeniedCount  int
+	AbsentCount  int
+	RefusedKinds []string
+	RequestID    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactRootRefusedFields uniformly, set ONLY by NewFactRootRefusedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactRootRefusedFields is the generated constructor for FactRootRefusedFields -- every
+// field FactRootRefused.Fields declares is a required parameter.
+func NewFactRootRefusedFields(orgID string, reason string, refusedCount int, deniedCount int, absentCount int, refusedKinds []string, requestID string) FactRootRefusedFields {
+	valid := true
+	if refusedKinds == nil {
+		valid = false
+	}
+	return FactRootRefusedFields{
+		OrgID:        orgID,
+		Reason:       reason,
+		RefusedCount: refusedCount,
+		DeniedCount:  deniedCount,
+		AbsentCount:  absentCount,
+		RefusedKinds: refusedKinds,
+		RequestID:    requestID,
+		constructed:  valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactRootRefusedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactRootRefusedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactRootRefused's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactRootRefusedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"refused_count", f.RefusedCount,
+		"denied_count", f.DeniedCount,
+		"absent_count", f.AbsentCount,
+		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -2754,6 +2987,66 @@ func (f OperationReadFields) SlogArgs() []any {
 		"graphql_code", contextfabric.SanitizeLogAttr(f.GraphqlCode),
 		"variable", contextfabric.SanitizeLogAttr(f.Variable),
 		"error_message", contextfabric.SanitizeLogAttr(f.ErrorMessage),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// OrganizationSubjectReadFields is contextfabric.organization_subject_read's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OrganizationSubjectRead.Fields declares in spec.go.
+type OrganizationSubjectReadFields struct {
+	OrgID                 string
+	Reason                string
+	SurveyMemberKind      string
+	OrganizationFactsRead int
+	OrganizationFactKinds []string
+	RequestID             string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OrganizationSubjectReadFields uniformly, set ONLY by NewOrganizationSubjectReadFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOrganizationSubjectReadFields is the generated constructor for OrganizationSubjectReadFields -- every
+// field OrganizationSubjectRead.Fields declares is a required parameter.
+func NewOrganizationSubjectReadFields(orgID string, reason string, surveyMemberKind string, organizationFactsRead int, organizationFactKinds []string, requestID string) OrganizationSubjectReadFields {
+	valid := true
+	if organizationFactKinds == nil {
+		valid = false
+	}
+	return OrganizationSubjectReadFields{
+		OrgID:                 orgID,
+		Reason:                reason,
+		SurveyMemberKind:      surveyMemberKind,
+		OrganizationFactsRead: organizationFactsRead,
+		OrganizationFactKinds: organizationFactKinds,
+		RequestID:             requestID,
+		constructed:           valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOrganizationSubjectReadFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OrganizationSubjectReadFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OrganizationSubjectRead's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OrganizationSubjectReadFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"survey_member_kind", contextfabric.SanitizeLogAttr(f.SurveyMemberKind),
+		"organization_facts_read", f.OrganizationFactsRead,
+		"organization_fact_kinds", contextfabric.SanitizeLogStrings(f.OrganizationFactKinds),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
