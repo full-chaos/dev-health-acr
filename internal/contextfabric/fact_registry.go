@@ -49,6 +49,9 @@ const CanonicalFactRegistryVersion = "context-fabric-facts.v2"
 // against pathological fanout, not a routine budget.
 const maxCanonicalFactsPerBundle = 2000
 
+// FactTableDeclarationsPerReadCap is the most table declaration lines one fact read writes: one per fact the merge could keep, the same cap the bundle applies. A table with a shape outside the vocabulary is rejected by the merge and writes no line.
+const FactTableDeclarationsPerReadCap = maxCanonicalFactsPerBundle
+
 // FactRole is declared in chaos4632_question_family_registry.go (S2,
 // §3.1's family table) -- reused here verbatim rather than redeclared, per
 // this design's own "declared once, consumed later" convention:
@@ -469,6 +472,15 @@ func FactReadFailureClassVocabulary() []string {
 		string(FactReadFailureContended), string(FactReadFailureReadFailed), string(FactReadFailureOrganizationRequired),
 		string(FactReadFailureUnclassified), string(FactReadFailureNotTyped),
 	}
+}
+
+func knownFactReadFailureClass(class FactReadFailureClass) bool {
+	for _, member := range FactReadFailureClassVocabulary() {
+		if member == string(class) && class != FactReadFailureNotTyped {
+			return true
+		}
+	}
+	return false
 }
 
 type FactReadFailure struct {
@@ -1409,11 +1421,16 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 	if r == nil || r.logger == nil {
 		return
 	}
+	written := 0
 	for _, fact := range facts {
 		for _, value := range fact.Fields {
-			if value.Table == nil {
+			if value.Table == nil || !validFactTableShape(value.Table.Shape) {
 				continue
 			}
+			if written >= FactTableDeclarationsPerReadCap {
+				return
+			}
+			written++
 			attrs := []any{
 				"org_id", SanitizeLogAttr(principal.OrgID),
 				"kind", SanitizeLogAttr(string(kind)),
@@ -2084,7 +2101,7 @@ func (r *FactCapabilityRegistry) logFactReadFailure(ctx context.Context, kind Fa
 	class := FactReadFailureNotTyped
 	if errors.As(err, &failure) {
 		class = failure.Class
-		if class == "" {
+		if !knownFactReadFailureClass(class) {
 			class = FactReadFailureUnclassified
 		}
 	}

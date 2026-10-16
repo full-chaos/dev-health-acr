@@ -3994,8 +3994,8 @@
       "request_id",
       "kind"
     ],
-    "bounded_aggregation": "one line per declared table of the facts a read returns; bounded by the facts a read may return, not by a fixed count.",
-    "data_dependent_bound": "one line per table-shaped value of each fact a read returns, so the count follows the facts returned (each read is capped at the bundle fact cap).",
+    "bounded_aggregation": "one line per declared table of the facts a read returns, at most FactTableDeclarationsPerReadCap per read (the bundle fact cap), for each of the main, group and period delta reads.",
+    "max_lines_per_scope": 6000,
     "fields": [
       {
         "key": "org_id",

@@ -306,10 +306,6 @@ type Event struct {
 	// MaxLinesPerScope bounds the lines one scope may carry for
 	// MultiplicityZeroOrManyPerRequest; zero for every other multiplicity.
 	MaxLinesPerScope int
-	// DataDependentBound states why a MultiplicityZeroOrManyPerRequest event
-	// has no fixed MaxLinesPerScope: the count follows the data a read returns.
-	// Exactly one of the two is declared.
-	DataDependentBound string
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -1985,9 +1981,9 @@ var FactTableDeclaration = Event{
 	Msg:                "context fabric fact table declaration",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per table-shaped value of each fact a read returns, so the count follows the facts returned (each read is capped at the bundle fact cap).",
+	MaxLinesPerScope:   contextfabric.FactTableDeclarationsPerReadCap * contextfabric.EngineFactGateReadsPerRequest,
 	Attribution:        []string{"request_id", "kind"},
-	BoundedAggregation: "one line per declared table of the facts a read returns; bounded by the facts a read may return, not by a fixed count.",
+	BoundedAggregation: "one line per declared table of the facts a read returns, at most FactTableDeclarationsPerReadCap per read (the bundle fact cap), for each of the main, group and period delta reads.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},

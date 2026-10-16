@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -113,6 +114,32 @@ func aBreakdownTable(measure contextfabric.FactValue) contextfabric.FactTable {
 	}
 }
 
+// certifyRegistryLine is certifyRequestLine plus the declared-key check: the
+// certifier does not refuse a key the declaration does not list, so the keys of
+// every registry line are compared with the event's declared keys here.
+func certifyRegistryLine(t *testing.T, raw []byte, event eventspec.Event, want map[string]any) certify.Line {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("line %q: %v", raw, err)
+	}
+	declared := map[string]bool{"time": true, "level": true, "msg": true}
+	for _, key := range eventspec.FieldKeys(event) {
+		declared[key] = true
+	}
+	for key := range decoded {
+		if !declared[key] {
+			t.Fatalf("%s: the line carries key %q, which the declaration does not list: %s", event.ID, key, raw)
+		}
+	}
+	for _, field := range event.Fields {
+		if _, ok := decoded[field.Key]; !ok && field.Presence == eventspec.PresenceRequired {
+			t.Fatalf("%s: the line lacks declared required key %q: %s", event.ID, field.Key, raw)
+		}
+	}
+	return certifyRequestLine(t, raw, event, want)
+}
+
 // TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces drives a
 // real registry through every outcome, every rejection cause and the failure
 // classes a provider can set, certifies each line the registry wrote, and
@@ -136,7 +163,7 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 		}
 		want["kind"] = string(kind)
 		want["org_id"] = "org_1"
-		line := certifyRequestLine(t, lines[0], eventspec.FactRead, want)
+		line := certifyRegistryLine(t, lines[0], eventspec.FactRead, want)
 		seenOutcomes[line["outcome"].(string)] = true
 	}
 
@@ -159,12 +186,12 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 	certifyReadLine(raw, status, map[string]any{
 		"outcome": "completed", "state": "available", "subjects": 1, "subject_kinds": "project", "facts": 1, "truncated": false,
 	})
-	certifyRequestLine(t, linesOf(t, raw, "context fabric evaluation coverage")[0], eventspec.FactEvaluationCoverage, map[string]any{
+	certifyRegistryLine(t, linesOf(t, raw, "context fabric evaluation coverage")[0], eventspec.FactEvaluationCoverage, map[string]any{
 		"org_id": "org_1", "kind": "status", "evaluated_covered": 4, "evaluated_fired": 3, "evaluated_stale": 2, "evaluated_before_range": 1,
 		"never_evaluated": 5, "measured_zero_credited": 1, "rules_evaluated": 6, "latest_window_end": "2026-10-15", "freshness_window_days": 7,
 		"withheld_capped_read": true,
 	})
-	certifyRequestLine(t, linesOf(t, raw, "context fabric fact table declaration")[0], eventspec.FactTableDeclaration, map[string]any{
+	certifyRegistryLine(t, linesOf(t, raw, "context fabric fact table declaration")[0], eventspec.FactTableDeclaration, map[string]any{
 		"org_id": "org_1", "kind": "status", "shape": "breakdown", "key_arity": 1, "measure_count": 1,
 	})
 
@@ -257,7 +284,7 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 		if class == "" {
 			wantClass = string(contextfabric.FactReadFailureUnclassified)
 		}
-		line := certifyRequestLine(t, failed[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": wantClass})
+		line := certifyRegistryLine(t, failed[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": wantClass, "error_type": "*contextfabric.FactReadFailure"})
 		seenClasses[line["provider_reason"].(string)] = true
 		if _, leaked := line["org_id"]; leaked {
 			t.Fatalf("the read failed line must carry no org_id: %s", failed[0])
@@ -270,14 +297,14 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 	}
 	untyped := &registryProviderStub{capability: registryCapability(status, contextfabric.SubjectProject), err: errors.New("boom tenant text")}
 	raw = readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{untyped}, registryRequest(status))
-	line := certifyRequestLine(t, linesOf(t, raw, "context fabric fact read failed")[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "none"})
+	line := certifyRegistryLine(t, linesOf(t, raw, "context fabric fact read failed")[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "none"})
 	seenClasses[line["provider_reason"].(string)] = true
 
 	// A timeout.
 	slow := &registryProviderStub{capability: registryCapability(status, contextfabric.SubjectProject), block: true}
 	slow.capability.Timeout = 20 * time.Millisecond
 	raw = readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{slow}, registryRequest(status))
-	line = certifyRequestLine(t, linesOf(t, raw, "context fabric fact read failed")[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "timed_out"})
+	line = certifyRegistryLine(t, linesOf(t, raw, "context fabric fact read failed")[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "timed_out"})
 	seenClasses[line["provider_reason"].(string)] = true
 
 	// Every rejection cause.
@@ -321,14 +348,14 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 		if tc.cause == "invalid_source_state" {
 			pinKeys(t, bytes.NewBuffer(rejected[0]), factResultRejectedLegacyKeys, 1)
 		}
-		got := certifyRequestLine(t, rejected[0], eventspec.FactResultRejected, map[string]any{"org_id": "org_1", "kind": "status", "rejection_cause": tc.cause, "subjects": 1, "subject_kinds": "project"})
+		got := certifyRegistryLine(t, rejected[0], eventspec.FactResultRejected, map[string]any{"org_id": "org_1", "kind": "status", "rejection_cause": tc.cause, "subjects": 1, "subject_kinds": "project"})
 		seenCauses[got["rejection_cause"].(string)] = true
 		certifyReadLine(raw, status, map[string]any{"state": "unavailable"})
 		failedLines := linesOf(t, raw, "context fabric fact read failed")
 		if len(failedLines) != 1 {
 			t.Fatalf("cause %s: want one read failed line, got %d", tc.cause, len(failedLines))
 		}
-		classLine := certifyRequestLine(t, failedLines[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "result_rejected"})
+		classLine := certifyRegistryLine(t, failedLines[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "result_rejected"})
 		seenClasses[classLine["provider_reason"].(string)] = true
 	}
 	// A non-numeric measure is the narrowed rejection outcome.
@@ -389,7 +416,7 @@ func TestFactRegistryLinesRefuseOpenText(t *testing.T) {
 	}
 	raw := readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{failing}, registryRequest(status))
 	failed := linesOf(t, raw, "context fabric fact read failed")[0]
-	certifyRequestLine(t, failed, eventspec.FactReadFailed, map[string]any{"kind": "status"})
+	certifyRegistryLine(t, failed, eventspec.FactReadFailed, map[string]any{"kind": "status"})
 	withText := bytes.Replace(failed, []byte(`"provider_reason":"read_failed"`), []byte(`"provider_reason":"query secret tenant widgets failed"`), 1)
 	if bytes.Equal(withText, failed) {
 		t.Fatalf("fixture did not carry the class: %s", failed)
@@ -397,7 +424,7 @@ func TestFactRegistryLinesRefuseOpenText(t *testing.T) {
 	certifyRefused(t, withText, eventspec.FactReadFailed, "free provider text where a closed class is declared", map[string]any{"kind": "status"})
 
 	read := linesOf(t, raw, "context fabric fact read")[0]
-	certifyRequestLine(t, read, eventspec.FactRead, map[string]any{"kind": "status"})
+	certifyRegistryLine(t, read, eventspec.FactRead, map[string]any{"kind": "status"})
 	for _, subjectKinds := range []string{"repository,project", "project,project", "project,future_kind"} {
 		mutated := bytes.Replace(read, []byte(`"subject_kinds":"project"`), []byte(`"subject_kinds":"`+subjectKinds+`"`), 1)
 		if bytes.Equal(mutated, read) {
@@ -406,12 +433,69 @@ func TestFactRegistryLinesRefuseOpenText(t *testing.T) {
 		certifyRefused(t, mutated, eventspec.FactRead, "subject_kinds "+subjectKinds, map[string]any{"kind": "status"})
 	}
 	sorted := bytes.Replace(read, []byte(`"subject_kinds":"project"`), []byte(`"subject_kinds":"project,repository"`), 1)
-	certifyRequestLine(t, sorted, eventspec.FactRead, map[string]any{"kind": "status", "subject_kinds": "project,repository"})
+	certifyRegistryLine(t, sorted, eventspec.FactRead, map[string]any{"kind": "status", "subject_kinds": "project,repository"})
 	var decoded map[string]any
 	if err := json.Unmarshal(failed, &decoded); err != nil {
 		t.Fatalf("read failed line: %v", err)
 	}
 	if _, has := decoded["org_id"]; has {
 		t.Fatalf("the read failed line must carry no org_id: %s", failed)
+	}
+}
+
+// TestFactTableDeclarationLinesAreCappedPerRead drives a provider that returns
+// more table-carrying facts than the bundle cap keeps: the registry writes at
+// most FactTableDeclarationsPerReadCap lines for the read, and the declared
+// per-scope bound covers the three reads a request can make.
+func TestFactTableDeclarationLinesAreCappedPerRead(t *testing.T) {
+	t.Parallel()
+	status := contextfabric.FactStatus
+	facts := make([]contextfabric.CanonicalFact, 0, contextfabric.FactTableDeclarationsPerReadCap+5)
+	for i := 0; i < contextfabric.FactTableDeclarationsPerReadCap+5; i++ {
+		facts = append(facts, factWithTable(status, aBreakdownTable(contextfabric.IntegerFactValue(int64(i)))))
+	}
+	provider := &registryProviderStub{
+		capability: registryCapability(status, contextfabric.SubjectProject),
+		result:     contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Version: "v1", Facts: facts},
+	}
+	raw := readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{provider}, registryRequest(status))
+	lines := linesOf(t, raw, "context fabric fact table declaration")
+	if len(lines) != contextfabric.FactTableDeclarationsPerReadCap {
+		t.Fatalf("a read of %d table facts wrote %d table declaration lines, want exactly the cap %d", len(facts), len(lines), contextfabric.FactTableDeclarationsPerReadCap)
+	}
+	if eventspec.FactTableDeclaration.MaxLinesPerScope < len(lines)*contextfabric.EngineFactGateReadsPerRequest {
+		t.Fatalf("the declared scope bound %d is below the cap times the reads per request", eventspec.FactTableDeclaration.MaxLinesPerScope)
+	}
+	certifyRegistryLine(t, lines[0], eventspec.FactTableDeclaration, map[string]any{"org_id": "org_1", "kind": "status", "shape": "breakdown", "key_arity": 1, "measure_count": 1})
+}
+
+// TestRegistryLinesNeverCarryProviderControlledText: a failure class outside
+// the vocabulary is logged as unclassified, and a table whose shape is outside
+// the vocabulary writes no declaration line.
+func TestRegistryLinesNeverCarryProviderControlledText(t *testing.T) {
+	t.Parallel()
+	status := contextfabric.FactStatus
+	failing := &registryProviderStub{
+		capability: registryCapability(status, contextfabric.SubjectProject),
+		err:        &contextfabric.FactReadFailure{State: contextfabric.SourceUnavailable, Class: "tenant widgets password=hunter2", Reason: "x"},
+	}
+	raw := readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{failing}, registryRequest(status))
+	if strings.Contains(string(raw), "hunter2") || strings.Contains(string(raw), "widgets") {
+		t.Fatalf("a provider-set class reached a log line: %s", raw)
+	}
+	certifyRegistryLine(t, linesOf(t, raw, "context fabric fact read failed")[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "unclassified"})
+
+	table := aBreakdownTable(contextfabric.IntegerFactValue(1))
+	table.Shape = "tenant widgets shape"
+	shaped := &registryProviderStub{
+		capability: registryCapability(status, contextfabric.SubjectProject),
+		result:     contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Version: "v1", Facts: []contextfabric.CanonicalFact{factWithTable(status, table)}},
+	}
+	raw = readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{shaped}, registryRequest(status))
+	if strings.Contains(string(raw), "widgets") {
+		t.Fatalf("a provider-set table shape reached a log line: %s", raw)
+	}
+	if n := len(linesOf(t, raw, "context fabric fact table declaration")); n != 0 {
+		t.Fatalf("a table with an unknown shape wrote %d declaration lines", n)
 	}
 }
