@@ -41,6 +41,19 @@ AMBIENT = re.compile(
     r"|repopath\."
     r"|\"go\"\s*,\s*\"list\""
 )
+# A file that opens repo files AND reaches above its own directory (a "..",
+# the repo-root helper, runtime.Caller) reads sources the import graph cannot
+# see: log-event and drift guards, contract and doc parity checks.
+FILE_READ = re.compile(
+    r"os\.(?:ReadFile|Open|ReadDir)\(|parser\.ParseFile\(|filepath\.Glob\(|os\.DirFS\("
+)
+REACHES_UP = re.compile(r"\"\.\.\"|\.\./|repopath|runtime\.Caller|repoRoot|moduleRoot|projectRoot")
+
+
+def reads_source_tree(text):
+    return bool(AMBIENT.search(text)) or bool(FILE_READ.search(text) and REACHES_UP.search(text))
+
+
 SKIP_DIRS = {".git", "vendor", "node_modules"}
 
 
@@ -138,7 +151,7 @@ def main():
             if not name.endswith(".go"):
                 continue
             with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
-                if AMBIENT.search(f.read()):
+                if reads_source_tree(f.read()):
                     ambient.add(pkg)
                     break
 

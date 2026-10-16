@@ -60,6 +60,32 @@ check "one non-Go path among Go paths is full" "full" "${first%% *}"
 first="$(python3 -I scripts/ci/affected_packages.py /dev/null --deps-file "$tmp/deps.txt" | head -n1)"
 check "empty change list is full" "full" "${first%% *}"
 
+# ---- source-reading guard detector ------------------------------------------
+detect() { # prints yes/no for a Go source snippet on stdin
+  python3 -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ap", "scripts/ci/affected_packages.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print("yes" if m.reads_source_tree(sys.stdin.read()) else "no")'
+}
+check "detector: ReadFile above the package dir" yes "$(detect <<<'b, _ := os.ReadFile("../../docs/x.md")')"
+check "detector: ReadFile via repopath" yes "$(detect <<<'b, _ := os.ReadFile(repopath.Path(t, "a.go"))')"
+check "detector: Walk of a non-dot root" yes "$(detect <<<'filepath.WalkDir(root, fn)')"
+check "detector: packages.Load" yes "$(detect <<<'packages.Load(cfg, p)')"
+check "detector: go list" yes "$(detect <<<'exec.Command("go", "list", "./...")')"
+check "detector: ParseFile with runtime.Caller root" yes "$(detect <<<'_, f, _, _ := runtime.Caller(0); parser.ParseFile(fset, f, nil, 0)')"
+check "detector: walk of the package dir only" no "$(detect <<<'filepath.WalkDir(".", fn)')"
+check "detector: ReadFile of a local file" no "$(detect <<<'os.ReadFile("testdata/a.json")')"
+check "detector: pure logic" no "$(detect <<<'func Add(a, b int) int { return a + b }')"
+printf 'M\tcmd/gendimtable/main.go\n' >"$tmp/leafgo_early.txt"
+cmd_out="$(python3 -I scripts/ci/affected_packages.py "$tmp/leafgo_early.txt")"
+for must in internal/contextfabric/devhealthschema internal/releasebuild internal/contracts/v1; do
+  case "$cmd_out" in
+    *"$module/$must"*) check "source-reading guard package $must always runs on a subset" ok ok ;;
+    *) check "source-reading guard package $must always runs on a subset" present absent ;;
+  esac
+done
+
 # ---- plan.sh ---------------------------------------------------------------
 printf 'M\tdocs/x.md\n' >"$tmp/docs.txt"
 o="$(run_plan push '' '' "$tmp/docs.txt")"
