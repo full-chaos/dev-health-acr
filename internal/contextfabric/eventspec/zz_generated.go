@@ -55,6 +55,7 @@ var ByID = map[string]Event{
 	"contextfabric.plan_carry":                         PlanCarry,
 	"contextfabric.plan_carry_outcome":                 PlanCarryOutcome,
 	"contextfabric.project_deployment_walk":            ProjectDeploymentWalk,
+	"contextfabric.project_status_drivers":             ProjectStatusDrivers,
 	"contextfabric.pull_request_status_filter":         PullRequestStatusFilter,
 	"contextfabric.question_family_resolution":         QuestionFamilyResolution,
 	"contextfabric.remembered_window_axis":             RememberedWindowAxis,
@@ -71,6 +72,7 @@ var ByID = map[string]Event{
 	"contextfabric.synthesis_input":                    SynthesisInput,
 	"contextfabric.synthesis_retry_selection":          SynthesisRetrySelection,
 	"contextfabric.team_anchor_walk":                   TeamAnchorWalk,
+	"contextfabric.team_blockers_drivers":              TeamBlockersDrivers,
 	"contextfabric.terminal_save_skipped":              TerminalSaveSkipped,
 	"contextfabric.window_continuation_decision":       WindowContinuationDecision,
 	"contextfabric.work_item_authorization_gap":        WorkItemAuthorizationGap,
@@ -3763,6 +3765,84 @@ func (f ProjectDeploymentWalkFields) SlogArgs() []any {
 	}
 }
 
+// ProjectStatusDriversFields is contextfabric.project_status_drivers's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ProjectStatusDrivers.Fields declares in spec.go.
+type ProjectStatusDriversFields struct {
+	OrgID          string
+	Emitted        int
+	SkippedBudget  int
+	SkippedIDClash int
+	MissingKinds   []string
+	MissingStates  []string
+	PartialKinds   []string
+	PartialStates  []string
+	RequestID      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ProjectStatusDriversFields uniformly, set ONLY by NewProjectStatusDriversFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewProjectStatusDriversFields is the generated constructor for ProjectStatusDriversFields -- every
+// field ProjectStatusDrivers.Fields declares is a required parameter.
+func NewProjectStatusDriversFields(orgID string, emitted int, skippedBudget int, skippedIDClash int, missingKinds []string, missingStates []string, partialKinds []string, partialStates []string, requestID string) ProjectStatusDriversFields {
+	valid := true
+	if missingKinds == nil {
+		valid = false
+	}
+	if missingStates == nil {
+		valid = false
+	}
+	if partialKinds == nil {
+		valid = false
+	}
+	if partialStates == nil {
+		valid = false
+	}
+	return ProjectStatusDriversFields{
+		OrgID:          orgID,
+		Emitted:        emitted,
+		SkippedBudget:  skippedBudget,
+		SkippedIDClash: skippedIDClash,
+		MissingKinds:   missingKinds,
+		MissingStates:  missingStates,
+		PartialKinds:   partialKinds,
+		PartialStates:  partialStates,
+		RequestID:      requestID,
+		constructed:    valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewProjectStatusDriversFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ProjectStatusDriversFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ProjectStatusDrivers's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ProjectStatusDriversFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"emitted", f.Emitted,
+		"skipped_budget", f.SkippedBudget,
+		"skipped_id_clash", f.SkippedIDClash,
+		"missing_kinds", contextfabric.SanitizeLogStrings(f.MissingKinds),
+		"missing_states", contextfabric.SanitizeLogStrings(f.MissingStates),
+		"partial_kinds", contextfabric.SanitizeLogStrings(f.PartialKinds),
+		"partial_states", contextfabric.SanitizeLogStrings(f.PartialStates),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // PullRequestStatusFilterFields is contextfabric.pull_request_status_filter's generated typed construction interface
 // (CHAOS-5516): one Go field per Field PullRequestStatusFilter.Fields declares in spec.go.
 type PullRequestStatusFilterFields struct {
@@ -5122,6 +5202,74 @@ func (f TeamAnchorWalkFields) SlogArgs() []any {
 		"denied", f.Denied,
 		"truncated", f.Truncated,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// TeamBlockersDriversFields is contextfabric.team_blockers_drivers's generated typed construction interface
+// (CHAOS-5516): one Go field per Field TeamBlockersDrivers.Fields declares in spec.go.
+type TeamBlockersDriversFields struct {
+	OrgID            string
+	Emitted          int
+	TruncatedServed  int
+	SkippedMissing   int
+	SkippedZero      int
+	SkippedBudget    int
+	SkippedIDClash   int
+	SkippedStale     int
+	SkippedDuplicate int
+	RequestID        string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every TeamBlockersDriversFields uniformly, set ONLY by NewTeamBlockersDriversFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewTeamBlockersDriversFields is the generated constructor for TeamBlockersDriversFields -- every
+// field TeamBlockersDrivers.Fields declares is a required parameter.
+func NewTeamBlockersDriversFields(orgID string, emitted int, truncatedServed int, skippedMissing int, skippedZero int, skippedBudget int, skippedIDClash int, skippedStale int, skippedDuplicate int, requestID string) TeamBlockersDriversFields {
+	return TeamBlockersDriversFields{
+		OrgID:            orgID,
+		Emitted:          emitted,
+		TruncatedServed:  truncatedServed,
+		SkippedMissing:   skippedMissing,
+		SkippedZero:      skippedZero,
+		SkippedBudget:    skippedBudget,
+		SkippedIDClash:   skippedIDClash,
+		SkippedStale:     skippedStale,
+		SkippedDuplicate: skippedDuplicate,
+		RequestID:        requestID,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewTeamBlockersDriversFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f TeamBlockersDriversFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns TeamBlockersDrivers's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f TeamBlockersDriversFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"emitted", f.Emitted,
+		"truncated_served", f.TruncatedServed,
+		"skipped_missing", f.SkippedMissing,
+		"skipped_zero", f.SkippedZero,
+		"skipped_budget", f.SkippedBudget,
+		"skipped_id_clash", f.SkippedIDClash,
+		"skipped_stale", f.SkippedStale,
+		"skipped_duplicate", f.SkippedDuplicate,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
