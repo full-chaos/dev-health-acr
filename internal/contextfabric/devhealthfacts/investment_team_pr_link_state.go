@@ -58,21 +58,19 @@ const teamPRLinkRepositorySet = `(SELECT toUUIDOrZero(arrayJoin({ids:Array(Strin
 // requested repositories and not with the organization.
 func teamPRLinkStatement(bound factTimeBound, limit int) string {
 	return withRowLimitOf(`SELECT toString(pr.repo_id) AS repo_id, count() AS pull_requests,
-	countIf((pr.repo_id, pr.number) IN (
-		SELECT l.repo_id, l.pr_number
-		FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native
-			FROM work_graph_issue_pr FINAL
-			WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`) AS l
-		WHERE l.repo_id IN `+teamPRLinkRepositorySet+`
-			AND `+linkTierRankSQL+` > 0 AND (l.provenance = 'native' OR l.issue_native = 0)
-	)) AS linked,
-	countIf((pr.repo_id, pr.number) IN (
-		SELECT l.repo_id, l.pr_number
-		FROM work_graph_issue_pr AS l FINAL
-		WHERE l.org_id = {org_id:String} AND l.repo_id IN `+teamPRLinkRepositorySet+`
-			AND `+linkTierRankSQL+` > 0
-	)) AS with_any_link
+	countIf(k.counted = 1) AS linked,
+	countIf(k.pr_number > 0 AND k.counted = 0) AS suppressed
 FROM git_pull_requests AS pr FINAL
+LEFT JOIN (
+	SELECT l.repo_id AS repo_id, l.pr_number AS pr_number,
+		max(toUInt8(l.provenance = 'native' OR l.issue_native = 0)) AS counted
+	FROM (SELECT *, max(provenance = 'native') OVER (PARTITION BY work_item_id) AS issue_native
+		FROM work_graph_issue_pr FINAL
+		WHERE org_id = {org_id:String} AND repo_id IN `+teamPRLinkRepositorySet+`) AS l
+	WHERE l.repo_id IN `+teamPRLinkRepositorySet+`
+		AND `+linkTierRankSQL+` > 0
+	GROUP BY l.repo_id, l.pr_number
+) AS k ON k.repo_id = pr.repo_id AND k.pr_number = pr.number
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+
 		themeInvestmentRangePredicate(bound, "pr.created_at", "ifNull(pr.merged_at, ifNull(pr.closed_at, toDateTime64('2999-12-31 00:00:00', 6, 'UTC')))")+`
 GROUP BY pr.repo_id
@@ -89,14 +87,14 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 	sorted := append([]string(nil), repoIDs...)
 	sort.Strings(sorted)
 	statement := teamPRLinkStatement(bound, teamPRLinkChunk+1)
-	var totalPullRequests, totalLinked, totalWithAnyLink uint64
+	var totalPullRequests, totalLinked, totalSuppressed uint64
 	for start := 0; start < len(sorted); start += teamPRLinkChunk {
 		chunk := sorted[start:min(start+teamPRLinkChunk, len(sorted))]
 		got := 0
 		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamPullRequestLinkState", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 			var repoID string
-			var prs, links, withAnyLink uint64
-			if err := row.Scan(&repoID, &prs, &links, &withAnyLink); err != nil {
+			var prs, links, suppressedLinks uint64
+			if err := row.Scan(&repoID, &prs, &links, &suppressedLinks); err != nil {
 				return err
 			}
 			got++
@@ -104,7 +102,7 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 			linked[repoID] = int64(links)
 			totalPullRequests += prs
 			totalLinked += links
-			totalWithAnyLink += withAnyLink
+			totalSuppressed += suppressedLinks
 			return nil
 		}, boundReaderBindings(bound)...)
 		if err != nil {
@@ -116,9 +114,9 @@ func (p *InvestmentProvider) readTeamPRLinkState(ctx context.Context, orgID stri
 	}
 	// The fallback-only rule decides here whether a pull request counts as
 	// linked: a pull request whose only links are fallback links of issues that
-	// carry a native link in the repositories read (with_any_link counts it,
-	// linked does not) is reported as unlinked.
-	suppressed := totalWithAnyLink - min(totalLinked, totalWithAnyLink)
+	// carry a native link in the repositories read is counted by the statement
+	// as suppressed (it has link rows, none counts) and reported as unlinked.
+	suppressed := totalSuppressed
 	outcome := "no_fallback_link_suppressed"
 	if suppressed > 0 {
 		outcome = "covered_fallback_links_suppressed"
