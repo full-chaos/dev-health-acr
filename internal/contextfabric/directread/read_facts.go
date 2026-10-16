@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"sort"
@@ -1146,10 +1147,19 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 	for _, fact := range facts {
 		served[fact.Kind+"\x00"+fact.Subject.Kind+"\x00"+fact.Subject.CanonicalID] = true
 	}
+	cutTables := map[string]string{}
+	for _, fact := range facts {
+		for name, table := range fact.Tables {
+			if table.TruncatedBy != "" {
+				cutTables[fact.Kind+"\x00"+fact.Subject.Kind+"\x00"+fact.Subject.CanonicalID] = name
+			}
+		}
+	}
 	rows := make([]CoverageRow, 0, len(plan.kinds)*len(subjects))
 	for _, kind := range plan.kinds {
 		capability := capabilities[kind]
 		outcome, recorded := bundle.Outcomes[kind]
+		subjectsCut := 0
 		for _, subject := range subjects {
 			row := CoverageRow{Kind: string(kind), Subject: RequestSubject{Kind: string(subject.Kind), CanonicalID: subject.CanonicalID}}
 			key := contextfabric.FactSubjectKey(subject)
@@ -1216,6 +1226,17 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 					row.ProviderState = state
 				}
 				row.Outcome = subjectOutcome(outcome, key, served[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID], row.ProviderState, subject, capability)
+				if outcome.TruncatedOnlyBySubjectCuts && row.Outcome == OutcomeTruncated && row.ProviderState == "" {
+					// The kind is truncated only by cuts disclosed on the facts that
+					// lost rows: a subject is truncated when a table it was served
+					// lost rows, and read whole otherwise.
+					if cut, ok := cutTables[string(kind)+"\x00"+string(subject.Kind)+"\x00"+subject.CanonicalID]; ok {
+						row.Reason = joinReason(row.Reason, cut+" lost rows to the provider row cap")
+						subjectsCut++
+					} else {
+						row.Outcome = OutcomeFactServed
+					}
+				}
 				share, expanded := derived.derivedCoverage(kind, subject, served, outcome.Evaluated)
 				notRun := expanded && share.targets == 0 && !share.shared && share.expansion.outcome == contextfabric.FactScopePolicyUnavailable
 				ownCut := expanded && !notRun && (share.shared || expansionCut(share.expansion.outcome))
@@ -1242,6 +1263,9 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 				}
 			}
 			rows = append(rows, row)
+		}
+		if outcome.TruncatedOnlyBySubjectCuts {
+			slog.Info("read_facts coverage: kind truncated only by subject-local cuts", "kind", contextfabric.SanitizeLogAttr(string(kind)), "subjects", len(subjects), "subjects_truncated", subjectsCut)
 		}
 	}
 	return rows

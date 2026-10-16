@@ -77,7 +77,7 @@
             "phrasingModel": { "type": "string" },
             "timeout": { "type": "string" },
             "maxAttempts": { "type": "string" },
-            "maxTransportRetries": { "type": "string" },
+            "maxOutputTokens": { "type": "string" },
             "allowInsecureBaseURL": { "type": "boolean" },
             "existingSecret": { "type": "string" },
             "apiKeyKey": { "type": "string" }

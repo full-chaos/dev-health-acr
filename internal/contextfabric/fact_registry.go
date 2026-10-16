@@ -371,6 +371,12 @@ type FactProviderResult struct {
 	Reason                string
 	Version               string
 	Truncated             bool
+	// TruncationSubjectLocal says every truncation reason of this result is a
+	// cut already disclosed on the facts that lost rows, which carry their own
+	// source state. The kind still reads truncated; a reader that answers per
+	// subject can read the rest as complete. The registry drops the flag when
+	// it adds a truncation of its own.
+	TruncationSubjectLocal bool
 	// Grain is the temporal precision THIS provider answered at
 	// (CHAOS-3781 round-1 F1). It exists because the providers are not
 	// uniform: a daily rollup can only speak for a day, while a provider
@@ -1203,6 +1209,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
 		r.recordEvaluationCoverage(ctx, principal, planned.Kind, result.Evaluation, len(result.EvaluatedSubjects))
 		bundle.recordOutcome(planned.Kind, factReadCompleted, planned.Subjects, query.Subjects, &result)
+		if result.TruncationSubjectLocal && planned.ScopeGap == nil && result.OmittedCount == 0 && mergedState == SourceTruncated && factCountOfKind(bundle.Facts, planned.Kind) == factsReturned {
+			ledgered := bundle.Outcomes[planned.Kind]
+			ledgered.TruncatedOnlyBySubjectCuts = true
+			bundle.Outcomes[planned.Kind] = ledgered
+		}
 		if gapOnlyTruncation && mergedState == SourceTruncated && factCountOfKind(bundle.Facts, planned.Kind) == factsReturned {
 			ledgered := bundle.Outcomes[planned.Kind]
 			ledgered.TruncatedOnlyByScopeGap = true
