@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -81,15 +82,18 @@ func (r RuntimeAnswerSynthesizer) withholdBareScoreClaims(ctx context.Context, p
 		return draft
 	}
 	draft.ClaimedFacts = kept
-	draft.Drivers = cloneSlice(draft.Drivers)
-	for index := range draft.Drivers {
-		ids := make([]string, 0, len(draft.Drivers[index].ClaimedFactIDs))
-		for _, id := range draft.Drivers[index].ClaimedFactIDs {
-			if _, gone := removed[id]; !gone {
-				ids = append(ids, id)
-			}
-		}
-		draft.Drivers[index].ClaimedFactIDs = ids
+	var droppedDrivers, droppedFindings int
+	draft.Drivers, droppedDrivers = dropItemsLeftWithoutTheirClaim(ctx, draft.Drivers, removed, "driver",
+		func(driver DriverJudgment) (string, []string) { return driver.Category, driver.ClaimedFactIDs },
+		func(driver *DriverJudgment, ids []string) { driver.ClaimedFactIDs = ids })
+	draft.RemainingWork, droppedFindings = dropFindingsLeftWithoutTheirClaim(ctx, draft.RemainingWork, removed)
+	var dropped int
+	draft.ReadinessGaps, dropped = dropFindingsLeftWithoutTheirClaim(ctx, draft.ReadinessGaps, removed)
+	droppedFindings += dropped
+	draft.Conflicts, dropped = dropFindingsLeftWithoutTheirClaim(ctx, draft.Conflicts, removed)
+	droppedFindings += dropped
+	if recorder, ok := r.Telemetry.(scoreDependentItemDropRecorder); ok && droppedDrivers+droppedFindings > 0 {
+		recorder.RecordScoreDependentItemsDropped(ctx, principal, droppedDrivers, droppedFindings)
 	}
 	draft.scoresWithheld = append(append([]withheldScore(nil), draft.scoresWithheld...), withheld...)
 	recordScoresWithheld(ctx, principal, "claim", withheld)
@@ -122,4 +126,48 @@ func recordScoresWithheld(ctx context.Context, principal storage.Principal, stag
 		attrs = append(attrs, "field_"+strconv.Itoa(index), SanitizeLogAttr(string(item.Kind)+"."+item.Field+"@"+string(item.SubjectKind)), "drivers_table_"+strconv.Itoa(index), SanitizeLogAttr(item.DriversTable))
 	}
 	slog.Default().InfoContext(ctx, "context fabric synthesis withheld scores without their drivers", attrs...)
+}
+
+// scoreDependentItemDropRecorder is the optional telemetry for drivers and findings left out of an answer because the only
+// claim they rested on was a score withheld for want of its drivers table.
+type scoreDependentItemDropRecorder interface {
+	RecordScoreDependentItemsDropped(ctx context.Context, principal storage.Principal, drivers, findings int)
+}
+
+// RecordScoreDependentItemsDropped implements scoreDependentItemDropRecorder. Content-safe: an org id and two counts.
+func (t SlogEngineTelemetry) RecordScoreDependentItemsDropped(ctx context.Context, principal storage.Principal, drivers, findings int) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "cf_score_dependent_drivers_dropped", drivers, "cf_score_dependent_findings_dropped", findings}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric answer left out items resting only on a withheld score", args...)
+}
+
+// dropItemsLeftWithoutTheirClaim removes each removed claim ID from an item's citations and drops an item that cited one,
+// is left with no claim, and is of a category that must cite a claimed fact. An item that keeps another claim, or never
+// needed one, stays. It returns the kept items and how many it dropped.
+func dropItemsLeftWithoutTheirClaim[T any](ctx context.Context, items []T, removed map[string]struct{}, noun string, read func(T) (category string, ids []string), write func(*T, []string)) ([]T, int) {
+	kept := make([]T, 0, len(items))
+	dropped := 0
+	for _, item := range items {
+		category, ids := read(item)
+		left := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, gone := removed[id]; !gone {
+				left = append(left, id)
+			}
+		}
+		write(&item, left)
+		if _, required := contractsv1.ContextFabricDriverCategoryRequiresClaimedFact(contractsv1.ContextFabricDriverCategory(category)); required && len(left) == 0 && len(left) < len(ids) {
+			dropped++
+			slog.Default().DebugContext(ctx, "context fabric answer item left out: its only claim was a withheld score",
+				"item", SanitizeLogAttr(noun), "category", SanitizeLogAttr(category), "reason", "drivers_not_served")
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept, dropped
+}
+
+func dropFindingsLeftWithoutTheirClaim(ctx context.Context, findings []Finding, removed map[string]struct{}) ([]Finding, int) {
+	return dropItemsLeftWithoutTheirClaim(ctx, cloneSlice(findings), removed, "finding",
+		func(finding Finding) (string, []string) { return finding.Kind, finding.ClaimedFactIDs },
+		func(finding *Finding, ids []string) { finding.ClaimedFactIDs = ids })
 }
