@@ -306,7 +306,11 @@ func readLinkedMixRows(t *testing.T, ctx context.Context, query contextpacket.Cl
 		var team string
 		var r linkedMixRow
 		var unitHashes, sizedHashes []uint64
-		if err := row.Scan(&team, &r.repos, &r.theme, &r.bugfix, &unitHashes, &sizedHashes); err != nil {
+		dest := []any{&team, &r.repos, &r.theme, &r.bugfix}
+		if strings.Contains(frag.SQL, "unit_hashes") {
+			dest = append(dest, &unitHashes, &sizedHashes)
+		}
+		if err := row.Scan(dest...); err != nil {
 			return err
 		}
 		out[team] = r
