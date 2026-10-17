@@ -69,12 +69,14 @@ spec = importlib.util.spec_from_file_location("ap", "scripts/ci/affected_package
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 print("yes" if m.reads_source_tree(sys.stdin.read()) else "no")'
 }
-check "detector: ReadFile above the package dir" yes "$(detect <<<'b, _ := os.ReadFile("../../docs/x.md")')"
-check "detector: ReadFile via repopath" yes "$(detect <<<'b, _ := os.ReadFile(repopath.Path(t, "a.go"))')"
+check "detector: ReadFile of a .go file above the package dir" yes "$(detect <<<'b, _ := os.ReadFile("../../internal/x/y.go")')"
+check "detector: ReadFile via repopath of a .go file" yes "$(detect <<<'b, _ := os.ReadFile(repopath.Path(t, "a.go"))')"
+check "detector: ReadFile of a doc above the package dir (non-Go: full rule covers it)" no "$(detect <<<'b, _ := os.ReadFile("../../docs/x.md")')"
+check "detector: ReadFile of SQL via repoRoot (non-Go)" no "$(detect <<<'b, _ := os.ReadFile(filepath.Join(repoRoot, "deploy", "a.sql"))')"
 check "detector: Walk of a non-dot root" yes "$(detect <<<'filepath.WalkDir(root, fn)')"
 check "detector: packages.Load" yes "$(detect <<<'packages.Load(cfg, p)')"
 check "detector: go list" yes "$(detect <<<'exec.Command("go", "list", "./...")')"
-check "detector: ParseFile with runtime.Caller root" yes "$(detect <<<'_, f, _, _ := runtime.Caller(0); parser.ParseFile(fset, f, nil, 0)')"
+check "detector: ParseFile with runtime.Caller root" yes "$(detect <<<'import "go/parser"; _, f, _, _ := runtime.Caller(0); parser.ParseFile(fset, f, nil, 0)')"
 check "detector: walk of the package dir only" no "$(detect <<<'filepath.WalkDir(".", fn)')"
 check "detector: ReadFile of a local file" no "$(detect <<<'os.ReadFile("testdata/a.json")')"
 check "detector: pure logic" no "$(detect <<<'func Add(a, b int) int { return a + b }')"
