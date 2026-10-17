@@ -816,6 +816,283 @@
     ]
   },
   {
+    "id": "contextfabric.answer_reuse_bypass",
+    "msg": "context fabric answer reuse bypass",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when reuse is skipped.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "confirmed_structure",
+          "prior_subject_receipts",
+          "prior_result_reference",
+          "stated_period",
+          "explicit_handle",
+          "supplied_interpretation",
+          "client_synthesis"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.answer_reuse_containment",
+    "msg": "context fabric answer reuse containment",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per containment measurement.",
+    "data_dependent_bound": "one line per reuse attempt that measured containment; the count follows the candidate lookups a request makes.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "demanded_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "visible_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_citation",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "stripped_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stripped_labels",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_candidates",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_drivers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_findings",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_paths",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "disclosure",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "structured",
+          "reason_only"
+        ],
+        "applicability": "written when the degrade stripped something and a disclosure form was taken"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.answer_reuse_outcome",
+    "msg": "context fabric answer reuse outcome",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per answer reuse attempt.",
+    "data_dependent_bound": "one line per reuse attempt; a request tries reuse once per candidate lookup it makes and the count follows the lookups.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "hit",
+          "miss_no_candidate",
+          "miss_authorization",
+          "miss_evidence_containment",
+          "stale_graph_epoch",
+          "graph_not_projected",
+          "hit_degraded",
+          "miss_recheck_unavailable",
+          "miss_degrade_invalid",
+          "miss_count_scope",
+          "miss_hint_not_committed",
+          "miss_scope_identity"
+        ]
+      },
+      {
+        "key": "ownership_routing_version",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ownership-routing.v2"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.answer_reuse_served_request_id",
+    "msg": "context fabric answer reuse served a stored result's own request id",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per reuse hit.",
+    "data_dependent_bound": "one line per reuse hit; the answer reuse path and the work item reuse path each write one, and the count follows the lookups a request makes.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "served_request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "request_id_mismatch",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.binding_epoch_moved",
+    "msg": "context fabric investigation's graph epoch moved between binding resolution and save",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation save, written when the epoch moved.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "flip_during_investigation",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "binding_epoch_delta",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.binding_epoch_unchanged",
+    "msg": "context fabric investigation's graph epoch unchanged between binding resolution and save",
+    "level": "debug",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation save, written when the epoch did not move.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "flip_during_investigation",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "binding_epoch_delta",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.client_synthesis_decision",
     "msg": "context fabric client synthesis decision",
     "level": "info",
@@ -1151,6 +1428,133 @@
         "key": "deficiency_zero_withheld",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.commit_affirmation_retraction",
+    "msg": "context fabric commit affirmation retraction",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per subject the commit gate retracts.",
+    "data_dependent_bound": "one line per retracted subject; the number of subjects an answer names follows the question.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "commit_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "caller_canonical_id",
+          "authoritative_identity",
+          "statistical"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "winning_mechanism",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "exact",
+          "alias",
+          "provider_key",
+          "lexical",
+          "vector",
+          "traversal_parent"
+        ]
+      },
+      {
+        "key": "provisional_committed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "final_committed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.commit_kept_by_no_member_found",
+    "msg": "context fabric commit kept by no member found",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per subject the commit gate keeps by the none-found row.",
+    "data_dependent_bound": "one line per kept subject; the number of subjects an answer names follows the question.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
       },
       {
         "key": "request_id",
@@ -6046,6 +6450,82 @@
     ]
   },
   {
+    "id": "contextfabric.prior_subject_receipt_skip_reason",
+    "msg": "context fabric prior-subject receipt skip reason",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id",
+      "reason"
+    ],
+    "bounded_aggregation": "one line per skip reason with a non-zero count.",
+    "data_dependent_bound": "at most one line per skip reason (four) per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "failed_reauth",
+          "unloadable",
+          "no_match",
+          "stale_graph_epoch"
+        ]
+      },
+      {
+        "key": "count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "epoch_delta",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written on the stale_graph_epoch reason only"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.prior_subject_receipts_skipped",
+    "msg": "context fabric prior-subject receipts skipped",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per receipt-skip recording, and none when no receipt was skipped.",
+    "data_dependent_bound": "one line per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass, so the count follows the branches a request passes, not a fixed number.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.project_deployment_walk",
     "msg": "context_fabric: project deployment walk",
     "level": "info",
@@ -7777,6 +8257,144 @@
     ]
   },
   {
+    "id": "contextfabric.stored_answerability",
+    "msg": "context fabric stored clarification answerability",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id",
+      "surface"
+    ],
+    "bounded_aggregation": "one line per stored clarification determination.",
+    "data_dependent_bound": "one line per stored clarification a surface checks; reuse checks one per candidate lookup and the result by id route one per stored result it serves.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written by the reuse surface; the result by id route does not write it"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "reuse",
+          "result_by_id"
+        ]
+      },
+      {
+        "key": "determination",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "answerable",
+          "unanswerable",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "decided_by",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "window_gate",
+          "role",
+          "no_subject_offer",
+          "offer_less"
+        ]
+      },
+      {
+        "key": "semantic_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_read",
+          "load_failed",
+          "store_unconfigured",
+          "unreported",
+          "available",
+          "absent",
+          "unsupported_version",
+          "malformed",
+          "oversized"
+        ]
+      },
+      {
+        "key": "repaired",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "stored_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "served_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "evaluated_roles",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^(none|(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved)(,(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved))*)$"
+      },
+      {
+        "key": "advanced_role",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^(none|(subject|anchor|member|group|operand):(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref))$"
+      },
+      {
+        "key": "advancing_channel",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "kind_option",
+          "anchor_option",
+          "handle_option",
+          "candidate_option",
+          "subject_candidate"
+        ]
+      },
+      {
+        "key": "offers_evaluated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offers_advancing",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.stored_result_authorization",
     "msg": "context fabric stored result authorization",
     "level": "info",
@@ -7931,6 +8549,107 @@
           "graph_error"
         ],
         "applicability": "written when the decision is unavailable because a graph read failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.subjectless_terminal",
+    "msg": "context fabric subjectless terminal",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when the turn reaches the subjectless terminal path.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "frame_gate_refused",
+          "no_candidate_of_declared_kind",
+          "ambiguous",
+          "offer_pool_emptied_by_exclusion",
+          "graph_not_projected",
+          "team_inactive",
+          "authz_filtered_to_empty",
+          "empty_pool",
+          "unbound_scope_anchor"
+        ]
+      },
+      {
+        "key": "refusal_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "member_kind_unservable",
+          "frame_invariant_violated",
+          "unspecified",
+          "continuation_context_unverifiable",
+          "declared_kind_unmatched",
+          "organization_scope_unsupported",
+          "subject_identity_unconfirmed"
+        ]
+      },
+      {
+        "key": "declared_kinds",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^(none|(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref)(,(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref))*)$"
+      },
+      {
+        "key": "offered_kinds",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^(none|(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref)(,(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref))*)$"
+      },
+      {
+        "key": "evaluated_roles",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^(none|(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved)(,(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved))*)$"
+      },
+      {
+        "key": "advanced_role",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^(none|(subject|anchor|member|group|operand):(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref))$"
+      },
+      {
+        "key": "advancing_channel",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "kind_option",
+          "anchor_option",
+          "handle_option",
+          "candidate_option",
+          "subject_candidate"
+        ]
+      },
+      {
+        "key": "offers_evaluated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offers_advancing",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",
@@ -8478,6 +9197,104 @@
         "key": "ceiling_fit",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.synthesis_status_override",
+    "msg": "context fabric synthesis status override",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when the served status differs from the synthesis status.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "to_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "clarification_unavailable",
+          "clarification_unavailable_uncommitted",
+          "no_match_over_cohort_outcome",
+          "no_match_over_read_facts",
+          "no_match_over_measured_zero",
+          "no_match_kept_unasked_fact_kinds"
+        ]
+      },
+      {
+        "key": "committed_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unasked_fact_kinds",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the kinds of the committed subject's read rows that no requirement asked for, sorted and comma-joined; empty when every read row was asked for. Any reason can carry it, including the ones that matched an asked row",
+        "joined_members": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
       },
       {
         "key": "request_id",

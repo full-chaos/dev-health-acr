@@ -252,6 +252,32 @@ func goVarName(e Event) string {
 		return "ProjectStatusDrivers"
 	case TeamBlockersDrivers.ID:
 		return "TeamBlockersDrivers"
+	case PriorSubjectReceiptsSkipped.ID:
+		return "PriorSubjectReceiptsSkipped"
+	case PriorSubjectReceiptSkipReason.ID:
+		return "PriorSubjectReceiptSkipReason"
+	case CommitAffirmationRetraction.ID:
+		return "CommitAffirmationRetraction"
+	case CommitKeptByNoMemberFound.ID:
+		return "CommitKeptByNoMemberFound"
+	case SynthesisStatusOverride.ID:
+		return "SynthesisStatusOverride"
+	case AnswerReuseOutcome.ID:
+		return "AnswerReuseOutcome"
+	case AnswerReuseBypass.ID:
+		return "AnswerReuseBypass"
+	case AnswerReuseContainment.ID:
+		return "AnswerReuseContainment"
+	case SubjectlessTerminal.ID:
+		return "SubjectlessTerminal"
+	case StoredAnswerability.ID:
+		return "StoredAnswerability"
+	case AnswerReuseServedRequestID.ID:
+		return "AnswerReuseServedRequestID"
+	case BindingEpochMoved.ID:
+		return "BindingEpochMoved"
+	case BindingEpochUnchanged.ID:
+		return "BindingEpochUnchanged"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:
