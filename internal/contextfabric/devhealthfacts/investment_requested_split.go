@@ -142,7 +142,7 @@ WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(` + linked 
 	}
 	return head + `
 	unit_size_weight AS effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from` + rowCols + `
-FROM ` + sizedUnits(`SELECT work_unit_id, {org_id:String} AS org_id,
+FROM ` + sizedUnitsForOrg(`SELECT work_unit_id,
 		any(theme_distribution_json) AS theme_distribution_json,
 		any(bugfix_share) AS bugfix_share,
 		any(span_from) AS span_from,

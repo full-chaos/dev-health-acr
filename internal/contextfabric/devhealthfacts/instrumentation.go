@@ -67,7 +67,7 @@ func (p instrumentedProvider) LoadPrerequisites(ctx context.Context, principal s
 // WHY the production caller (internal/runtime/hosted/open.go) always wires
 // this with readers.NewSlogInstrumentation, never
 // readers.NewOTelInstrumentation: internal/contextfabric/modelprovider/
-// provider.go's suppressGenkitTelemetryExport unconditionally overwrites the
+// provider.go's suppressModelTelemetryExport unconditionally overwrites the
 // GLOBAL otel.SetTracerProvider/otel.SetMeterProvider with no-op/discard
 // providers whenever the model provider initializes, purely to stop Genkit
 // exporting its own telemetry. The process's real OTLP export

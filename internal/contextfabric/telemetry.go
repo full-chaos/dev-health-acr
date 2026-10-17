@@ -579,7 +579,7 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 // -- see the interface method's own doc comment (engine.go) for the exact
 // denominator and the two directions it differs in.
 func (t SlogEngineTelemetry) RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "shape", SanitizeLogAttr(string(shape))}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "shape", SanitizeLogAttr(cohortStructureGateShapeLogValue(shape))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric cohort structure gate", args...)
 }
 
@@ -617,7 +617,7 @@ func (t SlogEngineTelemetry) RecordWindowExpandOfferRedeemed(ctx context.Context
 func (t SlogEngineTelemetry) RecordInterpretedTimeBound(ctx context.Context, principal storage.Principal, decision InterpretedTimeBoundDecision) {
 	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
-		"axis", SanitizeLogAttr(string(decision.Axis)),
+		"axis", SanitizeLogAttr(interpretedTimeBoundAxisLogValue(decision.Axis)),
 		"outcome", SanitizeLogAttr(string(decision.Outcome)),
 		"clamp_applied", decision.ClampApplied,
 		"range_days", decision.RangeDays,
