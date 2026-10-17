@@ -7,7 +7,7 @@
 // Nothing here calls otel.SetTracerProvider, otel.SetMeterProvider,
 // global.SetLoggerProvider, otel.SetTextMapPropagator or slog.SetDefault. That
 // is what keeps the Genkit guarantee in
-// internal/contextfabric/modelprovider (suppressGenkitTelemetryExport): Genkit
+// internal/contextfabric/modelprovider (suppressModelTelemetryExport): Genkit
 // reads only the GLOBAL tracer and meter providers and slog.Default, so its
 // spans (which carry model prompt and response content as attributes), its
 // metrics and its own log lines reach none of the exporters built here. A

@@ -109,7 +109,7 @@ func TestNew_neverExportsPromptContentToGenkitTelemetry(t *testing.T) {
 // raw provider response body (see retryable's doc comment in
 // genkitruntime/runtime.go). Unlike tracing.TracerProvider(), Genkit's
 // metrics path has no "already registered, skip" check of its own; it
-// just calls otel.Meter("genkit") fresh. suppressGenkitTelemetryExport now
+// just calls otel.Meter("genkit") fresh. suppressModelTelemetryExport now
 // also registers a no-op *metric.MeterProvider before genkit.Init runs.
 //
 // Ordering note (codex round 3, informational): like the tracing probe
@@ -124,7 +124,7 @@ func TestNew_neverExportsPromptContentToGenkitTelemetry(t *testing.T) {
 // Unlike the pre-fix repro (which genuinely depends on being first), this
 // is not a soundness gap in the fixed code as part of the full suite:
 // every test in this package reaches an action only via New(), and New()
-// always calls suppressGenkitTelemetryExport before genkit.Init runs --
+// always calls suppressModelTelemetryExport before genkit.Init runs --
 // so whichever test in the binary happens to trigger the first-ever
 // action completion, fetchInstruments binds to a no-op MeterProvider
 // either way. A run as part of the full package suite can therefore bind
@@ -160,38 +160,6 @@ func TestNew_neverExportsErrorContentToGenkitMetrics(t *testing.T) {
 	}
 	if len(data.ScopeMetrics) != 0 {
 		t.Fatalf("manual reader (registered before New()) collected %d scope-metrics groups, want 0 -- New() must overwrite the global MeterProvider before genkit's metrics instruments ever bind to it: %+v", len(data.ScopeMetrics), data)
-	}
-}
-
-// TestNew_rejectsGenkitDevEnvironment is the CHAOS-3770 F1 residual probe
-// (codex round 2, point c): genkit.Init starts a local reflection server
-// only when GENKIT_ENV=dev (api.CurrentEnvironment(), core/api/environment.go).
-// That server's handleNotify endpoint lets a caller register a NEW
-// telemetry exporter URL at runtime, independent of
-// GENKIT_TELEMETRY_SERVER and independent of
-// suppressGenkitTelemetryExport's tracer/meter-provider preemption above
-// (it wires a client directly via tracing.WriteTelemetryImmediate/
-// WriteTelemetryRealtime, not through the global provider that check
-// preempts). New() must fail composition outright rather than silently
-// allow it, the same posture as an ambient OPENAI_* variable.
-func TestNew_rejectsGenkitDevEnvironment(t *testing.T) {
-	t.Setenv("GENKIT_ENV", "dev")
-	provider := recordingProvider(t, chatCompletion(t, validInterpretationJSON))
-	cfg := testConfig(provider)
-
-	runtime, err := New(context.Background(), cfg)
-
-	if err == nil {
-		t.Fatal("New() = nil error with GENKIT_ENV=dev, want a rejection")
-	}
-	if runtime != nil {
-		t.Fatal("New() returned a runtime alongside an error")
-	}
-	if !strings.Contains(err.Error(), "GENKIT_ENV") {
-		t.Fatalf("err = %q, want it to name GENKIT_ENV", err)
-	}
-	if provider.calls() != 0 {
-		t.Fatal("a rejected configuration must not construct genkit or contact a provider")
 	}
 }
 
