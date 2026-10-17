@@ -157,7 +157,7 @@ func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, erro
 		}
 		client, err := llm.New(llm.Config{
 			Kind:        kind,
-			APIKey:      llm.NewSecret(cfg.APIKey),
+			APIKey:      cfg.APIKey,
 			BaseURL:     baseURL,
 			Model:       model,
 			HTTPClient:  newModelHTTPClient(cfg),
@@ -177,7 +177,7 @@ func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, erro
 // shared client would otherwise send its own placeholder bearer, and an
 // endpoint configured without a credential has never been sent one.
 func newModelHTTPClient(cfg Config) *http.Client {
-	if cfg.APIKey != "" {
+	if cfg.APIKey.Configured() {
 		return &http.Client{Timeout: cfg.Timeout}
 	}
 	// A custom RoundTripper is used by the shared client as it is, so this

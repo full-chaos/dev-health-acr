@@ -2,6 +2,7 @@ package modelprovider
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-go/llm"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,7 +225,7 @@ func TestConfigFromEnv_supportsBYOEndpointWithoutCredential(t *testing.T) {
 	}
 
 	// Then
-	if cfg.Provider != "local-llama" || cfg.Model != "meta-llama/Llama-3.1-8B-Instruct" || cfg.APIKey != "" {
+	if cfg.Provider != "local-llama" || cfg.Model != "meta-llama/Llama-3.1-8B-Instruct" || cfg.APIKey.Configured() {
 		t.Fatalf("config = %#v, want the BYO endpoint accepted verbatim with no credential", cfg)
 	}
 }
@@ -244,8 +245,8 @@ func TestConfigFromEnv_readsCredentialFromSecretFile(t *testing.T) {
 	}
 
 	// Then
-	if cfg.APIKey != "sk-from-file" {
-		t.Fatalf("APIKey = %q, want the trimmed file contents", cfg.APIKey)
+	if cfg.APIKey.Reveal() != "sk-from-file" {
+		t.Fatalf("APIKey = %q, want the trimmed file contents", cfg.APIKey.Reveal())
 	}
 }
 
@@ -372,7 +373,7 @@ func TestNewClientOptions_neutralizesAmbientProviderEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-ambient-must-not-be-sent")
 	t.Setenv("OPENAI_BASE_URL", "https://ambient.example.com/v1/")
 	cfg := Config{
-		Provider: DefaultProvider, Model: DefaultModel, APIKey: "sk-configured",
+		Provider: DefaultProvider, Model: DefaultModel, APIKey: llm.NewSecret("sk-configured"),
 		Timeout: time.Minute, MaxAttempts: 1, MaxTransportRetries: 0,
 	}
 

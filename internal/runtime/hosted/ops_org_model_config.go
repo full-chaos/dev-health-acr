@@ -99,7 +99,7 @@ func (o opsOrgModelConfigs) ResolveOrgModelConfig(ctx context.Context, orgID str
 	if err != nil || !found {
 		return contextfabric.ResolvedOrgModelConfig{}, false, err
 	}
-	if config.APIKey == "" && config.BaseURL == "" {
+	if !config.APIKey.Configured() && config.BaseURL == "" {
 		return contextfabric.ResolvedOrgModelConfig{}, false, errors.Join(entitlements.ErrLLMConfigUnusable, errors.New("no credential for a hosted provider endpoint"))
 	}
 	return contextfabric.ResolvedOrgModelConfig{
