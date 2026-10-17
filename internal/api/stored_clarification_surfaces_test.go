@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -286,6 +288,13 @@ func storedAnswerabilityLines(t *testing.T, logs *bytes.Buffer, offset int) []ma
 	for _, raw := range strings.Split(strings.TrimSpace(logs.String()[offset:]), "\n") {
 		var line map[string]any
 		if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == contextfabric.StoredAnswerabilityLogMessage {
+			parsed, err := certify.Parse([]byte(raw))
+			if err != nil {
+				t.Fatalf("certify.Parse: %v", err)
+			}
+			if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.StoredAnswerability, Want: map[string]any{"surface": line["surface"], "request_id": line["request_id"]}}); err != nil {
+				t.Fatalf("the stored-answerability line the route wrote failed certification: %v\n%s", err, raw)
+			}
 			lines = append(lines, line)
 		}
 	}
