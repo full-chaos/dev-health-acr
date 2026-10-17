@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,9 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 		return contextfabric.ProjectionReceipt{}, err
 	}
 	if err := a.retractPartOfEdges(ctx, key, batch); err != nil {
+		return contextfabric.ProjectionReceipt{}, err
+	}
+	if err := a.retractOutrankedLinks(ctx, key, batch); err != nil {
 		return contextfabric.ProjectionReceipt{}, err
 	}
 	// CHAOS-3778: attach vectors AFTER every node write in this batch, so a
@@ -958,4 +962,67 @@ func (a *Adapter) retractOpenEdges(ctx context.Context, key string, batch contex
 		}
 	}
 	return nil
+}
+
+// retractOutrankedLinks applies the fallback-only rule of the issue <> pull
+// request link: a pull request or an issue with a native link gets no
+// explicit_text or heuristic link. For every native LINKS_PULL_REQUEST edge the
+// batch asserts, it deletes every lower-tier LINKS_PULL_REQUEST edge that
+// leaves the same issue and every one that enters the same pull request. Two
+// statements per batch, whatever its size. Ops deletes the outranked link row,
+// so no row ever names the stored edge again: the native assertion is the
+// only signal, and it is the current truth, so the lower-tier edges go
+// whatever their stamps. An edge with no stored tier is not a link (the tree
+// walk's linkTiers) and is left as it is.
+func (a *Adapter) retractOutrankedLinks(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
+	natives, retracted, err := a.deleteOutrankedLinks(ctx, key, batch)
+	if err != nil || natives == 0 {
+		return err
+	}
+	slog.DebugContext(ctx, "context fabric: retracted lower-tier issue pull request links a native link covers",
+		"native_links", natives, "lower_tier_links_retracted", retracted)
+	return nil
+}
+
+// deleteOutrankedLinks runs retractOutrankedLinks' two statements and returns
+// the native links of the batch and the lower-tier edges deleted.
+func (a *Adapter) deleteOutrankedLinks(ctx context.Context, key string, batch contextfabric.ProjectionBatch) (int, int64, error) {
+	var natives []interface{}
+	for _, relationship := range batch.Relationships {
+		if relationship.Type != contractsv1.ContextFabricRelationshipLinksPullRequest {
+			continue
+		}
+		if tier := relationship.Properties[linkTierProperty].String; tier == nil || *tier != linkTiers[0].name {
+			continue
+		}
+		natives = append(natives, map[string]interface{}{
+			"fk": string(relationship.From.Kind), "fid": relationship.From.CanonicalID,
+			"tk": string(relationship.To.Kind), "tid": relationship.To.CanonicalID,
+		})
+	}
+	if len(natives) == 0 {
+		return 0, 0, nil
+	}
+	lower := make([]interface{}, 0, len(linkTiers)-1)
+	for _, tier := range linkTiers[1:] {
+		lower = append(lower, tier.name)
+	}
+	params := map[string]interface{}{"rows": natives, "org": batch.OrgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipLinksPullRequest)), "lower": lower}
+	where := fmt.Sprintf("WHERE r.%s = $rel AND r.%s%s IN $lower WITH DISTINCT r DELETE r RETURN count(r) AS n", propRelationType, propPropertyPrefix, safeName(linkTierProperty))
+	retracted := int64(0)
+	for _, pattern := range []string{
+		fmt.Sprintf("(a:%s {%s:$org, %s:row.fk, %s:row.fid})-[r:%s]->()", labelSubject, propOrgID, propKind, propCanonicalID, labelRelation),
+		fmt.Sprintf("()-[r:%s]->(b:%s {%s:$org, %s:row.tk, %s:row.tid})", labelRelation, labelSubject, propOrgID, propKind, propCanonicalID),
+	} {
+		rows, err := a.api.query(ctx, key, "UNWIND $rows AS row MATCH "+pattern+" "+where, params, false)
+		if err != nil {
+			return 0, 0, classifyProjectionError("retract outranked issue pull request links", err)
+		}
+		for _, r := range rows {
+			if n, ok := r["n"].(int64); ok {
+				retracted += n
+			}
+		}
+	}
+	return len(natives), retracted, nil
 }

@@ -471,11 +471,20 @@ same rows; no edge is provider-specific. Producers are in
   the source (`issueprlinks/fallback.go`). The issue end is the issue's own `work_items` row (its own `repo_id`);
   the table's `repo_id` is the pull request's repository. A row is projected
   only when the work item resolves and is not a pull request (`pr` or
-  `merge_request`), the `pull_request` node exists and the tier is one of the
-  three; each skip is counted. `RELATES_TO` from `work_item_dependencies`
-  stays for issue-to-issue relations and is no part of the tree. One rebuild
-  per projected organization is needed to gain the edge
-  (`ClickHouseSourceVersion` v8).
+  `merge_request`), the `pull_request` node exists, the tier is one of the
+  three, and the row is not a lower-tier row a native row of the organization
+  covers (by its issue or its pull request: the skip
+  `issue_pull_request_link:outranked_by_native`); each skip is counted. The
+  graph keeps the same rule: ops deletes the outranked rows, so no row names an
+  outranked edge projected before its native link arrived, and the projection
+  of a native edge deletes every `explicit_text` and `heuristic`
+  `LINKS_PULL_REQUEST` edge of the same issue and of the same pull request in
+  the same batch (`falkorgraph/projection.go` `retractOutrankedLinks`, a debug
+  line with the counts). An edge with no tier is left as it is. `RELATES_TO`
+  from `work_item_dependencies` stays for issue-to-issue relations and is no
+  part of the tree. One rebuild per projected organization is needed to gain
+  the edge (`ClickHouseSourceVersion` v8), and one to drop the outranked edges
+  projected before the rule (v16).
 - The tiers the walk admits are one table, `linkTiers` in
   `falkorgraph/tree_walk.go`: all three. The link read keeps only edges whose
   `link_provenance` is in it, orders the links by rank, highest first, and a

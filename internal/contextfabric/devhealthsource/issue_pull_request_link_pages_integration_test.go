@@ -23,6 +23,7 @@ const (
 	linkSkipUnresolved  = "issue_pull_request_link:unresolved_work_item"
 	linkSkipPRTyped     = "issue_pull_request_link:pull_request_typed_work_item"
 	linkSkipMissingPR   = "issue_pull_request_link:missing_pull_request_node"
+	linkSkipOutranked   = "issue_pull_request_link:outranked_by_native"
 )
 
 // linkPageLimit is smaller than the 14 link rows the fixture holds after
@@ -114,15 +115,17 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 		at := func(minute int) time.Time { return base.Add(time.Duration(minute) * time.Minute) }
 		// Every row has a distinct last_synced, so the keyset order is defined.
 		rows := []linkSeedRow{
-			// projectable: 8 distinct (issue, pull request) pairs
+			// 8 distinct (issue, pull request) pairs of known tiers and
+			// resolved ends; 3 of them are lower-tier links a native row
+			// outranks (outrankedPairs)
 			{"linear:CHAOS-1", repoGH, 42, "native", at(1)},
-			{"jira:PROJ-2", repoGL, 43, "explicit_text", at(2)},
-			{"gh:acme/widget#7", repoGH, 44, "native", at(3)}, // written twice, see below
+			{"jira:PROJ-2", repoGL, 43, "explicit_text", at(2)}, // GL 43 has a native row (#51's, skipped)
+			{"gh:acme/widget#7", repoGH, 44, "native", at(3)},   // written twice, see below
 			{"gitlab:group/proj#9", repoGL, 45, "native", at(4)},
-			{"linear:CHAOS-1", repoGL, 46, "heuristic", at(5)}, // same issue, different tier than its first link
+			{"linear:CHAOS-1", repoGL, 46, "heuristic", at(5)}, // CHAOS-1 has a native link (GH 42)
 			{"jira:PROJ-2", repoGH, 47, "explicit_text", at(6)},
 			{"gh:acme/widget#7", repoGH, 48, "native", at(7)},
-			{"gitlab:group/proj#9", repoGL, 43, "heuristic", at(8)},
+			{"gitlab:group/proj#9", repoGL, 43, "heuristic", at(8)}, // both ends have a native link
 			// the same pair again at a LATER stamp and a LOWER tier: FINAL keeps native
 			{"gh:acme/widget#7", repoGH, 44, "heuristic", at(9)},
 			// skipped rows
@@ -152,7 +155,11 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 		wantRank := map[string]int64{"native": 3, "explicit_text": 2, "heuristic": 1}
 		wantFrom := map[string]string{}
 		wantTo := map[string]string{}
-		for _, r := range rows[:8] {
+		outrankedPairs := map[int]bool{1: true, 4: true, 7: true}
+		for index, r := range rows[:8] {
+			if outrankedPairs[index] {
+				continue
+			}
 			issueID, _, err := identity.Derive(identity.KindWorkItem, []string{issueRepo[r.issue], r.issue}, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -161,10 +168,10 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 			id := identity.DeriveRelationship(identity.RelationshipFamilyIssuePullRequestLink, issueID, prID, "LINKS_PULL_REQUEST")
 			wantTier[id], wantFrom[id], wantTo[id] = r.tier, issueID, prID
 		}
-		if len(wantTier) != 8 {
-			t.Fatalf("fixture holds %d projectable pairs, want 8", len(wantTier))
+		if len(wantTier) != 5 {
+			t.Fatalf("fixture holds %d projectable pairs, want 5", len(wantTier))
 		}
-		wantSkips := map[string]int{linkSkipUnknownTier: 2, linkSkipUnresolved: 1, linkSkipPRTyped: 2, linkSkipMissingPR: 1}
+		wantSkips := map[string]int{linkSkipUnknownTier: 2, linkSkipUnresolved: 1, linkSkipPRTyped: 2, linkSkipMissingPR: 1, linkSkipOutranked: 3}
 
 		// Walk the keyset pages the way the projection source does: the cursor
 		// is the last row's position and row key.
@@ -318,7 +325,8 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 				t.Errorf("unexpected graph edge %s", key)
 			}
 		}
-		// The issue with two links of different tiers holds two edges, one per tier.
+		// The issue with a native link and a heuristic link holds the native
+		// edge only: the heuristic link is a fallback the native one outranks.
 		chaos1, _, _ := identity.Derive(identity.KindWorkItem, []string{zeroRepo, "linear:CHAOS-1"}, nil)
 		tiers := []string{}
 		for key, v := range gotGraph {
@@ -327,8 +335,8 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 			}
 		}
 		sort.Strings(tiers)
-		if strings.Join(tiers, ",") != "heuristic/1,native/3" {
-			t.Errorf("linear:CHAOS-1 edge tiers = %v, want [heuristic/1 native/3]", tiers)
+		if strings.Join(tiers, ",") != "native/3" {
+			t.Errorf("linear:CHAOS-1 edge tiers = %v, want [native/3]", tiers)
 		}
 	})
 

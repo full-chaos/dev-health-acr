@@ -53,7 +53,15 @@ func issuePullRequestLinkRow(workItemID, rowRepoID string, number uint32, proven
 	}
 	return []any{workItemID, rowRepoID, number, provenance, at,
 		issueResolved, issue.repoID, issue.itemType, issue.created, uint8(0), zeroTime,
-		prExists, pr.slug, pr.created, uint8(0), zeroTime}
+		prExists, pr.slug, pr.created, uint8(0), zeroTime, uint8(0)}
+}
+
+// outrankedLinkRow is issuePullRequestLinkRow for a row the statement marks as
+// covered by a native row of the organization.
+func outrankedLinkRow(workItemID, rowRepoID string, number uint32, provenance string, at time.Time, issue linkIssue, pr linkPullRequest) []any {
+	row := issuePullRequestLinkRow(workItemID, rowRepoID, number, provenance, at, issue, pr)
+	row[len(row)-1] = uint8(1)
+	return row
 }
 
 func linkTablesOnly(at time.Time, rows [][]any) []fakeTable {
@@ -252,7 +260,8 @@ func TestIssuePullRequestLinkIssueEndUsesTheIssuesOwnRepo(t *testing.T) {
 
 // TestIssuePullRequestLinkSkipsAreCountedByReason pins every skip: an
 // unresolved work item, a pull-request-typed work item (pr and merge_request),
-// a missing pull request node and an unknown provenance project nothing and
+// a missing pull request node, an unknown provenance and a lower-tier row a
+// native row covers (explicit_text and heuristic) project nothing and
 // are counted under their own reason, beside one good row that still projects.
 func TestIssuePullRequestLinkSkipsAreCountedByReason(t *testing.T) {
 	t.Parallel()
@@ -268,6 +277,8 @@ func TestIssuePullRequestLinkSkipsAreCountedByReason(t *testing.T) {
 		issuePullRequestLinkRow("gh:acme/widget#5", repo, 5, "native", at.Add(4*time.Second), issue, linkPullRequest{missing: true}),
 		issuePullRequestLinkRow("gh:acme/widget#6", repo, 6, "guess", at.Add(5*time.Second), issue, pr),
 		issuePullRequestLinkRow("gh:acme/widget#7", repo, 7, "NATIVE", at.Add(6*time.Second), issue, pr),
+		outrankedLinkRow("gh:acme/widget#8", repo, 8, "explicit_text", at.Add(7*time.Second), issue, pr),
+		outrankedLinkRow("gh:acme/widget#9", repo, 9, "heuristic", at.Add(8*time.Second), issue, pr),
 	}
 	links, counts := linkRun(t, linkTablesOnly(at, rows), linkCursor(t, at))
 	if len(links) != 1 || links[0].To.CanonicalID != "pull_request:"+repo+":1" {
@@ -278,6 +289,7 @@ func TestIssuePullRequestLinkSkipsAreCountedByReason(t *testing.T) {
 		"issue_pull_request_link:pull_request_typed_work_item": 2,
 		"issue_pull_request_link:missing_pull_request_node":    1,
 		"issue_pull_request_link:unknown_provenance":           2,
+		"issue_pull_request_link:outranked_by_native":          2,
 	}
 	for reason, n := range want {
 		if counts[reason] != n {

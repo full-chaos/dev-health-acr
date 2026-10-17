@@ -23,7 +23,8 @@ import (
 // link's tier and rank on the stored edge, for every issue id shape the
 // writers produce and all three tiers, onto pull requests of a GitHub repo and
 // a GitLab repo; and no edge for an unresolved work item, a pull-request-typed
-// work item, a missing pull request node or an unknown provenance.
+// work item, a missing pull request node, an unknown provenance or a
+// lower-tier row a native row outranks (by its issue or its pull request).
 //
 // Needs Docker (ClickHouse and FalkorDB containers). Written to be run by CI
 // or by the lane owner; not run in the authoring sandbox.
@@ -83,11 +84,15 @@ func TestIssuePullRequestLinkEdgesOnRealStores(t *testing.T) {
 	}
 	linked := []link{
 		{"linear:CHAOS-1", pull{repoGH, 42}, "native"},
-		{"jira:PROJ-2", pull{repoGL, 43}, "explicit_text"},
 		{"gh:acme/widget#7", pull{repoGH, 44}, "heuristic"},
 		{"gitlab:group/proj#9", pull{repoGL, 45}, "native"},
-		{"linear:CHAOS-1", pull{repoGL, 46}, "heuristic"},
 		{"jira:PROJ-2", pull{repoGH, 47}, "explicit_text"},
+	}
+	// Lower-tier rows a native row outranks: the fallback-only rule gives
+	// them no edge.
+	outranked := []link{
+		{"jira:PROJ-2", pull{repoGL, 43}, "explicit_text"}, // GL 43 has a native row (#51's, skipped below)
+		{"linear:CHAOS-1", pull{repoGL, 46}, "heuristic"},  // CHAOS-1 has a native link (GH 42)
 	}
 	skipped := []link{
 		{"linear:GHOST-1", pull{repoGH, 42}, "native"},       // no work item
@@ -97,7 +102,7 @@ func TestIssuePullRequestLinkEdgesOnRealStores(t *testing.T) {
 		{"jira:PROJ-2", pull{repoGH, 42}, "guess"},           // a tier outside the closed vocabulary
 		{"gh:acme/widget#7", pull{repoGL, 43}, "NOT_A_TIER"}, // a tier outside the closed vocabulary
 	}
-	for i, l := range append(append([]link{}, linked...), skipped...) {
+	for i, l := range append(append(append([]link{}, linked...), outranked...), skipped...) {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			l.pull.repo, l.issue, l.pull.number, float32(0.9), l.tier, "", now, orgID)
 	}
@@ -236,7 +241,8 @@ func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 		number uint32
 		tier   string
 	}
-	pulls := []pull{{repoA, 1, "native"}, {repoB, 2, "heuristic"}}
+	// Both links are below native: a native link would outrank the other.
+	pulls := []pull{{repoA, 1, "explicit_text"}, {repoB, 2, "heuristic"}}
 	for _, p := range pulls {
 		exec(fmt.Sprintf("pull request %s#%d", p.repo, p.number), `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			p.repo, orgID, p.number, fmt.Sprintf("PR %d", p.number), "open", created, now)

@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV15ForThePartOfEdgeRebuild pins the constant,
+// TestClickHouseSourceVersionIsV16ForTheOutrankedLinkRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -396,9 +396,14 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // so every already-projected edge carries the old id; the rebuild re-projects
 // them.
 //
-// v15 (one PART_OF edge per work item) is the latest: a re-parent, a cleared
+// v15 (one PART_OF edge per work item) is the next: a re-parent, a cleared
 // parent and a parent id that stops naming one parent left the old edge open;
 // the rebuild re-asserts each child and removes the stale edges.
+//
+// v16 (fallback-only issue <> pull request links) is the latest: ops deletes
+// the explicit_text and heuristic rows a native link outranks, so no row names
+// their already-projected edges again; the rebuild re-asserts every native
+// link, which retracts them.
 //
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
@@ -410,11 +415,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV15ForThePartOfEdgeRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV16ForTheOutrankedLinkRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v15" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v16" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v15")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v16")
 	}
 }
 

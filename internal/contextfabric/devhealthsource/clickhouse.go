@@ -155,7 +155,14 @@ const SourceName = "dev_health_clickhouse"
 // producer now retracts it per child (falkorgraph retractOpenEdges). Edges
 // projected before the roll are behind every checkpoint; the rebuild
 // re-asserts each child and removes the stale ones.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v15"
+//
+// (v16, fallback-only issue <> pull request links: a native LINKS_PULL_REQUEST
+// edge retracts every explicit_text and heuristic link of its issue and of its
+// pull request (falkorgraph retractOutrankedLinks), and a lower-tier row a
+// native row covers is not projected. Ops deletes the outranked rows, so the
+// lower-tier edges projected before the roll are named by no row again; the
+// rebuild re-asserts every native link and drops them.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v16"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and
