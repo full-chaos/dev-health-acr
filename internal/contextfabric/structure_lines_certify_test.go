@@ -266,7 +266,7 @@ func TestStructureReceiptVetoLineCertifiesEveryExitTheEngineWrites(t *testing.T)
 	}
 }
 
-// TestEveryStructureLineCertifiesWithoutARequestID emits each of the ten lines
+// TestEveryStructureLineCertifiesWithoutARequestID emits each declared line
 // through the real sink under a context that carries no request id, and
 // requires the line to certify when the assertion states the id is absent,
 // and to be unmatched by the same assertion when the line carries an id.
@@ -308,7 +308,27 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 			s.RecordStructureExplicit(c, principalOrg1, contractsv1.ContextFabricStructureNeedExpectedKind, contextfabric.StructureExplicitApplied)
 		}},
 	}
-	if len(cases) != 10 {
+	cases = append(cases, []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.PriorConsulted, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPriorConsulted(c, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, contextfabric.PriorConsultedOffered)
+		}},
+		{eventspec.PriorDegradationPointerDangling, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPriorDegradation(c, principalOrg1, contextfabric.PriorDegradationPointerDangling)
+		}},
+		{eventspec.PriorDegradation, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPriorDegradation(c, principalOrg1, contextfabric.PriorDegradationStoreUnavailable)
+		}},
+		{eventspec.ProjectedRowsCount, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordProjectedRowsCount(c, principalOrg1, 4, false)
+		}},
+		{eventspec.ProjectedRowsByFactKind, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordProjectedRowsByFactKind(c, principalOrg1, map[contextfabric.FactKind]int{contractsv1.ContextFabricFactMetrics: 2})
+		}},
+	}...)
+	if len(cases) != 15 {
 		t.Fatalf("want one case per declared line, have %d", len(cases))
 	}
 	for _, tc := range cases {
@@ -361,5 +381,90 @@ func TestNoAttributionRefusesAKeyThatIsNotAConditionalAttributionField(t *testin
 		if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.StructureReceipt, Want: map[string]any{"request_id": factScopeCertifyRequestID}, NoAttribution: []string{key}}); err == nil {
 			t.Errorf("NoAttribution %q was accepted", key)
 		}
+	}
+}
+
+func TestPriorConsultedAndDegradationLinesCertifyWhatTheEngineWrites(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for _, tc := range []struct {
+		saw, offered, revoked bool
+		want                  string
+	}{{true, true, false, "offered"}, {true, false, false, "suppressed_verification"}, {true, false, true, "suppressed_revoked"}} {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		for _, member := range structureNeedKinds() {
+			contextfabric.RecordPriorConsultOutcomeForTest(ctx, sink, principalOrg1, member, tc.saw, tc.offered, tc.revoked)
+		}
+		for _, member := range structureNeedKinds() {
+			line := certifyRequestLine(t, buf.Bytes(), eventspec.PriorConsulted, map[string]any{"org_id": "org_1", "member": string(member), "outcome": tc.want})
+			seen[line["outcome"].(string)] = true
+		}
+	}
+	seen["degraded"] = true // named by the vocabulary, never written by the engine (priors.go)
+	sameMembers(t, "prior consulted outcomes", keysOf(seen), contextfabric.PriorConsultedOutcomeVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	contextfabric.RecordPriorConsultOutcomeForTest(ctx, sink, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, false, false, false)
+	if buf.Len() != 0 {
+		t.Fatalf("a member with no candidate wrote a line: %s", buf.String())
+	}
+	sink.RecordPriorConsulted(ctx, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, "future_outcome")
+	certifyRefused(t, buf.Bytes(), eventspec.PriorConsulted, "an unknown prior outcome")
+
+	infoSeen := map[string]bool{}
+	for _, state := range contextfabric.PriorDegradationInfoVocabulary() {
+		buf.Reset()
+		contextfabric.RecordPriorDegradationForTest(ctx, sink, principalOrg1, contextfabric.PriorDegradationState(state))
+		certifyRequestLine(t, buf.Bytes(), eventspec.PriorDegradation, map[string]any{"state": state})
+		infoSeen[state] = true
+	}
+	buf.Reset()
+	contextfabric.RecordPriorDegradationForTest(ctx, sink, principalOrg1, contextfabric.PriorDegradationPointerDangling)
+	certifyRequestLine(t, buf.Bytes(), eventspec.PriorDegradationPointerDangling, map[string]any{"state": "pointer_dangling"})
+	certifyRefused(t, buf.Bytes(), eventspec.PriorDegradation, "a dangling pointer on the Info line")
+	buf.Reset()
+	contextfabric.RecordPriorDegradationForTest(ctx, sink, principalOrg1, contextfabric.PriorDegradationNone)
+	if buf.Len() != 0 {
+		t.Fatalf("no degradation wrote a line: %s", buf.String())
+	}
+	sink.RecordPriorDegradation(ctx, principalOrg1, "future_state")
+	certifyRefused(t, buf.Bytes(), eventspec.PriorDegradation, "an unknown degradation state")
+}
+
+func TestProjectedRowsLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
+	t.Parallel()
+	kinds := contextfabric.ProjectedRowsFactKindLogVocabulary()
+	claimed := append([]string(nil), kinds[:len(kinds)-1]...)
+	claimed = append(claimed, "Which team owns payments-api?")
+	rows, byKind, truncated := contextfabric.ProjectedRowsOfClaimsForTest(claimed)
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, rows, truncated)
+	sink.RecordProjectedRowsByFactKind(ctx, principalOrg1, byKind)
+	if strings.Contains(buf.String(), "payments-api") {
+		t.Fatalf("a claim kind from the model reached the log: %s", buf.String())
+	}
+	certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsCount, map[string]any{"org_id": "org_1", "rows_count": 0, "truncated": false})
+	seen := map[string]bool{}
+	for _, kind := range kinds {
+		line := certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsByFactKind, map[string]any{"fact_kind": kind, "rows_projected_by_fact_kind": 0})
+		seen[line["fact_kind"].(string)] = true
+	}
+	sameMembers(t, "projected rows fact kinds", keysOf(seen), kinds)
+	if got := strings.Count(buf.String(), "projected rows count by fact kind"); got != len(kinds) {
+		t.Fatalf("%d by kind lines for %d claimed kinds, want one each with the foreign kind as one class line", got, len(kinds))
+	}
+	buf.Reset()
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, 7, true)
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, 3, false)
+	certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsCount, map[string]any{"rows_count": 7, "truncated": true})
+	certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsCount, map[string]any{"rows_count": 3, "truncated": false})
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, 1, false)
+	certifyRefused(t, buf.Bytes(), eventspec.ProjectedRowsCount, "a third projected rows line in one request", map[string]any{"rows_count": 1})
+	buf.Reset()
+	sink.RecordProjectedRowsByFactKind(ctx, principalOrg1, map[contextfabric.FactKind]int{"future_a": 2, "future_b": 3})
+	if strings.Count(buf.String(), "by fact kind") != 1 || !strings.Contains(buf.String(), `"rows_projected_by_fact_kind":5`) {
+		t.Fatalf("kinds outside the contract were not summed into one class line: %s", buf.String())
 	}
 }

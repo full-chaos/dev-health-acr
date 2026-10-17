@@ -699,13 +699,19 @@ func (t SlogEngineTelemetry) RecordProjectedRowsCount(ctx context.Context, princ
 // Content-safe: an org id, one closed FactKind vocabulary value, and one
 // non-identifying count.
 func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, principal storage.Principal, byKind map[FactKind]int) {
-	kinds := make([]string, 0, len(byKind))
-	for kind := range byKind {
-		kinds = append(kinds, string(kind))
+	// A kind outside the contract is logged as one class, so its rows are
+	// summed into one line rather than written under the model's own text.
+	logged := make(map[string]int, len(byKind))
+	for kind, rows := range byKind {
+		logged[projectedRowsFactKindLogValue(kind)] += rows
+	}
+	kinds := make([]string, 0, len(logged))
+	for kind := range logged {
+		kinds = append(kinds, kind)
 	}
 	sort.Strings(kinds)
 	for _, kind := range kinds {
-		args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "fact_kind", SanitizeLogAttr(kind), "rows_projected_by_fact_kind", byKind[FactKind(kind)]}, requestIDLogAttrs(ctx)...)
+		args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "fact_kind", SanitizeLogAttr(kind), "rows_projected_by_fact_kind", logged[kind]}, requestIDLogAttrs(ctx)...)
 		t.logger.InfoContext(ctx, "context fabric projected rows count by fact kind", args...)
 	}
 }
