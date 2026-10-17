@@ -20,6 +20,12 @@ SQL, JSON, workflow text). A changed directory that `go list` does not know
 Affected packages = the changed packages plus every package whose test
 binary imports one of them, directly or transitively. The closure comes from
 ONE `go list -test` call, so test-only imports count.
+
+Source-reading guards always run. A package is a guard when its code or tests
+import a Go-source toolchain package (go/parser, go/ast, go/build, go/types,
+golang.org/x/tools/go/..., see SOURCE_TOOL_IMPORTS): decided from the import
+lists `go list` resolves, so no call shape can hide it. Walking, loading and
+file-read patterns (below) are a second net.
 """
 import os
 import re
@@ -62,6 +68,24 @@ def reads_source_tree(text):
 
 SKIP_DIRS = {".git", "vendor", "node_modules"}
 
+# A package that imports a Go-source toolchain package (in its code or its
+# tests) can inspect source files of other packages through any call shape, so
+# it is a source-reading guard. Decided from the import lists `go list`
+# resolves, never from call syntax. Lines: ImportPath|Imports TestImports
+# XTestImports (space separated).
+SOURCE_TOOL_IMPORTS = {
+    "go/ast", "go/build", "go/constant", "go/doc", "go/format", "go/importer",
+    "go/parser", "go/printer", "go/scanner", "go/token", "go/types",
+}
+SOURCE_TOOL_PREFIXES = ("golang.org/x/tools/go/", "golang.org/x/tools/imports")
+
+
+def imports_source_tooling(imports):
+    for imp in imports:
+        if imp in SOURCE_TOOL_IMPORTS or imp.startswith(SOURCE_TOOL_PREFIXES):
+            return True
+    return False
+
 
 def full(reason):
     print("full " + reason)
@@ -96,12 +120,30 @@ def read_deps(deps_file):
     return out.stdout
 
 
+def read_imports(imports_file):
+    if imports_file:
+        with open(imports_file, encoding="utf-8") as f:
+            return f.read()
+    out = subprocess.run(
+        ["go", "list", "-f",
+         "{{.ImportPath}}|{{join .Imports \" \"}} {{join .TestImports \" \"}} {{join .XTestImports \" \"}}",
+         "./..."],
+        check=True, capture_output=True, text=True,
+    )
+    return out.stdout
+
+
 def main():
     args = sys.argv[1:]
     deps_file = None
+    imports_file = None
     if "--deps-file" in args:
         i = args.index("--deps-file")
         deps_file = args[i + 1]
+        del args[i : i + 2]
+    if "--imports-file" in args:
+        i = args.index("--imports-file")
+        imports_file = args[i + 1]
         del args[i : i + 2]
     if len(args) != 1:
         full("usage error")
@@ -147,6 +189,16 @@ def main():
                 dep_set.add(base_name(d) if d.endswith(".test") else d)
 
     ambient = set()
+    try:
+        import_listing = read_imports(imports_file)
+    except Exception as exc:
+        full("go list (imports) failed: %s" % exc)
+    for ln in import_listing.splitlines():
+        if "|" not in ln:
+            continue
+        name, imports = ln.split("|", 1)
+        if name.startswith(module) and imports_source_tooling(imports.split()):
+            ambient.add(name)
     for root, dirs, files in os.walk("."):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and d != "testdata"]
         rel = os.path.relpath(root, ".")

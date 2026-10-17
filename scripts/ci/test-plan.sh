@@ -89,6 +89,86 @@ for must in internal/contextfabric/devhealthschema internal/releasebuild interna
   esac
 done
 
+# ---- guard detection by imports, on a real fixture module --------------------
+# Each guard reads another package's Go source in a DIFFERENT call shape; the
+# detector must select it from its imports alone. Run against a throwaway
+# module so the cases are executed `go list` output, not text.
+fx="$tmp/fx"
+mkdir -p "$fx/cmd/target" "$fx/internal/guardparsedir" "$fx/internal/guardbuild" "$fx/internal/guardtypes" "$fx/internal/plain"
+printf 'module fx\n\ngo 1.27.2\n' >"$fx/go.mod"
+printf 'package main\n\nfunc main() {}\n' >"$fx/cmd/target/main.go"
+printf 'package plain\n\nfunc Add(a, b int) int { return a + b }\n' >"$fx/internal/plain/plain.go"
+cat >"$fx/internal/plain/plain_test.go" <<'GO'
+package plain
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+	if Add(1, 2) != 3 {
+		t.Fatal("add")
+	}
+}
+GO
+printf 'package guardparsedir\n' >"$fx/internal/guardparsedir/doc.go"
+cat >"$fx/internal/guardparsedir/g_test.go" <<'GO'
+package guardparsedir
+
+import (
+	"go/parser"
+	"go/token"
+	"testing"
+)
+
+func TestTargetKeepsMain(t *testing.T) {
+	pkgs, err := parser.ParseDir(token.NewFileSet(), "../../cmd/target", nil, 0)
+	if err != nil || len(pkgs) == 0 {
+		t.Fatal("parse")
+	}
+}
+GO
+printf 'package guardbuild\n' >"$fx/internal/guardbuild/doc.go"
+cat >"$fx/internal/guardbuild/g_test.go" <<'GO'
+package guardbuild_test
+
+import (
+	"go/build"
+	"testing"
+)
+
+func TestTargetBuilds(t *testing.T) {
+	if _, err := build.ImportDir("../../cmd/target", 0); err != nil {
+		t.Fatal(err)
+	}
+}
+GO
+printf 'package guardtypes\n' >"$fx/internal/guardtypes/doc.go"
+cat >"$fx/internal/guardtypes/g_test.go" <<'GO'
+package guardtypes
+
+import (
+	"go/types"
+	"testing"
+)
+
+func TestTypesAvailable(t *testing.T) {
+	if types.Typ[types.Int] == nil {
+		t.Fatal("types")
+	}
+}
+GO
+printf 'M\tcmd/target/main.go\n' >"$tmp/fx-change.txt"
+fx_out="$(cd "$fx" && GOFLAGS=-buildvcs=false python3 -B -I "$repo_root/scripts/ci/affected_packages.py" "$tmp/fx-change.txt")"
+for must in fx/internal/guardparsedir fx/internal/guardbuild fx/internal/guardtypes fx/cmd/target; do
+  case "$fx_out" in
+    *"$must"*) check "fixture: $must is selected" ok ok ;;
+    *) check "fixture: $must is selected" present absent ;;
+  esac
+done
+case "$fx_out" in
+  *fx/internal/plain*) check "fixture: a package with no source tooling is not selected" absent present ;;
+  *) check "fixture: a package with no source tooling is not selected" ok ok ;;
+esac
+
 # ---- plan.sh ---------------------------------------------------------------
 printf 'M\tdocs/x.md\n' >"$tmp/docs.txt"
 o="$(run_plan push '' '' "$tmp/docs.txt")"
