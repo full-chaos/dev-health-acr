@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-go/llm"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,7 +53,7 @@ func TestLiveEndpointAnswersARealInvestigation(t *testing.T) {
 	// Given a real model runtime and a real engine behind the route.
 	modelConfig := modelprovider.Config{
 		Provider: modelprovider.DefaultProvider, Model: modelprovider.DefaultModel,
-		APIKey: apiKey, Timeout: 90 * time.Second, MaxAttempts: 2, MaxTransportRetries: 2,
+		APIKey: llm.NewSecret(apiKey), Timeout: 90 * time.Second, MaxAttempts: 2, MaxTransportRetries: 2,
 	}
 	if value := os.Getenv("ACR_TEST_MODEL"); value != "" {
 		modelConfig.Model = value

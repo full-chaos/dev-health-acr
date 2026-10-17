@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // NewModelProviderBuild returns a Build that constructs a per-organization
@@ -39,7 +40,7 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		BaseURL:              resolved.BaseURL,
 		Model:                resolved.Model,
 		FallbackModel:        resolved.FallbackModel,
-		APIKey:               resolved.Credential,
+		APIKey:               llm.NewSecret(resolved.Credential),
 		Timeout:              defaults.Timeout,
 		MaxAttempts:          defaults.MaxAttempts,
 		MaxTransportRetries:  defaults.MaxTransportRetries,

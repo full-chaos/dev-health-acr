@@ -15,6 +15,10 @@ type heldClients struct {
 	clients genkitruntime.LLMClients
 }
 
+type heldModelConfig struct {
+	config Config
+}
+
 type heldConfig struct {
 	config llm.Config
 }
@@ -24,7 +28,7 @@ func TestModelClientsNeverPrintTheAPIKey(t *testing.T) {
 	verbs := []string{"%v", "%+v", "%#v", "%s", "%q", "%x"}
 	for _, provider := range []string{"openai", "anthropic", "gemini", "qwen"} {
 		t.Run(provider, func(t *testing.T) {
-			cfg := Config{Provider: provider, Model: "m1", APIKey: key, BaseURL: "https://example.invalid"}
+			cfg := Config{Provider: provider, Model: "m1", APIKey: llm.NewSecret(key), BaseURL: "https://example.invalid"}
 			clients, err := newLLMClients(cfg, "m1")
 			if err != nil {
 				t.Fatalf("newLLMClients: %v", err)
@@ -34,6 +38,10 @@ func TestModelClientsNeverPrintTheAPIKey(t *testing.T) {
 				t.Fatalf("NewWithLLM: %v", err)
 			}
 			values := map[string]any{
+				"model config":      cfg,
+				"model config ptr":  &cfg,
+				"held model config": heldModelConfig{config: cfg},
+				"held model ptr":    &heldModelConfig{config: cfg},
 				"clients":      clients,
 				"provider":     clients["m1"],
 				"held clients": heldClients{clients: clients},

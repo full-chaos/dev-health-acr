@@ -68,7 +68,7 @@ func TestConfiguredModelWinsOverThePackageDefault(t *testing.T) {
 	recorder := &bodyRecorder{}
 	cfg := Config{
 		Provider: DefaultProvider, BaseURL: recorder.server(t, validInterpretationJSON), Model: DefaultModel,
-		APIKey: "sk-configured", Timeout: DefaultTimeout, MaxAttempts: 1, AllowInsecureBaseURL: true,
+		APIKey: llm.NewSecret("sk-configured"), Timeout: DefaultTimeout, MaxAttempts: 1, AllowInsecureBaseURL: true,
 	}
 	runtime, err := New(context.Background(), cfg)
 	if err != nil {
@@ -88,7 +88,7 @@ func TestConfiguredModelWinsOverThePackageDefault(t *testing.T) {
 		t.Fatalf("request model %v, receipt model %q, want %q", sent, receipt.Model, DefaultModel)
 	}
 
-	clients, err := newLLMClients(Config{Model: "gpt-5.6-luna", FallbackModel: "gpt-5.6-sol", PhrasingModel: "gpt-5.6-luna-phrase", APIKey: "k", Timeout: DefaultTimeout},
+	clients, err := newLLMClients(Config{Model: "gpt-5.6-luna", FallbackModel: "gpt-5.6-sol", PhrasingModel: "gpt-5.6-luna-phrase", APIKey: llm.NewSecret("k"), Timeout: DefaultTimeout},
 		"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-luna-phrase", "")
 	if err != nil {
 		t.Fatal(err)

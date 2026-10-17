@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-go/llm"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,7 +26,7 @@ func TestAWaitBudgetEndsAStalledModelCallInsideTheBudgetAndServesADegradedAnswer
 	logs := &bytes.Buffer{}
 	runtime, err := modelprovider.New(context.Background(), modelprovider.Config{
 		Provider: modelprovider.DefaultProvider, BaseURL: stalledModelProvider(t), Model: modelprovider.DefaultModel,
-		APIKey: "sk-configured", Timeout: 2 * time.Minute, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
+		APIKey: llm.NewSecret("sk-configured"), Timeout: 2 * time.Minute, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
 		Logger: slog.New(slog.NewJSONHandler(logs, nil)),
 	})
 	if err != nil {

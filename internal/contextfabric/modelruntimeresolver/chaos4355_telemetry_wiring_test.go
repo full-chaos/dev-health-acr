@@ -24,7 +24,7 @@ func TestOrgModelProviderConfigInheritsTelemetryFromDefaults(t *testing.T) {
 	if got.Telemetry != telemetry {
 		t.Fatalf("orgModelProviderConfig().Telemetry = %#v, want %#v", got.Telemetry, telemetry)
 	}
-	if got.Provider != resolved.Provider || got.Model != resolved.Model || got.APIKey != resolved.Credential {
+	if got.Provider != resolved.Provider || got.Model != resolved.Model || got.APIKey.Reveal() != resolved.Credential {
 		t.Fatalf("orgModelProviderConfig() = %#v, want the organization's own Provider/Model/Credential", got)
 	}
 }
