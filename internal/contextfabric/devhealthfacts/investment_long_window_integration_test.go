@@ -1,10 +1,11 @@
 package devhealthfacts_test
 
-// A 180-day investment read is ONE true window over the stored work units. A
-// unit that spans the boundary of two 60-day windows counts in both of them,
-// so the three stitched 60-day reads overcount it; a window that starts before
-// the earliest stored unit is served over the available span with a
-// limitation row, never zero-filled. EXECUTED against a real ClickHouse.
+// A 180-day investment read is ONE true window over the stored work units, and
+// windows are additive: a unit that spans the boundary of two 60-day windows
+// counts once, in the window that holds its end stamp, so the three stitched
+// 60-day reads add up to the 180-day read; a window that starts before the
+// earliest stored unit is served over the available span with a limitation
+// row, never zero-filled. EXECUTED against a real ClickHouse.
 
 import (
 	"context"
@@ -89,6 +90,7 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 	}
 	// Stitch three 60-day windows by reading each as a range.
 	stitched := 0.0
+	perWindow := [3]float64{}
 	for i := 0; i < 3; i++ {
 		start := end.Add(-time.Duration(180-60*i) * day)
 		stop := start.Add(60 * day)
@@ -100,15 +102,19 @@ func TestLongInvestmentWindowIsOneTrueWindowAgainstRealClickHouse(t *testing.T) 
 			t.Fatalf("stitch window %d: err=%v facts=%d", i, err, len(result.Facts))
 		}
 		for _, row := range result.Facts[0].Fields["theme_breakdown"].Table.Rows {
-			stitched += *row.Fields["weighted_effort"].Number
+			perWindow[i] += *row.Fields["weighted_effort"].Number
 		}
+		stitched += perWindow[i]
 	}
 	whole, wholeTotal := read(180)
 	if math.Abs(wholeTotal-4) > 1e-9 {
 		t.Fatalf("180d total = %v, want 4 (each unit once)", wholeTotal)
 	}
-	if math.Abs(stitched-5) > 1e-9 {
-		t.Fatalf("stitched total = %v, want 5 (the boundary-spanning unit counted in both windows)", stitched)
+	if math.Abs(stitched-wholeTotal) > 1e-9 {
+		t.Fatalf("stitched total = %v, want %v, the 180-day total (a unit counts in one window only)", stitched, wholeTotal)
+	}
+	if perWindow != [3]float64{1, 1, 2} {
+		t.Fatalf("per-window totals = %v, want [1 1 2] (spans-bc counts in window C, which holds its end stamp, not in B)", perWindow)
 	}
 	if strings.Contains(whole.Reason, "investment_window_beyond_stored_history") {
 		t.Fatalf("a window inside the stored history carries a span limitation: %q", whole.Reason)

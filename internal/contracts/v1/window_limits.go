@@ -38,13 +38,13 @@ func MaxRangeDaysFor(kinds []ContextFabricFactKind) int {
 	return widest
 }
 
-// WindowRefusalAdvice is the closing advice of a window refusal. A kind whose
-// maximum is the default may be read as several windows; a kind with a larger
-// declared maximum counts a work unit that spans a boundary whole in each
-// window, so adding shorter windows overcounts and is not advised.
+// WindowRefusalAdvice is the closing advice of a window refusal. Every kind
+// may be read as several windows. A kind with a larger declared maximum dates
+// a work unit by its end stamp, so each unit counts once, in the window that
+// holds its end, and the windows add up to the whole period.
 func WindowRefusalAdvice(maxDays int) string {
 	if maxDays > DefaultMaxRangeDays {
-		return "; ask one window of at most that length and do not add shorter windows: a work unit that spans a window boundary counts in each of them"
+		return "; read a longer period as several windows: a work unit counts once, in the window that holds its end stamp, so the windows add up"
 	}
 	return "; read a longer period as several windows"
 }

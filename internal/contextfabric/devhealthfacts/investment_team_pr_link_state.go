@@ -72,7 +72,7 @@ LEFT JOIN (
 	GROUP BY l.repo_id, l.pr_number
 ) AS k ON k.repo_id = pr.repo_id AND k.pr_number = pr.number
 WHERE pr.org_id = {org_id:String} AND pr.repo_id IN `+teamPRLinkRepositorySet+``+
-		themeInvestmentRangePredicate(bound, "pr.created_at", "ifNull(pr.merged_at, ifNull(pr.closed_at, toDateTime64('2999-12-31 00:00:00', 6, 'UTC')))")+`
+		rangeOverlapPredicate(bound, "pr.created_at", "ifNull(pr.merged_at, ifNull(pr.closed_at, toDateTime64('2999-12-31 00:00:00', 6, 'UTC')))")+`
 GROUP BY pr.repo_id
 ORDER BY pr.repo_id`, limit)
 }
