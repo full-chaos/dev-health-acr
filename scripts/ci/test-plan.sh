@@ -63,7 +63,7 @@ check "empty change list is full" "full" "${first%% *}"
 
 # ---- source-reading guard detector ------------------------------------------
 detect() { # prints yes/no for a Go source snippet on stdin
-  python3 -I -c '
+  python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ap", "scripts/ci/affected_packages.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
