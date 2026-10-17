@@ -156,10 +156,28 @@ func TestClientSynthesisCoreOverTheBudgetShareIsABudgetRefusal(t *testing.T) {
 	t.Parallel()
 	turn := runBudgetTurn(t, 4, 6000, 8192)
 	var refusal AnswerBudgetRefusal
-	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) || refusal.MaxSerializedBytes != int64(clientSynthesisBodyShare(8192)) || refusal.MeasuredBytes <= refusal.MaxSerializedBytes || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
-		t.Fatalf("Investigate() error = %v, want the byte budget refusal naming the input share of 8192 with measured above it", turn.err)
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) || refusal.MaxSerializedBytes != 8192 || refusal.MeasuredBytes <= refusal.MaxSerializedBytes || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal naming the caller's 8192 with measured above it", turn.err)
 	}
 	if turn.collected != nil {
 		t.Fatal("a synthesis input was delivered with the refusal")
+	}
+}
+
+// The refusal states the caller's own byte limit, not the half of it the
+// synthesis input is first cut to.
+func TestClientSynthesisBudgetRefusalStatesTheCallerLimit(t *testing.T) {
+	t.Parallel()
+	const budget = 16384
+	turn := runBudgetTurn(t, 1, 14000, budget)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal", turn.err)
+	}
+	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes <= budget {
+		t.Fatalf("refusal states a %d-byte limit with %d measured, want the caller's %d with measured above it", refusal.MaxSerializedBytes, refusal.MeasuredBytes, budget)
+	}
+	if !strings.Contains(turn.err.Error(), fmt.Sprintf("%d-byte budget", budget)) {
+		t.Fatalf("refusal text = %q, want it to name the %d-byte budget", turn.err.Error(), budget)
 	}
 }
