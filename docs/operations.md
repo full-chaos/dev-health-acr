@@ -847,7 +847,7 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
 | `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` for an OpenAI-compatible provider; the provider's own public endpoint for `anthropic`, `gemini` and `qwen` | API root. Set this for BYO. For `anthropic` it is the root without `/v1` (the client posts to `<base>/v1/messages`). |
 | `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Provider namespace, recorded verbatim as `ModelExecutionReceipt.Provider` and in `model_identity`. It also picks the shared dev-health-go `llm` client: `anthropic` uses the native Messages API (it sends `ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS` as its cap, and no interpretation seed); `gemini` uses Google's OpenAI-compatible endpoint without the seed (Gemini answers 400 to one); `qwen` uses Chat Completions (DashScope by default, or any compatible base URL such as Cloudflare Workers AI) with the seed folded into [0, 2^31). Every other name ("openai", a BYO gateway name) uses OpenAI-compatible Chat Completions with the seed. The same names apply to a per-organization config (`PUT /api/v1/context-fabric/model-config`). |
-| `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` | *(unset = `ops`)* | Override for where per-organization BYO LLM configuration comes from. Default (unset or `ops`): Dev Health's own settings store (written by the web AI Setup > BYO LLM page), read per org from ops' internal `GET /api/v1/internal/acr/orgs/{org_id}/llm-config` with the entitlement credential (`ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`; the credential needs scope `llm_config:read`). acr then holds no BYO store and no settings encryption key. Unset follows the one-store rule like `ops`: it refuses to start if acr's own store is also configured (`ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS` set). The one lenient case is no Dev Health entitlement client (local/dev): unset then means no per-organization source (platform model for every org) and logs one INFO line at startup; an explicit `ops` without the client refuses to start. `off`: no ops source; acr's own model-config store only when `ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS` is set. With `ops`: a 404 means no BYO, so the platform model answers; 401, 403 or 409 (BYO configured but unusable: scope missing, stored key unreadable) and a malformed or mismatched body fail that organization's model calls closed, never falling back to the platform model; a 5xx or timeout is unavailable. Answers are reused for 15 s per organization; errors are not cached. ops' `version` (a digest over the org's stored BYO rows) keys the org's built model runtime: a changed version builds a new one. |
+| `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` | *(unset = `ops`)* | Override for where per-organization BYO LLM configuration comes from. Default (unset or `ops`): Dev Health's own settings store (written by the web AI Setup > BYO LLM page), read per org from ops' internal `GET /api/v1/internal/acr/orgs/{org_id}/llm-config` with the entitlement credential (`ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`; the credential needs scope `llm_config:read`). acr holds no BYO store and no settings encryption key. The one lenient case is no Dev Health entitlement client (local/dev): unset then means no per-organization source (platform model for every org) and logs one INFO line at startup; an explicit `ops` without the client refuses to start. `off`: no per-organization source. With `ops`: a 404 means no BYO, so the platform model answers; 401, 403 or 409 (BYO configured but unusable: scope missing, stored key unreadable) and a malformed or mismatched body fail that organization's model calls closed, never falling back to the platform model; a 5xx or timeout is unavailable. Answers are reused for 15 s per organization; errors are not cached. ops' `version` (a digest over the org's stored BYO rows) keys the org's built model runtime: a changed version builds a new one. |
 | `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5.6-luna` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. Default changed from `gpt-5-nano` to `gpt-5.6-luna` in CHAOS-3855 — see the measurements below. |
 | `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call). As of CHAOS-3855, no fallback is recommended for the default `gpt-5.6-luna` primary — see the measurements below. |
 | `ACR_CONTEXT_FABRIC_MODEL_PHRASING` | *(unset)* | Distinct model for the SECOND bounded offer-phrasing call (CHAOS-4171 PR2, `internal/contextfabric/chaos4171_offer_phrasing.go`), which rewrites each structure offer's presentation-facing wording under a closed-vocabulary guard. Unset shares the primary `ACR_CONTEXT_FABRIC_MODEL`; set to route phrasing to a smaller/cheaper model. |
@@ -860,32 +860,18 @@ new build.
 ### Per-organization BYO LLM (CHAOS-3775)
 
 The variables above configure the **deployment-default** provider. An
-organization may additionally configure its own provider/base URL/model/
-fallback/credential through `PUT /api/v1/context-fabric/model-config`
-(`context:admin` scope; org derived from the authenticated principal, never
-from the request body). Per-request resolution: an organization with a
-stored configuration gets its own runtime; an organization with none falls
-through to the deployment default; an organization whose stored credential
-is broken (401/403 from its provider) gets a 503 scoped to that
-organization only — it never silently falls back to the deployment
-credential (explicit prohibition; see the TRD). A configuration change
-takes effect on the organization's next request, no restart needed
-(`internal/contextfabric/modelruntimeresolver` caches a constructed runtime
-keyed by the config's `generation` -- a monotonic Postgres-sequence column,
-not `updated_at`; two upserts landing in the same clock tick would be
-indistinguishable under a timestamp key -- and rebuilds when it changes).
-
-The stored credential is sealed with AES-256-GCM
-(`internal/contextfabric/modelconfigcrypto`) under a deployment master key
-set exactly like `ACR_EVIDENCE_ID_KEYS`/`ACR_EVIDENCE_ID_ACTIVE_KID`:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS` / `_FILE` | *(unset)* | Comma-separated `KID=base64key` pairs; each key must decode to exactly 32 bytes (AES-256). Required before any organization can save a BYO LLM configuration. |
-| `ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_ACTIVE_KID` / `_FILE` | *(unset)* | Which configured key id new writes are sealed under. Rotate by adding a new key, repointing this at it, and letting organizations re-save over time — ciphertext sealed under a retired key id still decrypts as long as that key id stays configured. |
-
-Reading a configuration back never returns the credential: the response
-carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
+organization configures its own provider/base URL/model/fallback/credential in
+the Dev Health settings store (the web AI Setup > BYO LLM page); acr reads it
+through `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` above and exposes no write
+route. Per-request resolution: an organization with a configuration gets its
+own runtime; an organization with none falls through to the deployment
+default; an organization whose credential is broken (401/403 from its
+provider) gets a 503 scoped to that organization only — it never silently
+falls back to the deployment credential (explicit prohibition; see the TRD).
+A configuration change takes effect on the organization's next request, no
+restart needed (`internal/contextfabric/modelruntimeresolver` caches a
+constructed runtime keyed by the config's `generation` and rebuilds when it
+changes).
 
 ### Answer reuse (CHAOS-3782)
 

@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 25855c9e76da6c36b7a27fa264f575521e493fb38905bcc33380ca40ebcda6ab
+# canonical-content-sha256: 2f038ac1933f8b52ad1d1400d399d82d9cf725ca9d7df740f39fb8a9f6306f6f
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -759,110 +759,6 @@ paths:
       summary: "Re-read one immutable investigation result by its opaque result_id."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
-  "/api/v1/context-fabric/model-config":
-    delete:
-      operationId: "deleteContextFabricOrgModelConfig"
-      parameters:
-        -
-          "$ref": "#/components/parameters/RequestID"
-        -
-          "$ref": "#/components/parameters/ClientVersion"
-      responses:
-        "204":
-          description: "The organization's BYO LLM provider configuration was removed; the deployment default applies to the next request"
-        "401":
-          "$ref": "#/components/responses/Error"
-        "403":
-          "$ref": "#/components/responses/Error"
-        "426":
-          "$ref": "#/components/responses/Error"
-        "429":
-          "$ref": "#/components/responses/Error"
-        "500":
-          "$ref": "#/components/responses/Error"
-        "503":
-          "$ref": "#/components/responses/Error"
-      security:
-        -
-          bearerAuth: []
-      x-required-entitlement: "agent_context_runtime"
-      x-required-scope: "context:admin"
-    get:
-      operationId: "getContextFabricOrgModelConfig"
-      parameters:
-        -
-          "$ref": "#/components/parameters/RequestID"
-        -
-          "$ref": "#/components/parameters/ClientVersion"
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                "$ref": "../jsonschema/v1/context_fabric_org_model_config.v1.schema.json"
-          description: "The organization's configured BYO LLM provider, with a masked credential"
-        "401":
-          "$ref": "#/components/responses/Error"
-        "403":
-          "$ref": "#/components/responses/Error"
-        "404":
-          "$ref": "#/components/responses/Error"
-        "426":
-          "$ref": "#/components/responses/Error"
-        "429":
-          "$ref": "#/components/responses/Error"
-        "500":
-          "$ref": "#/components/responses/Error"
-        "503":
-          "$ref": "#/components/responses/Error"
-      security:
-        -
-          bearerAuth: []
-        -
-          webAssertionAuth: []
-      x-required-entitlement: "agent_context_runtime"
-      x-required-scope: "context:admin"
-    put:
-      operationId: "putContextFabricOrgModelConfig"
-      parameters:
-        -
-          "$ref": "#/components/parameters/RequestID"
-        -
-          "$ref": "#/components/parameters/ClientVersion"
-      requestBody:
-        content:
-          application/json:
-            schema:
-              "$ref": "../jsonschema/v1/context_fabric_org_model_config_write_request.v1.schema.json"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                "$ref": "../jsonschema/v1/context_fabric_org_model_config.v1.schema.json"
-          description: "The organization's BYO LLM provider configuration was stored; it applies to the next request"
-        "400":
-          "$ref": "#/components/responses/Error"
-        "401":
-          "$ref": "#/components/responses/Error"
-        "403":
-          "$ref": "#/components/responses/Error"
-        "413":
-          "$ref": "#/components/responses/Error"
-        "426":
-          "$ref": "#/components/responses/Error"
-        "429":
-          "$ref": "#/components/responses/Error"
-        "500":
-          "$ref": "#/components/responses/Error"
-        "503":
-          "$ref": "#/components/responses/Error"
-      security:
-        -
-          bearerAuth: []
-      x-required-entitlement: "agent_context_runtime"
-      x-required-scope: "context:admin"
   "/api/v1/oauth/device_approval":
     post:
       operationId: "approveDeviceAuthorization"

@@ -53,33 +53,18 @@ func (g *serviceModelGrants) askedFor(entitlement string) int {
 	return count
 }
 
-// ownModelConfigs is an organization model configuration store that holds a
+// ownModelConfigs is an organization model configuration source that holds a
 // configuration, holds none, or cannot be read.
 type ownModelConfigs struct {
 	found bool
 	err   error
 }
 
-func (c ownModelConfigs) UpsertOrgModelConfig(context.Context, storage.Principal, contractsv1.ContextFabricOrgModelConfigWriteRequest) (contractsv1.ContextFabricOrgModelConfig, error) {
-	return contractsv1.ContextFabricOrgModelConfig{}, errors.New("not used")
+func (c ownModelConfigs) ResolveOrgModelConfig(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+	return contextfabric.ResolvedOrgModelConfig{}, c.found, c.err
 }
 
-func (c ownModelConfigs) GetOrgModelConfig(context.Context, storage.Principal) (contractsv1.ContextFabricOrgModelConfig, error) {
-	switch {
-	case c.err != nil:
-		return contractsv1.ContextFabricOrgModelConfig{}, c.err
-	case c.found:
-		return contractsv1.ContextFabricOrgModelConfig{Provider: "openai_compatible", Model: "org-model"}, nil
-	default:
-		return contractsv1.ContextFabricOrgModelConfig{}, contextfabric.ErrOrgModelConfigNotFound
-	}
-}
-
-func (c ownModelConfigs) DeleteOrgModelConfig(context.Context, storage.Principal) error {
-	return errors.New("not used")
-}
-
-func gatedClientRouteRig(t *testing.T, grants *serviceModelGrants, configs contextfabric.OrgModelConfigStore) *clientRouteRig {
+func gatedClientRouteRig(t *testing.T, grants *serviceModelGrants, configs contextfabric.OrgModelConfigResolver) *clientRouteRig {
 	t.Helper()
 	rig := newClientRouteRig(t, singleSubjectFixture())
 	rig.app.runtime.Entitlements = grants
@@ -167,7 +152,7 @@ func TestServiceModelTurnIsServedOnTheFeatureOwnModelOrOpenDeployment(t *testing
 	for _, tc := range []struct {
 		name    string
 		grants  *serviceModelGrants
-		configs contextfabric.OrgModelConfigStore
+		configs contextfabric.OrgModelConfigResolver
 		open    bool
 		basis   string
 		asked   int
@@ -200,7 +185,7 @@ func TestServiceModelDecisionThatCannotBeMadeFailsClosedBeforeAnyModelCall(t *te
 	for _, tc := range []struct {
 		name    string
 		grants  *serviceModelGrants
-		configs contextfabric.OrgModelConfigStore
+		configs contextfabric.OrgModelConfigResolver
 		code    string
 	}{
 		{name: "entitlement service down and no own model", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{}, code: "upstream_unavailable"},
@@ -330,7 +315,7 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 	for _, tc := range []struct {
 		name     string
 		grants   *serviceModelGrants
-		configs  contextfabric.OrgModelConfigStore
+		configs  contextfabric.OrgModelConfigResolver
 		open     bool
 		supplied bool
 		withheld bool
@@ -338,6 +323,7 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 		{name: "feature", grants: &serviceModelGrants{feature: true}, withheld: false},
 		{name: "open deployment", grants: &serviceModelGrants{}, open: true, withheld: false},
 		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, withheld: true},
+		{name: "own model whose configuration is unusable", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigUnusable}, withheld: true},
 		{name: "client model", grants: &serviceModelGrants{}, supplied: true, withheld: true},
 		{name: "client model with the feature", grants: &serviceModelGrants{feature: true}, supplied: true, withheld: false},
 		{name: "own model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{found: true}, withheld: true},

@@ -45,9 +45,6 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/agent-context/episodes", method: "post", operation: "createEpisode", statuses: []string{"200", "201", "204", "400", "401", "403", "404", "409", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/investigations", method: "post", operation: "createContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "502", "503", "504"}},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get", operation: "getContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
-		{path: "/api/v1/context-fabric/model-config", method: "get", operation: "getContextFabricOrgModelConfig", statuses: []string{"200", "401", "403", "404", "426", "429", "500", "503"}},
-		{path: "/api/v1/context-fabric/model-config", method: "put", operation: "putContextFabricOrgModelConfig", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "503"}},
-		{path: "/api/v1/context-fabric/model-config", method: "delete", operation: "deleteContextFabricOrgModelConfig", statuses: []string{"204", "401", "403", "426", "429", "500", "503"}},
 		{path: "/api/v1/context-fabric/data/catalog", method: "get", operation: "readContextFabricDataCatalog", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/subjects", method: "post", operation: "findContextFabricDataSubjects", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/operations", method: "post", operation: "runContextFabricDataOperation", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
@@ -78,7 +75,6 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get"},
 		{path: "/api/v1/context-fabric/investigations", method: "post"},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get"},
-		{path: "/api/v1/context-fabric/model-config", method: "get"},
 	} {
 		if !hasSecurityAlternative(document.Paths[route.path][route.method].Security, "webAssertionAuth") {
 			t.Fatalf("%s %s must allow web assertions", route.method, route.path)
@@ -87,10 +83,7 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 	if hasSecurityAlternative(document.Paths["/api/v1/agent-context/episodes"]["post"].Security, "webAssertionAuth") {
 		t.Fatal("episode writes must remain bearer-only")
 	}
-	for _, route := range []struct{ path, method string }{
-		{path: "/api/v1/context-fabric/model-config", method: "put"},
-		{path: "/api/v1/context-fabric/model-config", method: "delete"},
-	} {
+	for _, route := range []struct{ path, method string }{} {
 		if hasSecurityAlternative(document.Paths[route.path][route.method].Security, "webAssertionAuth") {
 			t.Fatalf("%s %s carries a credential and must remain bearer-only", route.method, route.path)
 		}
