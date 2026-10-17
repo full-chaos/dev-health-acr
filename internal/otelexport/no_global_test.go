@@ -16,7 +16,7 @@ import (
 // globalInstalls are the process-global telemetry setters. Any of them called
 // with a real provider or handler would hand Genkit (which reads only the
 // globals and slog.Default) an exporting pipeline -- see the package doc and
-// modelprovider.suppressGenkitTelemetryExport.
+// modelprovider.suppressModelTelemetryExport.
 var globalInstalls = map[string]map[string]bool{
 	"go.opentelemetry.io/otel":            {"SetTracerProvider": true, "SetMeterProvider": true, "SetTextMapPropagator": true},
 	"go.opentelemetry.io/otel/log/global": {"SetLoggerProvider": true},
