@@ -166,6 +166,44 @@ func nativeAndLowerTierInOnePassWriteOnlyTheNative(t *testing.T, adapter *falkor
 	}
 }
 
+// A native link the producer cannot project still covers its ends: one whose
+// pull request node is missing covers its issue, and one whose issue is not a
+// work item (or is a pull request item) covers its pull request. The
+// lower-tier edges of those ends projected before it are retracted.
+func nativeLinkThatIsNotProjectedStillRetracts(t *testing.T, adapter *falkorgraph.Adapter) {
+	const org, repo = "98780000-0000-4000-8000-000000000003", "98780000-0000-4000-8000-0000000000c1"
+	w := newLinkWorld(t, adapter, org, repo)
+	first := w.now.Add(-5 * time.Hour)
+	for _, id := range []string{"jira:A-3", "jira:B-3", "jira:C-3", "jira:D-3"} {
+		w.item(repo, id, "", first)
+	}
+	w.exec("pull request work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, parent_id, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"gh:acme/links#9", repo, org, "a pull request item", "pr", "open", "", "", "github", first, first, first)
+	p, q, r := w.pull(repo, 21), w.pull(repo, 22), w.pull(repo, 23)
+	w.link(repo, "jira:A-3", 21, "heuristic", first)
+	w.link(repo, "jira:B-3", 22, "explicit_text", first)
+	w.link(repo, "jira:C-3", 23, "heuristic", first)
+	w.link(repo, "jira:D-3", 23, "heuristic", first)
+	w.drain()
+	a, b, c, d := w.workItemID(repo, "jira:A-3"), w.workItemID(repo, "jira:B-3"), w.workItemID(repo, "jira:C-3"), w.workItemID(repo, "jira:D-3")
+	if got, want := w.stored(p, q, r), sortedStrings(a+" -> "+p+" = heuristic", b+" -> "+q+" = explicit_text", c+" -> "+r+" = heuristic", d+" -> "+r+" = heuristic"); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("before the native links: %v, want %v", got, want)
+	}
+
+	later := time.Now().UTC().Add(time.Second)
+	w.link(repo, "jira:A-3", 99, "native", later)        // no pull request #99: covers A-3
+	w.link(repo, "jira:GHOST-3", 22, "native", later)    // no such work item: covers #22
+	w.link(repo, "gh:acme/links#9", 23, "native", later) // a pull request item: covers #23
+	w.retract(repo, "jira:A-3", 21)
+	w.retract(repo, "jira:B-3", 22)
+	w.retract(repo, "jira:C-3", 23)
+	w.retract(repo, "jira:D-3", 23)
+	w.drain()
+	if got := w.stored(p, q, r); len(got) != 0 {
+		t.Fatalf("after native links the producer cannot project: %v, want none (each lower-tier edge has an end a native link covers)", got)
+	}
+}
+
 func sortedStrings(values ...string) []string {
 	out := append([]string(nil), values...)
 	sort.Strings(out)
@@ -178,4 +216,5 @@ func TestOutrankedIssuePullRequestLinksOnRealStores(t *testing.T) {
 	adapter := chaos7074FalkorAdapter(t, t.Context())
 	t.Run("a native link arriving later", func(t *testing.T) { nativeLinkArrivingLaterRetractsTheOutrankedEdges(t, adapter) })
 	t.Run("native and lower tier in one pass", func(t *testing.T) { nativeAndLowerTierInOnePassWriteOnlyTheNative(t, adapter) })
+	t.Run("a native link that is not projected", func(t *testing.T) { nativeLinkThatIsNotProjectedStillRetracts(t, adapter) })
 }

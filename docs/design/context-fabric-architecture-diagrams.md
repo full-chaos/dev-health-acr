@@ -480,7 +480,12 @@ same rows; no edge is provider-specific. Producers are in
   of a native edge deletes every `explicit_text` and `heuristic`
   `LINKS_PULL_REQUEST` edge of the same issue and of the same pull request in
   the same batch (`falkorgraph/projection.go` `retractOutrankedLinks`, a debug
-  line with the counts). An edge with no tier is left as it is. `RELATES_TO`
+  line with the counts). A native row the producer cannot project (its pull
+  request node is missing, or its issue is not a work item or is a pull
+  request item) still covers its ends: its skip names the end that has a node
+  by an `outranked_issue_links` or `outranked_pull_request_links` tombstone,
+  and the same rule retracts that end's lower-tier links. An edge with no tier
+  is left as it is. `RELATES_TO`
   from `work_item_dependencies` stays for issue-to-issue relations and is no
   part of the tree. One rebuild per projected organization is needed to gain
   the edge (`ClickHouseSourceVersion` v8), and one to drop the outranked edges

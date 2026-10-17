@@ -96,10 +96,30 @@ func TestLiveNativeLinkRetractsOutrankedLinksOfItsIssueAndPullRequest(t *testing
 		t.Fatalf("after B's native link: %s", got)
 	}
 
+	// A native link the producer cannot project names its covered end by a
+	// tombstone: the issue side, then the pull request side.
+	apply("batch-0008", tieredLink("link-B-P2", issueB, pullP, "heuristic", 1, t0), tieredLink("link-C-Q", issueC, pullQ, "explicit_text", 2, t0), tieredLink("link-D-Q2", issueD, pullQ, "heuristic", 1, t0))
+	covers := columnEdgeBatch(org, "batch-0009", t0, []contextfabric.RelationshipProjection{}, []contextfabric.ProjectionTombstone{
+		{Kind: contextfabric.TombstoneKindOutrankedIssueLinks, CanonicalID: issueB.CanonicalID, Reason: "native link not projected", EffectiveAt: t0, SourceVersion: "v1"},
+		{Kind: contextfabric.TombstoneKindOutrankedPullRequestLinks, CanonicalID: pullQ.CanonicalID, Reason: "native link not projected", EffectiveAt: t0, SourceVersion: "v1"},
+	})
+	if _, err := adapter.ApplyProjectionBatch(ctx, covers); err != nil {
+		t.Fatalf("batch-0009: %v", err)
+	}
+	if got := fmt.Sprint(linkEdges(t, ctx, adapter, key)); got != "[link-A-P=native link-B-P-untiered=<nil> link-C-R=native]" {
+		t.Fatalf("after the covered-end tombstones: %s, want B's lower-tier link and Q's lower-tier links retracted", got)
+	}
+	for _, subject := range []contextfabric.SubjectRef{issueB, pullQ} {
+		rows, err := adapter.api.query(ctx, key, fmt.Sprintf("MATCH (n:%s {%s:$id}) RETURN count(n) AS n", labelSubject, propCanonicalID), map[string]interface{}{"id": subject.CanonicalID}, true)
+		if err != nil || len(rows) != 1 || rows[0]["n"].(int64) != 1 {
+			t.Fatalf("a covered-end tombstone removed the node %s: %v %v", subject.CanonicalID, rows, err)
+		}
+	}
+
 	// A native link never retracts another native link; D's own lower-tier
 	// link to Q goes.
 	apply("batch-0007", tieredLink("link-D-R", issueD, pullR, "native", 3, t0))
 	if got := fmt.Sprint(linkEdges(t, ctx, adapter, key)); got != "[link-A-P=native link-B-P-untiered=<nil> link-C-R=native link-D-R=native]" {
-		t.Fatalf("a second native link of R: %s, want C -> R kept and D -> Q retracted", got)
+		t.Fatalf("a second native link of R: %s, want C -> R kept", got)
 	}
 }

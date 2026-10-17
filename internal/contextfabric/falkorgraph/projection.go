@@ -18,6 +18,16 @@ import (
 
 const propRelationType = "relation_type"
 
+// ruleTombstoneKinds are the tombstone kinds a retraction rule applies after
+// the batch's writes (retractOpenEdges, retractOutrankedLinks); applyTombstone
+// never sees them, since it would read their kind as a subject kind.
+var ruleTombstoneKinds = map[string]bool{
+	contextfabric.TombstoneKindColumnProjectEdges:        true,
+	contextfabric.TombstoneKindPartOfEdges:               true,
+	contextfabric.TombstoneKindOutrankedIssueLinks:       true,
+	contextfabric.TombstoneKindOutrankedPullRequestLinks: true,
+}
+
 // linkEdgePropertyNames are the relationship properties written onto the
 // edge, under the same property prefix nodes use: the LINKS_PULL_REQUEST
 // provenance tier and its rank. The names equal
@@ -108,7 +118,7 @@ func (a *Adapter) ApplyProjectionBatch(ctx context.Context, batch contextfabric.
 		}
 	}
 	for _, tombstone := range batch.Tombstones {
-		if tombstone.Kind == contextfabric.TombstoneKindColumnProjectEdges || tombstone.Kind == contextfabric.TombstoneKindPartOfEdges {
+		if ruleTombstoneKinds[tombstone.Kind] {
 			continue
 		}
 		if err := a.applyTombstone(ctx, key, batch.OrgID, tombstone); err != nil {
@@ -968,12 +978,14 @@ func (a *Adapter) retractOpenEdges(ctx context.Context, key string, batch contex
 // request link: a pull request or an issue with a native link gets no
 // explicit_text or heuristic link. For every native LINKS_PULL_REQUEST edge the
 // batch asserts, it deletes every lower-tier LINKS_PULL_REQUEST edge that
-// leaves the same issue and every one that enters the same pull request. Two
-// statements per batch, whatever its size. Ops deletes the outranked link row,
-// so no row ever names the stored edge again: the native assertion is the
-// only signal, and it is the current truth, so the lower-tier edges go
-// whatever their stamps. An edge with no stored tier is not a link (the tree
-// walk's linkTiers) and is left as it is.
+// leaves the same issue and every one that enters the same pull request; a
+// native link the producer cannot project names its covered end by a tombstone
+// (TombstoneKindOutrankedIssueLinks, TombstoneKindOutrankedPullRequestLinks)
+// and gets the same deletion. Two statements per batch, whatever its size.
+// Ops deletes the outranked link row, so no row ever names the stored edge
+// again: the native link is the only signal, and it is the current truth, so
+// the lower-tier edges go whatever their stamps. An edge with no stored tier
+// is not a link (the tree walk's linkTiers) and is left as it is.
 func (a *Adapter) retractOutrankedLinks(ctx context.Context, key string, batch contextfabric.ProjectionBatch) error {
 	natives, retracted, err := a.deleteOutrankedLinks(ctx, key, batch)
 	if err != nil || natives == 0 {
@@ -985,9 +997,14 @@ func (a *Adapter) retractOutrankedLinks(ctx context.Context, key string, batch c
 }
 
 // deleteOutrankedLinks runs retractOutrankedLinks' two statements and returns
-// the native links of the batch and the lower-tier edges deleted.
+// the covered ends the batch names (native edges and tombstones) and the
+// lower-tier edges deleted.
 func (a *Adapter) deleteOutrankedLinks(ctx context.Context, key string, batch contextfabric.ProjectionBatch) (int, int64, error) {
-	var natives []interface{}
+	var issues, pullRequests []interface{}
+	end := func(kind contextfabric.SubjectKind, id string) map[string]interface{} {
+		return map[string]interface{}{"kind": string(kind), "id": id}
+	}
+	natives := 0
 	for _, relationship := range batch.Relationships {
 		if relationship.Type != contractsv1.ContextFabricRelationshipLinksPullRequest {
 			continue
@@ -995,26 +1012,41 @@ func (a *Adapter) deleteOutrankedLinks(ctx context.Context, key string, batch co
 		if tier := relationship.Properties[linkTierProperty].String; tier == nil || *tier != linkTiers[0].name {
 			continue
 		}
-		natives = append(natives, map[string]interface{}{
-			"fk": string(relationship.From.Kind), "fid": relationship.From.CanonicalID,
-			"tk": string(relationship.To.Kind), "tid": relationship.To.CanonicalID,
-		})
+		natives++
+		issues = append(issues, end(relationship.From.Kind, relationship.From.CanonicalID))
+		pullRequests = append(pullRequests, end(relationship.To.Kind, relationship.To.CanonicalID))
 	}
-	if len(natives) == 0 {
+	for _, tombstone := range batch.Tombstones {
+		switch tombstone.Kind {
+		case contextfabric.TombstoneKindOutrankedIssueLinks:
+			natives++
+			issues = append(issues, end(contextfabric.SubjectWorkItem, tombstone.CanonicalID))
+		case contextfabric.TombstoneKindOutrankedPullRequestLinks:
+			natives++
+			pullRequests = append(pullRequests, end(contextfabric.SubjectPullRequest, tombstone.CanonicalID))
+		}
+	}
+	if natives == 0 {
 		return 0, 0, nil
 	}
 	lower := make([]interface{}, 0, len(linkTiers)-1)
 	for _, tier := range linkTiers[1:] {
 		lower = append(lower, tier.name)
 	}
-	params := map[string]interface{}{"rows": natives, "org": batch.OrgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipLinksPullRequest)), "lower": lower}
 	where := fmt.Sprintf("WHERE r.%s = $rel AND r.%s%s IN $lower WITH DISTINCT r DELETE r RETURN count(r) AS n", propRelationType, propPropertyPrefix, safeName(linkTierProperty))
 	retracted := int64(0)
-	for _, pattern := range []string{
-		fmt.Sprintf("(a:%s {%s:$org, %s:row.fk, %s:row.fid})-[r:%s]->()", labelSubject, propOrgID, propKind, propCanonicalID, labelRelation),
-		fmt.Sprintf("()-[r:%s]->(b:%s {%s:$org, %s:row.tk, %s:row.tid})", labelRelation, labelSubject, propOrgID, propKind, propCanonicalID),
+	for _, side := range []struct {
+		rows    []interface{}
+		pattern string
+	}{
+		{issues, fmt.Sprintf("(a:%s {%s:$org, %s:row.kind, %s:row.id})-[r:%s]->()", labelSubject, propOrgID, propKind, propCanonicalID, labelRelation)},
+		{pullRequests, fmt.Sprintf("()-[r:%s]->(b:%s {%s:$org, %s:row.kind, %s:row.id})", labelRelation, labelSubject, propOrgID, propKind, propCanonicalID)},
 	} {
-		rows, err := a.api.query(ctx, key, "UNWIND $rows AS row MATCH "+pattern+" "+where, params, false)
+		if len(side.rows) == 0 {
+			continue
+		}
+		params := map[string]interface{}{"rows": side.rows, "org": batch.OrgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipLinksPullRequest)), "lower": lower}
+		rows, err := a.api.query(ctx, key, "UNWIND $rows AS row MATCH "+side.pattern+" "+where, params, false)
 		if err != nil {
 			return 0, 0, classifyProjectionError("retract outranked issue pull request links", err)
 		}
@@ -1024,5 +1056,5 @@ func (a *Adapter) deleteOutrankedLinks(ctx context.Context, key string, batch co
 			}
 		}
 	}
-	return len(natives), retracted, nil
+	return natives, retracted, nil
 }

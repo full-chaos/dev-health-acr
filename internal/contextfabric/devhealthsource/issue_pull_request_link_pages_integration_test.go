@@ -177,6 +177,7 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 		// is the last row's position and row key.
 		gotRel := map[string]devhealthsource.IssuePullRequestLinkRowForTest{}
 		gotSkips := map[string]int{}
+		gotCovers := map[string]bool{}
 		seenKeys := map[string]bool{}
 		var since time.Time
 		var after string
@@ -205,6 +206,9 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 				}
 				if i > 0 && !(page[i-1].Position.Before(row.Position) || (page[i-1].Position.Equal(row.Position) && page[i-1].SortKey < row.SortKey)) {
 					t.Errorf("page %d rows out of keyset order at %d", pages, i)
+				}
+				if row.Covers != "" {
+					gotCovers[row.Covers] = true
 				}
 				switch {
 				case row.IgnoredReason != "":
@@ -271,6 +275,18 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 		if len(gotSkips) != len(wantSkips) {
 			t.Errorf("skip reasons = %v, want %v", gotSkips, wantSkips)
 		}
+		// The skipped native rows name the end they cover that has a node: GH
+		// 42 (no work item, and a pr-typed item), GL 43 (a merge_request item)
+		// and CHAOS-1 (its pull request GH 999 has no row).
+		chaos1, _, _ := identity.Derive(identity.KindWorkItem, []string{zeroRepo, "linear:CHAOS-1"}, nil)
+		wantCovers := map[string]bool{
+			"outranked_pull_request_links|" + fmt.Sprintf("pull_request:%s:%d", repoGH, 42): true,
+			"outranked_pull_request_links|" + fmt.Sprintf("pull_request:%s:%d", repoGL, 43): true,
+			"outranked_issue_links|" + chaos1:                                               true,
+		}
+		if fmt.Sprint(gotCovers) != fmt.Sprint(wantCovers) {
+			t.Errorf("covered ends = %v, want %v", gotCovers, wantCovers)
+		}
 
 		// The same store through the real projection source and a real graph.
 		source, err := devhealthsource.NewClickHouseProjectionSource(query)
@@ -327,7 +343,7 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 		}
 		// The issue with a native link and a heuristic link holds the native
 		// edge only: the heuristic link is a fallback the native one outranks.
-		chaos1, _, _ := identity.Derive(identity.KindWorkItem, []string{zeroRepo, "linear:CHAOS-1"}, nil)
+		chaos1, _, _ = identity.Derive(identity.KindWorkItem, []string{zeroRepo, "linear:CHAOS-1"}, nil)
 		tiers := []string{}
 		for key, v := range gotGraph {
 			if strings.HasPrefix(key, chaos1+" -> ") {

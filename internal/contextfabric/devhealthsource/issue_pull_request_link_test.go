@@ -359,3 +359,47 @@ func TestIssuePullRequestLinkOnlyPageAdvancesPastSkippedRows(t *testing.T) {
 		t.Fatalf("consumed progress ok=%v err=%v: the checkpoint cannot advance past skipped rows", ok, err)
 	}
 }
+
+// TestNativeRowsTheProducerCannotProjectNameTheirCoveredEndOncePerPage pins
+// the outranked-link tombstones: a native row whose pull request node is
+// missing names its issue, one whose issue is not a work item names its pull
+// request, a lower tier names nothing, and an end two rows of one page cover is
+// named once (a second tombstone would be a duplicate the batch drops at Warn).
+func TestNativeRowsTheProducerCannotProjectNameTheirCoveredEndOncePerPage(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	const repo = "11111111-1111-1111-1111-111111111111"
+	issue := linkIssue{repoID: repo, itemType: "issue", created: at}
+	pr := linkPullRequest{slug: "acme/widget", created: at}
+	rows := [][]any{
+		issuePullRequestLinkRow("gh:acme/widget#1", repo, 101, "native", at.Add(1*time.Second), issue, linkPullRequest{missing: true}),
+		issuePullRequestLinkRow("gh:acme/widget#1", repo, 102, "native", at.Add(2*time.Second), issue, linkPullRequest{missing: true}),
+		issuePullRequestLinkRow("gh:acme/widget#2", repo, 103, "heuristic", at.Add(3*time.Second), issue, linkPullRequest{missing: true}),
+		issuePullRequestLinkRow("linear:GHOST-1", repo, 7, "native", at.Add(4*time.Second), linkIssue{missing: true}, pr),
+	}
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: linkTablesOnly(at, rows)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	batch, ok, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: linkCursor(t, at)})
+	if err != nil || !ok {
+		t.Fatalf("batch: ok=%v err=%v", ok, err)
+	}
+	issueID, _, err := identity.Derive(identity.KindWorkItem, []string{repo, "gh:acme/widget#1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tombstone := range batch.Tombstones {
+		got = append(got, tombstone.Kind+"|"+tombstone.CanonicalID)
+	}
+	want := []string{contextfabric.TombstoneKindOutrankedIssueLinks + "|" + issueID, contextfabric.TombstoneKindOutrankedPullRequestLinks + "|pull_request:" + repo + ":7"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("tombstones = %v, want %v", got, want)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("the page logged at Warn: %s", buf.String())
+	}
+}
