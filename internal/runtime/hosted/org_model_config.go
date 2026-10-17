@@ -8,42 +8,10 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelconfigcrypto"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelreceipts"
 )
-
-// buildOrgModelConfigStore composes the per-organization BYO LLM
-// configuration store (CHAOS-3775). It returns (nil, nil, nil) -- the same
-// "unconfigured optional dependency never fails composition closed"
-// convention buildContextFabricInvestigator and newContextFabricModelRuntime
-// already use -- when no credential encryption key is configured: the
-// api.App model-config routes stay registered, authorized, and audited, and
-// answer a clean 503 for every request (api.App's nil-store handling,
-// mirroring the nil-Investigator case), and every organization uses the
-// deployment-default runtime unchanged.
-//
-// Composed independently of ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED /
-// falkorgraph.Configured (unlike the investigator): a customer must be able
-// to enter and save their organization's BYO LLM configuration before or
-// independently of the graph backend being wired, since the product-facing
-// configuration surface has no dependency on graph readiness.
-func buildOrgModelConfigStore(postgres postgresComponents, lookup func(string) (string, bool)) (*pgmodelconfig.Store, error) {
-	if !modelconfigcrypto.Configured(lookup) {
-		return nil, nil
-	}
-	cipher, err := modelconfigcrypto.NewFromEnv(lookup)
-	if err != nil {
-		return nil, fmt.Errorf("load context fabric credential encryption keys: %w", err)
-	}
-	store, err := pgmodelconfig.NewStore(postgres.db, cipher)
-	if err != nil {
-		return nil, fmt.Errorf("initialize context fabric org model config store: %w", err)
-	}
-	return store, nil
-}
 
 // wrapWithOrgModelRuntimeResolver wraps deploymentDefault (which may itself
 // be nil -- no deployment-default provider configured) with per-organization
@@ -53,9 +21,7 @@ func buildOrgModelConfigStore(postgres postgresComponents, lookup func(string) (
 // no encryption key configured gets.
 //
 // The second return value is the SAME *modelruntimeresolver.Resolver
-// wrapped into the first, exposed as contextfabric.OrgModelRuntimeEvictor
-// so internal/api's DELETE model-config handler can purge a cached runtime
-// immediately after a successful delete (Codex round-1 finding F4) --
+// wrapped into the first, exposed as contextfabric.OrgModelRuntimeEvictor --
 // callers must apply the typed-nil-interface guard this package's other
 // optional-dependency wiring already uses (see open.go's orgModelConfigs
 // conversion) before assigning it into an interface-typed field.
@@ -140,10 +106,8 @@ func (r contextFabricReuseModelIdentityResolver) ResolveReuseModelIdentity(ctx c
 // present, preserving order (CHAOS-3786, codex round-1 P2). A configured
 // FallbackModel equal to the primary Model is rejected by
 // modelprovider.Config.Validate() on the request path, but a row already
-// persisted in pgmodelconfig is read back WITHOUT revalidation
-// (pgmodelconfig/store.go's decode path), so a stored row that predates a
-// tightened validation rule -- or one written by a future/older binary --
-// can still reach here with FallbackModel == Model. Without this guard,
+// read from the ops settings store is not revalidated here, so a
+// configuration that predates a tightened validation rule can still reach here with FallbackModel == Model. Without this guard,
 // such a chain would carry the same identity twice; harmless for
 // FindReusable's `= ANY(...)` correctness, but it wastes a comparison and
 // makes a debug dump of the resolved chain misleadingly imply two distinct
