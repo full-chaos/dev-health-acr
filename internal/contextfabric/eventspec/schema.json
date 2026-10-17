@@ -10207,16 +10207,9 @@
         "presence": "required"
       },
       {
-        "key": "native_cover_issues",
+        "key": "pull_request_covered_rows",
         "type": "int",
-        "presence": "conditional",
-        "applicability": "written when the read held a fallback link, so a native cover was read"
-      },
-      {
-        "key": "native_cover_pull_requests",
-        "type": "int",
-        "presence": "conditional",
-        "applicability": "written when the read held a fallback link, so a native cover was read"
+        "presence": "required"
       },
       {
         "key": "request_id",

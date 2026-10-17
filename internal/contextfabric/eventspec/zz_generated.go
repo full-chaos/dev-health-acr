@@ -6069,11 +6069,12 @@ func (f OwningTeamsTruncatedFields) SlogArgs() []any {
 // PullRequestProjectNativeFirstFields is devhealthfacts.pull_request_project_native_first's generated typed construction interface
 // (CHAOS-5516): one Go field per Field PullRequestProjectNativeFirst.Fields declares in spec.go.
 type PullRequestProjectNativeFirstFields struct {
-	Outcome       string
-	ProjectRows   int
-	FallbackLinks int
-	DroppedLinks  int
-	DroppedRows   int
+	Outcome                string
+	ProjectRows            int
+	FallbackLinks          int
+	DroppedLinks           int
+	DroppedRows            int
+	PullRequestCoveredRows int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every PullRequestProjectNativeFirstFields uniformly, set ONLY by NewPullRequestProjectNativeFirstFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6087,14 +6088,15 @@ type PullRequestProjectNativeFirstFields struct {
 
 // NewPullRequestProjectNativeFirstFields is the generated constructor for PullRequestProjectNativeFirstFields -- every
 // field PullRequestProjectNativeFirst.Fields declares is a required parameter.
-func NewPullRequestProjectNativeFirstFields(outcome string, projectRows int, fallbackLinks int, droppedLinks int, droppedRows int) PullRequestProjectNativeFirstFields {
+func NewPullRequestProjectNativeFirstFields(outcome string, projectRows int, fallbackLinks int, droppedLinks int, droppedRows int, pullRequestCoveredRows int) PullRequestProjectNativeFirstFields {
 	return PullRequestProjectNativeFirstFields{
-		Outcome:       outcome,
-		ProjectRows:   projectRows,
-		FallbackLinks: fallbackLinks,
-		DroppedLinks:  droppedLinks,
-		DroppedRows:   droppedRows,
-		constructed:   true,
+		Outcome:                outcome,
+		ProjectRows:            projectRows,
+		FallbackLinks:          fallbackLinks,
+		DroppedLinks:           droppedLinks,
+		DroppedRows:            droppedRows,
+		PullRequestCoveredRows: pullRequestCoveredRows,
+		constructed:            true,
 	}
 }
 
@@ -6116,6 +6118,7 @@ func (f PullRequestProjectNativeFirstFields) SlogArgs() []any {
 		"fallback_links", f.FallbackLinks,
 		"dropped_links", f.DroppedLinks,
 		"dropped_rows", f.DroppedRows,
+		"pull_request_covered_rows", f.PullRequestCoveredRows,
 	}
 }
 

@@ -2139,7 +2139,7 @@ var TeamPRLinkStateNativeFirst = Event{
 	},
 }
 
-// PullRequestProjectNativeFirst is the Info line of the fallback-only rule of the pull request project links: how many project rows and fallback links were read, how many links and rows a native link covers and were dropped, and, when a native cover was read, how many issues and pull requests it holds. Counts and a closed outcome only.
+// PullRequestProjectNativeFirst is the Info line of the fallback-only rule of the pull request project links: how many project rows and fallback links were read, how many links and rows a native link covers and were dropped, and how many of the dropped rows a native link of their pull request covers. Counts and a closed outcome only.
 var PullRequestProjectNativeFirst = Event{
 	ID:                       "devhealthfacts.pull_request_project_native_first",
 	Msg:                      "devhealthfacts.pull_request_project_native_first",
@@ -2155,8 +2155,7 @@ var PullRequestProjectNativeFirst = Event{
 		{Key: "fallback_links", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "dropped_links", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
-		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
+		{Key: "pull_request_covered_rows", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

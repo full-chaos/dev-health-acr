@@ -243,8 +243,8 @@ func TestTheTeamLinkLinesCarryNoRequestIDWithoutOne(t *testing.T) {
 			return err
 		},
 		"project links": func(p *InvestmentProvider) error {
-			_, err := dropCoveredProjectLinks(context.Background(), p.facts.client, "org-1", []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "native", rank: 3}})
-			return err
+			dropCoveredProjectLinks(context.Background(), []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "native", rank: 3}})
+			return nil
 		},
 		"mix set": func(p *InvestmentProvider) error {
 			seeded := context.WithValue(context.Background(), loadedMembershipScopeKey{}, loadedMembershipScope{orgID: "org-1", runID: "run-1", scope: membershipScope{mode: membershipScopeNone}})
@@ -349,33 +349,26 @@ func TestTheGeneratedSlogArgsOfTheTeamLinkLinesOmitTheRequestID(t *testing.T) {
 
 // TestThePullRequestProjectLineCertifiesThroughItsProducer drives
 // dropCoveredProjectLinks through every outcome of the fallback-only rule and
-// certifies each line, including the shape without a native cover.
+// certifies each line.
 func TestThePullRequestProjectLineCertifiesThroughItsProducer(t *testing.T) {
 	ctx := observability.WithRequestID(context.Background(), linkLineRequestID)
 	native := []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "native", rank: 3}}
-	fallback := func(issue string) []pullRequestProjectLinkRow {
-		return []pullRequestProjectLinkRow{{key: "r1:1", provider: "gh", id: "p1", name: "P1", tier: "text", rank: 1, fallbacks: []string{"1|text|" + issue}}}
+	fallback := func(row pullRequestProjectLinkRow) []pullRequestProjectLinkRow {
+		row.key, row.provider, row.id, row.name, row.tier, row.rank = "r1:1", "gh", "p1", "P1", "explicit_text", 2
+		return []pullRequestProjectLinkRow{row}
 	}
 	for _, tc := range []struct {
-		name  string
-		rows  []pullRequestProjectLinkRow
-		cover [][]any
-		want  map[string]any
+		name string
+		rows []pullRequestProjectLinkRow
+		want map[string]any
 	}{
-		{"no fallback rows", native, nil, map[string]any{"outcome": "no_fallback_rows", "project_rows": 1, "fallback_links": 0, "dropped_links": 0, "dropped_rows": 0}},
-		{"no fallback link covered", fallback("i1"), [][]any{{[]string{}, []string{}}}, map[string]any{"outcome": "no_fallback_link_covered", "project_rows": 1, "fallback_links": 1, "dropped_links": 0, "dropped_rows": 0, "native_cover_issues": 0, "native_cover_pull_requests": 0}},
-		{"covered fallback links dropped", fallback("i1"), [][]any{{[]string{"i1"}, []string{"r1|1"}}}, map[string]any{"outcome": "covered_fallback_links_dropped", "project_rows": 1, "fallback_links": 1, "dropped_links": 1, "dropped_rows": 1, "native_cover_issues": 1, "native_cover_pull_requests": 1}},
+		{"no fallback rows", native, map[string]any{"outcome": "no_fallback_rows", "project_rows": 1, "fallback_links": 0, "dropped_links": 0, "dropped_rows": 0, "pull_request_covered_rows": 0}},
+		{"no fallback link covered", fallback(pullRequestProjectLinkRow{fallbackLinks: 1, remainingRank: 2, remainingTier: "explicit_text"}), map[string]any{"outcome": "no_fallback_link_covered", "project_rows": 1, "fallback_links": 1, "dropped_links": 0, "dropped_rows": 0, "pull_request_covered_rows": 0}},
+		{"an issue cover drops the row", fallback(pullRequestProjectLinkRow{fallbackLinks: 2, issueCoveredLinks: 2}), map[string]any{"outcome": "covered_fallback_links_dropped", "project_rows": 1, "fallback_links": 2, "dropped_links": 2, "dropped_rows": 1, "pull_request_covered_rows": 0}},
+		{"a pull request cover drops the row", fallback(pullRequestProjectLinkRow{pullRequestCovered: 1, fallbackLinks: 3, issueCoveredLinks: 1, remainingRank: 1, remainingTier: "heuristic"}), map[string]any{"outcome": "covered_fallback_links_dropped", "project_rows": 1, "fallback_links": 3, "dropped_links": 3, "dropped_rows": 1, "pull_request_covered_rows": 1}},
 	} {
 		buf := captureLinkLines(t)
-		if _, err := dropCoveredProjectLinks(ctx, &linkStubClient{coverRows: tc.cover}, "org-1", tc.rows); err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
+		dropCoveredProjectLinks(ctx, tc.rows)
 		certifyLinkLine(t, buf, eventspec.PullRequestProjectNativeFirst, tc.want)
-		_, wantsCover := tc.want["native_cover_issues"]
-		for _, key := range []string{"native_cover_issues", "native_cover_pull_requests"} {
-			if got := strings.Contains(buf.String(), `"`+key+`"`); got != wantsCover {
-				t.Fatalf("%s: key %s present=%v, want %v (written only when a native cover was read): %s", tc.name, key, got, wantsCover, buf.String())
-			}
-		}
 	}
 }

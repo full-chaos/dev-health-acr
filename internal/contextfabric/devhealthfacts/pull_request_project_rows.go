@@ -27,22 +27,56 @@ const pullRequestProjectScope = "project"
 // One row per (pull request, project), with the strongest link tier among the
 // links that reach that project; the tier is named on the row so a consumer
 // never presents a lower tier as native.
+//
+// The fallback-only rule (ops issueprlinks.NativeLinks.Outranks) is applied in
+// the statement with a fixed-size state per group: a link below native counts
+// only when no native row covers its pull request or its issue. The pull
+// request side is one flag per group (every link of the group names the same
+// pull request); the issue side is folded into maxIf/argMaxIf/countIf over the
+// group's links, so no group collects its links, however many there are. Both
+// native sets are read for the requested pull requests only: the native rows
+// of those pull requests, and the native rows of the issues their links name.
+//
 // pullRequestProjectRowCap is the most rows one read admits; the statement
 // asks for one more so a full page is told apart from a cut one.
 const pullRequestProjectRowCap = 5000
 
 const pullRequestProjectRowLimit = "5001"
 
-var pullRequestProjectLinksSQL = `SELECT concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number)) AS pr_key,
+const pullRequestProjectKeySQL = `concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number))`
+
+// pullRequestProjectNativePullRequestsSQL is the requested pull requests that
+// have a native row, as "repoID:number".
+const pullRequestProjectNativePullRequestsSQL = `(SELECT concat(toString(repo_id), ':', toString(pr_number)) FROM work_graph_issue_pr
+  WHERE org_id = {org_id:String} AND provenance = 'native' AND concat(toString(repo_id), ':', toString(pr_number)) IN {ids:Array(String)})`
+
+// pullRequestProjectNativeIssuesSQL is the issues linked to a requested pull
+// request that have a native row anywhere in the organization.
+const pullRequestProjectNativeIssuesSQL = `(SELECT work_item_id FROM work_graph_issue_pr
+  WHERE org_id = {org_id:String} AND provenance = 'native' AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr
+    WHERE org_id = {org_id:String} AND concat(toString(repo_id), ':', toString(pr_number)) IN {ids:Array(String)}))`
+
+// pullRequestProjectFallbackSQL is a link below native; ...UncoveredSQL is one
+// whose issue has no native row.
+const (
+	pullRequestProjectFallbackSQL  = `lk.link_rank < 3`
+	pullRequestProjectUncoveredSQL = pullRequestProjectFallbackSQL + ` AND lk.work_item_id NOT IN ` + pullRequestProjectNativeIssuesSQL
+)
+
+var pullRequestProjectLinksSQL = `SELECT ` + pullRequestProjectKeySQL + ` AS pr_key,
        pj.provider, pj.id, any(pj.name),
        toUInt8(max(lk.link_rank)),
        argMax(lk.provenance, lk.link_rank),
-       groupUniqArrayIf(concat(toString(lk.link_rank), '|', lk.provenance, '|', lk.work_item_id), lk.link_rank < 3)
+       toUInt8(pr_key IN ` + pullRequestProjectNativePullRequestsSQL + `),
+       countIf(` + pullRequestProjectFallbackSQL + `),
+       countIf(` + pullRequestProjectFallbackSQL + ` AND lk.work_item_id IN ` + pullRequestProjectNativeIssuesSQL + `),
+       toUInt8(maxIf(lk.link_rank, ` + pullRequestProjectUncoveredSQL + `)),
+       argMaxIf(lk.provenance, lk.link_rank, ` + pullRequestProjectUncoveredSQL + `)
 FROM ` + admittedIssueLinksSQL + ` AS lk
 INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = lk.work_item_id
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
 INNER JOIN projects AS pj FINAL ON pj.org_id = {org_id:String} AND pj.provider = p.provider AND pj.id = p.id
-WHERE concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number)) IN {ids:Array(String)}
+WHERE ` + pullRequestProjectKeySQL + ` IN {ids:Array(String)}
   AND p.key_resolution_count = 1
 GROUP BY pr_key, pj.provider, pj.id
 ORDER BY pr_key, pj.provider, pj.id
@@ -76,7 +110,7 @@ func (p *PullRequestsProvider) readPullRequestProjects(ctx context.Context, orgI
 			skipped++
 			return nil
 		}
-		if err := row.Scan(&r.key, &r.provider, &r.id, &r.name, &rank, &r.tier, &r.fallbacks); err != nil {
+		if err := row.Scan(&r.key, &r.provider, &r.id, &r.name, &rank, &r.tier, &r.pullRequestCovered, &r.fallbackLinks, &r.issueCoveredLinks, &r.remainingRank, &r.remainingTier); err != nil {
 			return err
 		}
 		r.rank = rank
@@ -86,10 +120,7 @@ func (p *PullRequestsProvider) readPullRequestProjects(ctx context.Context, orgI
 	if err != nil {
 		return nil, false, err
 	}
-	rows, err = dropCoveredProjectLinks(ctx, p.facts.client, orgID, rows)
-	if err != nil {
-		return nil, false, err
-	}
+	rows = dropCoveredProjectLinks(ctx, rows)
 	for _, r := range rows {
 		canonical, omitted, deriveErr := identity.Derive(identity.KindProject, []string{r.provider, r.id}, nil)
 		if deriveErr != nil || omitted || !validLinkTier(r.tier) {

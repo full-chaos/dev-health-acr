@@ -282,19 +282,19 @@ FactOperationalDeficiencies
   fields             latest_as_of_day latest_compounding_risk latest_computed_at latest_score_unavailable_reason latest_severity latest_severity_unavailable_reason latest_unavailable_reason rationale rule_basis_as_of_day rule_basis_compounding_risk rule_basis_severity rule_basis_unavailable_reason rule_computed_at rule_id rule_version score_moved_since_rule severity success_criterion title window_end window_start
 
 FactPullRequests
-  reached_funcs      146
+  reached_funcs      143
   dynamic_key_sites  0
-  leaked_call_sites  22
-    leak interface_method     10
+  leaked_call_sites  21
+    leak interface_method     9
     leak external_func_value  10
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         2
-    calls followed            1074
+    calls followed            1068
     calls accounted           14
-    calls not_a_call          13
-    calls excluded_by_design  339
-    calls leaked              22
+    calls not_a_call          14
+    calls excluded_by_design  314
+    calls leaked              21
   fields             link_tier link_tier_breakdown owned_repositories owned_repositories_omitted_count owned_repository_count project_breakdown project_reached_repository_count pull_request_count pull_request_link_basis pull_requests_by_state pull_requests_by_state_basis pull_requests_by_state_omitted_count pull_requests_closed_unmerged_window pull_requests_merged_window pull_requests_open_current pull_requests_opened_window pull_requests_without_state_count reach_basis repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis scope scope_id scope_name state window_basis window_end window_start
 
 FactReadiness
