@@ -813,7 +813,7 @@ make coverage-cobertura" || status=1
 # must `needs: plan` and carry exactly the plan-output `if:`, so a new job
 # defaults to heavy (skipped on a draft) and cannot quietly run on every draft
 # push; and verify must READ plan.outputs.heavy and reject a missing value.
-light_jobs=' plan mirror-preflight scripts lint docs-mermaid unit reports verify '
+light_jobs=' plan mirror-preflight scripts lint docs-mermaid helm unit reports verify '
 check_heavy_jobs_gated() {
   local file="$1" job block status=0
   while IFS= read -r job; do

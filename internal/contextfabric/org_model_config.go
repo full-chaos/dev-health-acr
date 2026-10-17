@@ -3,35 +3,11 @@ package contextfabric
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-go/llm"
 	"log/slog"
 	"time"
-
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
-
-// ErrOrgModelConfigNotFound identifies an organization with no stored BYO
-// LLM configuration -- the expected, common state for an organization that
-// has not opted in (CHAOS-3775, AC-3775-3). Callers resolving a runtime
-// treat this as "use the deployment default", not as an error.
-var ErrOrgModelConfigNotFound = errors.New("context fabric: organization has no model configuration")
-
-// OrgModelConfigStore is the ACR-owned port for managing an organization's
-// per-organization BYO LLM configuration (CHAOS-3775). Every method is
-// scoped by principal.OrgID, derived from the authenticated principal --
-// never from a request body (TRD §19.3.6, "organization scope is
-// structural"). Every implementation must return ErrOrgModelConfigNotFound
-// from GetOrgModelConfig when the organization has none, and must never
-// return or log the plaintext credential -- see ResolveOrgModelConfig for
-// the one seam that does.
-type OrgModelConfigStore interface {
-	UpsertOrgModelConfig(context.Context, storage.Principal, contractsv1.ContextFabricOrgModelConfigWriteRequest) (contractsv1.ContextFabricOrgModelConfig, error)
-	GetOrgModelConfig(context.Context, storage.Principal) (contractsv1.ContextFabricOrgModelConfig, error)
-	DeleteOrgModelConfig(context.Context, storage.Principal) error
-}
 
 // ResolvedOrgModelConfig is the plaintext-credential shape
 // OrgModelConfigResolver returns. It exists ONLY for constructing a

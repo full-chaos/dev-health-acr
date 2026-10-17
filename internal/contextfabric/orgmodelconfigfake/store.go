@@ -1,12 +1,8 @@
-// Package memorymodelconfig is the in-memory test/dev twin of
-// contextfabric.OrgModelConfigStore and contextfabric.OrgModelConfigResolver
-// (mirrors internal/storage's memory-vs-postgres split,
-// internal/storage/AGENTS.md, and internal/contextfabric/memoryinvestigation's
-// precedent). It enforces the same org-scoping semantics as
-// internal/contextfabric/pgmodelconfig.Store, including masking the
-// credential on every read that isn't ResolveOrgModelConfig, so behavior
-// cannot silently drift between the two implementations.
-package memorymodelconfig
+// Package orgmodelconfigfake is a test-only in-memory
+// contextfabric.OrgModelConfigResolver. Production reads per-organization
+// BYO LLM configuration from the ops settings store; this fake lets resolver
+// tests set, change and delete an organization's configuration.
+package orgmodelconfigfake
 
 import (
 	"context"
@@ -32,24 +28,20 @@ type entry struct {
 	updatedAt     time.Time
 }
 
-// Store is a mutex-protected, map-backed contextfabric.OrgModelConfigStore
-// and contextfabric.OrgModelConfigResolver.
+// Store is a mutex-protected, map-backed contextfabric.OrgModelConfigResolver.
 type Store struct {
 	mu      sync.Mutex
 	configs map[string]entry
 	now     func() time.Time
 	// nextGeneration is a single counter shared across every organization,
-	// mirroring pgmodelconfig's table-wide Postgres sequence (Codex round-1
+	// a table-wide sequence (Codex round-1
 	// finding F3/F4): it must be global, not per-org, so a value already
 	// handed out to a since-deleted row is never reissued to a
 	// newly-recreated row for the same org_id.
 	nextGeneration int64
 }
 
-var (
-	_ contextfabric.OrgModelConfigStore    = (*Store)(nil)
-	_ contextfabric.OrgModelConfigResolver = (*Store)(nil)
-)
+var _ contextfabric.OrgModelConfigResolver = (*Store)(nil)
 
 // NewStore returns an empty Store. now defaults to time.Now when nil.
 func NewStore(now func() time.Time) *Store {
@@ -61,14 +53,14 @@ func NewStore(now func() time.Time) *Store {
 
 func (s *Store) UpsertOrgModelConfig(ctx context.Context, principal storage.Principal, request contractsv1.ContextFabricOrgModelConfigWriteRequest) (contractsv1.ContextFabricOrgModelConfig, error) {
 	if s == nil {
-		return contractsv1.ContextFabricOrgModelConfig{}, errors.New("memorymodelconfig: store is not configured")
+		return contractsv1.ContextFabricOrgModelConfig{}, errors.New("orgmodelconfigfake: store is not configured")
 	}
 	if err := ctx.Err(); err != nil {
 		return contractsv1.ContextFabricOrgModelConfig{}, err
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	if orgID == "" {
-		return contractsv1.ContextFabricOrgModelConfig{}, errors.New("memorymodelconfig: organization is required")
+		return contractsv1.ContextFabricOrgModelConfig{}, errors.New("orgmodelconfigfake: organization is required")
 	}
 	if err := request.Validate(); err != nil {
 		return contractsv1.ContextFabricOrgModelConfig{}, err
@@ -95,33 +87,16 @@ func (s *Store) UpsertOrgModelConfig(ctx context.Context, principal storage.Prin
 	return toContract(orgID, record), nil
 }
 
-func (s *Store) GetOrgModelConfig(ctx context.Context, principal storage.Principal) (contractsv1.ContextFabricOrgModelConfig, error) {
-	if s == nil {
-		return contractsv1.ContextFabricOrgModelConfig{}, errors.New("memorymodelconfig: store is not configured")
-	}
-	if err := ctx.Err(); err != nil {
-		return contractsv1.ContextFabricOrgModelConfig{}, err
-	}
-	orgID := strings.TrimSpace(principal.OrgID)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.configs[orgID]
-	if orgID == "" || !ok {
-		return contractsv1.ContextFabricOrgModelConfig{}, contextfabric.ErrOrgModelConfigNotFound
-	}
-	return toContract(orgID, record), nil
-}
-
 func (s *Store) DeleteOrgModelConfig(ctx context.Context, principal storage.Principal) error {
 	if s == nil {
-		return errors.New("memorymodelconfig: store is not configured")
+		return errors.New("orgmodelconfigfake: store is not configured")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	if orgID == "" {
-		return errors.New("memorymodelconfig: organization is required")
+		return errors.New("orgmodelconfigfake: organization is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,7 +106,7 @@ func (s *Store) DeleteOrgModelConfig(ctx context.Context, principal storage.Prin
 
 func (s *Store) ResolveOrgModelConfig(ctx context.Context, orgID string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 	if s == nil {
-		return contextfabric.ResolvedOrgModelConfig{}, false, errors.New("memorymodelconfig: store is not configured")
+		return contextfabric.ResolvedOrgModelConfig{}, false, errors.New("orgmodelconfigfake: store is not configured")
 	}
 	if err := ctx.Err(); err != nil {
 		return contextfabric.ResolvedOrgModelConfig{}, false, err

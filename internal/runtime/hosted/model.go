@@ -33,7 +33,7 @@ import (
 //
 // This function is called from BOTH
 // contextFabricModelConfigFromEnv (the deployment-default path) and, when a
-// per-organization model-config store is also configured,
+// per-organization config source is also configured,
 // contextFabricModelDefaults (internal/runtime/hosted/org_model_config.go) --
 // a malformed value therefore logs the SAME warning TWICE in that
 // configuration, once per composition path that resolves it, not once
