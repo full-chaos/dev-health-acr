@@ -32,11 +32,10 @@ type orgLLMConfigSource interface {
 }
 
 // buildOrgModelConfigResolver returns the per-organization config source, or
-// a nil interface when there is none. One store only. Unset defaults to ops
-// when the Dev Health entitlement client is wired and acr's own store is off;
-// a deployment without that client, or one that still configures acr's store,
-// keeps working on what it has. An explicit "ops" is strict and refuses to
-// start when it cannot be honoured.
+// a nil interface when there is none. One store only: ops. Unset behaves as
+// "ops" and refuses to start beside acr's own store; the one lenient case is
+// no Dev Health entitlement client (local/dev), which means no per-org source.
+// An explicit "ops" without the client is an error.
 func buildOrgModelConfigResolver(acrStore *pgmodelconfig.Store, entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger) (contextfabric.OrgModelConfigResolver, error) {
 	value, _ := lookup(EnvOrgLLMConfigSource)
 	source, hasOps := entitlement.(orgLLMConfigSource)
@@ -44,14 +43,14 @@ func buildOrgModelConfigResolver(acrStore *pgmodelconfig.Store, entitlement enti
 	case "", orgLLMConfigSourceOps:
 		explicit := strings.TrimSpace(value) != ""
 		if acrStore != nil {
-			if explicit {
-				return nil, fmt.Errorf("%s=ops needs acr's own model config store off (one BYO store): unset the credential encryption keys", EnvOrgLLMConfigSource)
-			}
-			return acrStore, nil
+			return nil, fmt.Errorf("%s=ops needs acr's own model config store off (one BYO store): unset the credential encryption keys", EnvOrgLLMConfigSource)
 		}
 		if !hasOps {
 			if explicit {
 				return nil, fmt.Errorf("%s=ops needs the Dev Health entitlement client (ACR_DEV_HEALTH_ENTITLEMENT_URL and its token file)", EnvOrgLLMConfigSource)
+			}
+			if logger != nil {
+				logger.Info("context fabric org model config source: none (no Dev Health entitlement client configured); the platform model answers every organization")
 			}
 			return nil, nil
 		}

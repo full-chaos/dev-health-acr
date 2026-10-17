@@ -48,8 +48,11 @@ func TestBuildOrgModelConfigResolverPicksOneStore(t *testing.T) {
 		t.Fatalf("unset without the Dev Health client: %v %v, want a nil interface", got, err)
 	}
 	store := &pgmodelconfig.Store{}
-	if got, err := buildOrgModelConfigResolver(store, withOps, env(""), discardLogger()); err != nil || got != contextfabric.OrgModelConfigResolver(store) {
-		t.Fatalf("unset beside acr's own store must keep it: %v %v", got, err)
+	if _, err := buildOrgModelConfigResolver(store, withOps, env(""), discardLogger()); err == nil || !strings.Contains(err.Error(), "one BYO store") {
+		t.Fatalf("unset beside acr's own store: err = %v, want the one-store refusal", err)
+	}
+	if _, err := buildOrgModelConfigResolver(store, localEntitlement{}, env(""), discardLogger()); err == nil || !strings.Contains(err.Error(), "one BYO store") {
+		t.Fatalf("unset beside acr's own store without the client: err = %v, want the one-store refusal", err)
 	}
 	if got, err := buildOrgModelConfigResolver(nil, withOps, env("off"), discardLogger()); err != nil || got != nil {
 		t.Fatalf("off with no acr store: %v %v, want a nil interface", got, err)
