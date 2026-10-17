@@ -36,6 +36,7 @@ var ByID = map[string]Event{
 	"contextfabric.commit_kept_by_no_member_found":     CommitKeptByNoMemberFound,
 	"contextfabric.completeness_authority":             CompletenessAuthority,
 	"contextfabric.confirmed_need_ledger":              ConfirmedNeedLedger,
+	"contextfabric.confirmed_need_ledger_window":       ConfirmedNeedLedgerWindow,
 	"contextfabric.count_population_scope":             CountPopulationScope,
 	"contextfabric.direct_read":                        DirectRead,
 	"contextfabric.direct_read_authorization":          DirectReadAuthorization,
@@ -57,6 +58,7 @@ var ByID = map[string]Event{
 	"contextfabric.graphql_query":                      GraphQLQuery,
 	"contextfabric.interpretation_ensemble_gap":        InterpretationEnsembleGap,
 	"contextfabric.interpretation_ensemble_resolved":   InterpretationEnsembleResolved,
+	"contextfabric.kind_carry":                         KindCarry,
 	"contextfabric.operation_read":                     OperationRead,
 	"contextfabric.organization_subject_read":          OrganizationSubjectRead,
 	"contextfabric.ownership_routing":                  OwnershipRouting,
@@ -76,6 +78,7 @@ var ByID = map[string]Event{
 	"contextfabric.retained_ranking_accounting":        RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":         SemanticStatePersistence,
 	"contextfabric.server_status_shadow":               ServerStatusShadowLine,
+	"contextfabric.stated_window_axis_decision":        StatedWindowAxisDecision,
 	"contextfabric.stored_answerability":               StoredAnswerability,
 	"contextfabric.stored_result_authorization":        StoredResultAuthorization,
 	"contextfabric.subjectless_terminal":               SubjectlessTerminal,
@@ -87,7 +90,11 @@ var ByID = map[string]Event{
 	"contextfabric.team_anchor_walk":                   TeamAnchorWalk,
 	"contextfabric.team_blockers_drivers":              TeamBlockersDrivers,
 	"contextfabric.terminal_save_skipped":              TerminalSaveSkipped,
+	"contextfabric.window_binder_outcome":              WindowBinderOutcome,
+	"contextfabric.window_canonicalization_outcome":    WindowCanonicalizationOutcome,
+	"contextfabric.window_carry":                       WindowCarry,
 	"contextfabric.window_continuation_decision":       WindowContinuationDecision,
+	"contextfabric.window_gated_for_confirmation":      WindowGatedForConfirmation,
 	"contextfabric.work_item_authorization_gap":        WorkItemAuthorizationGap,
 	"contextfabric.work_item_membership_gate":          WorkItemMembershipGate,
 	"contextfabric.work_item_membership_s1":            WorkItemMembershipS1,
@@ -1606,6 +1613,56 @@ func (f ConfirmedNeedLedgerFields) SlogArgs() []any {
 		"substitution_parent_chain_depth", f.SubstitutionParentChainDepth,
 		"substitution_parent_chain_error", contextfabric.SanitizeLogAttr(f.SubstitutionParentChainError),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// ConfirmedNeedLedgerWindowFields is contextfabric.confirmed_need_ledger_window's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ConfirmedNeedLedgerWindow.Fields declares in spec.go.
+type ConfirmedNeedLedgerWindowFields struct {
+	OrgID          string
+	Decision       string
+	SourceResultID string
+	AppliedWindow  string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ConfirmedNeedLedgerWindowFields uniformly, set ONLY by NewConfirmedNeedLedgerWindowFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewConfirmedNeedLedgerWindowFields is the generated constructor for ConfirmedNeedLedgerWindowFields -- every
+// field ConfirmedNeedLedgerWindow.Fields declares is a required parameter.
+func NewConfirmedNeedLedgerWindowFields(orgID string, decision string, sourceResultID string, appliedWindow string) ConfirmedNeedLedgerWindowFields {
+	return ConfirmedNeedLedgerWindowFields{
+		OrgID:          orgID,
+		Decision:       decision,
+		SourceResultID: sourceResultID,
+		AppliedWindow:  appliedWindow,
+		constructed:    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewConfirmedNeedLedgerWindowFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ConfirmedNeedLedgerWindowFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ConfirmedNeedLedgerWindow's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ConfirmedNeedLedgerWindowFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
+		"applied_window", contextfabric.SanitizeLogAttr(f.AppliedWindow),
 	}
 }
 
@@ -3751,6 +3808,65 @@ func (f InterpretationEnsembleResolvedFields) SlogArgs() []any {
 	}
 }
 
+// KindCarryFields is contextfabric.kind_carry's generated typed construction interface
+// (CHAOS-5516): one Go field per Field KindCarry.Fields declares in spec.go.
+type KindCarryFields struct {
+	OrgID             string
+	Outcome           string
+	ChainDepth        int
+	CarriedKind       string
+	RedeemedKind      string
+	SeedSource        string
+	ViaStoredAncestry bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every KindCarryFields uniformly, set ONLY by NewKindCarryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewKindCarryFields is the generated constructor for KindCarryFields -- every
+// field KindCarry.Fields declares is a required parameter.
+func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool) KindCarryFields {
+	return KindCarryFields{
+		OrgID:             orgID,
+		Outcome:           outcome,
+		ChainDepth:        chainDepth,
+		CarriedKind:       carriedKind,
+		RedeemedKind:      redeemedKind,
+		SeedSource:        seedSource,
+		ViaStoredAncestry: viaStoredAncestry,
+		constructed:       true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewKindCarryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f KindCarryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns KindCarry's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f KindCarryFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"chain_depth", f.ChainDepth,
+		"carried_kind", contextfabric.SanitizeLogAttr(f.CarriedKind),
+		"redeemed_kind", contextfabric.SanitizeLogAttr(f.RedeemedKind),
+		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
+		"via_stored_ancestry", f.ViaStoredAncestry,
+	}
+}
+
 // OperationReadFields is contextfabric.operation_read's generated typed construction interface
 // (CHAOS-5516): one Go field per Field OperationRead.Fields declares in spec.go.
 type OperationReadFields struct {
@@ -5128,6 +5244,62 @@ func (f ServerStatusShadowLineFields) SlogArgs() []any {
 	}
 }
 
+// StatedWindowAxisDecisionFields is contextfabric.stated_window_axis_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field StatedWindowAxisDecision.Fields declares in spec.go.
+type StatedWindowAxisDecisionFields struct {
+	OrgID           string
+	Surface         string
+	Origin          string
+	InterpretedAxis string
+	ExecutedAxis    string
+	Outcome         string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every StatedWindowAxisDecisionFields uniformly, set ONLY by NewStatedWindowAxisDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewStatedWindowAxisDecisionFields is the generated constructor for StatedWindowAxisDecisionFields -- every
+// field StatedWindowAxisDecision.Fields declares is a required parameter.
+func NewStatedWindowAxisDecisionFields(orgID string, surface string, origin string, interpretedAxis string, executedAxis string, outcome string) StatedWindowAxisDecisionFields {
+	return StatedWindowAxisDecisionFields{
+		OrgID:           orgID,
+		Surface:         surface,
+		Origin:          origin,
+		InterpretedAxis: interpretedAxis,
+		ExecutedAxis:    executedAxis,
+		Outcome:         outcome,
+		constructed:     true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewStatedWindowAxisDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f StatedWindowAxisDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns StatedWindowAxisDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f StatedWindowAxisDecisionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"origin", contextfabric.SanitizeLogAttr(f.Origin),
+		"interpreted_axis", contextfabric.SanitizeLogAttr(f.InterpretedAxis),
+		"executed_axis", contextfabric.SanitizeLogAttr(f.ExecutedAxis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+	}
+}
+
 // StoredAnswerabilityFields is contextfabric.stored_answerability's generated typed construction interface
 // (CHAOS-5516): one Go field per Field StoredAnswerability.Fields declares in spec.go.
 type StoredAnswerabilityFields struct {
@@ -6035,6 +6207,159 @@ func (f TerminalSaveSkippedFields) SlogArgs() []any {
 	}
 }
 
+// WindowBinderOutcomeFields is contextfabric.window_binder_outcome's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WindowBinderOutcome.Fields declares in spec.go.
+type WindowBinderOutcomeFields struct {
+	OrgID      string
+	Surface    string
+	Reason     string
+	RelativeID string
+	Grammar    string
+	SpansBound int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WindowBinderOutcomeFields uniformly, set ONLY by NewWindowBinderOutcomeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWindowBinderOutcomeFields is the generated constructor for WindowBinderOutcomeFields -- every
+// field WindowBinderOutcome.Fields declares is a required parameter.
+func NewWindowBinderOutcomeFields(orgID string, surface string, reason string, relativeID string, grammar string, spansBound int) WindowBinderOutcomeFields {
+	return WindowBinderOutcomeFields{
+		OrgID:       orgID,
+		Surface:     surface,
+		Reason:      reason,
+		RelativeID:  relativeID,
+		Grammar:     grammar,
+		SpansBound:  spansBound,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWindowBinderOutcomeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WindowBinderOutcomeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WindowBinderOutcome's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WindowBinderOutcomeFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"relative_id", contextfabric.SanitizeLogAttr(f.RelativeID),
+		"grammar", contextfabric.SanitizeLogAttr(f.Grammar),
+		"spans_bound", f.SpansBound,
+	}
+}
+
+// WindowCanonicalizationOutcomeFields is contextfabric.window_canonicalization_outcome's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WindowCanonicalizationOutcome.Fields declares in spec.go.
+type WindowCanonicalizationOutcomeFields struct {
+	OrgID   string
+	Outcome string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WindowCanonicalizationOutcomeFields uniformly, set ONLY by NewWindowCanonicalizationOutcomeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWindowCanonicalizationOutcomeFields is the generated constructor for WindowCanonicalizationOutcomeFields -- every
+// field WindowCanonicalizationOutcome.Fields declares is a required parameter.
+func NewWindowCanonicalizationOutcomeFields(orgID string, outcome string) WindowCanonicalizationOutcomeFields {
+	return WindowCanonicalizationOutcomeFields{
+		OrgID:       orgID,
+		Outcome:     outcome,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWindowCanonicalizationOutcomeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WindowCanonicalizationOutcomeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WindowCanonicalizationOutcome's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WindowCanonicalizationOutcomeFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+	}
+}
+
+// WindowCarryFields is contextfabric.window_carry's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WindowCarry.Fields declares in spec.go.
+type WindowCarryFields struct {
+	OrgID             string
+	Outcome           string
+	ChainDepth        int
+	SeedSource        string
+	ViaStoredAncestry bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WindowCarryFields uniformly, set ONLY by NewWindowCarryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWindowCarryFields is the generated constructor for WindowCarryFields -- every
+// field WindowCarry.Fields declares is a required parameter.
+func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool) WindowCarryFields {
+	return WindowCarryFields{
+		OrgID:             orgID,
+		Outcome:           outcome,
+		ChainDepth:        chainDepth,
+		SeedSource:        seedSource,
+		ViaStoredAncestry: viaStoredAncestry,
+		constructed:       true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWindowCarryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WindowCarryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WindowCarry's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WindowCarryFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"chain_depth", f.ChainDepth,
+		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
+		"via_stored_ancestry", f.ViaStoredAncestry,
+	}
+}
+
 // WindowContinuationDecisionFields is contextfabric.window_continuation_decision's generated typed construction interface
 // (CHAOS-5516): one Go field per Field WindowContinuationDecision.Fields declares in spec.go.
 type WindowContinuationDecisionFields struct {
@@ -6178,6 +6503,62 @@ func (f WindowContinuationDecisionFields) SlogArgs() []any {
 		"parent_reference", contextfabric.SanitizeLogAttr(f.ParentReference),
 		"question_window_confirmed", f.QuestionWindowConfirmed,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WindowGatedForConfirmationFields is contextfabric.window_gated_for_confirmation's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WindowGatedForConfirmation.Fields declares in spec.go.
+type WindowGatedForConfirmationFields struct {
+	OrgID       string
+	Surface     string
+	Origin      string
+	RelativeID  string
+	Provenance  string
+	WindowClass string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WindowGatedForConfirmationFields uniformly, set ONLY by NewWindowGatedForConfirmationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWindowGatedForConfirmationFields is the generated constructor for WindowGatedForConfirmationFields -- every
+// field WindowGatedForConfirmation.Fields declares is a required parameter.
+func NewWindowGatedForConfirmationFields(orgID string, surface string, origin string, relativeID string, provenance string, windowClass string) WindowGatedForConfirmationFields {
+	return WindowGatedForConfirmationFields{
+		OrgID:       orgID,
+		Surface:     surface,
+		Origin:      origin,
+		RelativeID:  relativeID,
+		Provenance:  provenance,
+		WindowClass: windowClass,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWindowGatedForConfirmationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WindowGatedForConfirmationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WindowGatedForConfirmation's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WindowGatedForConfirmationFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"origin", contextfabric.SanitizeLogAttr(f.Origin),
+		"relative_id", contextfabric.SanitizeLogAttr(f.RelativeID),
+		"provenance", contextfabric.SanitizeLogAttr(f.Provenance),
+		"window_class", contextfabric.SanitizeLogAttr(f.WindowClass),
 	}
 }
 

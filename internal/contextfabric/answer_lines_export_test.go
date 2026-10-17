@@ -107,3 +107,11 @@ func SynthesisFloorOutcomesForTest() (matchedBesideUnasked, onlyUnasked Synthesi
 	only := applyServerStatusFloor(result, emptyAffirmationGraph(), facts, nil)
 	return *matched, *only
 }
+
+// LedgerWindowObservedForTest renders an applied ledger window value as the ledger window line does.
+func LedgerWindowObservedForTest(appliedValue string) string {
+	return observableLedgerWindowValue(appliedValue)
+}
+
+// LedgerWindowAbsoluteValueForTest is an applied value that names an absolute window.
+func LedgerWindowAbsoluteValueForTest() string { return windowAbsoluteAppliedValuePrefix + "1:2" }
