@@ -35,10 +35,10 @@ func applyBudget(packet *contractsv1.ContextPacket, candidates []contractsv1.Con
 	return nil
 }
 
-func finalizePacket(packet *contractsv1.ContextPacket, later map[string]bool) error {
+func finalizePacket(packet *contractsv1.ContextPacket, later map[string]bool, criteria map[string][]string) error {
 	for {
 		ensurePacketArrays(packet)
-		packet.RequiredChecks, packet.RecommendedNextSteps = actionsFor(packet.Items)
+		packet.RequiredChecks, packet.RecommendedNextSteps = actionsFor(packet.Items, criteria)
 		if packet.Budget.Truncated {
 			packet.Warnings = append(packet.Warnings, "context_truncated")
 		}

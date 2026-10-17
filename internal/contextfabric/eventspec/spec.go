@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"strings"
 )
 
 // tokenStrings converts one of this repository's many closed-vocabulary
@@ -1862,6 +1863,288 @@ var FactRootRefused = Event{
 }
 
 func intPtr(n int) *int { return &n }
+
+var (
+	answerabilityRoleAlt        = "(" + strings.Join(contextfabric.AnswerabilityRoleVocabulary(), "|") + ")"
+	answerabilityStateAlt       = "(" + strings.Join(contextfabric.AnswerabilityRoleStateVocabulary(), "|") + ")"
+	answerabilityKindAlt        = "(undeclared|" + strings.Join(arrayTokens(storedResultSubjectKindArr[:]), "|") + ")"
+	answerabilitySlot           = answerabilityRoleAlt + ":" + answerabilityKindAlt + ":" + answerabilityStateAlt
+	answerabilityRolePattern    = "^(none|" + answerabilitySlot + "(," + answerabilitySlot + ")*)$"
+	answerabilityAdvancePattern = "^(none|" + answerabilityRoleAlt + ":(" + strings.Join(arrayTokens(storedResultSubjectKindArr[:]), "|") + "))$"
+)
+
+var (
+	factKindArr     = contractsv1.ContextFabricFactKindVocabulary()
+	kindListPattern = noneOrJoinedPattern(arrayTokens(storedResultSubjectKindArr[:]))
+	refusalBasisArr = contractsv1.ContextFabricRefusalBasisVocabulary()
+)
+
+func noneOrJoinedPattern(members []string) string {
+	one := "(" + strings.Join(members, "|") + ")"
+	return "^(none|" + one + "(," + one + ")*)$"
+}
+
+const requestIDApplicability = "written when the request context carries a request ID"
+
+// PriorSubjectReceiptsSkipped is the Warn line of the prior-subject receipts a turn skipped: how many, never which.
+var PriorSubjectReceiptsSkipped = Event{
+	ID:                       "contextfabric.prior_subject_receipts_skipped",
+	Msg:                      "context fabric prior-subject receipts skipped",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass, so the count follows the branches a request passes, not a fixed number.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per receipt-skip recording, and none when no receipt was skipped.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "skipped_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// PriorSubjectReceiptSkipReason is the Info line of one skip reason of the prior-subject receipts a turn skipped: the reason, how many, and for a stale graph epoch the epoch distance.
+var PriorSubjectReceiptSkipReason = Event{
+	ID:                       "contextfabric.prior_subject_receipt_skip_reason",
+	Msg:                      "context fabric prior-subject receipt skip reason",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "at most one line per skip reason (four) per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id", "reason"},
+	BoundedAggregation:       "one line per skip reason with a non-zero count.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorSubjectReceiptSkipReasonVocabulary()},
+		{Key: "count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "epoch_delta", Type: FieldInt, Presence: PresenceConditional, Applicability: "written on the stale_graph_epoch reason only"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// CommitAffirmationRetraction is the Warn line of a subject the commit gate removed from an answer: the commit basis, the subject kind, the strongest match mechanism and whether the commit held before and after. Closed names only, never an id or a label.
+var CommitAffirmationRetraction = Event{
+	ID:                       "contextfabric.commit_affirmation_retraction",
+	Msg:                      "context fabric commit affirmation retraction",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per retracted subject; the number of subjects an answer names follows the question.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per subject the commit gate retracts.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "commit_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CommitBasisLogVocabulary()},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "winning_mechanism", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CommitWinningMechanismVocabulary()},
+		{Key: "provisional_committed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "final_committed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// CommitKeptByNoMemberFound is the Info line of a team anchor the commit gate kept because the service filed the none-found row under it. A closed subject kind only.
+var CommitKeptByNoMemberFound = Event{
+	ID:                       "contextfabric.commit_kept_by_no_member_found",
+	Msg:                      "context fabric commit kept by no member found",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per kept subject; the number of subjects an answer names follows the question.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per subject the commit gate keeps by the none-found row.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// SynthesisStatusOverride is the Warn line of an investigation served with a different status than the synthesis step returned: both statuses, the reason, and the count of committed subjects. The unasked fact kinds list the kinds of read rows the model skipped. Closed names only.
+var SynthesisStatusOverride = Event{
+	ID:                       "contextfabric.synthesis_status_override",
+	Msg:                      "context fabric synthesis status override",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when the served status differs from the synthesis status.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InvestigationStatusLogVocabulary()},
+		{Key: "to_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InvestigationStatusLogVocabulary()},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SynthesisStatusOverrideReasonVocabulary()},
+		{Key: "committed_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unasked_fact_kinds", Type: FieldString, Presence: PresenceRequired, JoinedMembers: arrayTokens(factKindArr[:]), Applicability: "the kinds of the committed subject's read rows that no requirement asked for, sorted and comma-joined; empty when every read row was asked for. Any reason can carry it, including the ones that matched an asked row"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// AnswerReuseOutcome is the Info line of one answer reuse attempt: the closed outcome and the ownership routing version the lookup matched.
+var AnswerReuseOutcome = Event{
+	ID:                       "contextfabric.answer_reuse_outcome",
+	Msg:                      "context fabric answer reuse outcome",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per reuse attempt; a request tries reuse once per candidate lookup it makes and the count follows the lookups.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per answer reuse attempt.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerReuseOutcomeVocabulary()},
+		{Key: "ownership_routing_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{contextfabric.OwnershipRoutingVersion}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// AnswerReuseBypass is the Info line of a question that skipped answer reuse, with the closed reason.
+var AnswerReuseBypass = Event{
+	ID:                       "contextfabric.answer_reuse_bypass",
+	Msg:                      "context fabric answer reuse bypass",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when reuse is skipped.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerReuseBypassReasonVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// AnswerReuseContainment is the Info line of one reuse attempt's containment measurement: counts of the references the stored answer demanded, the caller can see and the degrade stripped, and the form the disclosure took.
+var AnswerReuseContainment = Event{
+	ID:                       "contextfabric.answer_reuse_containment",
+	Msg:                      "context fabric answer reuse containment",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per reuse attempt that measured containment; the count follows the candidate lookups a request makes.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per containment measurement.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "demanded_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "visible_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_citation", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "stripped_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stripped_labels", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_candidates", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_drivers", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_findings", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_paths", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "disclosure", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.AnswerReuseContainmentDisclosureVocabulary(), Applicability: "written when the degrade stripped something and a disclosure form was taken"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// SubjectlessTerminal is the Info line of the classification of a turn that ended without a subject: the reason, the refusal basis, the kinds the frame declared and the turn offered, and the role half of the answerability decision. Closed tokens, with the word none for an empty value.
+var SubjectlessTerminal = Event{
+	ID:                       "contextfabric.subjectless_terminal",
+	Msg:                      "context fabric subjectless terminal",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when the turn reaches the subjectless terminal path.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectlessTerminalReasonVocabulary()},
+		{Key: "refusal_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(refusalBasisArr[:])...)},
+		{Key: "declared_kinds", Type: FieldString, Presence: PresenceRequired, Pattern: kindListPattern, PatternExample: "project,team"},
+		{Key: "offered_kinds", Type: FieldString, Presence: PresenceRequired, Pattern: kindListPattern, PatternExample: "project,team"},
+		{Key: "evaluated_roles", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityRolePattern, PatternExample: "subject:project:open,anchor:undeclared:resolved"},
+		{Key: "advanced_role", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityAdvancePattern, PatternExample: "subject:project"},
+		{Key: "advancing_channel", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.AnswerabilityChannelVocabulary()...)},
+		{Key: "offers_evaluated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offers_advancing", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// StoredAnswerability is the Info line of the determination a read surface took on a stored clarification, and on what reading. The reuse surface writes org_id and the result by id route does not.
+var StoredAnswerability = Event{
+	ID:                       "contextfabric.stored_answerability",
+	Msg:                      contextfabric.StoredAnswerabilityLogMessage,
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per stored clarification a surface checks; reuse checks one per candidate lookup and the result by id route one per stored result it serves.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id", "surface"},
+	BoundedAggregation:       "one line per stored clarification determination.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written by the reuse surface; the result by id route does not write it"},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StoredAnswerabilitySurfaceVocabulary()},
+		{Key: "determination", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StoredAnswerabilityDeterminationVocabulary()},
+		{Key: "decided_by", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StoredAnswerabilityStepVocabulary()},
+		{Key: "semantic_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StoredAnswerabilityReadingVocabulary()},
+		{Key: "repaired", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "stored_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InvestigationStatusLogVocabulary()},
+		{Key: "served_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.InvestigationStatusLogVocabulary()...)},
+		{Key: "evaluated_roles", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityRolePattern, PatternExample: "subject:project:open"},
+		{Key: "advanced_role", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityAdvancePattern, PatternExample: "none"},
+		{Key: "advancing_channel", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.AnswerabilityChannelVocabulary()...)},
+		{Key: "offers_evaluated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offers_advancing", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// AnswerReuseServedRequestID is the Info line of a reuse hit that served a stored result under the request id of the call that stored it, and whether that id differs from the live one.
+var AnswerReuseServedRequestID = Event{
+	ID:                       "contextfabric.answer_reuse_served_request_id",
+	Msg:                      "context fabric answer reuse served a stored result's own request id",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per reuse hit; the answer reuse path and the work item reuse path each write one, and the count follows the lookups a request makes.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per reuse hit.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id_mismatch", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// BindingEpochMoved is the Info line of an investigation whose graph epoch moved between binding resolution and save, with the distance.
+var BindingEpochMoved = Event{
+	ID:                       "contextfabric.binding_epoch_moved",
+	Msg:                      "context fabric investigation's graph epoch moved between binding resolution and save",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation save, written when the epoch moved.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "flip_during_investigation", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "binding_epoch_delta", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// BindingEpochUnchanged is the Debug line of an investigation whose graph epoch did not move between binding resolution and save.
+var BindingEpochUnchanged = Event{
+	ID:                       "contextfabric.binding_epoch_unchanged",
+	Msg:                      "context fabric investigation's graph epoch unchanged between binding resolution and save",
+	Level:                    LevelDebug,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation save, written when the epoch did not move.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "flip_during_investigation", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "binding_epoch_delta", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
 
 // engineFactGateReadsPerRequest counts the gated reads one request can make.
 const engineFactGateReadsPerRequest = contextfabric.EngineFactGateReadsPerRequest
@@ -4364,6 +4647,19 @@ var All = []Event{
 	PullRequestProjectNativeFirst,
 	ProjectStatusDrivers,
 	TeamBlockersDrivers,
+	PriorSubjectReceiptsSkipped,
+	PriorSubjectReceiptSkipReason,
+	CommitAffirmationRetraction,
+	CommitKeptByNoMemberFound,
+	SynthesisStatusOverride,
+	AnswerReuseOutcome,
+	AnswerReuseBypass,
+	AnswerReuseContainment,
+	SubjectlessTerminal,
+	StoredAnswerability,
+	AnswerReuseServedRequestID,
+	BindingEpochMoved,
+	BindingEpochUnchanged,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
