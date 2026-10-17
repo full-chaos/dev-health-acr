@@ -31,3 +31,18 @@ func TestMemoryCappedQueryClientSendsMaxThreadsOnlyWhenAsked(t *testing.T) {
 		t.Errorf("client with WithMaxThreads(4) sent seen=%v threads=%d, want 4", inner.seen, inner.threads)
 	}
 }
+
+func TestMemoryCappedQueryClientSendsTheReaderAsLogComment(t *testing.T) {
+	t.Parallel()
+	client := memoryCappedQueryClient{capBytes: APIStatementMaxMemoryUsage}
+	if _, present := client.statementSettings(context.Background())["log_comment"]; present {
+		t.Error("a statement without a named reader sent log_comment")
+	}
+	settings := client.statementSettings(WithStatementReader(context.Background(), "ReadTeamProjectReachedRepositories"))
+	if settings["log_comment"] != "ReadTeamProjectReachedRepositories" {
+		t.Errorf("log_comment = %v, want the reader name", settings["log_comment"])
+	}
+	if settings["max_memory_usage"] != APIStatementMaxMemoryUsage {
+		t.Errorf("max_memory_usage = %v, want the cap", settings["max_memory_usage"])
+	}
+}

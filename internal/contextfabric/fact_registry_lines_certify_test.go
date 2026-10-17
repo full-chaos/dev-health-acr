@@ -311,9 +311,26 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 			}
 		}
 	}
+	// A failure with a ClickHouse exception code carries the code, and only then.
+	coded := &registryProviderStub{
+		capability: registryCapability(status, contextfabric.SubjectProject),
+		err: &contextfabric.FactReadFailure{
+			State: contextfabric.SourceUnavailable, Class: contextfabric.FactReadFailureReadFailed, SourceCode: 241,
+			Reason: "devhealthfacts: query team owned repositories failed", Cause: errors.New("code: 241, memory limit exceeded"),
+		},
+	}
+	raw = readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{coded}, registryRequest(status))
+	codedRaw := linesOf(t, raw, "context fabric fact read failed")[0]
+	certifyRegistryLine(t, codedRaw, eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "read_failed", "clickhouse_code": 241})
+	if strings.Contains(string(codedRaw), "memory limit") {
+		t.Fatalf("the read failed line carries the exception text: %s", codedRaw)
+	}
 	untyped := &registryProviderStub{capability: registryCapability(status, contextfabric.SubjectProject), err: errors.New("boom tenant text")}
 	raw = readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{untyped}, registryRequest(status))
 	line := certifyRegistryLine(t, linesOf(t, raw, "context fabric fact read failed")[0], eventspec.FactReadFailed, map[string]any{"kind": "status", "provider_reason": "none"})
+	if _, present := line["clickhouse_code"]; present {
+		t.Fatalf("a failure without a ClickHouse code must not carry clickhouse_code: %v", line)
+	}
 	seenClasses[line["provider_reason"].(string)] = true
 
 	// A timeout.

@@ -31,12 +31,37 @@ type statementMemoryCapKey struct{}
 
 type statementMaxThreadsKey struct{}
 
+type statementReaderKey struct{}
+
+// WithStatementReader names the reader (a constant chosen at the call site) of
+// the statements sent under ctx. The memory-capped client sends it as
+// log_comment, so system.query_log names a failed statement directly.
+func WithStatementReader(ctx context.Context, reader string) context.Context {
+	return context.WithValue(ctx, statementReaderKey{}, reader)
+}
+
+// StatementReaderFromContext reports the reader WithStatementReader put on ctx.
+func StatementReaderFromContext(ctx context.Context) (string, bool) {
+	reader, ok := ctx.Value(statementReaderKey{}).(string)
+	return reader, ok && reader != ""
+}
+
 // StatementMaxThreadsFromContext reports the max_threads default
 // NewMemoryCappedQueryClient put on ctx, when WithMaxThreads set one.
 func StatementMaxThreadsFromContext(ctx context.Context) (uint64, bool) {
 	threads, ok := ctx.Value(statementMaxThreadsKey{}).(uint64)
 	return threads, ok
 }
+
+// StatementMaxThreads is the per-statement thread default of every acr
+// ClickHouse read, the API's and the projector's alike. At the server default
+// (64 on the venue) per-thread join and sort buffers dominate: a projector
+// from-zero build read 701 MiB for the project membership statement and the
+// API's team project-reached repository read used 313 MB for 14 rows, over the
+// 256 MiB statement cap; at 4 threads they read 67 MiB and 30 MB with the same
+// result. A statement's own SETTINGS max_threads (the caught-up membership read
+// sets 1) still wins.
+const StatementMaxThreads uint64 = 4
 
 // WithMaxThreads sends max_threads = threads with every statement. Per-thread
 // join and sort buffers scale with the server's default thread count (64 on
@@ -125,11 +150,10 @@ func NewMemoryCappedQueryClient(inner ClickHouseQueryClient, capBytes uint64, op
 
 func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bindings []ClickHouseBinding) (ClickHouseRowScanner, error) {
 	ctx = context.WithValue(ctx, statementMemoryCapKey{}, c.capBytes)
-	settings := clickhousedriver.Settings{"max_memory_usage": c.capBytes}
 	if c.maxThreads > 0 {
-		settings["max_threads"] = c.maxThreads
 		ctx = context.WithValue(ctx, statementMaxThreadsKey{}, c.maxThreads)
 	}
+	settings := c.statementSettings(ctx)
 	var peak atomic.Uint64
 	driverOptions := []clickhousedriver.QueryOption{clickhousedriver.WithSettings(settings)}
 	if c.observer != nil || c.unobserved != nil {
@@ -156,6 +180,17 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 		return rows, err
 	}
 	return &memoryObservedRows{ClickHouseRowScanner: rows, ctx: ctx, statement: statement, client: c, peak: &peak}, nil
+}
+
+func (c memoryCappedQueryClient) statementSettings(ctx context.Context) clickhousedriver.Settings {
+	settings := clickhousedriver.Settings{"max_memory_usage": c.capBytes}
+	if c.maxThreads > 0 {
+		settings["max_threads"] = c.maxThreads
+	}
+	if reader, ok := StatementReaderFromContext(ctx); ok {
+		settings["log_comment"] = reader
+	}
+	return settings
 }
 
 func isMemoryLimitExceeded(err error) bool {

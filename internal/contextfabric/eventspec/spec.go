@@ -2494,6 +2494,8 @@ var FactReadFailed = Event{
 		// The Go type name of the error (%T), never its text.
 		{Key: "error_type", Type: FieldString, Presence: PresenceRequired},
 		{Key: "provider_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FactReadFailureClassVocabulary()},
+		// The numeric ClickHouse exception code (241 = the per-statement memory cap), never the exception text.
+		{Key: "clickhouse_code", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the failed read carries a ClickHouse exception code"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

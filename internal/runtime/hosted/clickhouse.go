@@ -5,11 +5,13 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -86,6 +88,14 @@ func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimecl
 	}
 }
 
+func apiCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
+	return []contextpacket.MemoryCapOption{
+		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(logger, metrics.ClickHouseNearMemoryCap)),
+		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(logger, metrics.ClickHousePeakUnobserved)),
+		contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads),
+	}
+}
+
 func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHouseComponents, error) {
 	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(request.config.ClickHouseCACertPath)
 	if err != nil {
@@ -95,9 +105,7 @@ func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHous
 	if err != nil {
 		return clickHouseComponents{}, err
 	}
-	capped := contextpacket.NewMemoryCappedQueryClient(client, contextpacket.APIStatementMaxMemoryUsage,
-		contextpacket.WithMemoryNearCapObserver(contextpacket.NewSlogMemoryNearCapObserver(request.logger, request.metrics.ClickHouseNearMemoryCap)),
-		contextpacket.WithMemoryPeakUnobservedObserver(contextpacket.NewSlogMemoryPeakUnobservedObserver(request.logger, request.metrics.ClickHousePeakUnobserved)))
+	capped := contextpacket.NewMemoryCappedQueryClient(client, contextpacket.APIStatementMaxMemoryUsage, apiCapOptions(request.logger, request.metrics)...)
 	fail := func(cause error) (clickHouseComponents, error) {
 		return clickHouseComponents{}, errors.Join(cause, client.Close())
 	}

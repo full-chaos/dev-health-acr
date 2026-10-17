@@ -163,3 +163,12 @@ func TestReadStatsInstrumentationNamesTheClickHouseCodeOfAFailedStatement(t *tes
 		}
 	}
 }
+
+func TestReadStatsInstrumentationNamesTheReaderOnTheStatementContext(t *testing.T) {
+	instr := NewReadStatsInstrumentation(readers.NoopInstrumentation{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil)
+	ctx, finish := instr.StartQuery(context.Background(), "ReadTeamProjectReachedRepositories", true)
+	defer finish(nil)
+	if reader, ok := contextpacket.StatementReaderFromContext(ctx); !ok || reader != "ReadTeamProjectReachedRepositories" {
+		t.Fatalf("statement reader = %q, %v; want the reader name for log_comment", reader, ok)
+	}
+}

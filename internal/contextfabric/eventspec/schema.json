@@ -3717,6 +3717,12 @@
         ]
       },
       {
+        "key": "clickhouse_code",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the failed read carries a ClickHouse exception code"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
