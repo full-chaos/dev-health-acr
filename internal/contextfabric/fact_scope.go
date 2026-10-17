@@ -1163,10 +1163,11 @@ func (g FactScopeGap) ScopeExpansionUnavailable() bool {
 // for reuse, and validated; the derivation is the ENGINE's knowledge about
 // how a subject entered scope, not a property of the subject.
 type FactScopeDerivation struct {
-	Root   SubjectRef
-	Target SubjectRef
-	Policy FactScopePolicy
-	Basis  FactScopeBasis
+	Root     SubjectRef
+	Target   SubjectRef
+	Policy   FactScopePolicy
+	Basis    FactScopeBasis
+	LinkTier string
 }
 
 // FactReadScope is the resolver's whole output: what may be read, why, and
@@ -1473,6 +1474,7 @@ type FactScopeExpansionResult struct {
 	// truncation detection (Limit+1) or cross-origin duplicates can never
 	// inflate the count.
 	TargetAttributionSource map[string]string
+	TargetLinkTier          map[string]string
 	// TargetRoot is CHAOS-4260's addition: an OPTIONAL per-target override of
 	// the SPECIFIC origin subject a target was reached through, keyed by the
 	// SAME FactSubjectKey(target). Absent (nil, or a target missing from the
