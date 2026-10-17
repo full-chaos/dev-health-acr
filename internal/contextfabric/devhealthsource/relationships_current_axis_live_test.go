@@ -139,7 +139,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		{linWip, "native", repoSvc, prOpen},
 		{linOpen, "native", repoSvc, prOpen},
 		{ghDone, "native", repoSvc, prMerged},
-		{ghDone, "explicit_text", repoOther, prOtherNum},
+		{ghDone, "native", repoOther, prOtherNum}, // native: ghDone has a native link, so a lower-tier one is never written
 		{linEarly, "native", repoSvc, prLate},
 	} {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

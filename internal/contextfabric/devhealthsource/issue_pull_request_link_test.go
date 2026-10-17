@@ -53,7 +53,15 @@ func issuePullRequestLinkRow(workItemID, rowRepoID string, number uint32, proven
 	}
 	return []any{workItemID, rowRepoID, number, provenance, at,
 		issueResolved, issue.repoID, issue.itemType, issue.created, uint8(0), zeroTime,
-		prExists, pr.slug, pr.created, uint8(0), zeroTime}
+		prExists, pr.slug, pr.created, uint8(0), zeroTime, uint8(0)}
+}
+
+// outrankedLinkRow is issuePullRequestLinkRow for a row the statement marks as
+// covered by a native row of the organization.
+func outrankedLinkRow(workItemID, rowRepoID string, number uint32, provenance string, at time.Time, issue linkIssue, pr linkPullRequest) []any {
+	row := issuePullRequestLinkRow(workItemID, rowRepoID, number, provenance, at, issue, pr)
+	row[len(row)-1] = uint8(1)
+	return row
 }
 
 func linkTablesOnly(at time.Time, rows [][]any) []fakeTable {
@@ -252,7 +260,8 @@ func TestIssuePullRequestLinkIssueEndUsesTheIssuesOwnRepo(t *testing.T) {
 
 // TestIssuePullRequestLinkSkipsAreCountedByReason pins every skip: an
 // unresolved work item, a pull-request-typed work item (pr and merge_request),
-// a missing pull request node and an unknown provenance project nothing and
+// a missing pull request node, an unknown provenance and a lower-tier row a
+// native row covers (explicit_text and heuristic) project nothing and
 // are counted under their own reason, beside one good row that still projects.
 func TestIssuePullRequestLinkSkipsAreCountedByReason(t *testing.T) {
 	t.Parallel()
@@ -268,6 +277,8 @@ func TestIssuePullRequestLinkSkipsAreCountedByReason(t *testing.T) {
 		issuePullRequestLinkRow("gh:acme/widget#5", repo, 5, "native", at.Add(4*time.Second), issue, linkPullRequest{missing: true}),
 		issuePullRequestLinkRow("gh:acme/widget#6", repo, 6, "guess", at.Add(5*time.Second), issue, pr),
 		issuePullRequestLinkRow("gh:acme/widget#7", repo, 7, "NATIVE", at.Add(6*time.Second), issue, pr),
+		outrankedLinkRow("gh:acme/widget#8", repo, 8, "explicit_text", at.Add(7*time.Second), issue, pr),
+		outrankedLinkRow("gh:acme/widget#9", repo, 9, "heuristic", at.Add(8*time.Second), issue, pr),
 	}
 	links, counts := linkRun(t, linkTablesOnly(at, rows), linkCursor(t, at))
 	if len(links) != 1 || links[0].To.CanonicalID != "pull_request:"+repo+":1" {
@@ -278,6 +289,7 @@ func TestIssuePullRequestLinkSkipsAreCountedByReason(t *testing.T) {
 		"issue_pull_request_link:pull_request_typed_work_item": 2,
 		"issue_pull_request_link:missing_pull_request_node":    1,
 		"issue_pull_request_link:unknown_provenance":           2,
+		"issue_pull_request_link:outranked_by_native":          2,
 	}
 	for reason, n := range want {
 		if counts[reason] != n {
@@ -345,5 +357,49 @@ func TestIssuePullRequestLinkOnlyPageAdvancesPastSkippedRows(t *testing.T) {
 	}
 	if _, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint); err != nil || !ok {
 		t.Fatalf("consumed progress ok=%v err=%v: the checkpoint cannot advance past skipped rows", ok, err)
+	}
+}
+
+// TestNativeRowsTheProducerCannotProjectNameTheirCoveredEndOncePerPage pins
+// the outranked-link tombstones: a native row whose pull request node is
+// missing names its issue, one whose issue is not a work item names its pull
+// request, a lower tier names nothing, and an end two rows of one page cover is
+// named once (a second tombstone would be a duplicate the batch drops at Warn).
+func TestNativeRowsTheProducerCannotProjectNameTheirCoveredEndOncePerPage(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	const repo = "11111111-1111-1111-1111-111111111111"
+	issue := linkIssue{repoID: repo, itemType: "issue", created: at}
+	pr := linkPullRequest{slug: "acme/widget", created: at}
+	rows := [][]any{
+		issuePullRequestLinkRow("gh:acme/widget#1", repo, 101, "native", at.Add(1*time.Second), issue, linkPullRequest{missing: true}),
+		issuePullRequestLinkRow("gh:acme/widget#1", repo, 102, "native", at.Add(2*time.Second), issue, linkPullRequest{missing: true}),
+		issuePullRequestLinkRow("gh:acme/widget#2", repo, 103, "heuristic", at.Add(3*time.Second), issue, linkPullRequest{missing: true}),
+		issuePullRequestLinkRow("linear:GHOST-1", repo, 7, "native", at.Add(4*time.Second), linkIssue{missing: true}, pr),
+	}
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: linkTablesOnly(at, rows)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	batch, ok, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: linkCursor(t, at)})
+	if err != nil || !ok {
+		t.Fatalf("batch: ok=%v err=%v", ok, err)
+	}
+	issueID, _, err := identity.Derive(identity.KindWorkItem, []string{repo, "gh:acme/widget#1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tombstone := range batch.Tombstones {
+		got = append(got, tombstone.Kind+"|"+tombstone.CanonicalID)
+	}
+	want := []string{contextfabric.TombstoneKindOutrankedIssueLinks + "|" + issueID, contextfabric.TombstoneKindOutrankedPullRequestLinks + "|pull_request:" + repo + ":7"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("tombstones = %v, want %v", got, want)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("the page logged at Warn: %s", buf.String())
 	}
 }

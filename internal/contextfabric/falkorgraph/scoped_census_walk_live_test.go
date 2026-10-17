@@ -240,12 +240,13 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 		s.repoIDs[r.slug] = scopedUUID("repo " + r.slug)
 		exec("repo "+r.slug, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, s.repoIDs[r.slug], s.orgID, r.slug, r.provider, now)
 	}
-	// Pull requests and merge requests: two of acme/svc, one of acme/other,
-	// one merge request of acme/gl.
+	// Pull requests and merge requests: three of acme/svc, one of acme/other,
+	// one merge request of acme/gl. acme/svc#3 has no native link: explicit_text
+	// and heuristic links are a fallback only, so the lower-tier links target it.
 	pulls := []struct {
 		slug   string
 		number uint32
-	}{{"acme/svc", 1}, {"acme/svc", 2}, {"acme/other", 1}, {"acme/gl", 1}}
+	}{{"acme/svc", 1}, {"acme/svc", 2}, {"acme/svc", 3}, {"acme/other", 1}, {"acme/gl", 1}}
 	for _, p := range pulls {
 		exec(fmt.Sprintf("pull request %s#%d", p.slug, p.number), `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			s.repoIDs[p.slug], s.orgID, p.number, fmt.Sprintf("Change %d", p.number), "merged", created, now)
@@ -292,12 +293,12 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 	}{
 		{"linear:CHAOS-10", "acme/svc", 1, "native"},
 		{"jira:CHAOS-11", "acme/gl", 1, "native"},
-		{"linear:CHAOS-12", "acme/svc", 2, "explicit_text"},
+		{"linear:CHAOS-12", "acme/svc", 3, "explicit_text"},
 		{"jira:CHAOS-13", "acme/other", 1, "native"},
 		{"linear:CHAOS-14", "acme/svc", 1, "native"},
 		{"jira:CHAOS-14", "acme/svc", 2, "native"},
 		{"gh:acme/other#5", "acme/svc", 1, "native"},
-		{"gh:acme/svc#6", "acme/svc", 2, "heuristic"},
+		{"gh:acme/svc#6", "acme/svc", 3, "heuristic"},
 	}
 	for i, l := range links {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

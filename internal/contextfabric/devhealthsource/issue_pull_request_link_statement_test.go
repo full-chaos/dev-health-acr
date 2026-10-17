@@ -28,6 +28,9 @@ func TestIssuePullRequestLinkStatementShape(t *testing.T) {
 		"LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id",
 		"toString(w.repo_id)",
 		"WHERE l.org_id = {org_id:String}",
+		// The fallback-only cover: a lower-tier row whose issue or pull
+		// request has a native row anywhere in the organization.
+		"toUInt8(l.provenance != 'native' AND (l.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native') OR (l.repo_id, l.pr_number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND provenance = 'native')))",
 	} {
 		if !strings.Contains(statement, fragment) {
 			t.Errorf("statement lacks %q:\n%s", fragment, statement)

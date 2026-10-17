@@ -34,7 +34,8 @@ func (h *heldVersionCheckpoint) CompareAndSwapProjectionCheckpoint(_ context.Con
 }
 
 // An organization already projected under the previous source version holds
-// stale PART_OF edges no incremental read removes: the worker must refuse its
+// stale PART_OF edges (v15) and outranked lower-tier LINKS_PULL_REQUEST edges
+// (v16) no incremental read removes: the worker must refuse its
 // held checkpoint and demand a rebuild, and must not apply a batch first.
 func TestACheckpointFromThePreviousSourceVersionDemandsARebuild(t *testing.T) {
 	t.Parallel()
@@ -51,7 +52,8 @@ func TestACheckpointFromThePreviousSourceVersionDemandsARebuild(t *testing.T) {
 		name, held string
 		want       bool
 	}{
-		{"the previous version", "devhealthsource.clickhouse.v14", true},
+		{"the previous version", "devhealthsource.clickhouse.v15", true},
+		{"an older version", "devhealthsource.clickhouse.v14", true},
 		{"the current version", devhealthsource.ClickHouseSourceVersion, false},
 	} {
 		backend := &versionCountingBackend{}

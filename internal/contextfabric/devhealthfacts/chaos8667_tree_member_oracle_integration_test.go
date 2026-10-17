@@ -293,12 +293,15 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	} {
 		exec("repo "+r.key, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoIDs[r.key], oracleOrg, r.slug, r.provider, now)
 	}
-	// Pull requests: two of acme/svc (the anchor), one of acme/other.
+	// Pull requests: three of acme/svc (the anchor), one of acme/other.
+	// acme/svc#3 has no native link: explicit_text and heuristic links are a
+	// fallback only (a pull request or an issue with a native link gets no
+	// lower-tier link), so every lower-tier link of the seed targets it.
 	type pull struct {
 		repo   string
 		number uint32
 	}
-	pulls := []pull{{"svc", 1}, {"svc", 2}, {"other", 1}}
+	pulls := []pull{{"svc", 1}, {"svc", 2}, {"svc", 3}, {"other", 1}}
 	for _, p := range pulls {
 		exec(fmt.Sprintf("pull request %s#%d", p.repo, p.number), `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			repoIDs[p.repo], oracleOrg, p.number, fmt.Sprintf("PR %d", p.number), "open", created, now)
@@ -338,15 +341,15 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	}
 	links := []oracleLink{
 		{"gh:acme/svc#1", "svc", 1, "native"},
-		{"gh:acme/svc#2", "svc", 2, "heuristic"},
-		{"gh:acme/svc#8", "svc", 2, "explicit_text"},
+		{"gh:acme/svc#2", "svc", 3, "heuristic"},
+		{"gh:acme/svc#8", "svc", 3, "explicit_text"},
 		{"gitlab:acme/gl-proj#3", "svc", 1, "native"},
 		{"linear:CHAOS-10", "svc", 1, "native"},
 		{"jira:PROJ-11", "svc", 2, "native"},
-		{"linear:CHAOS-12", "svc", 1, "explicit_text"},
-		{"jira:PROJ-13", "svc", 2, "heuristic"},
+		{"linear:CHAOS-12", "svc", 3, "explicit_text"},
+		{"jira:PROJ-13", "svc", 3, "heuristic"},
 		{"gh:acme/other#4", "svc", 1, "native"},
-		{"linear:CHAOS-14", "svc", 1, "explicit_text"},
+		{"linear:CHAOS-14", "svc", 3, "explicit_text"},
 		{"gh:acme/svc#6", "svc", 1, "native"},
 		{"linear:GHOST-1", "svc", 1, "native"}, // no work item row
 		{"gh:acme/other#9", "other", 1, "native"},

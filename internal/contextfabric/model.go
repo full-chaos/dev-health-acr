@@ -352,6 +352,19 @@ const TombstoneKindColumnProjectEdges = "column_project_edges"
 // work item has no parent now, or its parent id names none or several.
 const TombstoneKindPartOfEdges = "part_of_edges"
 
+// TombstoneKindOutrankedIssueLinks retracts every explicit_text and heuristic
+// LINKS_PULL_REQUEST edge that leaves one issue (CanonicalID = the work item's
+// canonical id): the issue has a native link the producer cannot project (its
+// pull request node is missing). A projected native edge retracts them itself.
+const TombstoneKindOutrankedIssueLinks = "outranked_issue_links"
+
+// TombstoneKindOutrankedPullRequestLinks retracts every explicit_text and
+// heuristic LINKS_PULL_REQUEST edge that enters one pull request (CanonicalID =
+// the pull request's canonical id): the pull request has a native link the
+// producer cannot project (its issue is not a work item, or is a pull request
+// item).
+const TombstoneKindOutrankedPullRequestLinks = "outranked_pull_request_links"
+
 type ProjectionReceipt = contractsv1.ContextFabricProjectionReceipt
 type ProjectionWatermark = contractsv1.ContextFabricProjectionWatermark
 type ProjectionCheckpoint = contractsv1.ContextFabricProjectionCheckpoint

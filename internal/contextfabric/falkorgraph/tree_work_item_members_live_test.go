@@ -95,6 +95,9 @@ func newLiveMemberFixture(orgID string, observed time.Time, extra func(add func(
 // own-repository issues of two hosts and repository-less issues of two
 // trackers, linked natively to a pull request of each host; plus the tier
 // cases and the issue linked only to a pull request of another repository.
+// The tier cases have no native link: explicit_text and heuristic links are a
+// fallback only, and the projection retracts a lower-tier link of an issue or
+// a pull request with a native one (retractOutrankedLinks).
 func liveMemberLinks() []liveMemberLink {
 	var links []liveMemberLink
 	for _, issue := range []struct{ id, repository string }{
@@ -105,7 +108,7 @@ func liveMemberLinks() []liveMemberLink {
 		}
 	}
 	return append(links,
-		liveMemberLink{issue: "work_item.v2:a:both", issueRepository: memberAnchorSlug, pullRequest: "pull_request:t:1", slug: memberAnchorSlug, tier: "native"},
+		liveMemberLink{issue: "work_item.v2:a:both", issueRepository: memberAnchorSlug, pullRequest: "pull_request:t:3", slug: memberAnchorSlug, tier: "explicit_text"},
 		liveMemberLink{issue: "work_item.v2:a:both", issueRepository: memberAnchorSlug, pullRequest: "pull_request:t:2", slug: memberAnchorSlug, tier: "heuristic"},
 		liveMemberLink{issue: "work_item.v2:a:text", issueRepository: memberAnchorSlug, pullRequest: "pull_request:t:1", slug: memberAnchorSlug, tier: "explicit_text"},
 		liveMemberLink{issue: "work_item.v2:a:weak", issueRepository: memberAnchorSlug, pullRequest: "pull_request:t:2", slug: memberAnchorSlug, tier: "heuristic"},
@@ -172,7 +175,7 @@ func TestLiveRepositoryWorkItemsAreTheIssuesLinkedToItsPullRequests(t *testing.T
 	got := memberTiers(open)
 	for _, line := range []string{
 		memberGithubIssue + "=native", memberGitlabIssue + "=native", memberLinearIssue + "=native", memberJiraIssue + "=native",
-		"work_item.v2:a:both=native", "work_item.v2:a:text=explicit_text", "work_item.v2:a:weak=heuristic", "work_item.v2:a:text-less=explicit_text",
+		"work_item.v2:a:both=explicit_text", "work_item.v2:a:text=explicit_text", "work_item.v2:a:weak=heuristic", "work_item.v2:a:text-less=explicit_text",
 	} {
 		if !strings.Contains(got, line) {
 			t.Errorf("unrestricted members %s lack %s", got, line)

@@ -44,10 +44,14 @@ func TestLinkAdmittedWorkItemsHaveTheirOwnFactsReadUnderTheGrantsOnRealStores(t 
 		exec("pull request "+slug, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			repoIDs[slug], oracleOrg, uint32(1), "Change", "merged", created, now)
 	}
+	// acme/svc#2 has no native link: a text link is a fallback only, so it
+	// targets a pull request no native link covers.
+	exec("pull request acme/svc#2", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		repoIDs["acme/svc"], oracleOrg, uint32(2), "Change", "merged", created, now)
 	items := []struct{ id, slug, provider, itemType, status string }{
 		{"linear:CHAOS-21", "", "linear", "issue", "In Progress"}, // repository-less, native to acme/svc#1 and to acme/secret#1
 		{"linear:CHAOS-22", "", "linear", "issue", "Todo"},        // repository-less, native to acme/out#1 only
-		{"gh:acme/out#5", "acme/out", "github", "issue", "open"},  // own repository acme/out, linked by text to acme/svc#1
+		{"gh:acme/out#5", "acme/out", "github", "issue", "open"},  // own repository acme/out, linked by text to acme/svc#2
 	}
 	itemRepo := map[string]string{}
 	for _, i := range items {
@@ -59,14 +63,18 @@ func TestLinkAdmittedWorkItemsHaveTheirOwnFactsReadUnderTheGrantsOnRealStores(t 
 		exec("work item "+i.id, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, project_id, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			i.id, repoID, oracleOrg, "Title of "+i.id, i.itemType, i.status, i.provider, "", created, now, now)
 	}
-	for n, l := range []struct{ issue, slug, tier string }{
-		{"linear:CHAOS-21", "acme/svc", "native"},
-		{"linear:CHAOS-21", "acme/secret", "native"},
-		{"linear:CHAOS-22", "acme/out", "native"},
-		{"gh:acme/out#5", "acme/svc", "explicit_text"},
+	for n, l := range []struct {
+		issue, slug string
+		number      uint32
+		tier        string
+	}{
+		{"linear:CHAOS-21", "acme/svc", 1, "native"},
+		{"linear:CHAOS-21", "acme/secret", 1, "native"},
+		{"linear:CHAOS-22", "acme/out", 1, "native"},
+		{"gh:acme/out#5", "acme/svc", 2, "explicit_text"},
 	} {
 		exec(fmt.Sprintf("link %d", n), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			repoIDs[l.slug], l.issue, uint32(1), float32(0.9), l.tier, "", now, oracleOrg)
+			repoIDs[l.slug], l.issue, l.number, float32(0.9), l.tier, "", now, oracleOrg)
 	}
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
