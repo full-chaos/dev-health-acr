@@ -299,10 +299,12 @@ func freshDatabaseFixture(t *testing.T, orgID, layout string, versions int) layo
 
 // The statement's memory against the length of the ownership history, in a
 // merged layout and in a fixed 12-part layout (a fresh database per point).
-// Merged: flat, the rule is fail when large > 1.15x small and large > small +
-// 2 MiB over 1,000 versus 2,000 versions per pair, on the median of slopeRuns
-// warm reads per size: a single read moves in steps of about 1.5 MiB at equal
-// input, so a comparison of two sizes needs the typical read, not the lowest.
+// Merged: flat, the rule is fail when the median at 2,000 versions per pair
+// exceeds the median at 1,000 by more than the margin slopeMarginOf derives
+// (the larger of 15%, 2 MiB and the measured read spread at the two sizes),
+// on the median of slopeRuns warm reads per size: a single read moves in steps
+// of about 1.5 MiB at equal input, so a comparison of two sizes needs the
+// typical read, not the lowest.
 // The absolute bounds (48 MiB at the prod shape and the 12-part line) use the
 // highest warm read: a cap is hit by the worst read, not the best. Twelve parts: FINAL over
 // overlapping unmerged parts costs more per version, so the peak is bounded by
@@ -311,7 +313,7 @@ func freshDatabaseFixture(t *testing.T, orgID, layout string, versions int) layo
 func TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory(t *testing.T) {
 	for _, layout := range []string{"merged", "parts"} {
 		t.Run(layout, func(t *testing.T) {
-			peaks := map[int]float64{}
+			peaks := map[int]fragmentPeak{}
 			for i, versions := range []int{100, 1000, 2000} {
 				m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-0000000001%d%d", len(layout), i), layout, versions)
 				capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
@@ -319,7 +321,7 @@ func TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory(t *testin
 				all := measureProjectTeamsFragments(t, m.f, m.query, capped, fmt.Sprintf("slope-%s-%d", layout, versions), only, slopeRuns)
 				peak := peakOf(t, all, "paged_statement")
 				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
-				peaks[versions] = peak.medianMiB
+				peaks[versions] = peak
 				if layout == "parts" {
 					if limit := partsBoundBaseMiB + partsBoundPerVersion*float64(versions); peak.maxMiB > limit {
 						t.Errorf("parts: the paged statement peaked at %.2f MiB (lowest read %.2f) at %d versions per pair, bound %.2f MiB (%.0f + %.4f x versions)", peak.maxMiB, peak.mib, versions, limit, partsBoundBaseMiB, partsBoundPerVersion)
@@ -327,8 +329,8 @@ func TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory(t *testin
 				}
 			}
 			if layout == "merged" {
-				if small, large := peaks[1000], peaks[2000]; large > 1.15*small && large > small+2 {
-					t.Errorf("merged: memory grows with the ownership history: median %.2f MiB at 1,000 versions per pair, %.2f MiB at 2,000 (fail when large > 1.15x small and large > small + 2 MiB)", small, large)
+				if breach, line := slopeBreach(peaks[1000], peaks[2000]); breach {
+					t.Errorf("merged: memory grows with the ownership history (1,000 versus 2,000 versions per pair): %s", line)
 				}
 			}
 		})

@@ -168,13 +168,13 @@ func TestARankedListIsCutByAttentionRankNotByPoolPosition(t *testing.T) {
 			InclusionReasons: []string{"owned"}, RankingComputed: true, AttentionRank: rank,
 		})
 	}
-	// project_005 (attention 4) is named by a finding and is never cut.
+	// project_005 (attention 4) is named by a finding and is cut last.
 	result := InvestigationResult{
 		Cohort:        &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention},
 		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
 	}
 	basis, ok := memberCutBasis(result.Cohort)
-	order := memberCutOrder(result.Cohort, basis, result)
+	order, _ := memberCutOrder(result.Cohort, basis, result)
 	if !ok || basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
 		t.Fatalf("basis %q ok=%v, want attention_rank", basis, ok)
 	}
@@ -279,12 +279,12 @@ func TestAnUnrankedSortedListIsOrderedFromTheEnd(t *testing.T) {
 		ReadinessGaps: []Finding{{FindingID: "finding_gap_00", Kind: "relationship", Summary: "A gap.", Subjects: []SubjectRef{members[5].Subject}, EvidenceRefIDs: []string{"evidence_gap_01"}}},
 	}
 	basis, ok := memberCutBasis(result.Cohort)
-	order := memberCutOrder(result.Cohort, basis, result)
+	order, _ := memberCutOrder(result.Cohort, basis, result)
 	if !ok || basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Fatalf("basis %q ok=%v, want canonical_id_lexical", basis, ok)
 	}
-	if got := fmt.Sprint(order[:2]); got != fmt.Sprint([]int{4, 3}) {
-		t.Fatalf("order %v, want [4 3] (the cited member 5 is not cuttable)", order[:2])
+	if got := fmt.Sprint(order); got != fmt.Sprint([]int{4, 3, 2, 1, 0, 5}) {
+		t.Fatalf("order %v, want [4 3 2 1 0 5] (the cited member 5 is cut last)", order)
 	}
 }
 
@@ -307,7 +307,7 @@ func TestTheMemberCutKeepComesFromTheMeasuredOverrun(t *testing.T) {
 	}{
 		{"measured_with_margin", 50, 0, 71, 66, 41, 9, MemberCutKeepMeasured},
 		{"large_overrun", 50, 0, 132, 66, 20, 30, MemberCutKeepMeasured},
-		{"named_members_raise_keep", 50, 45, 71, 66, 45, 9, MemberCutKeepMeasured},
+		{"protected_members_raise_keep", 50, 45, 71, 66, 45, 9, MemberCutKeepMeasured},
 		{"keeps_one", 4, 0, 400, 66, 1, 5, MemberCutKeepMeasured},
 		{"no_ceiling_falls_back_to_half", 50, 0, 71, 0, 25, 25, MemberCutKeepHalf},
 		{"no_overrun_falls_back_to_half", 50, 0, 60, 66, 25, 25, MemberCutKeepHalf},
@@ -331,7 +331,7 @@ func TestTheTopAttentionMemberSurvivesEveryCut(t *testing.T) {
 		})
 	}
 	cohort := &Cohort{Kind: SubjectProject, Members: members, Rationale: "owned", Complete: true, ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention}
-	order := memberCutOrder(cohort, contractsv1.ContextFabricNarrowingBasisAttentionRank, InvestigationResult{Cohort: cohort})
+	order, _ := memberCutOrder(cohort, contractsv1.ContextFabricNarrowingBasisAttentionRank, InvestigationResult{Cohort: cohort})
 	if len(order) != len(members)-1 {
 		t.Fatalf("order = %v, want every member but the top-ranked", order)
 	}

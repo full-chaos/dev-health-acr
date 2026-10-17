@@ -552,7 +552,8 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		}
 		firstPass.discardObservationCoverFrom(mark)
 		// MEMBER CUT: the retry is the only other lever that removes members
-		// and it did not run. The cut keeps every member the answer names and
+		// and it did not run. The cut removes the members the answer does not
+		// name first, then the ones it does (the top-ranked member never), and
 		// synthesizes the answer ONCE more over the cut cohort, through the
 		// path the first pass took, in the retry tail below. It does not run
 		// when an items cut already left a document over bytes only.

@@ -19,7 +19,7 @@ import (
 func TestBlockersProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -55,8 +55,8 @@ func TestDependencyCounterpartRefOnlyWhenOneRepository(t *testing.T) {
 		row   []any
 		field string
 	}{
-		{"blocker in two repositories", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(2)}, "blocked_by_work_item_ref"},
-		{"blocker unmatched", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "", uint64(0)}, "blocked_by_work_item_ref"},
+		{"blocker in two repositories", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(2), uint8(1)}, "blocked_by_work_item_ref"},
+		{"blocker unmatched", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "", uint64(0), uint8(1)}, "blocked_by_work_item_ref"},
 		{"child in two repositories", contextfabric.FactRequiredChildren, []any{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(2)}, "required_child_work_item_ref"},
 		{"child unmatched", contextfabric.FactRequiredChildren, []any{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "", uint64(0)}, "required_child_work_item_ref"},
 	} {
@@ -197,7 +197,7 @@ const maxFactRowsPerQueryForTest = 200
 func blockerRows(n int) [][]any {
 	rows := make([][]any, n)
 	for i := 0; i < n; i++ {
-		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1)}
+		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1), uint8(1)}
 	}
 	return rows
 }
@@ -377,9 +377,9 @@ func TestBlockersProviderDedupesCaseVariantRows(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM work_item_dependencies", rows: [][]any{
-			{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
-			{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
-			{"WIDGET-300", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)},
+			{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)},
+			{"WIDGET-300", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)},
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
@@ -475,7 +475,7 @@ func blockerFactsFor(t *testing.T, rows [][]any) []contextfabric.CanonicalFact {
 func TestBlockersProviderServesInverseSpellingRow(t *testing.T) {
 	t.Parallel()
 	for _, spelling := range []string{"blocked_by", "IS_BLOCKED_BY", " Blocked_By\t"} {
-		facts := blockerFactsFor(t, [][]any{{"WIDGET-101", "WIDGET-200", spelling, "repo-1", "repo-9", uint64(1)}})
+		facts := blockerFactsFor(t, [][]any{{"WIDGET-101", "WIDGET-200", spelling, "repo-1", "repo-9", uint64(1), uint8(1)}})
 		if len(facts) != 1 {
 			t.Fatalf("%q: facts = %d, want 1", spelling, len(facts))
 		}
@@ -493,8 +493,8 @@ func TestBlockersProviderServesInverseSpellingRow(t *testing.T) {
 func TestBlockersProviderCollapsesForwardAndInverseTwins(t *testing.T) {
 	t.Parallel()
 	facts := blockerFactsFor(t, [][]any{
-		{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1)},
-		{"WIDGET-101", "WIDGET-200", "blocked_by", "repo-1", "repo-9", uint64(1)},
+		{"WIDGET-200", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)},
+		{"WIDGET-101", "WIDGET-200", "blocked_by", "repo-1", "repo-9", uint64(1), uint8(1)},
 	})
 	if len(facts) != 1 {
 		t.Fatalf("facts = %d, want 1 (one pair blocks once)", len(facts))
@@ -523,5 +523,42 @@ func TestBlockerStatementsSelectEverySpellingAndNeverDoubleCount(t *testing.T) {
 	}
 	if !strings.Contains(children, "NOT ("+pred+")") {
 		t.Fatalf("required children statement does not exclude every blocker spelling:\n%s", children)
+	}
+}
+
+// The blocker's open flag rides on the row: 1 serves blocker_active true, 0
+// serves false, and an item with no work_items row serves no marker at all
+// (unknown is neither active nor excluded).
+func TestBlockersProviderServesTheActiveMarker(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		open uint8
+		want *bool
+	}{
+		{"open blocker", 1, ptrBool(true)},
+		{"done or canceled blocker", 0, ptrBool(false)},
+		{"blocker with no work item row", 2, nil},
+	} {
+		facts := blockerFactsFor(t, [][]any{{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), tc.open}})
+		if len(facts) != 1 {
+			t.Fatalf("%s: facts = %d, want 1", tc.name, len(facts))
+		}
+		got, served := facts[0].Fields["blocker_active"]
+		if tc.want == nil {
+			if served {
+				t.Errorf("%s: blocker_active = %+v, want it left out", tc.name, got)
+			}
+			if _, basis := facts[0].Fields["blocker_status_basis"]; basis {
+				t.Errorf("%s: blocker_status_basis served without a marker", tc.name)
+			}
+			continue
+		}
+		if got.Boolean == nil || *got.Boolean != *tc.want {
+			t.Errorf("%s: blocker_active = %+v, want %v", tc.name, got, *tc.want)
+		}
+		if basis := facts[0].Fields["blocker_status_basis"].String; basis == nil || *basis != "open" {
+			t.Errorf("%s: blocker_status_basis = %+v, want open", tc.name, facts[0].Fields["blocker_status_basis"])
+		}
 	}
 }
