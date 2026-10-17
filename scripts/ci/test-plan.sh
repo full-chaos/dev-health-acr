@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 # test-plan.sh exercises scripts/ci/plan.sh, scripts/ci/affected_packages.py,
 # the AFFECTED_PACKAGES filter of scripts/ci/test-shard.sh and the verify
