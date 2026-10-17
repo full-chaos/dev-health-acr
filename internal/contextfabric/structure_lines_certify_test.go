@@ -2,12 +2,14 @@ package contextfabric_test
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -261,5 +263,103 @@ func TestStructureReceiptVetoLineCertifiesEveryExitTheEngineWrites(t *testing.T)
 	contextfabric.RecordStructureVetoDetailForTest(ctx, sink, principalOrg1, contextfabric.StructureVetoDetailsForTest()[0])
 	if !strings.Contains(buf.String(), `"level":"WARN"`) {
 		t.Fatalf("the veto line is not a Warn line: %s", buf.String())
+	}
+}
+
+// TestEveryStructureLineCertifiesWithoutARequestID emits each of the ten lines
+// through the real sink under a context that carries no request id, and
+// requires the line to certify when the assertion states the id is absent,
+// and to be unmatched by the same assertion when the line carries an id.
+func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
+	t.Parallel()
+	engine := contractsv1.ContextFabricStructureOfferEngine
+	cases := []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.StructureNeedsDisclosed, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordStructureNeedsDisclosed(c, principalOrg1, contractsv1.ContextFabricStructureNeedWindow)
+		}},
+		{eventspec.GatedOfferResolution, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordGatedOfferResolution(c, principalOrg1, contextfabric.GatedOfferResolutionComposed)
+		}},
+		{eventspec.CohortStructureGate, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordCohortStructureGate(c, principalOrg1, contextfabric.CohortStructureGateApplied, contractsv1.ContextFabricShapeOpen)
+		}},
+		{eventspec.WindowGateOfferDisclosure, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordWindowGateOfferDisclosure(c, principalOrg1, true)
+		}},
+		{eventspec.WindowExpandOfferRedeemed, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordWindowExpandOfferRedeemed(c, principalOrg1)
+		}},
+		{eventspec.InterpretedTimeBound, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordInterpretedTimeBound(c, principalOrg1, contextfabric.InterpretedTimeBoundDecision{Axis: "current", Outcome: contextfabric.InterpretedTimeBoundOK})
+		}},
+		{eventspec.StructureOfferCount, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordStructureOfferCount(c, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, engine, 2)
+		}},
+		{eventspec.StructureReceipt, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordStructureReceipt(c, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, contextfabric.StructureReceiptApplied)
+		}},
+		{eventspec.StructureReceiptVeto, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			contextfabric.RecordStructureVetoDetailForTest(c, s, principalOrg1, contextfabric.StructureVetoDetailsForTest()[0])
+		}},
+		{eventspec.StructureExplicit, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordStructureExplicit(c, principalOrg1, contractsv1.ContextFabricStructureNeedExpectedKind, contextfabric.StructureExplicitApplied)
+		}},
+	}
+	if len(cases) != 10 {
+		t.Fatalf("want one case per declared line, have %d", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.event.ID, func(t *testing.T) {
+			var without, with bytes.Buffer
+			sink, _ := answerLineSink(&without, slog.LevelInfo)
+			tc.emit(sink, context.Background())
+			if strings.Contains(without.String(), "request_id") {
+				t.Fatalf("a context without a request id wrote one: %s", without.String())
+			}
+			log, err := certify.Parse(without.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := certify.Certify(log, certify.Assertion{Event: tc.event, NoAttribution: []string{"request_id"}}); err != nil {
+				t.Fatalf("the line written without a request id was refused: %v\n%s", err, without.String())
+			}
+			if _, err := certify.Certify(log, certify.Assertion{Event: tc.event, Want: map[string]any{"request_id": factScopeCertifyRequestID}}); err == nil {
+				t.Fatalf("a line without a request id certified as the line of request %s", factScopeCertifyRequestID)
+			}
+			sinkWith, ctx := answerLineSink(&with, slog.LevelInfo)
+			tc.emit(sinkWith, ctx)
+			logWith, err := certify.Parse(with.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := certify.Certify(logWith, certify.Assertion{Event: tc.event, NoAttribution: []string{"request_id"}}); err == nil {
+				t.Fatalf("a line carrying a request id certified as the line without one: %s", with.String())
+			}
+			if _, err := certify.Certify(logWith, certify.Assertion{Event: tc.event, Want: map[string]any{"request_id": factScopeCertifyRequestID}, NoAttribution: []string{"request_id"}}); err == nil {
+				t.Fatal("an assertion naming the request id both present and absent was accepted")
+			}
+			if _, err := certify.Certify(logWith, certify.Assertion{Event: tc.event, Want: map[string]any{"request_id": factScopeCertifyRequestID}}); err != nil {
+				t.Fatalf("the line carrying a request id was refused: %v", err)
+			}
+		})
+	}
+}
+
+func TestNoAttributionRefusesAKeyThatIsNotAConditionalAttributionField(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordStructureReceipt(ctx, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, contextfabric.StructureReceiptApplied)
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"org_id", "member", "undeclared"} {
+		if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.StructureReceipt, Want: map[string]any{"request_id": factScopeCertifyRequestID}, NoAttribution: []string{key}}); err == nil {
+			t.Errorf("NoAttribution %q was accepted", key)
+		}
 	}
 }
