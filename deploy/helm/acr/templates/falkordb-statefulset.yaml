@@ -89,32 +89,33 @@ spec:
           # (verified necessary -- PING succeeding is not sufficient, see
           # docs/design/context-fabric-falkordb-adapter.md). Same vocabulary
           # as the compose service healthcheck.
+          # -e makes redis-cli exit non-zero on an error reply. Without it a
+          # LOADING reply exits 0, so these probes passed while a dump was
+          # still loading and handed the pod to liveness mid-load.
           readinessProbe:
             exec:
-              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+              command: ["redis-cli", "-e", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
-          # Loading a large dump and building its indexes blocks the server
-          # for minutes; the startup window (120 x 5 s = 10 min) covers it so
-          # liveness never kills a load in progress.
+          # The startup window (180 x 10 s = 30 min) covers loading a
+          # multi-GiB dump and building its indexes; liveness starts only
+          # after the graph answers.
           startupProbe:
             exec:
-              command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
-            periodSeconds: 5
+              command: ["redis-cli", "-e", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
+            periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 120
+            failureThreshold: 180
           # Liveness only needs the server process to answer; a restart on a
-          # missing graph module would loop without fixing anything. The
-          # startup probe can pass before the dump load and index build end,
-          # and loading a multi-GiB dump blocks PING for more than 5 min, so
-          # liveness allows 360 misses of 10 s each (1 h) before a restart.
+          # missing graph module would loop without fixing anything. It runs
+          # only after a finished load, so a modest tolerance is enough.
           livenessProbe:
             exec:
               command: ["redis-cli", "PING"]
             periodSeconds: 10
             timeoutSeconds: 10
-            failureThreshold: 360
+            failureThreshold: 6
           resources:
             {{- toYaml $falkordb.resources | nindent 12 }}
           volumeMounts:

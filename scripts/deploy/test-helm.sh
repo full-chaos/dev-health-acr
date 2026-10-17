@@ -683,10 +683,21 @@ falkordb_probe() { # $1 probe name, $2 field -> its value in the StatefulSet ren
     inprobe && $1 == field { print $2; exit }
   ' <<<"$falkordb_sts"
 }
-[[ "$(falkordb_probe startupProbe failureThreshold)" == "120" && "$(falkordb_probe startupProbe periodSeconds)" == "5" ]] \
-  || fail_gate "falkordb-workload: startupProbe must allow a 10 min load (failureThreshold 120 x periodSeconds 5)"
-[[ "$(falkordb_probe livenessProbe timeoutSeconds)" == "10" && "$(falkordb_probe livenessProbe periodSeconds)" == "10" && "$(falkordb_probe livenessProbe failureThreshold)" == "360" ]] \
-  || fail_gate "falkordb-workload: livenessProbe must tolerate a dump load and index build (timeoutSeconds 10, periodSeconds 10, failureThreshold 360)"
+falkordb_probe_command() { # $1 probe name -> its exec command line in the StatefulSet render
+  awk -v probe="$1:" '
+    $1 == probe { inprobe = 1; next }
+    inprobe && $1 ~ /Probe:$/ { inprobe = 0 }
+    inprobe && $1 == "command:" { sub(/^[[:space:]]*command:[[:space:]]*/, ""); print; exit }
+  ' <<<"$falkordb_sts"
+}
+for probe in startupProbe readinessProbe; do
+  [[ "$(falkordb_probe_command "$probe")" == '["redis-cli", "-e", "GRAPH.QUERY", "_acr_health", "RETURN 1"]' ]] \
+    || fail_gate "falkordb-workload: $probe must run redis-cli -e GRAPH.QUERY so an error reply (LOADING) fails it"
+done
+[[ "$(falkordb_probe startupProbe failureThreshold)" == "180" && "$(falkordb_probe startupProbe periodSeconds)" == "10" ]] \
+  || fail_gate "falkordb-workload: startupProbe must allow a 30 min load (failureThreshold 180 x periodSeconds 10)"
+[[ "$(falkordb_probe livenessProbe timeoutSeconds)" == "10" && "$(falkordb_probe livenessProbe periodSeconds)" == "10" && "$(falkordb_probe livenessProbe failureThreshold)" == "6" ]] \
+  || fail_gate "falkordb-workload: livenessProbe must be timeoutSeconds 10, periodSeconds 10, failureThreshold 6"
 grep -qE '^\s+mountPath: /var/lib/falkordb/data\s*$' <<<"$falkordb_sts" \
   || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
 grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_sts" \
