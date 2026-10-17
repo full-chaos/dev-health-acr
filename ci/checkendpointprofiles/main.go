@@ -58,14 +58,14 @@
 //     in, so a call under a condition that cannot hold is not caught. Generic
 //     function declarations are not supported as anchors (refused, fail closed).
 //     Still not proof (reachability is out of scope, CHAOS-4780):
-//     a row anchored at a SHARED definition (the ten rows marked by
-//     protectedRuntimeHandler's declaration, the six by
+//     a row anchored at a SHARED definition (the seven rows marked by
+//     protectedRuntimeHandler's declaration, the five by
 //     authenticateWebAssertion's) shows the definition exists, not that a
 //     given route uses it; and a route's OWN-call marker is located in the
 //     file, not bound to the route's handler builder, so moving that call to
 //     another function in the same file is not caught (CHAOS-7280).
 //   - Two rows whose primary_validator anchors point at the SAME source line
-//     (the model-config PUT/DELETE rows share one dispatch line) necessarily
+//     (two rows can share one dispatch line) necessarily
 //     share one marker too. If both anchors drift onto the same wrong line at
 //     once, the marker re-location cannot tell them apart: CHAOS-5652.
 //   - The inventory's declared source_commit and credential_class_source are

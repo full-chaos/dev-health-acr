@@ -569,14 +569,13 @@ var acrEnvIsolationAllowlist = map[string]bool{
 
 // clearAmbientACREnv unsets every ACR_-prefixed ambient env var NOT in
 // acrEnvIsolationAllowlist, restoring each on test cleanup. In particular
-// this guarantees ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS/
-// _ACTIVE_KID (modelconfigcrypto's BYO-LLM keys -- see buildOrgModelConfigStore)
-// are absent, so the per-organization model-config resolver
+// this guarantees the Dev Health entitlement client variables are absent,
+// so the per-organization model-config resolver
 // (wrapWithOrgModelRuntimeResolver) can never wrap a
 // ModelRuntimeOverride (arm 4) in an org's stored config: that resolver
-// is constructed as nil whenever modelconfigcrypto.Configured is false,
-// and returns the deployment-default runtime completely unchanged when
-// nil -- see its own doc comment. Belt-and-suspenders alongside the
+// is constructed as nil without the entitlement client, and returns the
+// deployment-default runtime completely unchanged when nil -- see its own
+// doc comment. Belt-and-suspenders alongside the
 // V1-confirmed-empty org_model_config table for 70d529e0.
 //
 // Also spares this harness's OWN ACR_TEST_TRIAL_* input namespace (a
@@ -742,18 +741,6 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set("ACR_EVIDENCE_ID_KEYS", "trial="+base64.StdEncoding.EncodeToString(key))
 	set("ACR_DEVICE_VERIFICATION_URL", "http://127.0.0.1/unused-trial-device-endpoint")
 
-	if modelOverridden {
-		// Belt-and-suspenders for arm 4 (fable-review finding): assert the
-		// BYO-LLM crypto keys are absent, so the org-config resolver is
-		// provably nil and cannot wrap ModelRuntimeOverride in a stored
-		// per-org config. clearAmbientACREnv already guarantees this; this
-		// is a loud, explicit check rather than trusting that silently.
-		for _, envVar := range []string{"ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS", "ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_ACTIVE_KID"} {
-			if v := os.Getenv(envVar); v != "" {
-				t.Fatalf("%s is set (%d bytes) with ModelRuntimeOverride active -- the org-config resolver would wrap the override in a stored per-org model config; clear it before running arm 4", envVar, len(v))
-			}
-		}
-	}
 }
 
 // contextFabricRejectionClass mirrors internal/api/context_fabric_routes.go's

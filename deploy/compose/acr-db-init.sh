@@ -262,7 +262,7 @@ GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_supersession_claims T
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_reuse_invalidations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_reuse_invalidations TO :"runtime_user";
 
--- SELECT internal/contextfabric/pgmodelconfig/store.go:138, INSERT and upsert store.go:95, DELETE store.go:195; generation draws from an explicit sequence
+-- no acr code reads or writes this table any more (BYO config lives in the ops settings store); the grant stays until the table drop
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_model_config FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_org_model_config TO :"runtime_user";
 GRANT USAGE ON SEQUENCE acr.context_fabric_org_model_config_generation_seq TO :"runtime_user";
