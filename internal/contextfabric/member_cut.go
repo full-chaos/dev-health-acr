@@ -18,6 +18,12 @@ import (
 // answer (no model call), the model when the model wrote it and the retry
 // gate admits a second call. Every field a synthesizer derives from its input
 // therefore describes the cut cohort.
+//
+// What the first answer cites or names is cut last, never protected outright:
+// the cut answer is synthesized again over the kept members, so the first
+// answer's citations bind nothing it serves, and a cut answer that still names
+// a removed member is refused (names_cut_member). A ranking cites every member
+// it ranks; protecting citations made every ranking uncuttable, and refused it.
 
 // MemberCutDeclined is the CLOSED vocabulary of why the member cut did not
 // serve an answer. Empty means it served.
@@ -41,8 +47,8 @@ const (
 	// MemberCutNoStatedOrder: the list carries no order the plan can state
 	// (neither attention rank nor canonical id order).
 	MemberCutNoStatedOrder MemberCutDeclined = "no_stated_order"
-	// MemberCutNothingCuttable: every member the cut would remove is named by
-	// the answer, or is the top-ranked member.
+	// MemberCutNothingCuttable: the keep left no member to cut (only the
+	// top-ranked member is never cut).
 	MemberCutNothingCuttable MemberCutDeclined = "nothing_cuttable"
 	// MemberCutNoSynthesisTime: the model wrote the first answer and the
 	// retry gate (deadline reserve, remaining deadline) admits no second
@@ -77,8 +83,10 @@ type memberCutAttempt struct {
 	Need     int
 	KeepBy   MemberCutKeepBasis
 	// Cut is the members the cut removed.
-	Cut     []SubjectRef
-	Listed  int
+	Cut    []SubjectRef
+	Listed int
+	// Uncited is how many listed members the first answer neither cites nor
+	// names: the members cut first.
 	Uncited int
 	Kept    int
 	Basis   contractsv1.ContextFabricNarrowingBasis
@@ -128,27 +136,38 @@ func memberCutBasis(cohort *Cohort) (contractsv1.ContextFabricNarrowingBasis, bo
 	return "", false
 }
 
-// memberCutOrder returns the members of cohort the answer does not name, worst
-// first: for a ranked list the highest AttentionRank first (a member ranking
-// did not run for counts as worst), as the Members array stays in pool order
-// and says nothing of attention; for an unranked list sorted by canonical id,
-// from the end of the list. A member the answer cites or its prose names is
-// never in the order (ruling 9324).
-func memberCutOrder(cohort *Cohort, basis contractsv1.ContextFabricNarrowingBasis, answer InvestigationResult) []int {
+// memberCutOrder returns every member of cohort but the top-ranked one, in
+// the order the cut takes them, and how many of them the answer neither cites
+// nor names. Those come first, then the members the answer cites or names; in
+// each, worst first: for a ranked list the highest AttentionRank first (a
+// member ranking did not run for counts as worst), as the Members array stays
+// in pool order and says nothing of attention; for an unranked list sorted by
+// canonical id, from the end of the list.
+func memberCutOrder(cohort *Cohort, basis contractsv1.ContextFabricNarrowingBasis, answer InvestigationResult) (order []int, uncited int) {
 	cited := walkListSubjectCited(answer)
 	prose := answerProse(answer)
 	top := -1
 	if basis == contractsv1.ContextFabricNarrowingBasisAttentionRank {
 		top = topAttentionIndex(cohort)
 	}
-	order := make([]int, 0, len(cohort.Members))
+	named := make(map[int]bool, len(cohort.Members))
+	order = make([]int, 0, len(cohort.Members))
 	for index, member := range cohort.Members {
-		if index != top && !cited[member.Subject.CanonicalID] && !namedInProse(member.Subject, prose) {
-			order = append(order, index)
+		if index == top {
+			continue
+		}
+		order = append(order, index)
+		if cited[member.Subject.CanonicalID] || namedInProse(member.Subject, prose) {
+			named[index] = true
+		} else {
+			uncited++
 		}
 	}
 	members := cohort.Members
 	sort.SliceStable(order, func(a, b int) bool {
+		if named[order[a]] != named[order[b]] {
+			return !named[order[a]]
+		}
 		left, right := members[order[a]], members[order[b]]
 		if basis == contractsv1.ContextFabricNarrowingBasisAttentionRank {
 			if left.RankingComputed != right.RankingComputed {
@@ -160,7 +179,7 @@ func memberCutOrder(cohort *Cohort, basis contractsv1.ContextFabricNarrowingBasi
 		}
 		return order[a] > order[b]
 	})
-	return order
+	return order, uncited
 }
 
 // topAttentionIndex is the member ranking put first (lowest AttentionRank among
@@ -253,8 +272,8 @@ func isWordByte(b byte) bool {
 // fits MaxItems, and a margin of a tenth of the list (at least one) covers the
 // per-member share being an average. When items per member cannot be measured
 // the retry's own half target applies. Never fewer than one member or than
-// every member the answer names. A fixed allocation, not a search: the cut is
-// synthesized once.
+// the protected members (the top-ranked one). A fixed allocation, not a
+// search: the cut is synthesized once.
 func memberCutKeep(listed, protected, items, maxItems int) (keep, need int, by MemberCutKeepBasis) {
 	if items > maxItems && maxItems > 0 && listed > 0 {
 		need = ((items-maxItems)*listed + items - 1) / items
@@ -289,7 +308,7 @@ func memberCutKind(kind SubjectKind) bool {
 
 // planMemberCut decides whether the member cut runs and builds its input.
 // answer is the first pass's assembled answer, the one that overran: what it
-// cites and names is kept.
+// cites and names is cut last.
 func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyParams, firstPass assemblyTelemetry, answer InvestigationResult, items, maxItems int) memberCutAttempt {
 	var attempt memberCutAttempt
 	graphCohort := params.Graph.Cohort
@@ -311,10 +330,10 @@ func (e *Engine) planMemberCut(ctx context.Context, params synthesisAssemblyPara
 		return attempt
 	}
 	cohort := copyCohortForRetry(graphCohort)
-	order := memberCutOrder(cohort, basis, answer)
+	order, uncited := memberCutOrder(cohort, basis, answer)
 	listed := len(cohort.Members)
 	keep, need, by := memberCutKeep(listed, listed-len(order), items, maxItems)
-	attempt.Listed, attempt.Uncited, attempt.Basis, attempt.Kept, attempt.Need, attempt.KeepBy = listed, len(order), basis, keep, need, by
+	attempt.Listed, attempt.Uncited, attempt.Basis, attempt.Kept, attempt.Need, attempt.KeepBy = listed, uncited, basis, keep, need, by
 	if keep >= listed {
 		attempt.Declined = MemberCutNothingCuttable
 		return attempt

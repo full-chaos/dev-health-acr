@@ -249,8 +249,8 @@ func TestTheServedCutPathsNameNoCutMember(t *testing.T) {
 	}
 }
 
-// A member a finding cites is never cut, however the order ranks it
-// (ruling 9324).
+// A member a finding cites is cut only after every member nothing names: the
+// uncited members are enough here, so the cited ones are served.
 func TestACitedMemberSurvivesTheServedCut(t *testing.T) {
 	var modelCalls int
 	var composed []SynthesisInput
@@ -319,5 +319,81 @@ func TestAServedCutThatNamesACutMemberIsRefused(t *testing.T) {
 	}
 	if len(telemetry.memberCuts) != 1 || telemetry.memberCuts[0].Declined != MemberCutNamesCutMember || telemetry.memberCuts[0].Served {
 		t.Fatalf("member-cut events = %+v, want one declined names_cut_member", telemetry.memberCuts)
+	}
+}
+
+// rankingCutCohort is the prod readback shape of CHAOS-9357 and CHAOS-9291: a
+// ranking over 18 members whose answer cites every member it ranks (one
+// finding per member) plus rankingCutGeneral findings that cite none, so its
+// items scale with its members. The caller's cohort cap of 20 sets a 36-item
+// budget, and the first answer measures 41.
+const (
+	rankingCutMembers = 18
+	rankingCutCap     = 20
+	rankingCutGeneral = 5
+	rankingCutItems   = 41
+	rankingCutBudget  = 36
+)
+
+func rankingCutOf(t *testing.T) (InvestigationResult, []SynthesisInput, *recordingTelemetry, error) {
+	t.Helper()
+	var modelCalls int
+	var composed []SynthesisInput
+	memberCutWrapSynthesizer = func(inner AnswerSynthesizer) AnswerSynthesizer {
+		return failingModel{inner: inner, modelCalls: &modelCalls, composed: &composed,
+			after: func(index int, composed []SynthesisInput, result *InvestigationResult) {
+				members := composed[index].Graph.Cohort.Members
+				result.ReadinessGaps = result.ReadinessGaps[:len(members)+rankingCutGeneral]
+				for i := range result.ReadinessGaps {
+					result.ReadinessGaps[i].Subjects = nil
+					if i < len(members) {
+						result.ReadinessGaps[i].Subjects = []SubjectRef{members[i].Subject}
+					}
+				}
+			}}
+	}
+	t.Cleanup(func() { memberCutWrapSynthesizer = nil })
+	telemetry := &recordingTelemetry{}
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.Options.MaxCohortMembers = rankingCutCap
+	engine := memberCutEngineAtCeiling(t, rankingCutMembers+rankingCutGeneral, nil, 0, 0, rankingCutMembers, telemetry)
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_listing"}, request)
+	return result, composed, telemetry, err
+}
+
+// A ranking that cites every member it ranks is served cut, with the cut
+// stated, instead of refused: its 41 items over a 36-item budget declined the
+// cut as nothing_cuttable and ended in a 413 when the first answer's citations
+// protected every member.
+func TestARankingThatCitesEveryMemberIsServedCutNotRefused(t *testing.T) {
+	result, composed, telemetry, err := rankingCutOf(t)
+	if err != nil {
+		t.Fatalf("err = %v, want the ranking served over the cut cohort; member-cut events %+v", err, telemetry.memberCuts)
+	}
+	if len(telemetry.memberCuts) != 1 {
+		t.Fatalf("member-cut events = %+v, want one", telemetry.memberCuts)
+	}
+	event := telemetry.memberCuts[0]
+	if event.ItemsBefore != rankingCutItems || event.MaxItems != rankingCutBudget || event.Listed != rankingCutMembers || event.Uncited != 0 {
+		t.Fatalf("member-cut event = %+v, want the readback shape: %d items, budget %d, %d listed, none uncited", event, rankingCutItems, rankingCutBudget, rankingCutMembers)
+	}
+	if !event.Served || event.Declined != MemberCutNotApplicable || event.Kept >= rankingCutMembers || event.Kept != rankingCutMembers-event.Need {
+		t.Fatalf("member-cut event = %+v, want served with fewer than %d members kept", event, rankingCutMembers)
+	}
+	if len(composed) != 2 || cohortSize(result.Cohort) != event.Kept {
+		t.Fatalf("compositions = %d served members = %d, want the second composition over the %d kept", len(composed), cohortSize(result.Cohort), event.Kept)
+	}
+	if items := contractsv1.CountContextFabricResultItems(result).Budgeted(); items > rankingCutBudget {
+		t.Fatalf("served items = %d, want at most %d", items, rankingCutBudget)
+	}
+	top := topAttentionIndex(composed[0].Graph.Cohort)
+	if top < 0 || !slices.ContainsFunc(result.Cohort.Members, func(m CohortMember) bool {
+		return m.Subject.CanonicalID == composed[0].Graph.Cohort.Members[top].Subject.CanonicalID
+	}) {
+		t.Fatalf("the top-attention member is not served")
+	}
+	want := fmt.Sprintf("%d of %d members are listed", event.Kept, rankingCutMembers)
+	if !slices.ContainsFunc(result.Limitations, func(l string) bool { return strings.Contains(l, want) }) {
+		t.Fatalf("limitations = %q, want the cut stated as %q", result.Limitations, want)
 	}
 }
