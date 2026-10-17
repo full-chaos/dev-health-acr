@@ -1158,6 +1158,17 @@ read that dependency's own logs. `unclassified` is a real answer — it means a
 failure arrived that this vocabulary does not yet name, which is itself the
 signal that the vocabulary needs extending.
 
+**Projector statement memory cap (acr-projector).** Every projector
+ClickHouse read is sent with `max_memory_usage` = 192 MiB (the measured
+default, above the 2026-10-13 prod incremental peak of 87.35 MiB). A
+from-zero build after a rebuild reads more per statement than an incremental
+tick and can exceed it on a large organization (ClickHouse code 241, the tick
+holds its checkpoint). `ACR_PROJECTOR_STATEMENT_MAX_MEMORY_BYTES` overrides the
+cap for the projector only (a positive integer, in bytes; zero or a non-number
+is refused at start). The projector logs `acr-projector clickhouse statement
+memory cap` at start with `max_memory_usage_bytes` and `source` (`default` or
+the variable name). A statement's own `SETTINGS max_memory_usage` still wins.
+
 **ClickHouse read budget (acr-api).** `ACR_CLICKHOUSE_MAX_BYTES_TO_READ`
 defaults to 256 MiB per statement. The bytes a statement reads come from the
 table state (every version row of the organization's `work_unit_investments`,

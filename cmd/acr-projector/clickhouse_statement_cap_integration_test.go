@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
@@ -75,4 +76,35 @@ func TestProjectorCountsStatementsAboveHalfOfTheirMemoryCap(t *testing.T) {
 		return
 	}
 	t.Fatal("the statement never passed under any cap up to 256 MiB")
+}
+
+// Against a real server, ACR_PROJECTOR_STATEMENT_MAX_MEMORY_BYTES reaches every
+// statement the production projector client sends, and the open logs it.
+func TestOpenProjectorClickHouseSendsTheOverriddenStatementMemoryCap(t *testing.T) {
+	dsn := chserver.StartDSN(t, context.Background())
+	var logs strings.Builder
+	cfg := config.ProjectorConfig{ClickHouseDSN: dsn, ClickHouseMaxBytesToRead: 256 << 20, StatementMaxMemoryBytes: 4 << 30, StatementMaxMemoryBytesSet: true}
+	client, err := openProjectorClickHouse(cfg, slog.New(slog.NewTextHandler(&logs, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.close() })
+	rows, err := client.query.Query(context.Background(), "SELECT toString(getSetting('max_memory_usage'))", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var value string
+	if !rows.Next() {
+		t.Fatalf("no row (err=%v)", rows.Err())
+	}
+	if err := rows.Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "4294967296" {
+		t.Fatalf("server saw max_memory_usage %s through the projector client, want 4294967296 (the override)", value)
+	}
+	if !strings.Contains(logs.String(), "max_memory_usage_bytes=4294967296") || !strings.Contains(logs.String(), "source="+config.EnvProjectorStatementMaxMemory) {
+		t.Fatalf("open did not log the effective cap and its source: %q", logs.String())
+	}
 }

@@ -46,6 +46,10 @@ const (
 	envContextFabricGraphReads        = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
 	envProjectorListenAddress         = "ACR_PROJECTOR_ADDR"
 	envProjectorEnvironment           = "ACR_ENVIRONMENT"
+	// EnvProjectorStatementMaxMemory overrides the per-statement ClickHouse
+	// memory cap of every projector read (cmd/acr-projector's
+	// projectorStatementMaxMemoryUsage when unset).
+	EnvProjectorStatementMaxMemory = "ACR_PROJECTOR_STATEMENT_MAX_MEMORY_BYTES"
 )
 
 // ProjectorConfig is cmd/acr-projector's process configuration. It shares
@@ -60,9 +64,13 @@ type ProjectorConfig struct {
 	LogLevel      slog.Level
 	ListenAddress string // readiness/health HTTP server
 
-	ClickHouseDSN                  string
-	ClickHouseCACertPath           string
-	ClickHouseMaxBytesToRead       uint64
+	ClickHouseDSN            string
+	ClickHouseCACertPath     string
+	ClickHouseMaxBytesToRead uint64
+	// StatementMaxMemoryBytes is set only when StatementMaxMemoryBytesSet:
+	// an operator override of the projector's per-statement memory cap.
+	StatementMaxMemoryBytes        uint64
+	StatementMaxMemoryBytesSet     bool
 	PostgresDSN                    string
 	PostgresPoolerAdminDSN         string
 	PostgresConnectionKind         string
@@ -236,6 +244,14 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	}
 	cfg.ClickHouseDSN, cfg.ClickHouseCACertPath = hosted.ClickHouseDSN, hosted.ClickHouseCACertPath
 	cfg.ClickHouseMaxBytesToRead = hosted.ClickHouseMaxBytesToRead
+	if required.clickhouse {
+		if raw, ok := lookup(EnvProjectorStatementMaxMemory); ok && strings.TrimSpace(raw) != "" {
+			if cfg.StatementMaxMemoryBytes, err = uint64Value(lookup, EnvProjectorStatementMaxMemory, 0); err != nil {
+				return ProjectorConfig{}, err
+			}
+			cfg.StatementMaxMemoryBytesSet = true
+		}
+	}
 	cfg.PostgresDSN, cfg.PostgresPoolerAdminDSN = hosted.PostgresDSN, hosted.PostgresPoolerAdminDSN
 	cfg.PostgresConnectionKind = hosted.PostgresConnectionKind
 	cfg.PostgresMaxOpenConns, cfg.PostgresMaxIdleConns = hosted.PostgresMaxOpenConns, hosted.PostgresMaxIdleConns
@@ -327,6 +343,9 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 	// not refuse it.
 	if required.clickhouse && c.ClickHouseMaxBytesToRead == 0 {
 		return errors.New("ACR_CLICKHOUSE_MAX_BYTES_TO_READ must be positive")
+	}
+	if required.clickhouse && c.StatementMaxMemoryBytesSet && c.StatementMaxMemoryBytes == 0 {
+		return fmt.Errorf("%s must be positive", EnvProjectorStatementMaxMemory)
 	}
 	if c.LocalCompositionReady && (c.Environment != "development" || c.RequireBackingStores) {
 		return errors.New("ACR_LOCAL_COMPOSITION_READY requires development with backing stores disabled")

@@ -407,9 +407,23 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, me
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
 	return projectorClickHouseClient{
-		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage, projectorCapOptions(logger, metrics)...),
+		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementCap(cfg, logger), projectorCapOptions(logger, metrics)...),
 		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
+}
+
+// projectorStatementCap is the per-statement memory cap of every projector
+// ClickHouse read: the operator's override when set, else the measured
+// default. The effective value is logged once at open.
+func projectorStatementCap(cfg config.ProjectorConfig, logger *slog.Logger) uint64 {
+	limit, source := projectorStatementMaxMemoryUsage, "default"
+	if cfg.StatementMaxMemoryBytesSet {
+		limit, source = cfg.StatementMaxMemoryBytes, config.EnvProjectorStatementMaxMemory
+	}
+	if logger != nil {
+		logger.Info("acr-projector clickhouse statement memory cap", "max_memory_usage_bytes", limit, "source", source)
+	}
+	return limit
 }
 
 func projectorCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
