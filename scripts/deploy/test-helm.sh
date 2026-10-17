@@ -685,8 +685,8 @@ falkordb_probe() { # $1 probe name, $2 field -> its value in the StatefulSet ren
 }
 [[ "$(falkordb_probe startupProbe failureThreshold)" == "120" && "$(falkordb_probe startupProbe periodSeconds)" == "5" ]] \
   || fail_gate "falkordb-workload: startupProbe must allow a 10 min load (failureThreshold 120 x periodSeconds 5)"
-[[ "$(falkordb_probe livenessProbe timeoutSeconds)" == "10" && "$(falkordb_probe livenessProbe failureThreshold)" == "6" ]] \
-  || fail_gate "falkordb-workload: livenessProbe must tolerate a busy server (timeoutSeconds 10, failureThreshold 6)"
+[[ "$(falkordb_probe livenessProbe timeoutSeconds)" == "10" && "$(falkordb_probe livenessProbe periodSeconds)" == "10" && "$(falkordb_probe livenessProbe failureThreshold)" == "30" ]] \
+  || fail_gate "falkordb-workload: livenessProbe must tolerate a dump load and index build (timeoutSeconds 10, periodSeconds 10, failureThreshold 30)"
 grep -qE '^\s+mountPath: /var/lib/falkordb/data\s*$' <<<"$falkordb_sts" \
   || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
 grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_sts" \
