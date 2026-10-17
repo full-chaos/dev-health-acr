@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV16ForTheOutrankedLinkRebuild pins the constant,
+// TestClickHouseSourceVersionIsV17ForTheEpicParentRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -400,10 +400,14 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // parent and a parent id that stops naming one parent left the old edge open;
 // the rebuild re-asserts each child and removes the stale edges.
 //
-// v16 (fallback-only issue <> pull request links) is the latest: ops deletes
+// v16 (fallback-only issue <> pull request links) is the next: ops deletes
 // the explicit_text and heuristic rows a native link outranks, so no row names
 // their already-projected edges again; the rebuild re-asserts every native
 // link, which retracts them.
+//
+// v17 (epic_id as the parent where parent_id is empty) is the latest: rows of
+// GitLab epics and Jira Epic Links synced before the roll are behind every
+// checkpoint; the rebuild reads them and projects their PART_OF edges.
 //
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
@@ -415,11 +419,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV16ForTheOutrankedLinkRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV17ForTheEpicParentRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v16" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v17" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v16")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v17")
 	}
 }
 

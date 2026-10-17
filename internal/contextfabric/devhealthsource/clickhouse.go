@@ -162,7 +162,11 @@ const SourceName = "dev_health_clickhouse"
 // native row covers is not projected. Ops deletes the outranked rows, so the
 // lower-tier edges projected before the roll are named by no row again; the
 // rebuild re-asserts every native link and drops them.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v16"
+//
+// (v17, epic_id as the parent where parent_id is empty: GitLab epics and the
+// Jira Epic Link produce PART_OF edges. Rows synced before the roll are behind
+// every checkpoint and are read again only by a rebuild.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v17"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

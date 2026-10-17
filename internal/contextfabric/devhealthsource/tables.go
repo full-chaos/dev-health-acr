@@ -1254,7 +1254,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 const hierarchyCursorExpr = "greatest(c.last_synced, pa.latest_synced)"
 
 // queryWorkItemHierarchy (CHAOS-3779, §19.5.3 PART_OF) projects
-// work_items.parent_id -- a distinct column from work_item_dependencies,
+// work_items.parent_id, or epic_id where parent_id is empty -- a distinct column from work_item_dependencies,
 // carrying real hierarchy data (verified live: 2082 of 3282 work_items
 // rows have a non-empty parent_id, and every one of those resolves to a
 // real work_items row in the same organization). A child row whose
@@ -1285,7 +1285,10 @@ const hierarchyCursorExpr = "greatest(c.last_synced, pa.latest_synced)"
 // repo_id is the zero UUID.
 func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	const rowKey = "concat(toString(c.repo_id), ':', c.work_item_id)"
-	// parent_id names its parent by work item id. A qualified id (a known
+	// A row names its parent by work item id: its parent_id, or its epic_id when
+	// parent_id is empty (devhealthschema.WorkItemParentRefSQL; the GitLab epic
+	// and the Jira Epic Link are written there, each as a qualified id). A
+	// qualified id (a known
 	// integration prefix and a key: parent_key.go) is unique in its provider's
 	// namespace and names its parent org-wide: pa holds the one candidate's
 	// data, and two or more candidates name no parent. Any other id is a
@@ -1293,15 +1296,16 @@ func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouse
 	// OWN repository (p), and nothing else. pa.candidates also tells a parent
 	// that does not exist from one that cannot be told apart. A child gets one
 	// row: its parent, or a row that retracts its PART_OF edges.
-	qualified := qualifiedParentSQL("c.parent_id")
-	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
+	parentRef := devhealthschema.WorkItemParentRefSQL("c")
+	qualified := qualifiedParentSQL(parentRef)
+	statement := `SELECT c.work_item_id, ` + parentRef + `, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
        if(` + qualified + `, pa.created_at, p.created_at), ` + nullableTimestamp("if("+qualified+", pa.ended_at, coalesce(p.completed_at, p.closed_at))") + `,
        if(` + qualified + `, pa.repo, toString(p.repo_id)),
-       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), toUInt8(` + qualified + `), toUInt8(` + emptyKeyParentSQL("c.parent_id") + `), ` + hierarchyCursorExpr + `
+       toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), toUInt8(` + qualified + `), toUInt8(` + emptyKeyParentSQL(parentRef) + `), ` + hierarchyCursorExpr + `
 FROM work_items AS c FINAL
-LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id AND p.repo_id = c.repo_id
-LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, max(last_synced) AS latest_synced, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = c.parent_id
+LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = ` + parentRef + ` AND p.repo_id = c.repo_id
+LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, max(last_synced) AS latest_synced, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = ` + parentRef + `
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
 WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, hierarchyCursorExpr, rowKey) + orderBy(hierarchyCursorExpr, rowKey)
 	notResolved := map[string]int{}

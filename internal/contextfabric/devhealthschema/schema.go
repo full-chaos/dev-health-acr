@@ -767,6 +767,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "labels", Type: "Array(String)"},
 		{Name: "sprint_id", Type: "String"},
 		{Name: "parent_id", Type: "String"},
+		// The epic a work item belongs to, or the parent epic of an epic
+		// (GitLab, and the Jira Epic Link field when a site names one); the
+		// hierarchy reads it where parent_id is empty (WorkItemParentRefSQL).
+		{Name: "epic_id", Type: "String"},
 		{Name: "url", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "due_at", Type: "Nullable(DateTime64(3))"},
