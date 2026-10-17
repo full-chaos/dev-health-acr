@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // A ClickHouse SELECT that aliases an expression as org_id and filters org_id
@@ -69,11 +70,7 @@ func TestOrgIDAliasDetection(t *testing.T) {
 
 func TestNoOrgIDAliasShadowingInClickHouseStatements(t *testing.T) {
 	t.Parallel()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the repository root")
-	}
-	root := filepath.Join(filepath.Dir(file), "..", "..")
+	root := repopath.Root(t)
 	seen := map[string]int{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
