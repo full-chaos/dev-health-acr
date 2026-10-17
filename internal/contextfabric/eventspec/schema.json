@@ -1438,6 +1438,52 @@
     ]
   },
   {
+    "id": "contextfabric.cohort_structure_gate",
+    "msg": "context fabric cohort structure gate",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per gate call; the gate has two call sites, the window gated terminal and the subjectless terminal, and each ends the pass.",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "applied",
+          "no_op",
+          "subject_bearing"
+        ]
+      },
+      {
+        "key": "shape",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.commit_affirmation_retraction",
     "msg": "context fabric commit affirmation retraction",
     "level": "warn",
@@ -5620,6 +5666,43 @@
     ]
   },
   {
+    "id": "contextfabric.gated_offer_resolution",
+    "msg": "context fabric gated offer resolution",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the window gate ends the pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "composed",
+          "empty",
+          "failed",
+          "disabled",
+          "refused",
+          "not_projected",
+          "frame_refused"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.graphql_query",
     "msg": "context fabric graphql query",
     "level": "info",
@@ -5966,6 +6049,65 @@
       {
         "key": "quorum_met",
         "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.interpreted_time_bound",
+    "msg": "context fabric interpreted time bound",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written on every arm that reaches the verdict.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ok",
+          "future_end",
+          "range_too_wide",
+          "absent_or_zero_instant",
+          "unknown_axis",
+          "malformed_range"
+        ]
+      },
+      {
+        "key": "clamp_applied",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "range_days",
+        "type": "int",
         "presence": "required"
       },
       {
@@ -8803,6 +8945,231 @@
     ]
   },
   {
+    "id": "contextfabric.structure_explicit",
+    "msg": "context fabric structure explicit",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per explicit member (expected kind, subject handle), written once per investigation: at a pre-flight veto, after the confirming save, or at a save time supersession.",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "expected_kind",
+          "subject_anchor",
+          "subject_handle",
+          "window",
+          "subject_candidate"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "applied",
+          "conflict"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.structure_needs_disclosed",
+    "msg": "context fabric structure needs disclosed",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per missing member of one disclosed needs block, at most one block per investigation (the subjectless terminal and the window gated terminal end the pass), so at most one line per structure member.",
+    "max_lines_per_scope": 5,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "expected_kind",
+          "subject_anchor",
+          "subject_handle",
+          "window",
+          "subject_candidate"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.structure_offer_count",
+    "msg": "context fabric structure offer count",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per member and source with a nonzero count of one disclosed needs block, at most one block per investigation, so at most one line per member and source pair.",
+    "max_lines_per_scope": 10,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "expected_kind",
+          "subject_anchor",
+          "subject_handle",
+          "window",
+          "subject_candidate"
+        ]
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "engine",
+          "prior"
+        ]
+      },
+      {
+        "key": "count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.structure_receipt",
+    "msg": "context fabric structure receipt",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per receipt bearing member (kind, anchor, handle, candidate), written once per investigation: at a pre-flight veto or after the confirming save.",
+    "max_lines_per_scope": 4,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "expected_kind",
+          "subject_anchor",
+          "subject_handle",
+          "window",
+          "subject_candidate"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "applied",
+          "unresolved",
+          "conflict",
+          "stale"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.structure_receipt_veto",
+    "msg": "context fabric structure receipt veto",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: a veto ends the pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "detail",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "nil_store",
+          "empty_ids",
+          "stored_result_get",
+          "stored_result_not_found",
+          "stored_result_unavailable",
+          "option_not_found",
+          "reverify_no_verifier",
+          "reverify_unverifiable",
+          "reverify_claim_lost",
+          "reverify_rejected",
+          "stored_result_denied_organization_mismatch",
+          "stored_result_denied_subject_denied",
+          "stored_result_denied_subject_absent",
+          "stored_result_denied_group_unproven",
+          "stored_result_denied_graph_not_projected",
+          "stored_result_denied_grant_mismatch",
+          "stored_result_denied_grant_unrecorded"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.subjectless_terminal",
     "msg": "context fabric subjectless terminal",
     "level": "info",
@@ -10700,6 +11067,57 @@
         "key": "request_id",
         "type": "string",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.window_expand_offer_redeemed",
+    "msg": "context fabric window expand offer redeemed",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the receipt loop stops at the first receipt the offer names.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.window_gate_offer_disclosure",
+    "msg": "context fabric window gate offer disclosure",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the window gate ends the pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "offered",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },

@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -165,11 +166,15 @@ func TestTheDeployedInterpretedTimeBoundLineNamesEveryRefusingRule(t *testing.T)
 			if got, _ := rec["outcome"].(string); got != string(testCase.decision.Outcome) {
 				t.Errorf("outcome = %q, want %q -- the rule that refused is the one thing the pre-existing failure line could never say", got, testCase.decision.Outcome)
 			}
-			// The axis is echoed VERBATIM, including one outside the
-			// vocabulary: an operator diagnosing an interpreter that
-			// emitted a bad axis needs to see what it emitted.
-			if got, _ := rec["axis"].(string); got != string(testCase.decision.Axis) {
-				t.Errorf("axis = %q, want %q echoed verbatim", got, testCase.decision.Axis)
+			// A contract axis is echoed; one outside the contract is logged as
+			// the class "unrecognised" (interpreter output never rides the
+			// key), and the outcome names the unknown axis arm.
+			wantAxis := string(testCase.decision.Axis)
+			if !contractsv1.ValidContextFabricTemporalAxis(testCase.decision.Axis) && wantAxis != "" {
+				wantAxis = "unrecognised"
+			}
+			if got, _ := rec["axis"].(string); got != wantAxis {
+				t.Errorf("axis = %q, want %q", got, wantAxis)
 			}
 			if got, ok := rec["clamp_applied"].(bool); !ok || got != testCase.wantClamp {
 				t.Errorf("clamp_applied = %v (present=%t), want %v", got, ok, testCase.wantClamp)
