@@ -684,8 +684,11 @@ did not need renumbering.
 ## PART_OF hierarchy: cycles are accepted, self-references are filtered (CHAOS-3779 codex round-1 finding M3)
 
 `queryWorkItemHierarchy` (`devhealthsource/tables.go`) projects `PART_OF`
-edges from `work_items.parent_id`. Two distinct hazards were raised in
-review, and they get two distinct answers:
+edges from `work_items.parent_id`, or from `work_items.epic_id` where
+`parent_id` is empty (the GitLab epic and the Jira Epic Link; a row that names
+both has the `parent_id` as its one parent). A `gitlab:` epic id carries its
+group path, so it names one epic org-wide and a bare number never matches. Two
+distinct hazards were raised in review, and they get two distinct answers:
 
 * **Multi-node cycles** (A `PART_OF` B `PART_OF` C `PART_OF` A) are
   **accepted graph state**. This source does not detect or reject them.

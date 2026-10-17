@@ -618,11 +618,11 @@ func everyRelationshipTypeFixtureTables(at time.Time) []fakeTable {
 	}
 	return append(tables,
 		fakeTable{match: "FROM git_pull_request_reviews AS r", rows: [][]any{{"review-1", "repo-1", uint32(1042), "approved", at, "example-org/widget-service", at, uint8(0), zeroTime, "Typed session tokens"}}},
-		// FROM work_items AS c is queryWorkItemHierarchy's child-side
+		// AS parent_ref FROM work_items FINAL is queryWorkItemHierarchy's child-side
 		// alias -- distinct from baseTables' "FROM work_items AS w"
 		// (queryWorkItems' entity query), so this does not collide with
 		// it in fakeClient's substring match.
-		fakeTable{match: "FROM work_items AS c", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, at, uint8(0), zeroTime, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}},
+		fakeTable{match: "AS parent_ref FROM work_items FINAL", rows: [][]any{{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at, at, uint8(0), zeroTime, at, uint8(0), zeroTime, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}},
 		// The Issue <> Pull request link of record: WIDGET-101 links pull
 		// request 1042 of repo-1 at the native tier.
 		fakeTable{match: "FROM work_graph_issue_pr AS l", rows: [][]any{issuePullRequestLinkRow("WIDGET-101", "repo-1", 1042, "native", at,
