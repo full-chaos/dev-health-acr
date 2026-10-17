@@ -124,7 +124,7 @@ func TestStore_resolveReturnsDecryptedCredential(t *testing.T) {
 	resolved, ok, err := store.ResolveOrgModelConfig(ctx, "org-a")
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, written.Credential, resolved.Credential)
+	require.Equal(t, written.Credential, resolved.Credential.Reveal())
 }
 
 // TestStore_orgIsolation is AC-3775-1/AC-3775-2's storage-level proof

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ func TestOrgLLMConfigServesTheOpsConfig(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("found = %v err = %v", found, err)
 	}
-	if config.Provider != "anthropic" || config.Model != "claude-haiku-5-5" || config.APIKey != "sk-ant-SECRET-VALUE" || config.Version != "2026-10-16T18:00:00.123456Z" {
+	if config.Provider != "anthropic" || config.Model != "claude-haiku-5-5" || config.APIKey.Reveal() != "sk-ant-SECRET-VALUE" || config.Version != "2026-10-16T18:00:00.123456Z" {
 		t.Fatalf("config = %+v", config)
 	}
 	if got := path.Load().(string); got != "/api/v1/internal/acr/orgs/"+llmOrg+"/llm-config Bearer "+testToken {
@@ -119,7 +120,7 @@ func TestOrgLLMConfigErrorsAreNotCached(t *testing.T) {
 }
 
 func TestOrgLLMConfigNeverPrintsTheKey(t *testing.T) {
-	config := entitlements.OrgLLMConfig{Provider: "anthropic", Model: "m", APIKey: "sk-ant-SECRET-VALUE", Version: "v"}
+	config := entitlements.OrgLLMConfig{Provider: "anthropic", Model: "m", APIKey: llm.NewSecret("sk-ant-SECRET-VALUE"), Version: "v"}
 	var logs strings.Builder
 	slog.New(slog.NewJSONHandler(&logs, nil)).Info("m", "config", config)
 	encoded, _ := json.Marshal(config)

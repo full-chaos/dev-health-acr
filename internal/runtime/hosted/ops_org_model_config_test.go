@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-go/llm"
 	"strings"
 	"testing"
 
@@ -60,18 +61,18 @@ func TestBuildOrgModelConfigResolverPicksOneStore(t *testing.T) {
 func TestOpsOrgModelConfigsMapsTheOpsAnswer(t *testing.T) {
 	const digest = "9f2c4e5d0b7a61c3e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b"
 	source := &fakeOrgLLMSource{found: true, config: entitlements.OrgLLMConfig{
-		Provider: "anthropic", Model: "claude-haiku-5-5", APIKey: "sk-ant-x", Version: digest,
+		Provider: "anthropic", Model: "claude-haiku-5-5", APIKey: llm.NewSecret("sk-ant-x"), Version: digest,
 	}}
 	configs := opsOrgModelConfigs{source: source, generations: &versionGenerations{}}
 	resolved, ok, err := configs.ResolveOrgModelConfig(context.Background(), "org")
 	if err != nil || !ok {
 		t.Fatalf("ok = %v err = %v", ok, err)
 	}
-	if resolved.Provider != "anthropic" || resolved.Model != "claude-haiku-5-5" || resolved.Credential != "sk-ant-x" || resolved.Generation < 1 {
+	if resolved.Provider != "anthropic" || resolved.Model != "claude-haiku-5-5" || resolved.Credential.Reveal() != "sk-ant-x" || resolved.Generation < 1 {
 		t.Fatalf("resolved = %s generation %d", resolved, resolved.Generation)
 	}
 	bad := *source
-	bad.config.APIKey = ""
+	bad.config.APIKey = llm.Secret{}
 	if _, ok, err := (opsOrgModelConfigs{source: &bad, generations: &versionGenerations{}}).ResolveOrgModelConfig(context.Background(), "org"); ok || !errors.Is(err, entitlements.ErrLLMConfigUnusable) {
 		t.Errorf("no key and no base URL: ok = %v err = %v, want unusable", ok, err)
 	}
