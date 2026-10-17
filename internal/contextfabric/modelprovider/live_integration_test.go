@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
+	"github.com/full-chaos/dev-health-go/llm"
 	"os"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func liveConfig(t *testing.T) Config {
 		t.Skipf("%s is not set; skipping live provider acceptance", envLiveAPIKey)
 	}
 	cfg := Config{
-		Provider: DefaultProvider, Model: DefaultModel, APIKey: apiKey,
+		Provider: DefaultProvider, Model: DefaultModel, APIKey: llm.NewSecret(apiKey),
 		Timeout: 90 * time.Second, MaxAttempts: 2, MaxTransportRetries: 2,
 		// The hosted default: production redraws a rejected interpretation
 		// or synthesis draw up to this many times.

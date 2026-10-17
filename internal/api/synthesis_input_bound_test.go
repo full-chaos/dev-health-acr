@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"io"
 	"log/slog"
 	"net/http"
@@ -239,7 +240,7 @@ func productionModelRuntime(t *testing.T, provider *recordedModelProvider, logs 
 	t.Helper()
 	runtime, err := modelprovider.New(context.Background(), modelprovider.Config{
 		Provider: modelprovider.DefaultProvider, BaseURL: provider.baseURL, Model: modelprovider.DefaultModel,
-		APIKey: "sk-configured", Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
+		APIKey: llm.NewSecret("sk-configured"), Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
 		Logger: slog.New(slog.NewJSONHandler(logs, nil)),
 	})
 	if err != nil {

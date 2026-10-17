@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func sampleResolvedOrgModelConfig() ResolvedOrgModelConfig {
 		BaseURL:       "https://llm.acme-gateway.example/v1/",
 		Model:         "acme-large",
 		FallbackModel: "acme-large-fallback",
-		Credential:    "sk-acme-live-super-secret-value",
+		Credential:    llm.NewSecret("sk-acme-live-super-secret-value"),
 		Generation:    42,
 		UpdatedAt:     time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC),
 	}
@@ -38,7 +39,7 @@ func TestResolvedOrgModelConfig_redactsCredentialAcrossEveryFormatVerb(t *testin
 		"%#v": fmt.Sprintf("%#v", config),
 	}
 	for verb, rendered := range cases {
-		if strings.Contains(rendered, config.Credential) {
+		if strings.Contains(rendered, config.Credential.Reveal()) {
 			t.Fatalf("%s rendering leaked the credential: %s", verb, rendered)
 		}
 		if !strings.Contains(rendered, redactedCredentialPlaceholder) {
@@ -53,7 +54,7 @@ func TestResolvedOrgModelConfig_LogValue_redactsCredential(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 	logger.Info("resolved org model config", "config", config)
 	output := buf.String()
-	if strings.Contains(output, config.Credential) {
+	if strings.Contains(output, config.Credential.Reveal()) {
 		t.Fatalf("slog output leaked the credential: %s", output)
 	}
 	if !strings.Contains(output, redactedCredentialPlaceholder) {
@@ -67,7 +68,7 @@ func TestResolvedOrgModelConfig_MarshalJSON_redactsCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
-	if bytes.Contains(encoded, []byte(config.Credential)) {
+	if bytes.Contains(encoded, []byte(config.Credential.Reveal())) {
 		t.Fatalf("json.Marshal leaked the credential: %s", encoded)
 	}
 	if !bytes.Contains(encoded, []byte(redactedCredentialPlaceholder)) {

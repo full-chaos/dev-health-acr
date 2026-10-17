@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -37,7 +38,7 @@ type OrgLLMConfig struct {
 	Provider string
 	Model    string
 	BaseURL  string
-	APIKey   string
+	APIKey   llm.Secret
 	// Version changes when the org's stored settings change (ops: the
 	// newest updated_at, RFC 3339 with nanoseconds).
 	Version string
@@ -166,7 +167,7 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	}
 	return OrgLLMConfig{
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),
-		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: parsed.APIKey, Version: parsed.Version,
+		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), Version: parsed.Version,
 	}, true, nil
 }
 
