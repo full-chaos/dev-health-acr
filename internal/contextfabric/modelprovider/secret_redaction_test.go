@@ -42,13 +42,13 @@ func TestModelClientsNeverPrintTheAPIKey(t *testing.T) {
 				"model config ptr":  &cfg,
 				"held model config": heldModelConfig{config: cfg},
 				"held model ptr":    &heldModelConfig{config: cfg},
-				"clients":      clients,
-				"provider":     clients["m1"],
-				"held clients": heldClients{clients: clients},
-				"held ptr":     &heldClients{clients: clients},
-				"runtime":      runtime,
-				"runtime val":  *runtime,
-				"llm config":   heldConfig{config: llm.Config{Kind: llm.KindLocal, APIKey: llm.NewSecret(key), Model: "m1"}},
+				"clients":           clients,
+				"provider":          clients["m1"],
+				"held clients":      heldClients{clients: clients},
+				"held ptr":          &heldClients{clients: clients},
+				"runtime":           runtime,
+				"runtime val":       *runtime,
+				"llm config":        heldConfig{config: llm.Config{Kind: llm.KindLocal, APIKey: llm.NewSecret(key), Model: "m1"}},
 			}
 			needles := []string{key, fmt.Sprintf("%x", key)}
 			for name, value := range values {

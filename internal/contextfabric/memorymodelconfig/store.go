@@ -11,6 +11,7 @@ package memorymodelconfig
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-go/llm"
 	"strings"
 	"sync"
 	"time"
@@ -147,7 +148,7 @@ func (s *Store) ResolveOrgModelConfig(ctx context.Context, orgID string) (contex
 		BaseURL:       record.baseURL,
 		Model:         record.model,
 		FallbackModel: record.fallbackModel,
-		Credential:    record.credential,
+		Credential:    llm.NewSecret(record.credential),
 		Generation:    record.generation,
 		UpdatedAt:     record.updatedAt,
 	}, true, nil
