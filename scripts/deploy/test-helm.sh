@@ -135,6 +135,9 @@ negative() {
 case "$scenario" in
   mutable-image)
     negative mutable-image "mutable-image" \
+      --set-string "config.environment=production" \
+      --set-string "config.entitlement.url=https://ops.dev-health.internal" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "image.reference=registry.internal/dev-health-acr/acr-api:latest"
     exit 0 ;;
   invalid-secret-ref)
@@ -157,6 +160,7 @@ case "$scenario" in
     exit 0 ;;
   entitlement-path)
     negative entitlement-path "entitlement-origin" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal/api/internal/entitlements"
     exit 0 ;;
   pgbouncer-missing-pooler)
@@ -173,18 +177,22 @@ case "$scenario" in
     exit 0 ;;
   unsupported-entitlement-scheme)
     negative unsupported-entitlement-scheme "entitlement-origin" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "config.entitlement.url=ftp://ops.dev-health.internal"
     exit 0 ;;
   userinfo-url)
     negative userinfo-url "entitlement-origin" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "config.entitlement.url=https://user@ops.dev-health.internal"
     exit 0 ;;
   query-url)
     negative query-url "entitlement-origin" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal?x=1"
     exit 0 ;;
   fragment-url)
     negative fragment-url "entitlement-origin" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal#f"
     exit 0 ;;
   unknown-root-key)
