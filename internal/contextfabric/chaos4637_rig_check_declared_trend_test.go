@@ -42,7 +42,7 @@ func TestChaos4637RigCheck_ADeclaredTimeSeriesChartsOnRealData(t *testing.T) {
 	}
 	orgID := os.Getenv("ACR_CHAOS4645_KIAC_ORG_ID")
 	if orgID == "" {
-		orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
+		t.Skip("ACR_CHAOS4645_KIAC_ORG_ID not set -- set it to run this rig check")
 	}
 	teamID := os.Getenv("ACR_CHAOS4645_KIAC_TEAM_ID")
 	if teamID == "" {
