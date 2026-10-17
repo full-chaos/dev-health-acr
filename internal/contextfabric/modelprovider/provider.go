@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -68,10 +67,7 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	if err := rejectDevGenkitEnvironment(); err != nil {
-		return nil, err
-	}
-	suppressGenkitTelemetryExport()
+	suppressModelTelemetryExport()
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -330,122 +326,26 @@ func sanitizeProviderErrorBody(req *http.Request, next option.MiddlewareNext) (*
 	return resp, nil
 }
 
-// suppressGenkitTelemetryExport prevents Genkit's own tracing AND metrics
-// packages from ever exporting generation content off this process
-// (CHAOS-3770 F1, hardened in codex round 2).
+// suppressModelTelemetryExport keeps the model call's own tracing and metrics
+// out of the service's OTLP export, and out of any exporter an ambient
+// environment could attach.
 //
-// TRACES: every Genkit generate call runs inside tracing.RunInNewSpan
-// (core/tracing/tracing.go), which unconditionally records the full
-// request -- including the system prompt and the encoded question -- as
-// the "genkit:input" span attribute, and the model's response as
-// "genkit:output" (spanMetadata.attributes(), set via a deferred
-// span.SetAttributes on every span, success or failure). That alone is
-// harmless: an attribute on an unexported span goes nowhere. What makes it
-// a live risk is tracing.TracerProvider()'s lazy, package-global
-// initialization: the FIRST call anywhere in the process to Genkit's
-// Tracer() checks the ambient GENKIT_TELEMETRY_SERVER environment
-// variable and, if it is non-empty, wires up an HTTP exporter
-// (WriteTelemetryImmediate) that ships every finished span -- prompt and
-// response content included -- to that URL SYNCHRONOUSLY, in the same
-// goroutine as span.End(). tracing.TracerProvider() only consults
-// GENKIT_TELEMETRY_SERVER when otel.GetTracerProvider() does not already
-// return a *sdktrace.TracerProvider:
-//
-//	func TracerProvider() *sdktrace.TracerProvider {
-//		if tp := otel.GetTracerProvider(); tp != nil {
-//			if sdkTP, ok := tp.(*sdktrace.TracerProvider); ok {
-//				return sdkTP
-//			}
-//		}
-//		providerInitOnce.Do(func() { ... reads GENKIT_TELEMETRY_SERVER ... })
-//		...
-//	}
-//
-// So registering our own bare *sdktrace.TracerProvider -- with no span
-// processors, meaning every span it creates is simply discarded when it
-// ends -- before Genkit ever calls Tracer() makes that check succeed and
-// the env-var-gated branch dead code for this process.
-//
-// METRICS: internal/metrics/metrics.go's WriteActionFailure/WriteFlowFailure
-// (invoked from core/action.go's recordActionMetrics on every failed
-// generate call -- reachable from genkitruntime's own generate path, not
-// only Genkit's dev-only registered-action path) record
-// attribute.String("errorMessage", err.Error()) on a counter obtained from
-// the GLOBAL otel.Meter("genkit") -- i.e. otel.GetMeterProvider(). err.Error()
-// can carry a raw provider response body (see retryable's doc comment in
-// genkitruntime/runtime.go for why). Unlike TracerProvider(), Genkit's
-// metrics path has NO "already registered, skip" check of its own -- it
-// just calls otel.Meter("genkit") fresh on every failure, so nothing in
-// Genkit itself gates this on an env var the way tracing does. The only
-// lever available from here is the same one: register our own no-op
-// *metric.MeterProvider (metric/noop) so genkit/action metrics are
-// recorded into a sink that discards them, since OTel's default global
-// MeterProvider (what genkit would otherwise get) is ALSO a no-op --
-// this only matters if something else in the binary later installs a
-// real one (see the LAST-WRITER-WINS note below).
-//
-// LAST-WRITER-WINS (codex round 2, point d): both otel.SetTracerProvider
-// and otel.SetMeterProvider are unconditional global assignments -- ANY
-// later call anywhere in the process, by ANY package, silently overrides
-// what this function set, for every subsequent Genkit span/metric,
-// including ones already suppressed here. This function cannot and does
-// not defend against that; it can only ensure IT wins the race for
-// whichever caller constructs the first genkit.Genkit instance. That is a
-// real, durable guarantee for THIS codebase specifically -- confirmed by
-// inspection, not assumed -- because modelprovider is the only package in
-// this repository that imports otel's Set{Tracer,Meter}Provider at all,
-// and the only Genkit plugin ACR uses (compat_oai) never touches
-// OpenTelemetry itself (only Genkit's own plugins/googlecloud does, and
-// ACR does not import it). ACR's real service export (internal/otelexport)
-// was built against this comment: its providers are never installed
-// globally, only handed explicitly to its own HTTP handler, log handler and
-// tick tracer, so Genkit -- which reads only the globals set here -- never
-// reaches them. A bare otel.Set{Tracer,Meter}Provider call added elsewhere
-// in this repository would silently re-expose Genkit's prompt/response
-// content to whatever exporter it configures;
+// The shared dev-health-go llm client records a span per attempt on the
+// GLOBAL tracer provider. Registering a bare *sdktrace.TracerProvider with no
+// span processors makes those spans local and discards them when they end; a
+// no-op meter provider does the same for metrics. ACR's real service export
+// (internal/otelexport) is never installed globally, only handed explicitly
+// to its own HTTP handler, log handler and tick tracer, so the model call
+// never reaches it. A bare otel.Set{Tracer,Meter}Provider call added
+// elsewhere in this repository would break that isolation;
 // internal/otelexport.TestNoGlobalTelemetryInstallOutsideModelProvider fails
-// on one, and TestGenkitTelemetryNeverExported (this package) proves the
-// isolation end to end. This function also
-// necessarily overwrites any tracer/meter provider a HOST process embedding
-// this code as a library had already configured for its OWN purposes --
-// acceptable because ACR ships as a self-contained service (cmd/acr-api),
-// never as an embedded library, but worth this explicit note for anyone
-// who changes that.
+// on one and TestModelCallTelemetryNeverExported proves it end to end.
 //
-// Called on every initGenkit invocation rather than gated by a sync.Once
-// of its own: otel.Set{Tracer,Meter}Provider are cheap, idempotent pointer
-// swaps, and always winning this race -- regardless of which caller
-// happens to construct the first genkit.Genkit instance in the process --
-// is what makes the guarantee independent of call order.
-func suppressGenkitTelemetryExport() {
+// otel.Set{Tracer,Meter}Provider are cheap, idempotent pointer swaps, so this
+// runs on every runtime construction rather than behind a sync.Once. It
+// overwrites any provider a host process embedding this code as a library
+// had configured; ACR ships as a self-contained service, never a library.
+func suppressModelTelemetryExport() {
 	otel.SetTracerProvider(sdktrace.NewTracerProvider())
 	otel.SetMeterProvider(metricnoop.NewMeterProvider())
-}
-
-// rejectDevGenkitEnvironment fails composition if the ambient GENKIT_ENV
-// variable would put Genkit into its dev mode (CHAOS-3770 F1 residual,
-// codex round 2, point c). genkit.Init starts a local reflection server
-// (HTTP or WebSocket, depending on GENKIT_REFLECTION_V2_SERVER) only when
-// api.CurrentEnvironment() == api.EnvironmentDev, i.e. only when
-// os.Getenv("GENKIT_ENV") == "dev" -- unset defaults to prod, and ACR
-// itself never sets this variable, so by default no such server ever
-// binds. That server's handleNotify endpoint lets a caller register a NEW
-// telemetry exporter URL at runtime (configureTelemetry), independent of
-// GENKIT_TELEMETRY_SERVER and independent of suppressGenkitTelemetryExport
-// above (it operates via genkit's own tracing.WriteTelemetryImmediate/
-// WriteTelemetryRealtime, not through the global TracerProvider check this
-// package preempts) -- so if it ever started, it would reopen exactly the
-// export path this package exists to close. Rather than merely relying on
-// "ACR itself never sets GENKIT_ENV" (true today, but an ambient variable
-// this package does not control, same class of risk as
-// GENKIT_TELEMETRY_SERVER), this fails composition outright the moment it
-// would matter, consistent with newClientOptions' treatment of ambient
-// OPENAI_* variables: an ambient setting must never be able to change this
-// service's behavior in a security-relevant way without an explicit ACR
-// configuration decision.
-func rejectDevGenkitEnvironment() error {
-	if value := os.Getenv("GENKIT_ENV"); value == "dev" {
-		return fmt.Errorf("GENKIT_ENV=dev is not permitted: it starts Genkit's local reflection server, whose handleNotify endpoint can register a telemetry exporter for prompt/response content at runtime, independent of this package's own telemetry suppression")
-	}
-	return nil
 }
