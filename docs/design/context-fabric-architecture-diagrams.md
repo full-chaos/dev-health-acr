@@ -482,9 +482,11 @@ same rows; no edge is provider-specific. Producers are in
   the same batch (`falkorgraph/projection.go` `retractOutrankedLinks`, a debug
   line with the counts). A native row the producer cannot project (its pull
   request node is missing, or its issue is not a work item or is a pull
-  request item) still covers its ends: its skip names the end that has a node
-  by an `outranked_issue_links` or `outranked_pull_request_links` tombstone,
-  and the same rule retracts that end's lower-tier links. An edge with no tier
+  request item) still covers its ends: its skip names each end that has a node
+  (for a pull request item, the item too, since it may have been an issue when
+  an earlier link of it was projected) by an `outranked_issue_links` or
+  `outranked_pull_request_links` tombstone, and the same rule retracts that
+  end's lower-tier links. An edge with no tier
   is left as it is. `RELATES_TO`
   from `work_item_dependencies` stays for issue-to-issue relations and is no
   part of the tree. One rebuild per projected organization is needed to gain

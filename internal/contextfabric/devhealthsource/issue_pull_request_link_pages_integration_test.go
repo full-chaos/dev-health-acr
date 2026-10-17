@@ -207,8 +207,8 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 				if i > 0 && !(page[i-1].Position.Before(row.Position) || (page[i-1].Position.Equal(row.Position) && page[i-1].SortKey < row.SortKey)) {
 					t.Errorf("page %d rows out of keyset order at %d", pages, i)
 				}
-				if row.Covers != "" {
-					gotCovers[row.Covers] = true
+				for _, end := range row.Covers {
+					gotCovers[end] = true
 				}
 				switch {
 				case row.IgnoredReason != "":
@@ -275,14 +275,17 @@ func TestIssuePullRequestLinkProducerPagesOnPopulatedStore(t *testing.T) {
 		if len(gotSkips) != len(wantSkips) {
 			t.Errorf("skip reasons = %v, want %v", gotSkips, wantSkips)
 		}
-		// The skipped native rows name the end they cover that has a node: GH
-		// 42 (no work item, and a pr-typed item), GL 43 (a merge_request item)
-		// and CHAOS-1 (its pull request GH 999 has no row).
+		// The skipped native rows name each end they cover that has a node: GH
+		// 42 (no work item, and a pr-typed item), GL 43 (a merge_request item),
+		// the two pull request items themselves, and CHAOS-1 (its pull request
+		// GH 999 has no row).
 		chaos1, _, _ := identity.Derive(identity.KindWorkItem, []string{zeroRepo, "linear:CHAOS-1"}, nil)
 		wantCovers := map[string]bool{
 			"outranked_pull_request_links|" + fmt.Sprintf("pull_request:%s:%d", repoGH, 42): true,
 			"outranked_pull_request_links|" + fmt.Sprintf("pull_request:%s:%d", repoGL, 43): true,
 			"outranked_issue_links|" + chaos1:                                               true,
+			"outranked_issue_links|" + pagesWorkItemID(t, repoGH, "gh:acme/widget#50"):      true,
+			"outranked_issue_links|" + pagesWorkItemID(t, repoGL, "gitlab:group/proj#51"):   true,
 		}
 		if fmt.Sprint(gotCovers) != fmt.Sprint(wantCovers) {
 			t.Errorf("covered ends = %v, want %v", gotCovers, wantCovers)
@@ -415,4 +418,13 @@ func applyProductionSchema(t *testing.T, ctx context.Context, direct clickhoused
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+}
+
+func pagesWorkItemID(t *testing.T, repo, id string) string {
+	t.Helper()
+	out, _, err := identity.Derive(identity.KindWorkItem, []string{repo, id}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

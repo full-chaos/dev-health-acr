@@ -145,24 +145,39 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, ignoredType: reason}}, nil
 		}
 		// A native row the producer cannot project still covers its ends, so
-		// its skip names the end that has a node by a tombstone, and the
+		// its skip names each end that has a node by a tombstone, and the
 		// projection retracts that end's lower-tier links
 		// (falkorgraph retractOutrankedLinks).
-		skipNative := func(reason, kind, coveredID string) ([]candidate, error) {
+		type coveredEnd struct{ kind, id string }
+		skipNative := func(reason string, ends ...coveredEnd) ([]candidate, error) {
 			out := []candidate{{observedAt: observedAt, sortKey: rowSortKey, ignoredType: reason}}
-			if strings.TrimSpace(provenance) != "native" || coveredID == "" || covered[kind+"\x00"+coveredID] {
+			if strings.TrimSpace(provenance) != "native" {
 				return out, nil
 			}
-			covered[kind+"\x00"+coveredID] = true
-			tombstone := contractsv1.ContextFabricProjectionTombstone{
-				Kind: kind, CanonicalID: coveredID, Reason: "a native link the producer cannot project covers this end: " + reason,
-				EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+			for _, end := range ends {
+				if end.id == "" || covered[end.kind+"\x00"+end.id] {
+					continue
+				}
+				covered[end.kind+"\x00"+end.id] = true
+				tombstone := contractsv1.ContextFabricProjectionTombstone{
+					Kind: end.kind, CanonicalID: end.id, Reason: "a native link the producer cannot project covers this end: " + reason,
+					EffectiveAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+				}
+				out = append(out, candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone})
 			}
-			return append(out, candidate{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}), nil
+			return out, nil
 		}
-		pullRequestEnd := ""
+		pullRequestEnd := coveredEnd{kind: contextfabric.TombstoneKindOutrankedPullRequestLinks}
 		if prExists == 1 && strings.TrimSpace(prRepoSlug) != "" {
-			pullRequestEnd = pullRequestCanonicalID(prRepoID, int64(rawNumber))
+			pullRequestEnd.id = pullRequestCanonicalID(prRepoID, int64(rawNumber))
+		}
+		// The work item's node, when it has one: an id the identity rules
+		// cannot derive names no node, so it has no edge to retract.
+		issueEnd := coveredEnd{kind: contextfabric.TombstoneKindOutrankedIssueLinks}
+		if issueResolved == 1 {
+			if id, omitted, err := identity.Derive(identity.KindWorkItem, []string{issueRepoID, workItemID}, nil); err == nil && !omitted {
+				issueEnd.id = id
+			}
 		}
 
 		tier := strings.TrimSpace(provenance)
@@ -174,20 +189,15 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 			return skip(issuePullRequestLinkSkipOutranked)
 		}
 		if issueResolved == 0 {
-			return skipNative(issuePullRequestLinkSkipUnresolvedIssue, contextfabric.TombstoneKindOutrankedPullRequestLinks, pullRequestEnd)
+			return skipNative(issuePullRequestLinkSkipUnresolvedIssue, pullRequestEnd)
 		}
 		if _, isPullRequest := pullRequestWorkItemTypes[strings.ToLower(strings.TrimSpace(issueType))]; isPullRequest {
-			return skipNative(issuePullRequestLinkSkipPullRequestTyped, contextfabric.TombstoneKindOutrankedPullRequestLinks, pullRequestEnd)
+			// The work item may have been an issue when an earlier link of it
+			// was projected, so its own lower-tier links go too.
+			return skipNative(issuePullRequestLinkSkipPullRequestTyped, pullRequestEnd, issueEnd)
 		}
-
-		if pullRequestEnd == "" {
-			// An issue id the identity rules cannot derive names no node, so
-			// it has no edge to retract.
-			issueEnd, omitted, err := identity.Derive(identity.KindWorkItem, []string{issueRepoID, workItemID}, nil)
-			if err != nil || omitted {
-				issueEnd = ""
-			}
-			return skipNative(issuePullRequestLinkSkipMissingPRNode, contextfabric.TombstoneKindOutrankedIssueLinks, issueEnd)
+		if pullRequestEnd.id == "" {
+			return skipNative(issuePullRequestLinkSkipMissingPRNode, issueEnd)
 		}
 
 		// The issue's id uses the ISSUE's own repo_id from work_items. The
@@ -199,7 +209,7 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 		if omitted {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
-		pullRequestID := pullRequestEnd
+		pullRequestID := pullRequestEnd.id
 
 		validFrom, validTo := edgeValidity(
 			requiredTime(issueCreatedAt), optionalTime(issueHasEnded, issueEndedAt),

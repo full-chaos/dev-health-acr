@@ -271,10 +271,10 @@ type IssuePullRequestLinkRowForTest struct {
 	Tier           string
 	Rank           int64
 	IgnoredReason  string
-	// Covers is the "kind|canonical id" of the outranked-link tombstone the
+	// Covers is the "kind|canonical id" of each outranked-link tombstone the
 	// row emits beside its skip, when a native row the producer cannot
 	// project names a covered end.
-	Covers string
+	Covers []string
 }
 
 // IssuePullRequestLinkPageForTest runs queryIssuePullRequestLinks for ONE page
@@ -289,7 +289,7 @@ func IssuePullRequestLinkPageForTest(ctx context.Context, client contextpacket.C
 	rows := make([]IssuePullRequestLinkRowForTest, 0, len(candidates))
 	for _, c := range candidates {
 		if c.tombstone != nil && len(rows) > 0 && rows[len(rows)-1].SortKey == c.sortKey {
-			rows[len(rows)-1].Covers = c.tombstone.Kind + "|" + c.tombstone.CanonicalID
+			rows[len(rows)-1].Covers = append(rows[len(rows)-1].Covers, c.tombstone.Kind+"|"+c.tombstone.CanonicalID)
 			continue
 		}
 		row := IssuePullRequestLinkRowForTest{Position: c.position(), SortKey: c.sortKey, IgnoredReason: c.ignoredType}

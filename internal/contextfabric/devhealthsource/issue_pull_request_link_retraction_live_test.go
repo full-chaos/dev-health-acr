@@ -204,6 +204,32 @@ func nativeLinkThatIsNotProjectedStillRetracts(t *testing.T, adapter *falkorgrap
 	}
 }
 
+// A work item that was an issue when its lower-tier link was projected and is
+// a pull request item now, with a native link to a pull request that has no
+// node: its earlier lower-tier link is retracted.
+func workItemThatBecameAPullRequestItemLosesItsLowerTierLinks(t *testing.T, adapter *falkorgraph.Adapter) {
+	const org, repo = "98780000-0000-4000-8000-000000000004", "98780000-0000-4000-8000-0000000000d1"
+	w := newLinkWorld(t, adapter, org, repo)
+	first := w.now.Add(-5 * time.Hour)
+	w.item(repo, "gh:acme/links#40", "", first)
+	p := w.pull(repo, 31)
+	w.link(repo, "gh:acme/links#40", 31, "heuristic", first)
+	w.drain()
+	x := w.workItemID(repo, "gh:acme/links#40")
+	if got := w.stored(p); fmt.Sprint(got) != fmt.Sprint([]string{x + " -> " + p + " = heuristic"}) {
+		t.Fatalf("before: %v", got)
+	}
+	later := time.Now().UTC().Add(time.Second)
+	w.exec("work item becomes a pull request item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, url, parent_id, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"gh:acme/links#40", repo, org, "now a pull request", "pr", "open", "", "", "github", first, later, later)
+	w.link(repo, "gh:acme/links#40", 99, "native", later)
+	w.retract(repo, "gh:acme/links#40", 31)
+	w.drain()
+	if got := w.stored(p); len(got) != 0 {
+		t.Fatalf("after the native link of the pull request item: %v, want its earlier lower-tier link retracted", got)
+	}
+}
+
 func sortedStrings(values ...string) []string {
 	out := append([]string(nil), values...)
 	sort.Strings(out)
@@ -217,4 +243,5 @@ func TestOutrankedIssuePullRequestLinksOnRealStores(t *testing.T) {
 	t.Run("a native link arriving later", func(t *testing.T) { nativeLinkArrivingLaterRetractsTheOutrankedEdges(t, adapter) })
 	t.Run("native and lower tier in one pass", func(t *testing.T) { nativeAndLowerTierInOnePassWriteOnlyTheNative(t, adapter) })
 	t.Run("a native link that is not projected", func(t *testing.T) { nativeLinkThatIsNotProjectedStillRetracts(t, adapter) })
+	t.Run("a work item that became a pull request item", func(t *testing.T) { workItemThatBecameAPullRequestItemLosesItsLowerTierLinks(t, adapter) })
 }
