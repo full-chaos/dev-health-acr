@@ -65,7 +65,9 @@ import (
 // exists to signal, same class as the rp3 -> rp4 bump immediately above. No
 // vector or node stamp moves; this is a read-side commit-decision change
 // only.
-const RetrievalPolicyVersion = "rp5"
+// CHAOS-10031 bumped this rp5 -> rp6: the calibrated retrieval-policy entry is
+// re-keyed t3 -> t4 (inherited calibration, see calibratedIdentityText3Large).
+const RetrievalPolicyVersion = "rp6"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty
@@ -76,7 +78,8 @@ const RetrievalPolicyVersion = "rp5"
 const EmbedRetrievalIdentityNone = "none"
 
 // embedTextTemplateVersion names the per-kind embed-text COMPOSITION the
-// write path currently produces (spec §4 Layer B). "t3" is CHAOS-3835's
+// write path currently produces (spec §4 Layer B). "t4" is CHAOS-10031's
+// skip of every ci_pipeline_run vector (embedSkippedKinds). "t3" is CHAOS-3835's
 // (T5) id-only skip decision (isPureIdentifierSubject, id_only.go): which
 // ROWS get embedded is exactly as much a composition fact as which FIELDS
 // do, per embedKindSkipped's own doc comment, so it rides the same
@@ -90,7 +93,7 @@ const EmbedRetrievalIdentityNone = "none"
 // -- bumps this constant, which moves the composition tag, which fails the
 // read fence closed and moves the answer-reuse key, both through the one
 // string below.
-const embedTextTemplateVersion = "t3"
+const embedTextTemplateVersion = "t4"
 
 // EmbedPrefixTagComponentNone is the prefix component of the composition tag
 // for a deployment with no prefix family configured -- the value
@@ -104,7 +107,7 @@ const EmbedPrefixTagComponentNone = "p" + string(embedprovider.PrefixFamilyNone)
 
 // EmbedCompositionTag is the canonical composition-tag literal (spec §4
 // Layer C): template version, embed rune cap, body gate, prefix component --
-// e.g. "t3:r2000:b0:pnone". A LITERAL, not a hash, so an operator can read a
+// e.g. "t4:r2000:b0:pnone". A LITERAL, not a hash, so an operator can read a
 // stamp (or a persisted reuse row) and know exactly what produced it.
 //
 // prefixTagComponent is embedprovider's PrefixTagComponent literal, leading

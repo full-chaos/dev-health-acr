@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // errVectorIndexNotReady reports that the organization's vector index exists
@@ -138,10 +139,6 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 		}
 	}
 	for _, entity := range batch.Entities {
-		if embedKindSkipped(entity.Subject.Kind) {
-			skippedKindKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
-			continue
-		}
 		if isPureIdentifierSubject(entity) {
 			// CHAOS-3835: a record-level decision, checked BEFORE the text is
 			// even composed for embedding -- the row never reaches add(), so
@@ -154,6 +151,10 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 			// vector on this exact kind/canonicalID.
 			key := string(entity.Subject.Kind) + "\x00" + entity.Subject.CanonicalID
 			skippedIDOnly[key] = embedTarget{kind: string(entity.Subject.Kind), canonicalID: entity.Subject.CanonicalID}
+			continue
+		}
+		if embedKindSkipped(entity.Subject.Kind) {
+			skippedKindKeys[string(entity.Subject.Kind)+"\x00"+entity.Subject.CanonicalID] = struct{}{}
 			continue
 		}
 		add(entity.Subject.Kind, entity.Subject.CanonicalID, subjectSearchText(entity, includeBodies))
@@ -202,7 +203,24 @@ func collectEmbedTargets(batch contextfabric.ProjectionBatch, maxRunes int, incl
 // separate reported reason (embedSkipCounts.IDOnly), not a member of this
 // list.
 func embedKindSkipped(kind contextfabric.SubjectKind) bool {
-	return kind == contextfabric.SubjectOrganization
+	_, skipped := embedSkippedKinds[kind]
+	return skipped
+}
+
+// embedSkippedKinds is the declared whole-kind embed skip-list.
+//   - organization: its text is a raw org UUID, pure noise (CHAOS-3833).
+//   - ci_pipeline_run: CHAOS-10031. Measured in prod, 167,212 CI-run vectors
+//     were 85% of all vectors (3072-d, ~3.8 GiB resident) and 0 of 88 subject
+//     resolutions in 30 days picked a CI run. CI runs keep their nodes,
+//     stored fields, search_text, edges and exact lookup by "run <id>"
+//     handle, repository, PR or commit; only the vector is not written.
+//
+// A skipped kind is not cleared: vectors written before the kind joined this
+// list stay until the from-zero rebuild; they fail the read fence meanwhile
+// because embedTextTemplateVersion moved.
+var embedSkippedKinds = map[contextfabric.SubjectKind]struct{}{
+	contextfabric.SubjectOrganization:     {},
+	contractsv1.ContextFabricSubjectCIRun: {},
 }
 
 // embedProjectionBatch writes one vector per node this batch authored.

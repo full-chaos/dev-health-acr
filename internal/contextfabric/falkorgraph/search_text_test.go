@@ -233,6 +233,12 @@ func TestWriteAndEmbedPathsComposeByteIdenticalText(t *testing.T) {
 			if written == "" {
 				t.Fatalf("%s wrote no search text", entity.Subject.CanonicalID)
 			}
+			if embedKindSkipped(entity.Subject.Kind) {
+				if _, embedded := embedText[entity.Subject.CanonicalID]; embedded {
+					t.Errorf("%s is in embedSkippedKinds but got an embed target", entity.Subject.CanonicalID)
+				}
+				continue
+			}
 			if embedText[entity.Subject.CanonicalID] != written {
 				t.Errorf("includeBodies=%v %s: embed text %q != written search text %q",
 					includeBodies, entity.Subject.CanonicalID, embedText[entity.Subject.CanonicalID], written)
@@ -443,11 +449,11 @@ func TestOrganizationIsSkippedFromEmbeddingAndCounted(t *testing.T) {
 // node stamp is the ONE identity string suffixed with it.
 func TestCompositionTagAndStampCarryTheSemanticConfig(t *testing.T) {
 	t.Parallel()
-	if got := EmbedCompositionTag(2000, false, ""); got != "t3:r2000:b0:pnone" {
-		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t3:r2000:b0:pnone", got)
+	if got := EmbedCompositionTag(2000, false, ""); got != "t4:r2000:b0:pnone" {
+		t.Fatalf("EmbedCompositionTag = %q, want the canonical literal t4:r2000:b0:pnone", got)
 	}
-	if got := EmbedCompositionTag(4096, true, ""); got != "t3:r4096:b1:pnone" {
-		t.Fatalf("EmbedCompositionTag = %q, want t3:r4096:b1:pnone", got)
+	if got := EmbedCompositionTag(4096, true, ""); got != "t4:r4096:b1:pnone" {
+		t.Fatalf("EmbedCompositionTag = %q, want t4:r4096:b1:pnone", got)
 	}
 
 	fake := &fakeConn{}
@@ -542,5 +548,38 @@ func TestEmbedRetrievalIdentityFromEnvTracksTheSemanticConfig(t *testing.T) {
 	}
 	if _, err := EmbedRetrievalIdentityFromEnv(env(invalid)); err == nil {
 		t.Fatal("an invalid locality must fail closed, never default")
+	}
+}
+
+// TestCIPipelineRunsAreNeverEmbedded (CHAOS-10031): a CI run with a real
+// name gets no embed target and is counted as a kind skip, while its
+// lexical search text is still composed; other kinds still embed.
+func TestCIPipelineRunsAreNeverEmbedded(t *testing.T) {
+	t.Parallel()
+	run := contextfabric.EntityProjection{
+		Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ci_pipeline_run:run-77", Label: "CI run-77"},
+		Properties: map[string]contextfabric.ScalarValue{
+			"pipeline_name": scalar("fullstack-acceptance"), "branch": scalar("main"),
+			"repo": scalar("example-org/widget-service"),
+		},
+	}
+	repo := contextfabric.EntityProjection{
+		Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:r1", Label: "widget-service"},
+	}
+	targets, _, skipped := collectEmbedTargets(contextfabric.ProjectionBatch{OrgID: "org", Entities: []contextfabric.EntityProjection{run, repo}}, embedprovider.MinimumMaxTextRunes, false)
+	for _, target := range targets {
+		if target.kind == string(contractsv1.ContextFabricSubjectCIRun) {
+			t.Fatalf("a CI run got an embed target: %+v", target)
+		}
+	}
+	if len(targets) != 1 || targets[0].canonicalID != "repository:r1" {
+		t.Fatalf("targets = %+v, want only the repository", targets)
+	}
+	if skipped.Kind != 1 {
+		t.Errorf("skipped.Kind = %d, want 1", skipped.Kind)
+	}
+	attrs := subjectMergeAttrs(run.Subject, run.Authorization, run.EvidenceRefIDs, time.Time{}, nil, nil, run.SourceVersion, &run, false)
+	if written, _ := attrs[propSearchText].(string); written == "" {
+		t.Error("the CI run lost its lexical search text")
 	}
 }

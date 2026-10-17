@@ -518,7 +518,7 @@ running the rebuild.
 
 **The calibrated retrieval-policy table entry auto-applies with no
 opt-in flag.** `retrievalPolicyTable`'s shipped
-`openai/text-embedding-3-large#t3:r2000:b0:pnone#d3072` entry (tau=0.30,
+`openai/text-embedding-3-large#t4:r2000:b0:pnone#d3072` entry (tau=0.30,
 K unchanged, efRuntime=200) applies automatically the moment a
 deployment's provider, model, composition tag, and dimension match it
 exactly — the exact-identity pinning IS the safety mechanism: any other
@@ -529,7 +529,7 @@ table's tau per-knob. The entry's constants are chris-ratified for the
 CHAOS-3834 T4 measurement program; the no-match/false-friend controls
 its precision actually depends on (hybrid ranking + corroboration) are
 the sequencing gate recorded on CHAOS-3834, tracked operationally rather
-than encoded as a second flag. **This key is `t3`-scoped** — it
+than encoded as a second flag. **This key is `t4`-scoped** (re-keyed from `t3` by CHAOS-10031, `RetrievalPolicyVersion` rp5 → rp6, same inheritance: no calibration pair was built from a CI run) — it
 INHERITS the original t2-measured tau/efRuntime values by an explicit
 decision recorded on CHAOS-3834 at CHAOS-3835 integration (T5's id-only
 skip changes no embedded text for any subject still embedded; it only
@@ -546,6 +546,8 @@ tau=0.2821294944901428, a 0.0179 delta from the shipped 0.30 — inside the
 ±0.02 confirmation band — with K staying at "unchanged". No table edit, no
 `RetrievalPolicyVersion` bump. See `calibratedIdentityText3Large`'s doc
 comment for the full result, provenance caveat, and negative-gate note.
+
+**CHAOS-10031 (embed composition tag `t3` → `t4`): CI pipeline runs are no longer embedded.** `embedSkippedKinds` (`falkorgraph/vector_projection.go`) now lists `ci_pipeline_run` beside `organization`. CI-run nodes, stored fields, `search_text`, edges and exact lookup (the `run <id>` handle, by repository, PR or commit) are unchanged; only the vector is not written. Prod measurement that drove it: 167,212 CI-run vectors were 85% of all vectors (3072-d, about 3.8 GiB resident), and 0 of 88 subject resolutions in 30 days picked a CI run. The `t4` tag fails the read fence for `t3`-stamped vectors, same as the T5 step above, so a vector-enabled organization is lexical-only until `acr-projector rebuild --org`. An incremental projector run does **not** delete existing CI-run vectors (a skipped kind is never cleared); only the from-zero rebuild drops them. No `ClickHouseSourceVersion` or `TeamsProjectsSourceVersion` bump.
 
 **A rebuild is likewise REQUIRED after deploying CHAOS-3916**
 (`ClickHouseSourceVersion` v5 → v6, `TeamsProjectsSourceVersion` v2 → v3).

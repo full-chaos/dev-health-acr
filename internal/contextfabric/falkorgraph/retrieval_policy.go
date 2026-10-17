@@ -181,7 +181,14 @@ type RetrievalPolicy struct {
 // the identity side: this entry is scoped to dimension 3072 exactly, and an
 // unmatched width falls back to the conservative, uncalibrated defaults
 // like any other uncalibrated identity.
-const calibratedIdentityText3Large = "openai/text-embedding-3-large#t3:r2000:b0:pnone#d3072"
+//
+// CHAOS-10031 moved the key t3 -> t4 (ci_pipeline_run vectors dropped,
+// embedSkippedKinds). Same explicit inheritance as t2 -> t3: no S+/S- pair in
+// the tau=0.30/efRuntime=200 calibration was built from a CI run (0 of 88
+// resolutions in 30 days picked one), so the t3 calibration describes the t4
+// corpus; re-measure after the from-zero rebuild. The t3 key is dropped, since
+// a t4-constant binary can never produce it.
+const calibratedIdentityText3Large = "openai/text-embedding-3-large#t4:r2000:b0:pnone#d3072"
 
 // retrievalPolicyTable is keyed by EmbedRetrievalIdentityFromEnv's persisted
 // string (identity.String() + "#" + EmbedCompositionTag(...), byte-identical
