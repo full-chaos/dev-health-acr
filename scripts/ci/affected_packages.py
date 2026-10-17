@@ -48,10 +48,16 @@ FILE_READ = re.compile(
     r"os\.(?:ReadFile|Open|ReadDir)\(|parser\.ParseFile\(|filepath\.Glob\(|os\.DirFS\("
 )
 REACHES_UP = re.compile(r"\"\.\.\"|\.\./|repopath|runtime\.Caller|repoRoot|moduleRoot|projectRoot")
+# ... and the same file works with Go source (a .go path or the go/* parsers).
+# Reading docs, JSON, SQL or golden files above the package is not enough: a
+# change to one of those is a non-Go path, which is always the full suite.
+GO_SOURCE = re.compile(r"\.go[\"`]|go/parser|go/ast|go/types|go/token")
 
 
 def reads_source_tree(text):
-    return bool(AMBIENT.search(text)) or bool(FILE_READ.search(text) and REACHES_UP.search(text))
+    if AMBIENT.search(text):
+        return True
+    return bool(FILE_READ.search(text) and REACHES_UP.search(text) and GO_SOURCE.search(text))
 
 
 SKIP_DIRS = {".git", "vendor", "node_modules"}

@@ -383,6 +383,16 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 // memory-limit-measured: 87.35 MiB 2026-10-13 prod query_log hash 783246543299970617
 const projectorStatementMaxMemoryUsage uint64 = 192 << 20
 
+// projectorStatementMaxThreads is the per-statement thread default of every
+// projector ClickHouse read. At the server default (64 on the venue) a
+// from-zero build read 701 MiB for the project membership statement and 274 MiB
+// for the work item dependency statement; at 4 threads they read 67 MiB and
+// 15 MiB. A statement's own SETTINGS max_threads (the caught-up membership
+// read sets 1) still wins.
+//
+// memory-limit-measured: 66.83 MiB 2026-10-17 venue query_log, hash 12829533649210058194 at max_threads 4
+const projectorStatementMaxThreads uint64 = 4
+
 type projectorClickHouseClient struct {
 	query contextpacket.ClickHouseQueryClient
 	ping  func(context.Context) error
@@ -407,7 +417,7 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, me
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
 	return projectorClickHouseClient{
-		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage, projectorCapOptions(logger, metrics)...),
+		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage, append(projectorCapOptions(logger, metrics), contextpacket.WithMaxThreads(projectorStatementMaxThreads))...),
 		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
 }

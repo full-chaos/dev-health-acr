@@ -3,7 +3,9 @@ package contextpacket
 import (
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -18,6 +20,7 @@ type rule struct {
 	why          string
 	cites        []string
 	subRank      int
+	event        *contractsv1.CauseEvent
 }
 
 func evidenceRule(ref contractsv1.EvidenceRef) rule {
@@ -56,31 +59,31 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	// Rows whose entity type or text is free-form producer content never
 	// choose a role by that text.
 	if ref.SourceVersion == aiArtifactSourceVersion {
-		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0}
+		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0, nil}
 	}
 	if failurePressure(ref) {
 		return pressureRule()
 	}
 	switch strings.ToLower(ref.Source.EntityType) {
 	case "deployment":
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0, nil}
 	case "recommendation", "review_action", "task":
 		if ref.SourceVersion != storedFindingsSourceVersion {
 			break
 		}
-		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, "", nil, 0}
+		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, "", nil, 0, nil}
 	case "state", "release":
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0, nil}
 	}
-	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0}
+	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0, nil}
 }
 
 func pressureRule() rule {
-	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0}
+	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0, nil}
 }
 
 func causeRule() rule {
-	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, "", nil, 0}
+	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, "", nil, 0, nil}
 }
 
 const (
@@ -136,11 +139,19 @@ func logExplicitRuleRejection(ref contractsv1.EvidenceRef) {
 	}
 }
 
-func actionsFor(items []contractsv1.ContextPacketItem) ([]contractsv1.RequiredCheck, []contractsv1.RecommendedStep) {
+func actionsFor(items []contractsv1.ContextPacketItem, criteria map[string][]string) ([]contractsv1.RequiredCheck, []contractsv1.RecommendedStep) {
 	rules := make([]string, 0, len(items))
 	seen := map[string]bool{}
 	titles := map[string][]string{}
+	stated := map[string][]string{}
 	for _, item := range items {
+		for _, refID := range item.EvidenceRefIDs {
+			for _, criterion := range criteria[refID] {
+				if text := actionCriterion(criterion); text != "" && len(stated[item.RuleID]) < maxActionCriteria && !slices.Contains(stated[item.RuleID], text) {
+					stated[item.RuleID] = append(stated[item.RuleID], text)
+				}
+			}
+		}
 		if !seen[item.RuleID] {
 			seen[item.RuleID] = true
 			rules = append(rules, item.RuleID)
@@ -158,15 +169,33 @@ func actionsFor(items []contractsv1.ContextPacketItem) ([]contractsv1.RequiredCh
 			named = subject + " (retrieved titles, untrusted): " + strings.Join(titles[ruleID], "; ")
 		}
 		checks = append(checks, contractsv1.RequiredCheck{CheckID: "check." + ruleID, Label: "Validate retrieved evidence for " + named, Reason: "Retrieved content for " + subject + " is untrusted.", RuleID: ruleID})
+		if len(stated[ruleID]) > 0 {
+			for index, criterion := range stated[ruleID] {
+				steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID + ".criterion" + strconv.Itoa(index+1), Label: "Work toward the stated success criterion (stored finding, untrusted): " + criterion, Reason: "A stored finding for the owning team states this criterion; check it against cited evidence before changing code.", RuleID: ruleID})
+			}
+			continue
+		}
 		steps = append(steps, contractsv1.RecommendedStep{StepID: "step." + ruleID, Label: "Investigate retrieved evidence for " + named, Reason: "Use cited evidence for " + subject + " before changing code.", RuleID: ruleID})
 	}
 	return checks, steps
 }
 
 const (
-	maxActionTitles     = 2
-	maxActionTitleRunes = 80
+	maxActionTitles      = 2
+	maxActionTitleRunes  = 80
+	maxActionCriteria    = 3
+	maxActionCriterionRu = 300
 )
+
+// actionCriterion renders a stored success criterion as quoted, bounded text:
+// it is untrusted content and is never shown as the packet's own words.
+func actionCriterion(criterion string) string {
+	criterion = strings.ReplaceAll(strings.Join(strings.Fields(criterion), " "), `"`, "'")
+	if criterion == "" {
+		return ""
+	}
+	return `"` + truncateRunes(criterion, maxActionCriterionRu) + `"`
+}
 
 func actionTitle(title string) string {
 	title = strings.ReplaceAll(strings.Join(strings.Fields(title), " "), `"`, "'")
