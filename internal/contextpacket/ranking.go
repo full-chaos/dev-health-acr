@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	RankingVersionV1          = "ranker.v10"
+	RankingVersionV1          = "ranker.v11"
 	minimumEvidenceConfidence = 0.5
 )
 
@@ -329,7 +329,11 @@ func evidenceItem(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope) 
 func evidenceItemWithRoles(ref contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, roles roleResolver) contractsv1.ContextPacketItem {
 	rule := roles.rule(ref)
 	logExplicitRuleRejection(ref)
-	return contractsv1.ContextPacketItem{SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: itemID(ref.EvidenceRefID),
+	var causeEvent contractsv1.CauseEvent
+	if rule.event != nil {
+		causeEvent = *rule.event
+	}
+	return contractsv1.ContextPacketItem{CauseEvent: causeEvent, SchemaVersion: contractsv1.ContextPacketItemSchema, PacketItemID: itemID(ref.EvidenceRefID),
 		Category: rule.category, ClaimKind: rule.claim, Title: truncateRunes(ref.Source.DisplayLabel, 500), Summary: evidenceSummary(ref),
 		WhyIncluded: whyIncluded(rule), RuleID: rule.id, Confidence: ref.Confidence,
 		Severity: rule.severity, ValidityScope: contractsv1.ValidityScope{Branch: scope.Branch, CommitSHA: scope.CommitSHA},
