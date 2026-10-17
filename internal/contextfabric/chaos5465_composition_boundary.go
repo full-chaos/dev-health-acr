@@ -284,7 +284,18 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 	// none was proposed FOR THIS TURN. The carried reading rides out under its
 	// own already-served frame, so a refusal on this path can come only from the
 	// carried reading itself.
+	//
+	// ONE EXCEPTION, NAMED: a fresh reading that failed invariant I6 (a group
+	// kind equal to its member kind) is kept and refuses the turn. That
+	// refusal is a property of what the question asks for, not of the window
+	// the receipt confirmed, so a receipt cannot launder it: serving the
+	// carried reading beside an illegal fresh one would answer a question the
+	// server has just refused. This reverses the CHAOS-5582 rule for I6 only;
+	// every other invariant and every refused_basis gate stays dropped.
 	if in.TransitionEstablished && in.FreshGate.Refuses() {
+		if isFreshSelfGroupRefusal(in.FreshGate) {
+			return AcceptedContext{Gate: in.FreshGate, Outcome: CompositionFreshRefused, FailedInvariant: string(in.FreshGate.FailedInvariant)}
+		}
 		in.Fresh = nil
 		in.FreshGate = FrameGate{Outcome: FrameGateNotProposed}
 	}
@@ -422,4 +433,10 @@ func ValidCompositionOutcome(outcome CompositionOutcome) bool {
 		}
 	}
 	return false
+}
+
+// isFreshSelfGroupRefusal reports whether a gate refused on invariant I6: the
+// one fresh refusal an established window-only transition keeps.
+func isFreshSelfGroupRefusal(gate FrameGate) bool {
+	return gate.Outcome == FrameGateRejectedInvalid && gate.FailedInvariant == FrameInvariantI6
 }

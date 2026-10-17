@@ -710,13 +710,20 @@ func (i refusingGate5582) Interpret(ctx context.Context, p storage.Principal, r 
 // paired with the same fixture on an UNESTABLISHED turn, where the refusal must
 // still stand. Without that control the table would pass on a build that simply
 // stopped refusing.
+//
+// THE ONE CONSCIOUS EXCEPTION: a fresh rejected_invalid reading that failed I6
+// (a group kind equal to its member kind) is kept and refuses the turn even on
+// an established transition, because that refusal is a property of the
+// question, not of the window; see TestSelfGroupRefusesOnAnEstablishedWindowTransition.
+// The i6 cell therefore expects a refusal. The i1 cell is the control that
+// every other invariant is still dropped.
 func TestCHAOS5582_NoFreshGateDecidesAnEstablishedTransition(t *testing.T) {
 	t.Parallel()
 	question := validInvestigationRequest().Question
 	changed := "What was the status of Ask Dev last spring and what drove it?"
 	gates := map[string]FrameGate{
-		"rejected_invalid": {Outcome: FrameGateRejectedInvalid, FailedInvariant: FrameInvariant("i6")},
-		"refused_basis":    {Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository},
+		"rejected_invalid_i1": {Outcome: FrameGateRejectedInvalid, FailedInvariant: FrameInvariantI1},
+		"refused_basis":       {Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository},
 	}
 	for gateName, gate := range gates {
 		for _, withFrame := range []bool{false, true} {
