@@ -1,0 +1,177 @@
+package entitlements
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+)
+
+// llmConfigSchemaVersion is the schema of ops' internal org llm-config route
+// (GET /api/v1/internal/acr/orgs/{org_id}/llm-config).
+const llmConfigSchemaVersion = "acr_llm_config.v1"
+
+// llmConfigCacheTTL bounds how long one org's answer is reused: the route is
+// read on every model call, and a changed BYO setting must still reach the
+// next turn quickly.
+const llmConfigCacheTTL = 15 * time.Second
+
+// ErrLLMConfigUnusable is a BYO configuration ops holds but acr cannot use:
+// a credential without the llm_config:read scope (401/403), a stored config
+// ops cannot decrypt (409), or a body that does not match the request. It
+// fails the organization's model calls closed; it is never "no BYO", so the
+// platform model is never used in its place.
+var ErrLLMConfigUnusable = errors.New("Dev Health BYO LLM configuration is unusable")
+
+// OrgLLMConfig is one org's BYO LLM configuration as ops serves it. APIKey is
+// the plaintext credential: it never reaches a log line, an error or a
+// printed value (String, GoString, LogValue and MarshalJSON redact it).
+type OrgLLMConfig struct {
+	Provider string
+	Model    string
+	BaseURL  string
+	APIKey   string
+	// Version changes when the org's stored settings change (ops: the
+	// newest updated_at, RFC 3339 with nanoseconds).
+	Version string
+}
+
+func (c OrgLLMConfig) view() map[string]any {
+	return map[string]any{"provider": c.Provider, "model": c.Model, "base_url": c.BaseURL, "api_key": "[REDACTED]", "version": c.Version}
+}
+
+func (c OrgLLMConfig) String() string {
+	return fmt.Sprintf("OrgLLMConfig{Provider:%q Model:%q BaseURL:%q APIKey:[REDACTED] Version:%q}", c.Provider, c.Model, c.BaseURL, c.Version)
+}
+
+func (c OrgLLMConfig) GoString() string { return c.String() }
+
+func (c OrgLLMConfig) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("provider", c.Provider), slog.String("model", c.Model),
+		slog.String("base_url", c.BaseURL), slog.String("api_key", "[REDACTED]"), slog.String("version", c.Version))
+}
+
+func (c OrgLLMConfig) MarshalJSON() ([]byte, error) { return json.Marshal(c.view()) }
+
+type llmConfigResponse struct {
+	SchemaVersion string `json:"schema_version"`
+	OrgID         string `json:"org_id"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	BaseURL       string `json:"base_url"`
+	APIKey        string `json:"api_key"`
+	Version       string `json:"version"`
+}
+
+type llmConfigEntry struct {
+	config  OrgLLMConfig
+	found   bool
+	expires time.Time
+}
+
+type llmConfigCache struct {
+	mu      sync.Mutex
+	entries map[string]llmConfigEntry
+}
+
+func (c *llmConfigCache) get(orgID string, now time.Time) (llmConfigEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[orgID]
+	if !ok || !now.Before(entry.expires) {
+		delete(c.entries, orgID)
+		return llmConfigEntry{}, false
+	}
+	return entry, true
+}
+
+func (c *llmConfigCache) put(orgID string, entry llmConfigEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]llmConfigEntry{}
+	}
+	c.entries[orgID] = entry
+}
+
+// OrgLLMConfig returns orgID's BYO LLM configuration from ops. found=false
+// is "no BYO configured" (404): the caller uses the platform model. An
+// unusable configuration is ErrLLMConfigUnusable; ops being unreachable or
+// answering 5xx is errUnavailable. Answers (found or not) are reused for
+// llmConfigCacheTTL; errors are never cached.
+func (c *Client) OrgLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, bool, error) {
+	if strings.TrimSpace(orgID) == "" {
+		return OrgLLMConfig{}, false, errors.New("unsupported llm config request")
+	}
+	now := c.now()
+	if entry, ok := c.llmConfigs.get(orgID, now); ok {
+		return entry.config, entry.found, nil
+	}
+	config, found, err := c.fetchLLMConfig(ctx, orgID)
+	if err != nil {
+		return OrgLLMConfig{}, false, err
+	}
+	c.llmConfigs.put(orgID, llmConfigEntry{config: config, found: found, expires: now.Add(llmConfigCacheTTL)})
+	return config, found, nil
+}
+
+func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, bool, error) {
+	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, llmConfigURL(c.baseURL, orgID), nil)
+	if err != nil {
+		return OrgLLMConfig{}, false, errUnavailable
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return OrgLLMConfig{}, false, errUnavailable
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return OrgLLMConfig{}, false, nil
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:
+		return OrgLLMConfig{}, false, fmt.Errorf("%w: ops answered %d", ErrLLMConfigUnusable, response.StatusCode)
+	default:
+		return OrgLLMConfig{}, false, errUnavailable
+	}
+	payload, err := readBounded(response.Body, c.maxBody)
+	if err != nil {
+		return OrgLLMConfig{}, false, errUnavailable
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var parsed llmConfigResponse
+	if err := decoder.Decode(&parsed); err != nil {
+		return OrgLLMConfig{}, false, fmt.Errorf("%w: the body does not decode", ErrLLMConfigUnusable)
+	}
+	switch {
+	case parsed.SchemaVersion != llmConfigSchemaVersion:
+		return OrgLLMConfig{}, false, fmt.Errorf("%w: schema_version is not %s", ErrLLMConfigUnusable, llmConfigSchemaVersion)
+	case parsed.OrgID != orgID:
+		return OrgLLMConfig{}, false, fmt.Errorf("%w: the body names another organization", ErrLLMConfigUnusable)
+	case strings.TrimSpace(parsed.Provider) == "" || strings.TrimSpace(parsed.Model) == "":
+		return OrgLLMConfig{}, false, fmt.Errorf("%w: provider or model is empty", ErrLLMConfigUnusable)
+	case strings.TrimSpace(parsed.Version) == "":
+		return OrgLLMConfig{}, false, fmt.Errorf("%w: version is empty", ErrLLMConfigUnusable)
+	}
+	return OrgLLMConfig{
+		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),
+		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: parsed.APIKey, Version: parsed.Version,
+	}, true, nil
+}
+
+func llmConfigURL(baseURL *url.URL, orgID string) string {
+	copy := *baseURL
+	copy.Path = "/api/v1/internal/acr/orgs/" + url.PathEscape(orgID) + "/llm-config"
+	return copy.String()
+}
