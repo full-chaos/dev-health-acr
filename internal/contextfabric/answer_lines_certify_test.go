@@ -370,3 +370,48 @@ func TestReuseServedRequestIDAndBindingEpochLinesCertify(t *testing.T) {
 	sink.RecordBindingEpochDelta(context.Background(), principalOrg1, true, 4)
 	pinKeys(t, bytes.NewBuffer(buf.Bytes()), without(bindingEpochKeys, "request_id"), 1)
 }
+
+// TestSynthesisStatusOverrideCarriesUnaskedKindsOnTheReasonsThatMatchedARow
+// drives the status floor itself: an asked row read beside an unasked one
+// gives the over-read-facts reason AND the unasked kind, and the declaration
+// must not restrict the field to the kept-unasked reason.
+func TestSynthesisStatusOverrideCarriesUnaskedKindsOnTheReasonsThatMatchedARow(t *testing.T) {
+	t.Parallel()
+	matched, only := contextfabric.SynthesisFloorOutcomesForTest()
+	if matched.Reason != contextfabric.SynthesisStatusOverrideNoMatchOverReadFacts || matched.UnaskedFactKinds != "workload" {
+		t.Fatalf("floor outcome beside an unasked row = %q / %q, want over_read_facts with the unasked kind", matched.Reason, matched.UnaskedFactKinds)
+	}
+	if only.Reason != contextfabric.SynthesisStatusOverrideNoMatchKeptUnaskedFactKinds || only.UnaskedFactKinds != "workload" {
+		t.Fatalf("floor outcome over an unasked-only row = %q / %q", only.Reason, only.UnaskedFactKinds)
+	}
+	for _, outcome := range []contextfabric.SynthesisStatusOverrideOutcome{matched, only} {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		sink.RecordSynthesisStatusOverride(ctx, principalOrg1, outcome)
+		certifyRequestLine(t, buf.Bytes(), eventspec.SynthesisStatusOverride, map[string]any{
+			"reason": string(outcome.Reason), "unasked_fact_kinds": outcome.UnaskedFactKinds,
+		})
+	}
+	for _, field := range eventspec.SynthesisStatusOverride.Fields {
+		if field.Key == "unasked_fact_kinds" && strings.Contains(field.Applicability, string(contextfabric.SynthesisStatusOverrideNoMatchKeptUnaskedFactKinds)) {
+			t.Errorf("unasked_fact_kinds applicability %q ties the field to the kept reason, but the floor writes it on %q too", field.Applicability, matched.Reason)
+		}
+	}
+}
+
+func TestAnswerabilityRolePatternsRefuseAKindOutsideTheVocabulary(t *testing.T) {
+	t.Parallel()
+	none := contextfabric.SubjectlessTerminalAnswerability{EvaluatedRoles: "none", AdvancedRole: "none", AdvancingChannel: "none"}
+	for what, answerability := range map[string]contextfabric.SubjectlessTerminalAnswerability{
+		"an unknown evaluated kind": {EvaluatedRoles: "subject:future_kind:open", AdvancedRole: "none", AdvancingChannel: "none"},
+		"an unknown advanced kind":  {EvaluatedRoles: "none", AdvancedRole: "subject:future_kind", AdvancingChannel: "none"},
+	} {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		sink.RecordSubjectlessTerminal(ctx, principalOrg1, "ambiguous", "none", "none", "none", answerability)
+		certifyRefused(t, buf.Bytes(), eventspec.SubjectlessTerminal, what)
+		buf.Reset()
+		sink.RecordSubjectlessTerminal(ctx, principalOrg1, "ambiguous", "none", "none", "none", none)
+		certifyRequestLine(t, buf.Bytes(), eventspec.SubjectlessTerminal, nil)
+	}
+}

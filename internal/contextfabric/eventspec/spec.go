@@ -1864,7 +1864,14 @@ var FactRootRefused = Event{
 
 func intPtr(n int) *int { return &n }
 
-const answerabilityRolePattern = `^(none|(subject|anchor|member|group|operand):[a-z_]+:(open|population|resolved)(,(subject|anchor|member|group|operand):[a-z_]+:(open|population|resolved))*)$`
+var (
+	answerabilityRoleAlt        = "(" + strings.Join(contextfabric.AnswerabilityRoleVocabulary(), "|") + ")"
+	answerabilityStateAlt       = "(" + strings.Join(contextfabric.AnswerabilityRoleStateVocabulary(), "|") + ")"
+	answerabilityKindAlt        = "(undeclared|" + strings.Join(arrayTokens(storedResultSubjectKindArr[:]), "|") + ")"
+	answerabilitySlot           = answerabilityRoleAlt + ":" + answerabilityKindAlt + ":" + answerabilityStateAlt
+	answerabilityRolePattern    = "^(none|" + answerabilitySlot + "(," + answerabilitySlot + ")*)$"
+	answerabilityAdvancePattern = "^(none|" + answerabilityRoleAlt + ":(" + strings.Join(arrayTokens(storedResultSubjectKindArr[:]), "|") + "))$"
+)
 
 var (
 	factKindArr     = contractsv1.ContextFabricFactKindVocabulary()
@@ -1968,7 +1975,7 @@ var SynthesisStatusOverride = Event{
 		{Key: "to_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InvestigationStatusLogVocabulary()},
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SynthesisStatusOverrideReasonVocabulary()},
 		{Key: "committed_count", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "unasked_fact_kinds", Type: FieldString, Presence: PresenceRequired, JoinedMembers: arrayTokens(factKindArr[:]), Applicability: "empty unless the reason is no_match_kept_unasked_fact_kinds"},
+		{Key: "unasked_fact_kinds", Type: FieldString, Presence: PresenceRequired, JoinedMembers: arrayTokens(factKindArr[:]), Applicability: "the kinds of the committed subject's read rows that no requirement asked for, sorted and comma-joined; empty when every read row was asked for. Any reason can carry it, including the ones that matched an asked row"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -2051,7 +2058,7 @@ var SubjectlessTerminal = Event{
 		{Key: "declared_kinds", Type: FieldString, Presence: PresenceRequired, Pattern: kindListPattern, PatternExample: "project,team"},
 		{Key: "offered_kinds", Type: FieldString, Presence: PresenceRequired, Pattern: kindListPattern, PatternExample: "project,team"},
 		{Key: "evaluated_roles", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityRolePattern, PatternExample: "subject:project:open,anchor:undeclared:resolved"},
-		{Key: "advanced_role", Type: FieldString, Presence: PresenceRequired, Pattern: `^(none|(subject|anchor|member|group|operand):[a-z_]+)$`, PatternExample: "subject:project"},
+		{Key: "advanced_role", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityAdvancePattern, PatternExample: "subject:project"},
 		{Key: "advancing_channel", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.AnswerabilityChannelVocabulary()...)},
 		{Key: "offers_evaluated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "offers_advancing", Type: FieldInt, Presence: PresenceRequired},
@@ -2079,7 +2086,7 @@ var StoredAnswerability = Event{
 		{Key: "stored_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InvestigationStatusLogVocabulary()},
 		{Key: "served_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.InvestigationStatusLogVocabulary()...)},
 		{Key: "evaluated_roles", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityRolePattern, PatternExample: "subject:project:open"},
-		{Key: "advanced_role", Type: FieldString, Presence: PresenceRequired, Pattern: `^(none|(subject|anchor|member|group|operand):[a-z_]+)$`, PatternExample: "none"},
+		{Key: "advanced_role", Type: FieldString, Presence: PresenceRequired, Pattern: answerabilityAdvancePattern, PatternExample: "none"},
 		{Key: "advancing_channel", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.AnswerabilityChannelVocabulary()...)},
 		{Key: "offers_evaluated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "offers_advancing", Type: FieldInt, Presence: PresenceRequired},

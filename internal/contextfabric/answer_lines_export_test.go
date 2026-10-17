@@ -82,3 +82,28 @@ func PriorSubjectReceiptSkipReasonsForTest() (reasons []string, skipped []int, e
 	}
 	return reasons, rec.priorSubjectReceiptsSkipped, epochDeltas
 }
+
+// SynthesisFloorOutcomesForTest drives the status floor over a committed
+// subject whose asked fact row was read beside a row nobody asked for, and
+// over one whose only row was unasked, and returns what each wrote.
+func SynthesisFloorOutcomesForTest() (matchedBesideUnasked, onlyUnasked SynthesisStatusOverrideOutcome) {
+	build := func(kinds ...FactKind) (*InvestigationResult, CanonicalFactBundle) {
+		result := affirmationResult()
+		result.Status = InvestigationNoMatch
+		result.SubjectResolution = SubjectResolution{Committed: []SubjectRef{affirmationSubject}}
+		result.Interpretation.FactRequirements = []FactRequirement{{Kind: FactStatus}}
+		facts := emptyAffirmationFacts()
+		for _, kind := range kinds {
+			facts.Facts = append(facts.Facts, CanonicalFact{
+				Kind: kind, Subject: affirmationSubject, Fields: map[string]FactValue{}, EvidenceRefIDs: []string{affirmationSubjectRef},
+				SourceState: SourceAvailable, Source: "test", SourceVersion: "v1",
+			})
+		}
+		return &result, facts
+	}
+	result, facts := build(FactStatus, FactWorkload)
+	matched := applyServerStatusFloor(result, emptyAffirmationGraph(), facts, nil)
+	result, facts = build(FactWorkload)
+	only := applyServerStatusFloor(result, emptyAffirmationGraph(), facts, nil)
+	return *matched, *only
+}

@@ -8355,13 +8355,13 @@
         "key": "evaluated_roles",
         "type": "string",
         "presence": "required",
-        "pattern": "^(none|(subject|anchor|member|group|operand):[a-z_]+:(open|population|resolved)(,(subject|anchor|member|group|operand):[a-z_]+:(open|population|resolved))*)$"
+        "pattern": "^(none|(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved)(,(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved))*)$"
       },
       {
         "key": "advanced_role",
         "type": "string",
         "presence": "required",
-        "pattern": "^(none|(subject|anchor|member|group|operand):[a-z_]+)$"
+        "pattern": "^(none|(subject|anchor|member|group|operand):(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref))$"
       },
       {
         "key": "advancing_channel",
@@ -8620,13 +8620,13 @@
         "key": "evaluated_roles",
         "type": "string",
         "presence": "required",
-        "pattern": "^(none|(subject|anchor|member|group|operand):[a-z_]+:(open|population|resolved)(,(subject|anchor|member|group|operand):[a-z_]+:(open|population|resolved))*)$"
+        "pattern": "^(none|(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved)(,(subject|anchor|member|group|operand):(undeclared|organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref):(open|population|resolved))*)$"
       },
       {
         "key": "advanced_role",
         "type": "string",
         "presence": "required",
-        "pattern": "^(none|(subject|anchor|member|group|operand):[a-z_]+)$"
+        "pattern": "^(none|(subject|anchor|member|group|operand):(organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref))$"
       },
       {
         "key": "advancing_channel",
@@ -9267,7 +9267,7 @@
         "key": "unasked_fact_kinds",
         "type": "string",
         "presence": "required",
-        "applicability": "empty unless the reason is no_match_kept_unasked_fact_kinds",
+        "applicability": "the kinds of the committed subject's read rows that no requirement asked for, sorted and comma-joined; empty when every read row was asked for. Any reason can carry it, including the ones that matched an asked row",
         "joined_members": [
           "identity",
           "membership",
