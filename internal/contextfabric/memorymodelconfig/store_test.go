@@ -79,8 +79,8 @@ func TestResolveOrgModelConfig_returnsPlaintextCredential(t *testing.T) {
 	if !ok {
 		t.Fatal("ResolveOrgModelConfig reported no configuration for a configured org")
 	}
-	if resolved.Credential != written.Credential {
-		t.Fatalf("Credential = %q, want %q", resolved.Credential, written.Credential)
+	if resolved.Credential.Reveal() != written.Credential {
+		t.Fatalf("Credential = %q, want %q", resolved.Credential.Reveal(), written.Credential)
 	}
 }
 

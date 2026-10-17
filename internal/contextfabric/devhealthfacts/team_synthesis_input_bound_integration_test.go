@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"io"
 	"log/slog"
 	"net/http"
@@ -199,7 +200,7 @@ func TestATeamAtTheExpansionCapIsSynthesizedWithinTheModelInputBound(t *testing.
 	model := newRecordedSynthesisModel(t)
 	runtime, err := modelprovider.New(ctx, modelprovider.Config{
 		Provider: modelprovider.DefaultProvider, BaseURL: model.url, Model: modelprovider.DefaultModel,
-		APIKey: "sk-configured", Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
+		APIKey: llm.NewSecret("sk-configured"), Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
 		Logger: logger,
 	})
 	if err != nil {
@@ -342,7 +343,7 @@ func TestABoundedTeamInputKeepsTheFactsTheQuestionNamesNotTheFirstRead(t *testin
 		model := newRecordedSynthesisModel(t)
 		runtime, err := modelprovider.New(ctx, modelprovider.Config{
 			Provider: modelprovider.DefaultProvider, BaseURL: model.url, Model: modelprovider.DefaultModel,
-			APIKey: "sk-configured", Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
+			APIKey: llm.NewSecret("sk-configured"), Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
 			Logger: logger,
 		})
 		if err != nil {

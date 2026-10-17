@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"log/slog"
 	"time"
 
@@ -64,7 +65,7 @@ type ResolvedOrgModelConfig struct {
 	BaseURL       string
 	Model         string
 	FallbackModel string
-	Credential    string `json:"-"`
+	Credential    llm.Secret `json:"-"`
 	Generation    int64
 	UpdatedAt     time.Time
 }

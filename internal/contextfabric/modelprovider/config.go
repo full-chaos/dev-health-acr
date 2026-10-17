@@ -34,6 +34,7 @@ import (
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // Default provider selection. These encode the CHAOS-3855 decision (the
@@ -153,7 +154,7 @@ type Config struct {
 	// APIKey is the bearer credential. It is optional only when BaseURL is
 	// set (a local BYO server may not authenticate at all); reaching a
 	// hosted provider on the default base URL always requires it.
-	APIKey string
+	APIKey llm.Secret
 	// Timeout bounds one generation attempt and MaxAttempts bounds how many
 	// attempts genkitruntime makes. MaxTransportRetries is validated but not
 	// used by model calls (see EnvMaxTransportRetries).
@@ -255,7 +256,7 @@ func (c Config) validate() error {
 	if err := c.validateBaseURL(); err != nil {
 		return err
 	}
-	if c.BaseURL == "" && strings.TrimSpace(c.APIKey) == "" {
+	if c.BaseURL == "" && strings.TrimSpace(c.APIKey.Reveal()) == "" {
 		return fmt.Errorf("%s is required when %s is unset (the default provider endpoint authenticates every request)", EnvAPIKey, EnvBaseURL)
 	}
 	if c.Timeout < time.Second || c.Timeout > 2*time.Minute {
@@ -402,7 +403,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		Model:         envString(lookup, EnvModel, DefaultModel),
 		FallbackModel: envString(lookup, EnvFallbackModel, ""),
 		PhrasingModel: envString(lookup, EnvPhrasingModel, ""),
-		APIKey:        apiKey,
+		APIKey:        llm.NewSecret(apiKey),
 	}
 	if cfg.Timeout, err = envDuration(lookup, EnvTimeout, DefaultTimeout); err != nil {
 		return Config{}, err
