@@ -2,3 +2,5 @@
 // principals. Its in-memory Manager does not coordinate quota or concurrency
 // across replicas; cluster-wide enforcement requires a shared backend.
 package limits
+
+// proof: comment-only change
