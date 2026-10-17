@@ -136,7 +136,7 @@ func probeArms() []probeArm {
 			name: "blockers", kind: contextfabric.FactBlockers, match: "FROM work_item_dependencies",
 			subjectsFor: oneWorkItemSubject,
 			rowsFor: perSubject(func(i int) []any {
-				return []any{"BLOCKER-" + strconv.Itoa(i), "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1)}
+				return []any{"BLOCKER-" + strconv.Itoa(i), "WIDGET-101", "blocks", "repo-1", "repo-1", uint64(1), uint8(1)}
 			}),
 		},
 		{
