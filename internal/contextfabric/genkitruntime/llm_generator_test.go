@@ -26,6 +26,7 @@ type llmReply struct {
 // i-th with replies[i], repeating the last.
 type scriptedLLM struct {
 	model   string
+	kind    llm.Kind
 	replies []llmReply
 
 	mu       sync.Mutex
@@ -39,9 +40,14 @@ func (s *scriptedLLM) Complete(_ context.Context, request llm.Request) (llm.Resu
 	s.requests = append(s.requests, request)
 	return reply.result, reply.err
 }
-func (s *scriptedLLM) Model() string  { return s.model }
-func (s *scriptedLLM) Kind() llm.Kind { return llm.KindLocal }
-func (s *scriptedLLM) Close() error   { return nil }
+func (s *scriptedLLM) Model() string { return s.model }
+func (s *scriptedLLM) Kind() llm.Kind {
+	if s.kind == "" {
+		return llm.KindLocal
+	}
+	return s.kind
+}
+func (s *scriptedLLM) Close() error { return nil }
 
 func (s *scriptedLLM) request(i int) llm.Request {
 	s.mu.Lock()
@@ -92,7 +98,7 @@ func TestLLMInterpretSendsTheSampleSeedAndTheGenkitSchemaText(t *testing.T) {
 		t.Fatalf("seed = %v, want the sample-0 seed %d", sent.Seed, want)
 	}
 	schema, _ := json.Marshal(core.InferSchemaMap(interpretationOutput{}))
-	if sent.Format != nil || !strings.HasSuffix(sent.System, "Output should be in JSON format and conform to the following schema:\n\n```"+string(schema)+"```") {
+	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONObject || !strings.HasSuffix(sent.System, "Output should be in JSON format and conform to the following schema:\n\n```"+string(schema)+"```") {
 		t.Fatalf("format = %+v, system tail missing: want Genkit's json_object request with the schema as text", sent.Format)
 	}
 	if sent.MaxOutputTokens != DefaultMaxOutputTokens || sent.System == "" || sent.Prompt == "" {
@@ -116,7 +122,7 @@ func TestLLMSynthesizeSendsNoSeed(t *testing.T) {
 		t.Fatalf("synthesis seed = %d, want none", *sent.Seed)
 	}
 	schema, _ := json.Marshal(core.InferSchemaMap(synthesisOutput{}))
-	if sent.Format != nil || !strings.HasSuffix(sent.System, "```"+string(schema)+"```") {
+	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONObject || !strings.HasSuffix(sent.System, "```"+string(schema)+"```") {
 		t.Fatal("synthesis is not Genkit's json_object request with the schema as text")
 	}
 }
@@ -229,5 +235,111 @@ func TestLLMRequestCarriesTheConfiguredOutputCapAndLogsACutReply(t *testing.T) {
 		if !strings.Contains(logs.String(), "context fabric model reply hit the output cap") || !strings.Contains(logs.String(), "output_tokens=77") {
 			t.Fatalf("no cut-reply debug line: %s", logs.String())
 		}
+	}
+}
+
+func TestLLMInterpretSendsTheSeedOnlyToKindsThatTakeOne(t *testing.T) {
+	for _, tc := range []struct {
+		kind     llm.Kind
+		wantSeed bool
+	}{
+		{llm.KindLocal, true}, {llm.KindQwen, true}, {llm.KindGemini, false}, {llm.KindAnthropic, false}, {llm.KindOpenAI, false},
+	} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			client := &scriptedLLM{model: "gpt-5.6-luna", kind: tc.kind, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+			runtime := llmRuntime(t, LLMClients{"gpt-5.6-luna": client}, "")
+			if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if got := client.request(0).Seed != nil; got != tc.wantSeed {
+				t.Fatalf("seed sent = %v, want %v", got, tc.wantSeed)
+			}
+		})
+	}
+}
+
+func TestLLMInterpretFoldsTheQwenSeedIntoDashScopesRange(t *testing.T) {
+	client := &scriptedLLM{model: "qwen-plus", kind: llm.KindQwen, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+	runtime, err := NewWithLLM(Config{
+		Provider: "qwen", Model: "qwen-plus", InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1",
+		SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	}, LLMClients{"qwen-plus": client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validRequest()
+	if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatal(err)
+	}
+	full := chaos4631InterpretSeedFor(contextfabric.QuestionHash(request.Question), 0)
+	sent := client.request(0).Seed
+	if sent == nil || *sent != full%(1<<31) || *sent < 0 || *sent >= 1<<31 {
+		t.Fatalf("qwen seed = %v, want %d folded to [0, 2^31)", sent, full)
+	}
+}
+
+func TestLLMSchemaRejectionLogsWhereTheReplyBrokeTheSchemaWithoutItsText(t *testing.T) {
+	var logs strings.Builder
+	gen := llmGenerator{logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	var err error
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "SECRET_REPLY_VALUE"
+	gen.clients = LLMClients{"m": &scriptedLLM{model: "m", replies: []llmReply{{result: llm.Result{Text: `{"shape":"` + secret + `"}`}}}}}
+	if _, _, err := gen.Interpret(context.Background(), generationRequest{Model: "m"}); err == nil {
+		t.Fatal("an invalid reply was accepted")
+	}
+	if !strings.Contains(logs.String(), "violations=") || !strings.Contains(logs.String(), "(root):required") || !strings.Contains(logs.String(), "shape:") {
+		t.Fatalf("no violation paths in: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), secret) {
+		t.Fatalf("the reply's text reached the log: %s", logs.String())
+	}
+}
+
+func TestLLMLogsTheFormatPathAtInfoOncePerModeAndAtDebugEveryCall(t *testing.T) {
+	loggedFormatPaths.Range(func(key, _ any) bool { loggedFormatPaths.Delete(key); return true })
+	var logs strings.Builder
+	client := &scriptedLLM{model: "m", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{
+		Text: jsonOf(t, validInterpretationOutput()), FormatPath: llm.FormatPathTool, FormatReason: "additional_properties_not_false: $.x",
+	}}}}
+	runtime, err := NewWithLLM(Config{
+		Provider: "anthropic", Model: "m", Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1", SchemaVersion: "schema-v1",
+		EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	}, LLMClients{"m": client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const tail = `msg="context fabric model answer format path" operation=interpret llm_kind=anthropic format_path=tool format_reason="additional_properties_not_false: $.x"`
+	if got := strings.Count(logs.String(), "level=INFO "+tail); got != 1 {
+		t.Fatalf("info lines = %d, want 1 per process: %s", got, logs.String())
+	}
+	if got := strings.Count(logs.String(), "level=DEBUG "+tail); got != 3 {
+		t.Fatalf("debug lines = %d, want one per call", got)
+	}
+}
+
+func TestLLMAnthropicGetsTheSchemaNotTheGenkitText(t *testing.T) {
+	client := &scriptedLLM{model: "claude-haiku-5-5", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+	runtime, err := NewWithLLM(Config{
+		Provider: "anthropic", Model: "claude-haiku-5-5", InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1",
+		SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+	}, LLMClients{"claude-haiku-5-5": client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	sent := client.request(0)
+	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONSchema || sent.Format.Name != "output" || strings.Contains(sent.System, "Output should be in JSON format") {
+		t.Fatalf("anthropic request = format %+v, schema text in system %v", sent.Format, strings.Contains(sent.System, "Output should be in JSON format"))
 	}
 }
