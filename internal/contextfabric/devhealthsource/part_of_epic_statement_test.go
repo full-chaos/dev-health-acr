@@ -28,7 +28,7 @@ func TestHierarchyReadNamesTheParentByTheParentReference(t *testing.T) {
 	}
 	var statement string
 	for _, s := range recorder.statements {
-		if strings.Contains(s, "FROM work_items AS c FINAL") && strings.Contains(s, "AS pa ON") {
+		if strings.Contains(s, "AS parent_ref FROM work_items FINAL") && strings.Contains(s, "AS pa ON") {
 			statement = s
 			break
 		}
@@ -36,8 +36,10 @@ func TestHierarchyReadNamesTheParentByTheParentReference(t *testing.T) {
 	if statement == "" {
 		t.Fatal("no statement queried the work item hierarchy")
 	}
-	ref := devhealthschema.WorkItemParentRefSQL("c")
+	const ref = "c.parent_ref"
 	for _, want := range []string{
+		"AS parent_ref FROM work_items FINAL",
+		devhealthschema.WorkItemParentRefSQL("") + " AS parent_ref",
 		"SELECT c.work_item_id, " + ref + ",",
 		"p.work_item_id = " + ref + " AND",
 		"pa.parent_key = " + ref,
@@ -48,7 +50,7 @@ func TestHierarchyReadNamesTheParentByTheParentReference(t *testing.T) {
 			t.Errorf("the hierarchy read does not contain %q:\n%s", want, statement)
 		}
 	}
-	if rest := strings.ReplaceAll(statement, ref, "<parent reference>"); strings.Contains(rest, "c.parent_id") || strings.Contains(rest, "c.epic_id") {
+	if rest := strings.ReplaceAll(statement, devhealthschema.WorkItemParentRefSQL(""), "<parent reference>"); strings.Contains(rest, "parent_id") || strings.Contains(rest, "epic_id") {
 		t.Errorf("the hierarchy read names parent_id or epic_id outside the parent reference:\n%s", rest)
 	}
 }

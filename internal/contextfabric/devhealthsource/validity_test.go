@@ -184,9 +184,9 @@ func TestHierarchyEdgeIntersectsBothEndpointWindows(t *testing.T) {
 	for index := range tables {
 		tables[index].rows = nil
 	}
-	// The PART_OF producer ("FROM work_items AS c") is not part of
+	// The PART_OF producer ("AS parent_ref FROM work_items FINAL") is not part of
 	// baseTables, so it is added here rather than overridden.
-	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
+	tables = append(tables, fakeTable{match: "AS parent_ref FROM work_items FINAL", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
 			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}})
 	batch := projectOneBatch(t, tables)
@@ -209,7 +209,7 @@ func TestHierarchyEdgeStaysOpenWhenBothEndpointsAreOpen(t *testing.T) {
 	for index := range tables {
 		tables[index].rows = nil
 	}
-	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
+	tables = append(tables, fakeTable{match: "AS parent_ref FROM work_items FINAL", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
 			childCreated, uint8(0), zeroTime, parentCreated, uint8(0), zeroTime, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}})
 	batch := projectOneBatch(t, tables)
@@ -708,7 +708,7 @@ func TestDisjointHierarchyEdgeCollapsesToADegenerateWindow(t *testing.T) {
 	for index := range tables {
 		tables[index].rows = nil
 	}
-	tables = append(tables, fakeTable{match: "FROM work_items AS c", rows: [][]any{
+	tables = append(tables, fakeTable{match: "AS parent_ref FROM work_items FINAL", rows: [][]any{
 		{"WIDGET-101", "WIDGET-050", "repo-1", "example-org/widget-service", at,
 			childCreated, uint8(1), childEnded, parentCreated, uint8(1), parentEnded, "repo-1", uint32(1), uint8(1), uint8(0), uint8(0)}}})
 	batch := projectOneBatch(t, tables)
