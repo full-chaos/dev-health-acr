@@ -107,14 +107,14 @@ spec:
           # Liveness only needs the server process to answer; a restart on a
           # missing graph module would loop without fixing anything. The
           # startup probe can pass before the dump load and index build end,
-          # and that work blocks PING for minutes, so liveness allows 30
-          # misses of 10 s each (5 min) before a restart.
+          # and loading a multi-GiB dump blocks PING for more than 5 min, so
+          # liveness allows 360 misses of 10 s each (1 h) before a restart.
           livenessProbe:
             exec:
               command: ["redis-cli", "PING"]
             periodSeconds: 10
             timeoutSeconds: 10
-            failureThreshold: 30
+            failureThreshold: 360
           resources:
             {{- toYaml $falkordb.resources | nindent 12 }}
           volumeMounts:
