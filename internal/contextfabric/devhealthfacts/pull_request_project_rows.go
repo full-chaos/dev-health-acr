@@ -36,7 +36,8 @@ const pullRequestProjectRowLimit = "5001"
 var pullRequestProjectLinksSQL = `SELECT concat(toString(lk.pr_repo_id), ':', toString(lk.pr_number)) AS pr_key,
        pj.provider, pj.id, any(pj.name),
        toUInt8(max(lk.link_rank)),
-       argMax(lk.provenance, lk.link_rank)
+       argMax(lk.provenance, lk.link_rank),
+       groupUniqArrayIf(concat(toString(lk.link_rank), '|', lk.provenance, '|', lk.work_item_id), lk.link_rank < 3)
 FROM ` + admittedIssueLinksSQL + ` AS lk
 INNER JOIN work_items AS w FINAL ON w.org_id = {org_id:String} AND w.work_item_id = lk.work_item_id
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
@@ -66,26 +67,35 @@ func (p *PullRequestsProvider) readPullRequestProjects(ctx context.Context, orgI
 	}
 	scanned := 0
 	skipped := 0
+	var rows []pullRequestProjectLinkRow
 	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadPullRequestProjects", pullRequestProjectLinksSQL, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		var key, provider, id, name, tier string
+		var r pullRequestProjectLinkRow
 		var rank uint8
 		scanned++
 		if scanned > pullRequestProjectRowCap {
 			skipped++
 			return nil
 		}
-		if err := row.Scan(&key, &provider, &id, &name, &rank, &tier); err != nil {
+		if err := row.Scan(&r.key, &r.provider, &r.id, &r.name, &rank, &r.tier, &r.fallbacks); err != nil {
 			return err
 		}
-		canonical, omitted, deriveErr := identity.Derive(identity.KindProject, []string{provider, id}, nil)
-		if deriveErr != nil || omitted || !validLinkTier(tier) {
-			return nil
-		}
-		out[key] = append(out[key], pullRequestProjectRow{canonicalID: canonical, label: name, tier: tier, provider: provider, id: id})
+		r.rank = rank
+		rows = append(rows, r)
 		return nil
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	rows, err = dropCoveredProjectLinks(ctx, p.facts.client, orgID, rows)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, r := range rows {
+		canonical, omitted, deriveErr := identity.Derive(identity.KindProject, []string{r.provider, r.id}, nil)
+		if deriveErr != nil || omitted || !validLinkTier(r.tier) {
+			continue
+		}
+		out[r.key] = append(out[r.key], pullRequestProjectRow{canonicalID: canonical, label: r.name, tier: r.tier, provider: r.provider, id: r.id})
 	}
 	for key := range out {
 		rows := out[key]

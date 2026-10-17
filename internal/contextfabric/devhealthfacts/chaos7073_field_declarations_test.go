@@ -164,6 +164,12 @@ func t4Cases() []t4Case {
 		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
 		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-07-03", uint8(1), uint8(1)}}},
 	}})
+	dayDeficiency := deficiencyRow("CHAOS")
+	dayDeficiency[5] = ruleBasisRationale[:strings.Index(ruleBasisRationale, ". ")+1] + " Score as of 2026-07-03. " + ruleBasisRationale[strings.Index(ruleBasisRationale, ". ")+2:]
+	add(t4Case{name: "operational_deficiencies/team_rule_basis_as_of_day", kind: contextfabric.FactOperationalDeficiencies, subjects: team, tables: []fakeTable{
+		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{dayDeficiency}},
+		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-07-03", uint8(1), uint8(1)}}},
+	}})
 	staleLatest := []fakeTable{
 		{match: "WHERE rn = 1 AND fired = 1", rows: [][]any{basisDeficiency}},
 		{match: "compounding_risk, computed_at, day,\n\t\trow_number()", rows: [][]any{{"CHAOS", "high", uint8(1), 0.72, "2026-07-04 00:30:00", "2026-05-01", uint8(1), uint8(0)}}},
@@ -491,7 +497,7 @@ func t4Cases() []t4Case {
 	}})
 	add(t4Case{name: "pull_requests/pull_request_projects", kind: contextfabric.FactPullRequests, subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")}, tables: []fakeTable{
 		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}}},
-		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:1042", "jira", "P1", "Payments", uint8(3), "native"}}},
+		{match: "FROM work_graph_issue_pr", rows: [][]any{{"repo-1:1042", "jira", "P1", "Payments", uint8(3), "native", []string{}}}},
 	}})
 	add(t4Case{name: "pull_requests/project", kind: contextfabric.FactPullRequests, subjects: proj, tables: []fakeTable{
 		{match: "lp.project_key", rows: [][]any{{"linear:proj-1", int64(3), int64(2), int64(1), int64(1), int64(0)}, {"linear:proj-1", int64(1), int64(1), int64(0), int64(0), int64(1)}}},

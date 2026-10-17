@@ -758,6 +758,36 @@
         "presence": "required"
       },
       {
+        "key": "max_serialized_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "narrative_byte_allowance",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "limitations_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "warnings_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "limitations_byte_cut",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "warnings_byte_cut",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "count_basis",
         "type": "string",
         "presence": "required",
@@ -6127,6 +6157,93 @@
     ]
   },
   {
+    "id": "contextfabric.project_status_drivers",
+    "msg": "context fabric project status drivers",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that builds project status drivers.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "emitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_budget",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_id_clash",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "missing_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "workload",
+          "readiness",
+          "health"
+        ]
+      },
+      {
+        "key": "missing_states",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "available",
+          "stale",
+          "unavailable",
+          "unconfigured",
+          "unauthorized",
+          "no_data",
+          "truncated",
+          "conflicted",
+          "not_applicable",
+          "pruned",
+          "no_evidence",
+          "no_value",
+          "not_read"
+        ]
+      },
+      {
+        "key": "partial_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "workload",
+          "readiness",
+          "health"
+        ]
+      },
+      {
+        "key": "partial_states",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "stale",
+          "truncated"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.pull_request_status_filter",
     "msg": "context_fabric: pull request status filter",
     "level": "info",
@@ -6228,6 +6345,349 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.question_family_resolution",
+    "msg": "context fabric question family resolution",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per interpretation; the sample list is bounded by the ensemble size (at most 7).",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "model_consensus",
+          "model",
+          "model_plurality_rejected",
+          "carried",
+          "structure_precedence",
+          "fallback",
+          "none"
+        ]
+      },
+      {
+        "key": "ensemble_size",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "downgraded_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consensus_field_divergence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "family_version",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "question-family.v4"
+        ]
+      },
+      {
+        "key": "sample_families",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "samples",
+        "type": "object_slice",
+        "presence": "required",
+        "max_items": 7,
+        "fields": [
+          {
+            "key": "shape",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "single_subject",
+              "explicit_cohort",
+              "discovered_cohort",
+              "open"
+            ]
+          },
+          {
+            "key": "attempted_family",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "subject_investigation",
+              "discovered_cohort_ranking",
+              "scoped_cohort_status",
+              "grouped_cohort_status",
+              "explicit_comparison",
+              "trend",
+              "investment_allocation",
+              "unclassified"
+            ]
+          },
+          {
+            "key": "resolved_family",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "subject_investigation",
+              "discovered_cohort_ranking",
+              "scoped_cohort_status",
+              "grouped_cohort_status",
+              "explicit_comparison",
+              "trend",
+              "investment_allocation",
+              "unclassified"
+            ]
+          },
+          {
+            "key": "row",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "group_kind_set",
+              "scope_anchor_asymmetry",
+              "comparison_terms",
+              "cohort_shape",
+              "single_subject_shape",
+              "no_row_matched"
+            ]
+          },
+          {
+            "key": "incompatibility_reason",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "",
+              "unrecognized_family",
+              "structural_mismatch",
+              "declared_unreachable"
+            ]
+          },
+          {
+            "key": "group_kind_set",
+            "type": "bool",
+            "presence": "required"
+          },
+          {
+            "key": "scope_anchor_set",
+            "type": "bool",
+            "presence": "required"
+          }
+        ]
+      },
+      {
+        "key": "samples_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_frame_observed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_frame_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "valid",
+          "repaired",
+          "refused_invalid",
+          "refused_kind_change"
+        ]
+      },
+      {
+        "key": "shadow_projection_version",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "question-frame.v1"
+        ]
+      },
+      {
+        "key": "shadow_projected_family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "shadow_projected_row",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "topology_grouped",
+          "topology_scoped",
+          "topology_explicit",
+          "topology_discovered",
+          "single_subject_investment",
+          "single_subject_trend",
+          "single_subject_default",
+          "no_row_matched"
+        ]
+      },
+      {
+        "key": "shadow_precedence_family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "shadow_precedence_row",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "group_kind_set",
+          "scope_anchor_asymmetry",
+          "comparison_terms",
+          "cohort_shape",
+          "single_subject_shape",
+          "no_row_matched"
+        ]
+      },
+      {
+        "key": "shadow_agreement_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "agreed",
+          "projection_unclassified",
+          "precedence_unclassified",
+          "goal_row_unreachable_in_precedence",
+          "precedence_comparison_row",
+          "organization_route",
+          "shape_divergence",
+          "unexplained"
+        ]
+      },
+      {
+        "key": "shadow_agreed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "family_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "projected",
+          "precedence",
+          "carried"
+        ]
+      },
+      {
+        "key": "route_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "agreed",
+          "projection_unclassified",
+          "precedence_unclassified",
+          "goal_row_unreachable_in_precedence",
+          "precedence_comparison_row",
+          "organization_route",
+          "shape_divergence",
+          "unexplained"
+        ]
+      },
+      {
+        "key": "route_disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "identical",
+          "intended_change",
+          "switched_additive_unobserved",
+          "declined_withdrawn_claim",
+          "declined_not_observed",
+          "declined_indistinguishable",
+          "declined_projection_silent",
+          "declined_unexplained",
+          "no_frame_observed",
+          "carried_from_prior_turn"
+        ]
+      },
+      {
+        "key": "route_switched",
+        "type": "bool",
+        "presence": "required"
       },
       {
         "key": "request_id",
@@ -8112,6 +8572,69 @@
     ]
   },
   {
+    "id": "contextfabric.team_blockers_drivers",
+    "msg": "context fabric team blockers drivers",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that builds team blockers drivers.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "emitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_missing",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_zero",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_budget",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_id_clash",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_stale",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "skipped_duplicate",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.terminal_save_skipped",
     "msg": "context fabric terminal save skipped",
     "level": "error",
@@ -9520,6 +10043,450 @@
     ]
   },
   {
+    "id": "devhealthfacts.fact_bytes_bound_exceeded",
+    "msg": "context_fabric_fact_bytes_bound_exceeded",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "producer",
+      "kind"
+    ],
+    "bounded_aggregation": "one line per dropped time series of a dual-table fact.",
+    "data_dependent_bound": "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+    "fields": [
+      {
+        "key": "producer",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "flow"
+        ]
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
+      },
+      {
+        "key": "combined_cells_max",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "combined_bytes_max",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.health_daily_health_cap_cut",
+    "msg": "health daily_health display cap cut rows",
+    "level": "debug",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per health read with a cut daily_health table.",
+    "data_dependent_bound": "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subjects_cut",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subjects",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_local",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.owning_teams_truncated",
+    "msg": "context_fabric_owning_teams_truncated",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "producer"
+    ],
+    "bounded_aggregation": "one line per identity read with truncated owning teams.",
+    "data_dependent_bound": "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "fields": [
+      {
+        "key": "producer",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "devhealthfacts.identity"
+        ]
+      },
+      {
+        "key": "omitted",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.pull_request_project_native_first",
+    "msg": "devhealthfacts.pull_request_project_native_first",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per pull request project links read.",
+    "data_dependent_bound": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_fallback_rows",
+          "no_fallback_link_covered",
+          "covered_fallback_links_dropped"
+        ]
+      },
+      {
+        "key": "project_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_links",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_links",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "native_cover_issues",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read held a fallback link, so a native cover was read"
+      },
+      {
+        "key": "native_cover_pull_requests",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read held a fallback link, so a native cover was read"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.rule_basis_day_absent",
+    "msg": "devhealthfacts.rule_basis_day_absent",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per fired compounding-risk rule row without a day.",
+    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rule_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.rule_basis_day_invalid",
+    "msg": "devhealthfacts.rule_basis_day_invalid",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per fired compounding-risk rule row with an invalid day.",
+    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rule_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "day",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.subject_id_shape_rejected",
+    "msg": "context_fabric_subject_id_shape_rejected",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "producer",
+      "kind"
+    ],
+    "bounded_aggregation": "one line per provider read with a positive rejected count.",
+    "data_dependent_bound": "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "fields": [
+      {
+        "key": "producer",
+        "type": "string",
+        "presence": "required",
+        "pattern": "^devhealthfacts\\.[a-z_]+$"
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ]
+      },
+      {
+        "key": "rejected",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.team_linked_mix_native_first",
+    "msg": "devhealthfacts.team_linked_mix_native_first",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per team chunk of a team linked mix read.",
+    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_fallback_rows",
+          "no_fallback_row_covered",
+          "covered_fallback_rows_dropped"
+        ]
+      },
+      {
+        "key": "link_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fallback_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "native_cover_issues",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "native_cover_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.team_linked_mix_set",
+    "msg": "devhealthfacts.team_linked_mix_set",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per team chunk of a team linked mix read.",
+    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "sent",
+          "empty_set_mix_skipped"
+        ]
+      },
+      {
+        "key": "teams",
+        "type": "int",
+        "presence": "required",
+        "max_int": 100
+      },
+      {
+        "key": "linked_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "scope_mode",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "ids",
+          "ids_table",
+          "subquery"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.team_pr_link_state_native_first",
+    "msg": "devhealthfacts.team_pr_link_state_native_first",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per team pull request link state read.",
+    "data_dependent_bound": "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+    "fields": [
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_fallback_link_suppressed",
+          "covered_fallback_links_suppressed"
+        ]
+      },
+      {
+        "key": "repositories",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "linked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "genkitruntime.model_interpret_decision",
     "msg": "context fabric model decision",
     "level": "info",
@@ -9990,6 +10957,33 @@
         "key": "matched_claimants",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "term_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "matched_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
       }
     ]
   },
@@ -10622,6 +11616,11 @@
         "key": "population_basis",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "offered_under_window_gate",
+        "type": "bool",
+        "presence": "required"
       }
     ]
   },
@@ -11051,6 +12050,48 @@
       {
         "key": "shadow_caller_hint_short_circuit",
         "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_survivor_excluded_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "scope_anchor"
+        ]
+      },
+      {
+        "key": "shadow_trigger",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "caller_hint",
+          "committed_scope_anchor",
+          "stalled"
+        ]
+      },
+      {
+        "key": "shadow_caller_narrowing",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "narrowed_to_one",
+          "narrowed_to_none",
+          "narrowed_to_many",
+          "census_truncated",
+          "satisfier_read_failed"
+        ]
+      },
+      {
+        "key": "shadow_narrowed_from",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_narrowed_to",
+        "type": "int",
         "presence": "required"
       }
     ]

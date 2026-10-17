@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 
-	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
+	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/openai/openai-go/option"
 	"go.opentelemetry.io/otel"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
@@ -23,7 +22,7 @@ import (
 // returned contextfabric.ModelRuntime is always non-nil, so a caller may
 // assign it straight into an interface field without the typed-nil trap.
 //
-// ctx bounds plugin initialization only; it is not retained for
+// ctx is used for the construction log line only; it is not retained for
 // generation, which is bounded per attempt by Config.Timeout inside
 // genkitruntime.
 func New(ctx context.Context, cfg Config) (contextfabric.ModelRuntime, error) {
@@ -46,8 +45,8 @@ func New(ctx context.Context, cfg Config) (contextfabric.ModelRuntime, error) {
 
 // NewGenkitRuntime is New's concrete-type counterpart (CHAOS-4631). It
 // builds the SAME primary runtime New does -- identical validation,
-// identical genkit/compat_oai plugin construction, identical fallback
-// wiring -- but returns the concrete *genkitruntime.Runtime instead of the
+// identical shared-client construction, identical fallback wiring -- but
+// returns the concrete *genkitruntime.Runtime instead of the
 // contextfabric.ModelRuntime interface.
 //
 // The concrete type is required only because InterpretQuestionForSample
@@ -60,7 +59,7 @@ func New(ctx context.Context, cfg Config) (contextfabric.ModelRuntime, error) {
 // InterpretQuestionForSample while still going through the SAME
 // environment-driven construction path production composition
 // (internal/runtime/hosted) uses via New -- never a second, hand-rolled
-// genkit/compat_oai setup that could drift from it.
+// client setup that could drift from it.
 func NewGenkitRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime, error) {
 	return newPrimaryRuntime(ctx, cfg)
 }
@@ -72,56 +71,151 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 	if err := rejectDevGenkitEnvironment(); err != nil {
 		return nil, err
 	}
-	instance, err := initGenkit(ctx, &compat_oai.OpenAICompatible{
-		Provider: cfg.Provider,
-		Opts:     newClientOptions(cfg),
-	})
-	if err != nil {
-		return nil, err
+	suppressGenkitTelemetryExport()
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 	var fallback contextfabric.ModelRuntime
 	if cfg.FallbackModel != "" {
-		fallbackRuntime, err := genkitruntime.New(fallbackRuntimeConfig(instance, cfg))
+		clients, err := newLLMClients(cfg, cfg.FallbackModel)
+		if err != nil {
+			return nil, fmt.Errorf("initialize fallback model runtime: %w", err)
+		}
+		fallbackRuntime, err := genkitruntime.NewWithLLM(fallbackRuntimeConfig(cfg), clients)
 		if err != nil {
 			return nil, fmt.Errorf("initialize fallback model runtime: %w", err)
 		}
 		fallback = fallbackRuntime
 	}
-	// CHAOS-4171 PR2: the phrasing model (empty PhrasingModel defaults
-	// inside genkitruntime.New to the primary Model) is wired ONLY onto
-	// the primary runtime -- offer phrasing has no fallback chain of its
-	// own (ratified design: a failure degrades to structural, never to a
-	// second model), so the fallback runtime built above never needs it.
-	primary, err := genkitruntime.New(runtimeConfigWithPhrasing(instance, cfg, cfg.Model, fallback))
+	clients, err := newLLMClients(cfg, cfg.Model, cfg.PhrasingModel)
 	if err != nil {
 		return nil, fmt.Errorf("initialize model runtime: %w", err)
 	}
+	// CHAOS-4171 PR2: the phrasing model (empty PhrasingModel defaults
+	// inside genkitruntime to the primary Model) is wired ONLY onto the
+	// primary runtime -- offer phrasing has no fallback chain of its own
+	// (ratified design: a failure degrades to structural, never to a second
+	// model), so the fallback runtime built above never needs it.
+	primary, err := genkitruntime.NewWithLLM(runtimeConfigWithPhrasing(cfg, cfg.Model, fallback), clients)
+	if err != nil {
+		return nil, fmt.Errorf("initialize model runtime: %w", err)
+	}
+	logger.InfoContext(ctx, modelClientsBuiltMessage,
+		"provider", contextfabric.SanitizeLogAttr(cfg.Provider), "llm_kind", contextfabric.SanitizeLogAttr(string(kindFor(cfg.Provider))),
+		"model", contextfabric.SanitizeLogAttr(cfg.Model), "fallback_model", contextfabric.SanitizeLogAttr(cfg.FallbackModel),
+		"phrasing_model", contextfabric.SanitizeLogAttr(cfg.PhrasingModel), "temperature", contextfabric.SanitizeLogAttr("omitted"),
+		"output_cap", contextfabric.SanitizeLogAttr("omitted"), "max_output_tokens", cfg.MaxOutputTokens)
 	return primary, nil
+}
+
+// modelClientsBuiltMessage is the one line that records which shared-client
+// kind and models a model runtime was built with.
+const modelClientsBuiltMessage = "context fabric model clients built"
+
+// kindFor picks the shared dev-health-go client a Provider namespace is
+// served by. The namespaces that name a provider API the package has a
+// native client for get that client; every other namespace ("openai", a BYO
+// gateway name) gets the OpenAI-compatible Chat Completions client, the API
+// the Genkit compat_oai plugin spoke before it. Provider is still recorded
+// verbatim on receipts.
+func kindFor(provider string) llm.Kind {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case string(llm.KindAnthropic):
+		return llm.KindAnthropic
+	case string(llm.KindGemini):
+		return llm.KindGemini
+	case string(llm.KindQwen):
+		return llm.KindQwen
+	}
+	return llm.KindLocal
+}
+
+// newLLMClients builds one shared-package client per distinct non-empty
+// model, all on cfg's endpoint and credential. The configured model is
+// always passed explicitly, so the package default never applies.
+//
+// Temperature and the output cap are omitted, as the Genkit plugin omitted
+// them: GPT-5 models refuse any temperature but their default with a 400,
+// and a fixed cap is a 400 on a model whose context window is not above it. The HTTP client
+// times out with the per-attempt bound; the attempt's own context deadline
+// still governs first.
+func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, error) {
+	kind := kindFor(cfg.Provider)
+	baseURL := cfg.BaseURL
+	if baseURL == "" && kind == llm.KindLocal {
+		// A native kind with no BaseURL uses its provider's public endpoint.
+		baseURL = DefaultBaseURL
+	}
+	clients := genkitruntime.LLMClients{}
+	for _, model := range models {
+		if model == "" {
+			continue
+		}
+		if _, ok := clients[model]; ok {
+			continue
+		}
+		client, err := llm.New(llm.Config{
+			Kind:        kind,
+			APIKey:      llm.NewSecret(cfg.APIKey),
+			BaseURL:     baseURL,
+			Model:       model,
+			HTTPClient:  newModelHTTPClient(cfg),
+			Temperature: llm.TemperatureOmit,
+			OutputCap:   llm.OutputCapOmit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		clients[model] = client
+	}
+	return clients, nil
+}
+
+// newModelHTTPClient is the HTTP client of every model call. A
+// credential-free BYO endpoint gets no Authorization header at all: the
+// shared client would otherwise send its own placeholder bearer, and an
+// endpoint configured without a credential has never been sent one.
+func newModelHTTPClient(cfg Config) *http.Client {
+	if cfg.APIKey != "" {
+		return &http.Client{Timeout: cfg.Timeout}
+	}
+	// A custom RoundTripper is used by the shared client as it is, so this
+	// one drops the ambient proxy itself, as the client does for its own.
+	direct := http.DefaultTransport.(*http.Transport).Clone()
+	direct.Proxy = nil
+	return &http.Client{Timeout: cfg.Timeout, Transport: withoutAuthorization{next: direct}}
+}
+
+type withoutAuthorization struct{ next http.RoundTripper }
+
+func (t withoutAuthorization) RoundTrip(request *http.Request) (*http.Response, error) {
+	request = request.Clone(request.Context())
+	request.Header.Del("Authorization")
+	return t.next.RoundTrip(request)
 }
 
 // fallbackRuntimeConfig is the fallback leg's runtime config: the plain
 // runtimeConfig (no phrasing model, no re-synthesis bound) held to a single
 // synthesis draw, because it answers once after the primary has spent its own.
-func fallbackRuntimeConfig(instance *genkit.Genkit, cfg Config) genkitruntime.Config {
-	config := runtimeConfig(instance, cfg, cfg.FallbackModel, nil)
+func fallbackRuntimeConfig(cfg Config) genkitruntime.Config {
+	config := runtimeConfig(cfg, cfg.FallbackModel, nil)
 	config.SingleDraw = true
 	return config
 }
 
-func runtimeConfig(instance *genkit.Genkit, cfg Config, model string, fallback contextfabric.ModelRuntime) genkitruntime.Config {
+func runtimeConfig(cfg Config, model string, fallback contextfabric.ModelRuntime) genkitruntime.Config {
 	return genkitruntime.Config{
-		Genkit:   instance,
 		Provider: cfg.Provider,
-		// Model stays the bare id so it lands unqualified in every
-		// ModelExecutionReceipt (the receipt already carries Provider
-		// separately); ModelRef carries the namespaced action name Genkit
-		// resolves against.
-		Model:       model,
-		ModelRef:    api.NewName(cfg.Provider, model),
-		Timeout:     cfg.Timeout,
-		MaxAttempts: cfg.MaxAttempts,
-		Fallback:    fallback,
-		Telemetry:   cfg.Telemetry,
+		// Model is the bare id: it lands unqualified in every
+		// ModelExecutionReceipt (the receipt carries Provider separately),
+		// and it is the key of the model's shared-package client.
+		Model:           model,
+		Timeout:         cfg.Timeout,
+		MaxAttempts:     cfg.MaxAttempts,
+		Fallback:        fallback,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+		Telemetry:       cfg.Telemetry,
 		// CHAOS-5380: copied straight through, unconditionally, exactly
 		// like Telemetry above it -- a nil here keeps genkitruntime's own
 		// documented slog.Default() fallback rather than a
@@ -134,11 +228,10 @@ func runtimeConfig(instance *genkit.Genkit, cfg Config, model string, fallback c
 // model fields (CHAOS-4171 PR2) -- a separate function rather than folding
 // PhrasingModel into runtimeConfig itself, because the fallback runtime
 // (built via the plain runtimeConfig above) must never carry it.
-func runtimeConfigWithPhrasing(instance *genkit.Genkit, cfg Config, model string, fallback contextfabric.ModelRuntime) genkitruntime.Config {
-	config := runtimeConfig(instance, cfg, model, fallback)
+func runtimeConfigWithPhrasing(cfg Config, model string, fallback contextfabric.ModelRuntime) genkitruntime.Config {
+	config := runtimeConfig(cfg, model, fallback)
 	if cfg.PhrasingModel != "" {
 		config.PhrasingModel = cfg.PhrasingModel
-		config.PhrasingModelRef = api.NewName(cfg.Provider, cfg.PhrasingModel)
 	}
 	// CHAOS-5655: wired here, not in the shared runtimeConfig above, because
 	// this function builds ONLY the primary runtime (the fallback runtime is
@@ -147,39 +240,6 @@ func runtimeConfigWithPhrasing(instance *genkit.Genkit, cfg Config, model string
 	// the fallback leg must not inherit it.
 	config.MaxSynthesisResynthesisAttempts = cfg.MaxSynthesisResynthesisAttempts
 	return config
-}
-
-// newClientOptions builds the OpenAI-compatible client options.
-//
-// Both the credential and the base URL are ALWAYS passed explicitly, even
-// when the credential is empty or the base URL is the provider default.
-// openai.NewClient seeds itself from the ambient process environment
-// (OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_ORG_ID, ...) and applies
-// caller-supplied options afterwards, so passing both explicitly is what
-// guarantees that (a) an ambient OPENAI_BASE_URL cannot redirect this
-// service's traffic, and (b) an ambient OPENAI_API_KEY is never sent to a
-// BYO endpoint this configuration pointed at. Do not "simplify" either
-// option away on the grounds that the SDK has a sensible default -- the
-// point is precisely that the SDK's default is environment-derived.
-func newClientOptions(cfg Config) []option.RequestOption {
-	baseURL := cfg.BaseURL
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
-	credential := option.WithAPIKey(cfg.APIKey)
-	if cfg.APIKey == "" {
-		// A credential-free BYO endpoint should receive no Authorization
-		// header at all, not an empty bearer -- but the header must still
-		// be actively removed, because the SDK will have populated it from
-		// an ambient OPENAI_API_KEY.
-		credential = option.WithHeaderDel("authorization")
-	}
-	return []option.RequestOption{
-		credential,
-		option.WithBaseURL(baseURL),
-		option.WithMaxRetries(cfg.MaxTransportRetries),
-		option.WithMiddleware(sanitizeProviderErrorBody),
-	}
 }
 
 // sanitizeProviderErrorBody is an OpenAI SDK request middleware
@@ -388,29 +448,4 @@ func rejectDevGenkitEnvironment() error {
 		return fmt.Errorf("GENKIT_ENV=dev is not permitted: it starts Genkit's local reflection server, whose handleNotify endpoint can register a telemetry exporter for prompt/response content at runtime, independent of this package's own telemetry suppression")
 	}
 	return nil
-}
-
-// initGenkit wraps genkit.Init, which reports every failure by panicking
-// (an unrecoverable plugin error, an invalid option, an unloadable prompt
-// directory) because it has no error return. Hosted composition must fail
-// closed with an error it can annotate and log, and must not take the
-// process down mid-startup, so the panic is converted here.
-//
-// Only the panic value's type and text reach the returned error, and only
-// from genkit's own construction path -- no credential is in scope at this
-// point beyond the option values themselves, which genkit never formats
-// into a panic message.
-func initGenkit(ctx context.Context, plugin api.Plugin) (instance *genkit.Genkit, err error) {
-	suppressGenkitTelemetryExport()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			instance = nil
-			err = fmt.Errorf("initialize model provider plugin %q: %v", plugin.Name(), recovered)
-		}
-	}()
-	instance = genkit.Init(ctx, genkit.WithPlugins(plugin))
-	if instance == nil {
-		return nil, fmt.Errorf("initialize model provider plugin %q: genkit returned no instance", plugin.Name())
-	}
-	return instance, nil
 }

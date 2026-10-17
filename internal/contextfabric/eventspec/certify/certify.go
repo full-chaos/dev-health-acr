@@ -329,6 +329,9 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
+		if err := validateNoUndeclaredKeys(a.Event, l); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 		if err := validateLevel(a.Event, l); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
@@ -351,8 +354,11 @@ func Certify(log *Log, a Assertion) (Result, error) {
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
 		if a.Event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
-			if a.Event.MaxLinesPerScope <= 0 {
-				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares no MaxLinesPerScope bound", a.Event.ID)
+			if a.Event.MaxLinesPerScope <= 0 && a.Event.DataDependentBound == "" {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares neither MaxLinesPerScope nor DataDependentBound", a.Event.ID)
+			}
+			if a.Event.MaxLinesPerScope > 0 && a.Event.DataDependentBound != "" {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares both MaxLinesPerScope and DataDependentBound", a.Event.ID)
 			}
 			family := 0
 			for _, line := range log.linesWithMsg(a.Event.Msg) {
@@ -360,10 +366,10 @@ func Certify(log *Log, a Assertion) (Result, error) {
 					family++
 				}
 			}
-			if family > a.Event.MaxLinesPerScope {
+			if a.Event.MaxLinesPerScope > 0 && family > a.Event.MaxLinesPerScope {
 				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q (every level) for this attempt, over the declared bound of %d", a.Event.ID, family, a.Event.Msg, a.Event.MaxLinesPerScope)
 			}
-			if len(scoped) > a.Event.MaxLinesPerScope {
+			if a.Event.MaxLinesPerScope > 0 && len(scoped) > a.Event.MaxLinesPerScope {
 				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q for this attempt, over the declared bound of %d", a.Event.ID, len(scoped), a.Event.Msg, a.Event.MaxLinesPerScope)
 			}
 			var matched []Line
@@ -549,6 +555,9 @@ func certifyBoundedMany(log *Log, a Assertion) (Result, error) {
 		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
+		if err := validateNoUndeclaredKeys(a.Event, l); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 		if err := validateLevel(a.Event, l); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
@@ -695,6 +704,9 @@ func CertifyBoundedManyCount(log *Log, ev eventspec.Event, scope map[string]any)
 		// selects a single line to check, so without its own loop-covered
 		// check every bounded-many line's own production visibility went
 		// completely unverified by this entry point.
+		if err := validateNoUndeclaredKeys(ev, l); err != nil {
+			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 		if err := validateLevel(ev, l); err != nil {
 			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
@@ -895,6 +907,24 @@ func requireScopeValueTypes(ev eventspec.Event, m map[string]any) error {
 // FIRST place. Called from the SAME per-line loop as validateFields in
 // every one of the three call sites below, so a caller can never reach one
 // check without the other.
+func validateNoUndeclaredKeys(ev eventspec.Event, line Line) error {
+	declared := map[string]bool{"time": true, "level": true, "msg": true}
+	for _, field := range ev.Fields {
+		declared[field.Key] = true
+	}
+	var undeclared []string
+	for key := range line {
+		if !declared[key] {
+			undeclared = append(undeclared, key)
+		}
+	}
+	if len(undeclared) > 0 {
+		sort.Strings(undeclared)
+		return fmt.Errorf("certify: %s: the line carries keys %q, which the declaration does not list -- a line may carry only declared keys", ev.ID, undeclared)
+	}
+	return nil
+}
+
 func validateLevel(ev eventspec.Event, line Line) error {
 	wantLevel := strings.ToUpper(string(ev.Level))
 	gotLevel, _ := line["level"].(string)

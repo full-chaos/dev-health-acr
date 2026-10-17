@@ -26,7 +26,10 @@ func TestACauseItemNamesTheFailedDeploymentThatCarriedItAndWhen(t *testing.T) {
 	_, packet := servedRoles(t, evidence)
 	events := map[string]*contractsv1.CauseEvent{}
 	for _, item := range packet.Items {
-		events[item.EvidenceRefIDs[0]] = item.CauseEvent
+		if item.CauseEvent != (contractsv1.CauseEvent{}) {
+			event := item.CauseEvent
+			events[item.EvidenceRefIDs[0]] = &event
+		}
 	}
 	want := map[string]struct {
 		id string

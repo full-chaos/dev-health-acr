@@ -37,7 +37,7 @@ func TestDevhealthfactsRaceSplit_fourJobsAreWired(t *testing.T) {
 		}
 		for _, want := range []string{
 			"name: " + j.name,
-			"needs: mirror-preflight",
+			"- mirror-preflight",
 			"race-split.sh devhealthfacts " + j.mode + ")",
 			"GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh",
 			"race-split.sh devhealthfacts verify",

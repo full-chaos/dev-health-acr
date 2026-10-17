@@ -344,7 +344,9 @@ contextFabric:
     phrasingModel: ""
     timeout: "45s"
     maxAttempts: "2"
-    maxTransportRetries: "2"
+    # Output cap where the model's client sends one (the Anthropic Messages
+    # API requires a cap; the Chat Completions clients send none).
+    maxOutputTokens: "32768"
     allowInsecureBaseURL: false
     existingSecret: ""
     apiKeyKey: ACR_CONTEXT_FABRIC_MODEL_API_KEY

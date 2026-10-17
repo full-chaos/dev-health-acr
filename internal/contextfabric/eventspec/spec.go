@@ -310,6 +310,10 @@ type Event struct {
 	// MaxLinesPerScope bounds the lines one scope may carry for
 	// MultiplicityZeroOrManyPerRequest; zero for every other multiplicity.
 	MaxLinesPerScope int
+	// DataDependentBound states why a MultiplicityZeroOrManyPerRequest event
+	// has no fixed MaxLinesPerScope: the count follows the data a read covers.
+	// Exactly one of the two is declared.
+	DataDependentBound string
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -913,6 +917,7 @@ var Decision = Event{
 			Key: "population_basis", Type: FieldString, Presence: PresenceRequired,
 			// Open vocabulary: a population-basis token, or "none".
 		},
+		{Key: "offered_under_window_gate", Type: FieldBool, Presence: PresenceRequired},
 	},
 }
 
@@ -966,6 +971,8 @@ var AliasLookup = Event{
 		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "identity_lookup", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"complete", "incomplete", "graph_lag", "not_run_time_axis"}},
 		{Key: "matched_claimants", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "term_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "matched_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 	},
 }
 
@@ -2072,6 +2079,300 @@ var FactReadFailed = Event{
 	},
 }
 
+// TeamLinkedMixNativeFirst is the Info line of the fallback-only rule of the team linked mix: how many link rows were read, how many came from fallback links, how many of those a native link covers and was dropped. Counts and a closed outcome only.
+var TeamLinkedMixNativeFirst = Event{
+	ID:                       "devhealthfacts.team_linked_mix_native_first",
+	Msg:                      "devhealthfacts.team_linked_mix_native_first",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per team chunk of a team linked mix read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_row_covered", "covered_fallback_rows_dropped"}},
+		{Key: "link_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fallback_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// TeamLinkedMixSet is the Info line of the linked pull request set a team linked mix chunk sends: how many teams and linked pull requests, and the membership scope mode the read resolved (an ids scope is sent to the query as a table, the line reports the resolved mode).
+var TeamLinkedMixSet = Event{
+	ID:                       "devhealthfacts.team_linked_mix_set",
+	Msg:                      "devhealthfacts.team_linked_mix_set",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per team chunk of a team linked mix read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"sent", "empty_set_mix_skipped"}},
+		{Key: "teams", Type: FieldInt, Presence: PresenceRequired, MaxInt: intPtr(100)},
+		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "scope_mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"none", "ids", "ids_table", "subquery"}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// TeamPRLinkStateNativeFirst is the Info line of the fallback-only rule of the team pull request link state: how many pull requests and linked ones the repositories read hold, and how many a fallback link suppressed.
+var TeamPRLinkStateNativeFirst = Event{
+	ID:                       "devhealthfacts.team_pr_link_state_native_first",
+	Msg:                      "devhealthfacts.team_pr_link_state_native_first",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per team pull request link state read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_link_suppressed", "covered_fallback_links_suppressed"}},
+		{Key: "repositories", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "linked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "suppressed_pull_requests", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// PullRequestProjectNativeFirst is the Info line of the fallback-only rule of the pull request project links: how many project rows and fallback links were read, how many links and rows a native link covers and were dropped, and, when a native cover was read, how many issues and pull requests it holds. Counts and a closed outcome only.
+var PullRequestProjectNativeFirst = Event{
+	ID:                       "devhealthfacts.pull_request_project_native_first",
+	Msg:                      "devhealthfacts.pull_request_project_native_first",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per pull request project links read.",
+	Fields: []Field{
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"no_fallback_rows", "no_fallback_link_covered", "covered_fallback_links_dropped"}},
+		{Key: "project_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fallback_links", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_links", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "dropped_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "native_cover_issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
+		{Key: "native_cover_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read held a fallback link, so a native cover was read"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// ProjectStatusDrivers is the Info line of one project status driver decision: how many drivers were emitted or skipped, and which fact kinds were missing or partial and in which state. Counts and closed names only, never a value or a subject.
+var ProjectStatusDrivers = Event{
+	ID:                 "contextfabric.project_status_drivers",
+	Msg:                "context fabric project status drivers",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that builds project status drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_budget", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_id_clash", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "missing_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverKindVocabulary()},
+		{Key: "missing_states", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverMissingStateVocabulary()},
+		{Key: "partial_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverKindVocabulary()},
+		{Key: "partial_states", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverPartialStateVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// TeamBlockersDrivers is the Info line of one team blockers driver decision: closed counts only, never a team, a count value or an id.
+var TeamBlockersDrivers = Event{
+	ID:                 "contextfabric.team_blockers_drivers",
+	Msg:                "context fabric team blockers drivers",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per investigation that builds team blockers drivers.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "emitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_missing", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_zero", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_budget", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_id_clash", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_stale", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "skipped_duplicate", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+var (
+	familyAgreementClassArr   = contextfabric.FamilyAgreementClassVocabulary()
+	familyRouteSourceArr      = contextfabric.FamilyRouteSourceVocabulary()
+	familyRouteDispositionArr = contextfabric.FamilyRouteDispositionVocabulary()
+	familyProjectionRowArr    = contextfabric.FamilyProjectionRowVocabulary()
+)
+
+func withEmptyToken(tokens []string) []string {
+	return append([]string{""}, tokens...)
+}
+
+func questionFamilyLineTokens() []string {
+	vocab := contextfabric.QuestionFamilyVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
+func questionFamilySourceLineTokens() []string {
+	vocab := contractsv1.ContextFabricQuestionFamilySourceVocabulary()
+	out := make([]string, 0, len(vocab))
+	for _, member := range vocab {
+		out = append(out, string(member))
+	}
+	return out
+}
+
+// QuestionFamilyResolution is the Info line of the question family resolution (CHAOS-4579): the family served, where it came from, how the ensemble samples voted, the frame projection comparison and the routing decision. The per-sample rows ride as one bounded list; a sample past the ensemble bound is counted in samples_omitted. Closed values and counts only: no subject term, anchor or question text.
+var QuestionFamilyResolution = Event{
+	ID:                 "contextfabric.question_family_resolution",
+	Msg:                "context fabric question family resolution",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per interpretation; the sample list is bounded by the ensemble size (at most 7).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+		{Key: "source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: questionFamilySourceLineTokens()},
+		{Key: "ensemble_size", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "downgraded_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "consensus_field_divergence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "family_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", contextfabric.QuestionFamilyTableVersion}},
+		{Key: "sample_families", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: questionFamilyLineTokens()},
+		{Key: "samples", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contextfabric.QuestionFamilyEnsembleMax, Fields: []Field{
+			{Key: "shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(investigationShapeLineTokens())},
+			{Key: "attempted_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+			{Key: "resolved_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+			{Key: "row", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FamilyPrecedenceRowVocabulary()},
+			{Key: "incompatibility_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FamilyIncompatibilityReasonVocabulary()},
+			{Key: "group_kind_set", Type: FieldBool, Presence: PresenceRequired},
+			{Key: "scope_anchor_set", Type: FieldBool, Presence: PresenceRequired},
+		}},
+		{Key: "samples_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "shadow_frame_observed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_frame_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(frameValidationOutcomeTokens)},
+		{Key: "shadow_projection_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", contextfabric.QuestionFrameVersion}},
+		{Key: "shadow_projected_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+		{Key: "shadow_projected_row", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyProjectionRowArr[:]))},
+		{Key: "shadow_precedence_family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(questionFamilyLineTokens())},
+		{Key: "shadow_precedence_row", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.FamilyPrecedenceRowVocabulary()},
+		{Key: "shadow_agreement_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyAgreementClassArr[:]))},
+		{Key: "shadow_agreed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "family_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyRouteSourceArr[:]))},
+		{Key: "route_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyAgreementClassArr[:]))},
+		{Key: "route_disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: withEmptyToken(arrayTokens(familyRouteDispositionArr[:]))},
+		{Key: "route_switched", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// HealthDailyHealthCapCut is the Debug line of a health read whose daily_health display cap cut rows from one or more subjects' tables. The cut is also disclosed on the served fact (daily_health_omitted_count) and the read is marked truncated; this line carries counts and the closed subject-local flag only.
+var HealthDailyHealthCapCut = Event{
+	ID:                 "devhealthfacts.health_daily_health_cap_cut",
+	Msg:                "health daily_health display cap cut rows",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per health read with a cut daily_health table.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subjects_cut", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subjects", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_local", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// DeficiencyRuleBasisDayAbsent is the Info line of an operational_deficiencies read whose compounding-risk rule row parsed as a rule basis but names no score day, so the fact is served without rule_basis_as_of_day. The omission is also visible on the served fact (the field is absent); this line carries the org and the closed rule id only.
+var DeficiencyRuleBasisDayAbsent = Event{
+	ID:                 "devhealthfacts.rule_basis_day_absent",
+	Msg:                "devhealthfacts.rule_basis_day_absent",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per fired compounding-risk rule row without a day.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rule_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// DeficiencyRuleBasisDayInvalid is the Warn line of an operational_deficiencies read whose compounding-risk rule row names a score day that is not a calendar date, so the fact is served without rule_basis_as_of_day. The invalid text is sanitized before it is written.
+var DeficiencyRuleBasisDayInvalid = Event{
+	ID:                 "devhealthfacts.rule_basis_day_invalid",
+	Msg:                "devhealthfacts.rule_basis_day_invalid",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "one line per fired compounding-risk rule row with an invalid day.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rule_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "day", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// FactBytesBoundExceeded is the Warn line of a producer that dropped an additive time series because it, with the legacy rows, passed the joint cell or byte bound of a dual-table fact. The drop is also disclosed on the served fact; producer and kind are closed values, never row content.
+var FactBytesBoundExceeded = Event{
+	ID:                 "devhealthfacts.fact_bytes_bound_exceeded",
+	Msg:                "context_fabric_fact_bytes_bound_exceeded",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+	Attribution:        []string{"producer", "kind"},
+	BoundedAggregation: "one line per dropped time series of a dual-table fact.",
+	Fields: []Field{
+		{Key: "producer", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"flow"}},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "combined_cells_max", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "combined_bytes_max", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// SubjectIDShapeRejected is the Warn line of a provider that could not match requested subjects to its row-key shape; the rejected subjects are disclosed on the served result as an omitted count and a truncated state. A count only, never a subject id.
+var SubjectIDShapeRejected = Event{
+	ID:                 "devhealthfacts.subject_id_shape_rejected",
+	Msg:                "context_fabric_subject_id_shape_rejected",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+	Attribution:        []string{"producer", "kind"},
+	BoundedAggregation: "one line per provider read with a positive rejected count.",
+	Fields: []Field{
+		{Key: "producer", Type: FieldString, Presence: PresenceRequired, Pattern: `^devhealthfacts\.[a-z_]+$`, PatternExample: "devhealthfacts.flow"},
+		{Key: "kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(organizationFactKindArr[:])},
+		{Key: "rejected", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// OwningTeamsTruncated is the Warn line of an identity read that had more owning teams for a repository than its table carries; the omitted count is also on the served fact and result.
+var OwningTeamsTruncated = Event{
+	ID:                 "devhealthfacts.owning_teams_truncated",
+	Msg:                "context_fabric_owning_teams_truncated",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrManyPerRequest,
+	DataDependentBound: "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+	Attribution:        []string{"producer"},
+	BoundedAggregation: "one line per identity read with truncated owning teams.",
+	Fields: []Field{
+		{Key: "producer", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"devhealthfacts.identity"}},
+		{Key: "omitted", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
 // CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
 // handleOfferMaterial's own combined per-resolution offer bookkeeping --
@@ -2374,6 +2675,11 @@ var EvidenceRound = Event{
 		{Key: "shadow_handle_insensitivity_evaluated", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_handle_insensitivity_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: kindInsensitivityOutcome},
 		{Key: "shadow_caller_hint_short_circuit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_survivor_excluded_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "scope_anchor"}},
+		{Key: "shadow_trigger", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"caller_hint", "committed_scope_anchor", "stalled"}},
+		{Key: "shadow_caller_narrowing", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "narrowed_to_one", "narrowed_to_none", "narrowed_to_many", "census_truncated", "satisfier_read_failed"}},
+		{Key: "shadow_narrowed_from", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "shadow_narrowed_to", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 
@@ -3395,6 +3701,12 @@ var AnswerDisplay = Event{
 		{Key: "max_evidence", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "floor_counts", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "recorded_counts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_serialized_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "narrative_byte_allowance", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "limitations_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "warnings_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "limitations_byte_cut", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "warnings_byte_cut", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "count_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"absent", "floor", "recorded", "mixed"}},
 		{Key: "projection_truncated", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "markdown_rendered", Type: FieldBool, Presence: PresenceRequired},
@@ -4046,6 +4358,19 @@ var All = []Event{
 	FactTableDeclarationRejected,
 	FactResultRejected,
 	FactReadFailed,
+	TeamLinkedMixNativeFirst,
+	TeamLinkedMixSet,
+	TeamPRLinkStateNativeFirst,
+	PullRequestProjectNativeFirst,
+	ProjectStatusDrivers,
+	TeamBlockersDrivers,
+	QuestionFamilyResolution,
+	HealthDailyHealthCapCut,
+	DeficiencyRuleBasisDayAbsent,
+	DeficiencyRuleBasisDayInvalid,
+	FactBytesBoundExceeded,
+	SubjectIDShapeRejected,
+	OwningTeamsTruncated,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,

@@ -685,9 +685,7 @@
           ],
           "properties": {
             "entity_type": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 100
+              "const": "deployment"
             },
             "entity_id": {
               "type": "string",
@@ -714,6 +712,20 @@
             "properties": {
               "evidence_ref_ids": {
                 "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cause_event"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "cause"
               }
             }
           }

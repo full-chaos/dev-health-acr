@@ -20,108 +20,121 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"api.oauth_step": OAuthStep,
-	"contextfabric.anchor_binding_transition":        AnchorBindingTransition,
-	"contextfabric.answer_display":                   AnswerDisplay,
-	"contextfabric.client_synthesis_decision":        ClientSynthesisDecision,
-	"contextfabric.cohort_driver_narration":          CohortDriverNarration,
-	"contextfabric.cohort_kind_fulltext":             CohortKindFulltext,
-	"contextfabric.cohort_ranked":                    CohortRanked,
-	"contextfabric.completeness_authority":           CompletenessAuthority,
-	"contextfabric.confirmed_need_ledger":            ConfirmedNeedLedger,
-	"contextfabric.count_population_scope":           CountPopulationScope,
-	"contextfabric.direct_read":                      DirectRead,
-	"contextfabric.direct_read_authorization":        DirectReadAuthorization,
-	"contextfabric.direct_relationships_read":        DirectRelationshipsRead,
-	"contextfabric.engine_fact_gate_info":            EngineFactGateInfo,
-	"contextfabric.engine_fact_gate_warn":            EngineFactGateWarn,
-	"contextfabric.evidence_expansion":               EvidenceExpansion,
-	"contextfabric.fact_evaluation_coverage":         FactEvaluationCoverage,
-	"contextfabric.fact_read":                        FactRead,
-	"contextfabric.fact_read_failed":                 FactReadFailed,
-	"contextfabric.fact_result_rejected":             FactResultRejected,
-	"contextfabric.fact_root_refused":                FactRootRefused,
-	"contextfabric.fact_scope_expansion_decision":    FactScopeExpansionDecision,
-	"contextfabric.fact_scope_expansion_gap":         FactScopeExpansionGap,
-	"contextfabric.fact_table_declaration":           FactTableDeclaration,
-	"contextfabric.fact_table_declaration_rejected":  FactTableDeclarationRejected,
-	"contextfabric.fact_table_declarations_capped":   FactTableDeclarationsCapped,
-	"contextfabric.frame_validation":                 FrameValidation,
-	"contextfabric.graphql_query":                    GraphQLQuery,
-	"contextfabric.interpretation_ensemble_gap":      InterpretationEnsembleGap,
-	"contextfabric.interpretation_ensemble_resolved": InterpretationEnsembleResolved,
-	"contextfabric.operation_read":                   OperationRead,
-	"contextfabric.organization_subject_read":        OrganizationSubjectRead,
-	"contextfabric.ownership_routing":                OwnershipRouting,
-	"contextfabric.plan_carry":                       PlanCarry,
-	"contextfabric.plan_carry_outcome":               PlanCarryOutcome,
-	"contextfabric.project_deployment_walk":          ProjectDeploymentWalk,
-	"contextfabric.pull_request_status_filter":       PullRequestStatusFilter,
-	"contextfabric.remembered_window_axis":           RememberedWindowAxis,
-	"contextfabric.render_shape_rule_skipped":        RenderShapeRuleSkipped,
-	"contextfabric.render_shape_selection_summary":   RenderShapeSelectionSummary,
-	"contextfabric.repository_work_item_walk":        RepositoryWorkItemWalk,
-	"contextfabric.requirement_outcome_transition":   RequirementOutcomeTransition,
-	"contextfabric.retained_ranking_accounting":      RetainedRankingAccounting,
-	"contextfabric.semantic_state_persistence":       SemanticStatePersistence,
-	"contextfabric.server_status_shadow":             ServerStatusShadowLine,
-	"contextfabric.stored_result_authorization":      StoredResultAuthorization,
-	"contextfabric.supplied_interpretation_decision": SuppliedInterpretationDecision,
-	"contextfabric.supplied_synthesis_decision":      SuppliedSynthesisDecision,
-	"contextfabric.synthesis_input":                  SynthesisInput,
-	"contextfabric.synthesis_retry_selection":        SynthesisRetrySelection,
-	"contextfabric.team_anchor_walk":                 TeamAnchorWalk,
-	"contextfabric.terminal_save_skipped":            TerminalSaveSkipped,
-	"contextfabric.window_continuation_decision":     WindowContinuationDecision,
-	"contextfabric.work_item_authorization_gap":      WorkItemAuthorizationGap,
-	"contextfabric.work_item_membership_gate":        WorkItemMembershipGate,
-	"contextfabric.work_item_membership_s1":          WorkItemMembershipS1,
-	"contextfabric.work_item_reuse":                  WorkItemReuse,
-	"contextfabric.work_item_stored_serving":         WorkItemStoredServing,
-	"contextfabric.work_item_tuple_admission":        WorkItemTupleAdmission,
-	"genkitruntime.model_interpret_decision":         ModelInterpretDecision,
-	"genkitruntime.model_phrase_decision":            ModelPhraseDecision,
-	"genkitruntime.model_synthesize_decision":        ModelSynthesizeDecision,
-	"graphrank.alias_lookup":                         AliasLookup,
-	"graphrank.anchor_kind_withheld":                 AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary":         AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                         AnchorOffer,
-	"graphrank.anchor_pool":                          AnchorPool,
-	"graphrank.anchor_slot_displaced":                AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":                ConfirmedKindRescue,
-	"graphrank.confirmed_kind_scope":                 ConfirmedKindScope,
-	"graphrank.corroboration":                        Corroboration,
-	"graphrank.corroboration_summary":                CorroborationSummary,
-	"graphrank.decision":                             Decision,
-	"graphrank.decision_summary":                     DecisionSummary,
-	"graphrank.evidence_census_commit":               EvidenceCensusCommit,
-	"graphrank.evidence_probe":                       EvidenceProbe,
-	"graphrank.evidence_round":                       EvidenceRound,
-	"graphrank.evidence_source_native":               EvidenceSourceNative,
-	"graphrank.evidence_source_native_probe":         EvidenceSourceNativeProbe,
-	"graphrank.exact_name_search":                    ExactNameSearch,
-	"graphrank.identity_gate":                        IdentityGate,
-	"graphrank.identity_gate_summary":                IdentityGateSummary,
-	"graphrank.identity_universe":                    IdentityUniverse,
-	"graphrank.kind_coverage_floor":                  KindCoverageFloor,
-	"graphrank.kind_hint_search":                     KindHintSearch,
-	"graphrank.kind_offer":                           KindOffer,
-	"graphrank.kind_offer_withheld":                  KindOfferWithheld,
-	"graphrank.low_population_kind_scope":            LowPopulationKindScope,
-	"graphrank.low_population_kind_scope_summary":    LowPopulationKindScopeSummary,
-	"graphrank.offer_pool":                           OfferPool,
-	"graphrank.offer_pool_summary":                   OfferPoolSummary,
-	"graphrank.ranked_cut_summary":                   RankedCutSummary,
-	"graphrank.reserved_kind_admitted":               ReservedKindAdmitted,
-	"graphrank.search":                               Search,
-	"graphrank.search_question":                      SearchQuestion,
-	"graphrank.slice_b_survivor_verdict":             SliceBSurvivorVerdict,
-	"graphrank.slice_b_survivor_verdict_summary":     SliceBSurvivorVerdictSummary,
-	"mcp.hosted_context_scope":                       MCPHostedContextScope,
-	"mcp.http_readiness":                             MCPHTTPReadiness,
-	"mcp.http_request":                               MCPHTTPRequest,
-	"mcp.http_serving":                               MCPHTTPServing,
-	"process.otel_export":                            OTelExport,
-	"projectionrun.graph_count_check_finished":       GraphCountCheckFinished,
+	"contextfabric.anchor_binding_transition":          AnchorBindingTransition,
+	"contextfabric.answer_display":                     AnswerDisplay,
+	"contextfabric.client_synthesis_decision":          ClientSynthesisDecision,
+	"contextfabric.cohort_driver_narration":            CohortDriverNarration,
+	"contextfabric.cohort_kind_fulltext":               CohortKindFulltext,
+	"contextfabric.cohort_ranked":                      CohortRanked,
+	"contextfabric.completeness_authority":             CompletenessAuthority,
+	"contextfabric.confirmed_need_ledger":              ConfirmedNeedLedger,
+	"contextfabric.count_population_scope":             CountPopulationScope,
+	"contextfabric.direct_read":                        DirectRead,
+	"contextfabric.direct_read_authorization":          DirectReadAuthorization,
+	"contextfabric.direct_relationships_read":          DirectRelationshipsRead,
+	"contextfabric.engine_fact_gate_info":              EngineFactGateInfo,
+	"contextfabric.engine_fact_gate_warn":              EngineFactGateWarn,
+	"contextfabric.evidence_expansion":                 EvidenceExpansion,
+	"contextfabric.fact_evaluation_coverage":           FactEvaluationCoverage,
+	"contextfabric.fact_read":                          FactRead,
+	"contextfabric.fact_read_failed":                   FactReadFailed,
+	"contextfabric.fact_result_rejected":               FactResultRejected,
+	"contextfabric.fact_root_refused":                  FactRootRefused,
+	"contextfabric.fact_scope_expansion_decision":      FactScopeExpansionDecision,
+	"contextfabric.fact_scope_expansion_gap":           FactScopeExpansionGap,
+	"contextfabric.fact_table_declaration":             FactTableDeclaration,
+	"contextfabric.fact_table_declaration_rejected":    FactTableDeclarationRejected,
+	"contextfabric.fact_table_declarations_capped":     FactTableDeclarationsCapped,
+	"contextfabric.frame_validation":                   FrameValidation,
+	"contextfabric.graphql_query":                      GraphQLQuery,
+	"contextfabric.interpretation_ensemble_gap":        InterpretationEnsembleGap,
+	"contextfabric.interpretation_ensemble_resolved":   InterpretationEnsembleResolved,
+	"contextfabric.operation_read":                     OperationRead,
+	"contextfabric.organization_subject_read":          OrganizationSubjectRead,
+	"contextfabric.ownership_routing":                  OwnershipRouting,
+	"contextfabric.plan_carry":                         PlanCarry,
+	"contextfabric.plan_carry_outcome":                 PlanCarryOutcome,
+	"contextfabric.project_deployment_walk":            ProjectDeploymentWalk,
+	"contextfabric.project_status_drivers":             ProjectStatusDrivers,
+	"contextfabric.pull_request_status_filter":         PullRequestStatusFilter,
+	"contextfabric.question_family_resolution":         QuestionFamilyResolution,
+	"contextfabric.remembered_window_axis":             RememberedWindowAxis,
+	"contextfabric.render_shape_rule_skipped":          RenderShapeRuleSkipped,
+	"contextfabric.render_shape_selection_summary":     RenderShapeSelectionSummary,
+	"contextfabric.repository_work_item_walk":          RepositoryWorkItemWalk,
+	"contextfabric.requirement_outcome_transition":     RequirementOutcomeTransition,
+	"contextfabric.retained_ranking_accounting":        RetainedRankingAccounting,
+	"contextfabric.semantic_state_persistence":         SemanticStatePersistence,
+	"contextfabric.server_status_shadow":               ServerStatusShadowLine,
+	"contextfabric.stored_result_authorization":        StoredResultAuthorization,
+	"contextfabric.supplied_interpretation_decision":   SuppliedInterpretationDecision,
+	"contextfabric.supplied_synthesis_decision":        SuppliedSynthesisDecision,
+	"contextfabric.synthesis_input":                    SynthesisInput,
+	"contextfabric.synthesis_retry_selection":          SynthesisRetrySelection,
+	"contextfabric.team_anchor_walk":                   TeamAnchorWalk,
+	"contextfabric.team_blockers_drivers":              TeamBlockersDrivers,
+	"contextfabric.terminal_save_skipped":              TerminalSaveSkipped,
+	"contextfabric.window_continuation_decision":       WindowContinuationDecision,
+	"contextfabric.work_item_authorization_gap":        WorkItemAuthorizationGap,
+	"contextfabric.work_item_membership_gate":          WorkItemMembershipGate,
+	"contextfabric.work_item_membership_s1":            WorkItemMembershipS1,
+	"contextfabric.work_item_reuse":                    WorkItemReuse,
+	"contextfabric.work_item_stored_serving":           WorkItemStoredServing,
+	"contextfabric.work_item_tuple_admission":          WorkItemTupleAdmission,
+	"devhealthfacts.fact_bytes_bound_exceeded":         FactBytesBoundExceeded,
+	"devhealthfacts.health_daily_health_cap_cut":       HealthDailyHealthCapCut,
+	"devhealthfacts.owning_teams_truncated":            OwningTeamsTruncated,
+	"devhealthfacts.pull_request_project_native_first": PullRequestProjectNativeFirst,
+	"devhealthfacts.rule_basis_day_absent":             DeficiencyRuleBasisDayAbsent,
+	"devhealthfacts.rule_basis_day_invalid":            DeficiencyRuleBasisDayInvalid,
+	"devhealthfacts.subject_id_shape_rejected":         SubjectIDShapeRejected,
+	"devhealthfacts.team_linked_mix_native_first":      TeamLinkedMixNativeFirst,
+	"devhealthfacts.team_linked_mix_set":               TeamLinkedMixSet,
+	"devhealthfacts.team_pr_link_state_native_first":   TeamPRLinkStateNativeFirst,
+	"genkitruntime.model_interpret_decision":           ModelInterpretDecision,
+	"genkitruntime.model_phrase_decision":              ModelPhraseDecision,
+	"genkitruntime.model_synthesize_decision":          ModelSynthesizeDecision,
+	"graphrank.alias_lookup":                           AliasLookup,
+	"graphrank.anchor_kind_withheld":                   AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":           AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                           AnchorOffer,
+	"graphrank.anchor_pool":                            AnchorPool,
+	"graphrank.anchor_slot_displaced":                  AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":                  ConfirmedKindRescue,
+	"graphrank.confirmed_kind_scope":                   ConfirmedKindScope,
+	"graphrank.corroboration":                          Corroboration,
+	"graphrank.corroboration_summary":                  CorroborationSummary,
+	"graphrank.decision":                               Decision,
+	"graphrank.decision_summary":                       DecisionSummary,
+	"graphrank.evidence_census_commit":                 EvidenceCensusCommit,
+	"graphrank.evidence_probe":                         EvidenceProbe,
+	"graphrank.evidence_round":                         EvidenceRound,
+	"graphrank.evidence_source_native":                 EvidenceSourceNative,
+	"graphrank.evidence_source_native_probe":           EvidenceSourceNativeProbe,
+	"graphrank.exact_name_search":                      ExactNameSearch,
+	"graphrank.identity_gate":                          IdentityGate,
+	"graphrank.identity_gate_summary":                  IdentityGateSummary,
+	"graphrank.identity_universe":                      IdentityUniverse,
+	"graphrank.kind_coverage_floor":                    KindCoverageFloor,
+	"graphrank.kind_hint_search":                       KindHintSearch,
+	"graphrank.kind_offer":                             KindOffer,
+	"graphrank.kind_offer_withheld":                    KindOfferWithheld,
+	"graphrank.low_population_kind_scope":              LowPopulationKindScope,
+	"graphrank.low_population_kind_scope_summary":      LowPopulationKindScopeSummary,
+	"graphrank.offer_pool":                             OfferPool,
+	"graphrank.offer_pool_summary":                     OfferPoolSummary,
+	"graphrank.ranked_cut_summary":                     RankedCutSummary,
+	"graphrank.reserved_kind_admitted":                 ReservedKindAdmitted,
+	"graphrank.search":                                 Search,
+	"graphrank.search_question":                        SearchQuestion,
+	"graphrank.slice_b_survivor_verdict":               SliceBSurvivorVerdict,
+	"graphrank.slice_b_survivor_verdict_summary":       SliceBSurvivorVerdictSummary,
+	"mcp.hosted_context_scope":                         MCPHostedContextScope,
+	"mcp.http_readiness":                               MCPHTTPReadiness,
+	"mcp.http_request":                                 MCPHTTPRequest,
+	"mcp.http_serving":                                 MCPHTTPServing,
+	"process.otel_export":                              OTelExport,
+	"projectionrun.graph_count_check_finished":         GraphCountCheckFinished,
 }
 
 // OAuthStepFields is api.oauth_step's generated typed construction interface
@@ -468,6 +481,12 @@ type AnswerDisplayFields struct {
 	MaxEvidence            int
 	FloorCounts            int
 	RecordedCounts         int
+	MaxSerializedBytes     int
+	NarrativeByteAllowance int
+	LimitationsOmitted     int
+	WarningsOmitted        int
+	LimitationsByteCut     int
+	WarningsByteCut        int
 	CountBasis             string
 	ProjectionTruncated    bool
 	MarkdownRendered       bool
@@ -485,7 +504,7 @@ type AnswerDisplayFields struct {
 
 // NewAnswerDisplayFields is the generated constructor for AnswerDisplayFields -- every
 // field AnswerDisplay.Fields declares is a required parameter.
-func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers int, projectedMembers int, canonicalEligibleFacts int, projectedFacts int, factsOmitted int, membersOmitted int, evidenceOmitted int, maxFacts int, maxMembers int, maxEvidence int, floorCounts int, recordedCounts int, countBasis string, projectionTruncated bool, markdownRendered bool, markdownTruncated bool) AnswerDisplayFields {
+func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers int, projectedMembers int, canonicalEligibleFacts int, projectedFacts int, factsOmitted int, membersOmitted int, evidenceOmitted int, maxFacts int, maxMembers int, maxEvidence int, floorCounts int, recordedCounts int, maxSerializedBytes int, narrativeByteAllowance int, limitationsOmitted int, warningsOmitted int, limitationsByteCut int, warningsByteCut int, countBasis string, projectionTruncated bool, markdownRendered bool, markdownTruncated bool) AnswerDisplayFields {
 	return AnswerDisplayFields{
 		RequestID:              requestID,
 		Surface:                surface,
@@ -501,6 +520,12 @@ func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers i
 		MaxEvidence:            maxEvidence,
 		FloorCounts:            floorCounts,
 		RecordedCounts:         recordedCounts,
+		MaxSerializedBytes:     maxSerializedBytes,
+		NarrativeByteAllowance: narrativeByteAllowance,
+		LimitationsOmitted:     limitationsOmitted,
+		WarningsOmitted:        warningsOmitted,
+		LimitationsByteCut:     limitationsByteCut,
+		WarningsByteCut:        warningsByteCut,
 		CountBasis:             countBasis,
 		ProjectionTruncated:    projectionTruncated,
 		MarkdownRendered:       markdownRendered,
@@ -536,6 +561,12 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 		"max_evidence", f.MaxEvidence,
 		"floor_counts", f.FloorCounts,
 		"recorded_counts", f.RecordedCounts,
+		"max_serialized_bytes", f.MaxSerializedBytes,
+		"narrative_byte_allowance", f.NarrativeByteAllowance,
+		"limitations_omitted", f.LimitationsOmitted,
+		"warnings_omitted", f.WarningsOmitted,
+		"limitations_byte_cut", f.LimitationsByteCut,
+		"warnings_byte_cut", f.WarningsByteCut,
 		"count_basis", contextfabric.SanitizeLogAttr(f.CountBasis),
 		"projection_truncated", f.ProjectionTruncated,
 		"markdown_rendered", f.MarkdownRendered,
@@ -3734,6 +3765,84 @@ func (f ProjectDeploymentWalkFields) SlogArgs() []any {
 	}
 }
 
+// ProjectStatusDriversFields is contextfabric.project_status_drivers's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ProjectStatusDrivers.Fields declares in spec.go.
+type ProjectStatusDriversFields struct {
+	OrgID          string
+	Emitted        int
+	SkippedBudget  int
+	SkippedIDClash int
+	MissingKinds   []string
+	MissingStates  []string
+	PartialKinds   []string
+	PartialStates  []string
+	RequestID      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ProjectStatusDriversFields uniformly, set ONLY by NewProjectStatusDriversFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewProjectStatusDriversFields is the generated constructor for ProjectStatusDriversFields -- every
+// field ProjectStatusDrivers.Fields declares is a required parameter.
+func NewProjectStatusDriversFields(orgID string, emitted int, skippedBudget int, skippedIDClash int, missingKinds []string, missingStates []string, partialKinds []string, partialStates []string, requestID string) ProjectStatusDriversFields {
+	valid := true
+	if missingKinds == nil {
+		valid = false
+	}
+	if missingStates == nil {
+		valid = false
+	}
+	if partialKinds == nil {
+		valid = false
+	}
+	if partialStates == nil {
+		valid = false
+	}
+	return ProjectStatusDriversFields{
+		OrgID:          orgID,
+		Emitted:        emitted,
+		SkippedBudget:  skippedBudget,
+		SkippedIDClash: skippedIDClash,
+		MissingKinds:   missingKinds,
+		MissingStates:  missingStates,
+		PartialKinds:   partialKinds,
+		PartialStates:  partialStates,
+		RequestID:      requestID,
+		constructed:    valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewProjectStatusDriversFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ProjectStatusDriversFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ProjectStatusDrivers's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ProjectStatusDriversFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"emitted", f.Emitted,
+		"skipped_budget", f.SkippedBudget,
+		"skipped_id_clash", f.SkippedIDClash,
+		"missing_kinds", contextfabric.SanitizeLogStrings(f.MissingKinds),
+		"missing_states", contextfabric.SanitizeLogStrings(f.MissingStates),
+		"partial_kinds", contextfabric.SanitizeLogStrings(f.PartialKinds),
+		"partial_states", contextfabric.SanitizeLogStrings(f.PartialStates),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // PullRequestStatusFilterFields is contextfabric.pull_request_status_filter's generated typed construction interface
 // (CHAOS-5516): one Go field per Field PullRequestStatusFilter.Fields declares in spec.go.
 type PullRequestStatusFilterFields struct {
@@ -3804,6 +3913,120 @@ func (f PullRequestStatusFilterFields) SlogArgs() []any {
 		"outside_set", f.OutsideSet,
 		"pool", f.Pool,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// QuestionFamilyResolutionFields is contextfabric.question_family_resolution's generated typed construction interface
+// (CHAOS-5516): one Go field per Field QuestionFamilyResolution.Fields declares in spec.go.
+type QuestionFamilyResolutionFields struct {
+	OrgID                    string
+	Family                   string
+	Source                   string
+	EnsembleSize             int
+	DowngradedCount          int
+	ConsensusFieldDivergence int
+	FamilyVersion            string
+	SampleFamilies           map[string]int
+	Samples                  []map[string]any
+	SamplesOmitted           int
+	ShadowFrameObserved      bool
+	ShadowFrameOutcome       string
+	ShadowProjectionVersion  string
+	ShadowProjectedFamily    string
+	ShadowProjectedRow       string
+	ShadowPrecedenceFamily   string
+	ShadowPrecedenceRow      string
+	ShadowAgreementClass     string
+	ShadowAgreed             bool
+	FamilySource             string
+	RouteClass               string
+	RouteDisposition         string
+	RouteSwitched            bool
+	RequestID                string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every QuestionFamilyResolutionFields uniformly, set ONLY by NewQuestionFamilyResolutionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewQuestionFamilyResolutionFields is the generated constructor for QuestionFamilyResolutionFields -- every
+// field QuestionFamilyResolution.Fields declares is a required parameter.
+func NewQuestionFamilyResolutionFields(orgID string, family string, source string, ensembleSize int, downgradedCount int, consensusFieldDivergence int, familyVersion string, sampleFamilies map[string]int, samples []map[string]any, samplesOmitted int, shadowFrameObserved bool, shadowFrameOutcome string, shadowProjectionVersion string, shadowProjectedFamily string, shadowProjectedRow string, shadowPrecedenceFamily string, shadowPrecedenceRow string, shadowAgreementClass string, shadowAgreed bool, familySource string, routeClass string, routeDisposition string, routeSwitched bool, requestID string) QuestionFamilyResolutionFields {
+	valid := true
+	if samples == nil {
+		valid = false
+	}
+	return QuestionFamilyResolutionFields{
+		OrgID:                    orgID,
+		Family:                   family,
+		Source:                   source,
+		EnsembleSize:             ensembleSize,
+		DowngradedCount:          downgradedCount,
+		ConsensusFieldDivergence: consensusFieldDivergence,
+		FamilyVersion:            familyVersion,
+		SampleFamilies:           sampleFamilies,
+		Samples:                  samples,
+		SamplesOmitted:           samplesOmitted,
+		ShadowFrameObserved:      shadowFrameObserved,
+		ShadowFrameOutcome:       shadowFrameOutcome,
+		ShadowProjectionVersion:  shadowProjectionVersion,
+		ShadowProjectedFamily:    shadowProjectedFamily,
+		ShadowProjectedRow:       shadowProjectedRow,
+		ShadowPrecedenceFamily:   shadowPrecedenceFamily,
+		ShadowPrecedenceRow:      shadowPrecedenceRow,
+		ShadowAgreementClass:     shadowAgreementClass,
+		ShadowAgreed:             shadowAgreed,
+		FamilySource:             familySource,
+		RouteClass:               routeClass,
+		RouteDisposition:         routeDisposition,
+		RouteSwitched:            routeSwitched,
+		RequestID:                requestID,
+		constructed:              valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewQuestionFamilyResolutionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f QuestionFamilyResolutionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns QuestionFamilyResolution's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f QuestionFamilyResolutionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"ensemble_size", f.EnsembleSize,
+		"downgraded_count", f.DowngradedCount,
+		"consensus_field_divergence", f.ConsensusFieldDivergence,
+		"family_version", contextfabric.SanitizeLogAttr(f.FamilyVersion),
+		"sample_families", f.SampleFamilies,
+		"samples", f.Samples,
+		"samples_omitted", f.SamplesOmitted,
+		"shadow_frame_observed", f.ShadowFrameObserved,
+		"shadow_frame_outcome", contextfabric.SanitizeLogAttr(f.ShadowFrameOutcome),
+		"shadow_projection_version", contextfabric.SanitizeLogAttr(f.ShadowProjectionVersion),
+		"shadow_projected_family", contextfabric.SanitizeLogAttr(f.ShadowProjectedFamily),
+		"shadow_projected_row", contextfabric.SanitizeLogAttr(f.ShadowProjectedRow),
+		"shadow_precedence_family", contextfabric.SanitizeLogAttr(f.ShadowPrecedenceFamily),
+		"shadow_precedence_row", contextfabric.SanitizeLogAttr(f.ShadowPrecedenceRow),
+		"shadow_agreement_class", contextfabric.SanitizeLogAttr(f.ShadowAgreementClass),
+		"shadow_agreed", f.ShadowAgreed,
+		"family_source", contextfabric.SanitizeLogAttr(f.FamilySource),
+		"route_class", contextfabric.SanitizeLogAttr(f.RouteClass),
+		"route_disposition", contextfabric.SanitizeLogAttr(f.RouteDisposition),
+		"route_switched", f.RouteSwitched,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -4983,6 +5206,74 @@ func (f TeamAnchorWalkFields) SlogArgs() []any {
 	}
 }
 
+// TeamBlockersDriversFields is contextfabric.team_blockers_drivers's generated typed construction interface
+// (CHAOS-5516): one Go field per Field TeamBlockersDrivers.Fields declares in spec.go.
+type TeamBlockersDriversFields struct {
+	OrgID            string
+	Emitted          int
+	TruncatedServed  int
+	SkippedMissing   int
+	SkippedZero      int
+	SkippedBudget    int
+	SkippedIDClash   int
+	SkippedStale     int
+	SkippedDuplicate int
+	RequestID        string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every TeamBlockersDriversFields uniformly, set ONLY by NewTeamBlockersDriversFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewTeamBlockersDriversFields is the generated constructor for TeamBlockersDriversFields -- every
+// field TeamBlockersDrivers.Fields declares is a required parameter.
+func NewTeamBlockersDriversFields(orgID string, emitted int, truncatedServed int, skippedMissing int, skippedZero int, skippedBudget int, skippedIDClash int, skippedStale int, skippedDuplicate int, requestID string) TeamBlockersDriversFields {
+	return TeamBlockersDriversFields{
+		OrgID:            orgID,
+		Emitted:          emitted,
+		TruncatedServed:  truncatedServed,
+		SkippedMissing:   skippedMissing,
+		SkippedZero:      skippedZero,
+		SkippedBudget:    skippedBudget,
+		SkippedIDClash:   skippedIDClash,
+		SkippedStale:     skippedStale,
+		SkippedDuplicate: skippedDuplicate,
+		RequestID:        requestID,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewTeamBlockersDriversFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f TeamBlockersDriversFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns TeamBlockersDrivers's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f TeamBlockersDriversFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"emitted", f.Emitted,
+		"truncated_served", f.TruncatedServed,
+		"skipped_missing", f.SkippedMissing,
+		"skipped_zero", f.SkippedZero,
+		"skipped_budget", f.SkippedBudget,
+		"skipped_id_clash", f.SkippedIDClash,
+		"skipped_stale", f.SkippedStale,
+		"skipped_duplicate", f.SkippedDuplicate,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // TerminalSaveSkippedFields is contextfabric.terminal_save_skipped's generated typed construction interface
 // (CHAOS-5516): one Go field per Field TerminalSaveSkipped.Fields declares in spec.go.
 type TerminalSaveSkippedFields struct {
@@ -5631,6 +5922,500 @@ func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
 	}
 }
 
+// FactBytesBoundExceededFields is devhealthfacts.fact_bytes_bound_exceeded's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FactBytesBoundExceeded.Fields declares in spec.go.
+type FactBytesBoundExceededFields struct {
+	Producer         string
+	Kind             string
+	CombinedCellsMax int
+	CombinedBytesMax int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FactBytesBoundExceededFields uniformly, set ONLY by NewFactBytesBoundExceededFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFactBytesBoundExceededFields is the generated constructor for FactBytesBoundExceededFields -- every
+// field FactBytesBoundExceeded.Fields declares is a required parameter.
+func NewFactBytesBoundExceededFields(producer string, kind string, combinedCellsMax int, combinedBytesMax int) FactBytesBoundExceededFields {
+	return FactBytesBoundExceededFields{
+		Producer:         producer,
+		Kind:             kind,
+		CombinedCellsMax: combinedCellsMax,
+		CombinedBytesMax: combinedBytesMax,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFactBytesBoundExceededFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FactBytesBoundExceededFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FactBytesBoundExceeded's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FactBytesBoundExceededFields) SlogArgs() []any {
+	return []any{
+		"producer", contextfabric.SanitizeLogAttr(f.Producer),
+		"kind", contextfabric.SanitizeLogAttr(f.Kind),
+		"combined_cells_max", f.CombinedCellsMax,
+		"combined_bytes_max", f.CombinedBytesMax,
+	}
+}
+
+// HealthDailyHealthCapCutFields is devhealthfacts.health_daily_health_cap_cut's generated typed construction interface
+// (CHAOS-5516): one Go field per Field HealthDailyHealthCapCut.Fields declares in spec.go.
+type HealthDailyHealthCapCutFields struct {
+	OrgID        string
+	SubjectsCut  int
+	Subjects     int
+	SubjectLocal bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every HealthDailyHealthCapCutFields uniformly, set ONLY by NewHealthDailyHealthCapCutFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewHealthDailyHealthCapCutFields is the generated constructor for HealthDailyHealthCapCutFields -- every
+// field HealthDailyHealthCapCut.Fields declares is a required parameter.
+func NewHealthDailyHealthCapCutFields(orgID string, subjectsCut int, subjects int, subjectLocal bool) HealthDailyHealthCapCutFields {
+	return HealthDailyHealthCapCutFields{
+		OrgID:        orgID,
+		SubjectsCut:  subjectsCut,
+		Subjects:     subjects,
+		SubjectLocal: subjectLocal,
+		constructed:  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewHealthDailyHealthCapCutFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f HealthDailyHealthCapCutFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns HealthDailyHealthCapCut's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f HealthDailyHealthCapCutFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"subjects_cut", f.SubjectsCut,
+		"subjects", f.Subjects,
+		"subject_local", f.SubjectLocal,
+	}
+}
+
+// OwningTeamsTruncatedFields is devhealthfacts.owning_teams_truncated's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OwningTeamsTruncated.Fields declares in spec.go.
+type OwningTeamsTruncatedFields struct {
+	Producer string
+	Omitted  int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OwningTeamsTruncatedFields uniformly, set ONLY by NewOwningTeamsTruncatedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOwningTeamsTruncatedFields is the generated constructor for OwningTeamsTruncatedFields -- every
+// field OwningTeamsTruncated.Fields declares is a required parameter.
+func NewOwningTeamsTruncatedFields(producer string, omitted int) OwningTeamsTruncatedFields {
+	return OwningTeamsTruncatedFields{
+		Producer:    producer,
+		Omitted:     omitted,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOwningTeamsTruncatedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OwningTeamsTruncatedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OwningTeamsTruncated's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OwningTeamsTruncatedFields) SlogArgs() []any {
+	return []any{
+		"producer", contextfabric.SanitizeLogAttr(f.Producer),
+		"omitted", f.Omitted,
+	}
+}
+
+// PullRequestProjectNativeFirstFields is devhealthfacts.pull_request_project_native_first's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PullRequestProjectNativeFirst.Fields declares in spec.go.
+type PullRequestProjectNativeFirstFields struct {
+	Outcome       string
+	ProjectRows   int
+	FallbackLinks int
+	DroppedLinks  int
+	DroppedRows   int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PullRequestProjectNativeFirstFields uniformly, set ONLY by NewPullRequestProjectNativeFirstFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPullRequestProjectNativeFirstFields is the generated constructor for PullRequestProjectNativeFirstFields -- every
+// field PullRequestProjectNativeFirst.Fields declares is a required parameter.
+func NewPullRequestProjectNativeFirstFields(outcome string, projectRows int, fallbackLinks int, droppedLinks int, droppedRows int) PullRequestProjectNativeFirstFields {
+	return PullRequestProjectNativeFirstFields{
+		Outcome:       outcome,
+		ProjectRows:   projectRows,
+		FallbackLinks: fallbackLinks,
+		DroppedLinks:  droppedLinks,
+		DroppedRows:   droppedRows,
+		constructed:   true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPullRequestProjectNativeFirstFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PullRequestProjectNativeFirstFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PullRequestProjectNativeFirst's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PullRequestProjectNativeFirstFields) SlogArgs() []any {
+	return []any{
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"project_rows", f.ProjectRows,
+		"fallback_links", f.FallbackLinks,
+		"dropped_links", f.DroppedLinks,
+		"dropped_rows", f.DroppedRows,
+	}
+}
+
+// DeficiencyRuleBasisDayAbsentFields is devhealthfacts.rule_basis_day_absent's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DeficiencyRuleBasisDayAbsent.Fields declares in spec.go.
+type DeficiencyRuleBasisDayAbsentFields struct {
+	OrgID  string
+	RuleID string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DeficiencyRuleBasisDayAbsentFields uniformly, set ONLY by NewDeficiencyRuleBasisDayAbsentFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDeficiencyRuleBasisDayAbsentFields is the generated constructor for DeficiencyRuleBasisDayAbsentFields -- every
+// field DeficiencyRuleBasisDayAbsent.Fields declares is a required parameter.
+func NewDeficiencyRuleBasisDayAbsentFields(orgID string, ruleID string) DeficiencyRuleBasisDayAbsentFields {
+	return DeficiencyRuleBasisDayAbsentFields{
+		OrgID:       orgID,
+		RuleID:      ruleID,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDeficiencyRuleBasisDayAbsentFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DeficiencyRuleBasisDayAbsentFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DeficiencyRuleBasisDayAbsent's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DeficiencyRuleBasisDayAbsentFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"rule_id", contextfabric.SanitizeLogAttr(f.RuleID),
+	}
+}
+
+// DeficiencyRuleBasisDayInvalidFields is devhealthfacts.rule_basis_day_invalid's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DeficiencyRuleBasisDayInvalid.Fields declares in spec.go.
+type DeficiencyRuleBasisDayInvalidFields struct {
+	OrgID  string
+	RuleID string
+	Day    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DeficiencyRuleBasisDayInvalidFields uniformly, set ONLY by NewDeficiencyRuleBasisDayInvalidFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDeficiencyRuleBasisDayInvalidFields is the generated constructor for DeficiencyRuleBasisDayInvalidFields -- every
+// field DeficiencyRuleBasisDayInvalid.Fields declares is a required parameter.
+func NewDeficiencyRuleBasisDayInvalidFields(orgID string, ruleID string, day string) DeficiencyRuleBasisDayInvalidFields {
+	return DeficiencyRuleBasisDayInvalidFields{
+		OrgID:       orgID,
+		RuleID:      ruleID,
+		Day:         day,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDeficiencyRuleBasisDayInvalidFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DeficiencyRuleBasisDayInvalidFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DeficiencyRuleBasisDayInvalid's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DeficiencyRuleBasisDayInvalidFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"rule_id", contextfabric.SanitizeLogAttr(f.RuleID),
+		"day", contextfabric.SanitizeLogAttr(f.Day),
+	}
+}
+
+// SubjectIDShapeRejectedFields is devhealthfacts.subject_id_shape_rejected's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SubjectIDShapeRejected.Fields declares in spec.go.
+type SubjectIDShapeRejectedFields struct {
+	Producer string
+	Kind     string
+	Rejected int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SubjectIDShapeRejectedFields uniformly, set ONLY by NewSubjectIDShapeRejectedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSubjectIDShapeRejectedFields is the generated constructor for SubjectIDShapeRejectedFields -- every
+// field SubjectIDShapeRejected.Fields declares is a required parameter.
+func NewSubjectIDShapeRejectedFields(producer string, kind string, rejected int) SubjectIDShapeRejectedFields {
+	return SubjectIDShapeRejectedFields{
+		Producer:    producer,
+		Kind:        kind,
+		Rejected:    rejected,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSubjectIDShapeRejectedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SubjectIDShapeRejectedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SubjectIDShapeRejected's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SubjectIDShapeRejectedFields) SlogArgs() []any {
+	return []any{
+		"producer", contextfabric.SanitizeLogAttr(f.Producer),
+		"kind", contextfabric.SanitizeLogAttr(f.Kind),
+		"rejected", f.Rejected,
+	}
+}
+
+// TeamLinkedMixNativeFirstFields is devhealthfacts.team_linked_mix_native_first's generated typed construction interface
+// (CHAOS-5516): one Go field per Field TeamLinkedMixNativeFirst.Fields declares in spec.go.
+type TeamLinkedMixNativeFirstFields struct {
+	Outcome                 string
+	LinkRows                int
+	FallbackRows            int
+	DroppedRows             int
+	NativeCoverIssues       int
+	NativeCoverPullRequests int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every TeamLinkedMixNativeFirstFields uniformly, set ONLY by NewTeamLinkedMixNativeFirstFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewTeamLinkedMixNativeFirstFields is the generated constructor for TeamLinkedMixNativeFirstFields -- every
+// field TeamLinkedMixNativeFirst.Fields declares is a required parameter.
+func NewTeamLinkedMixNativeFirstFields(outcome string, linkRows int, fallbackRows int, droppedRows int, nativeCoverIssues int, nativeCoverPullRequests int) TeamLinkedMixNativeFirstFields {
+	return TeamLinkedMixNativeFirstFields{
+		Outcome:                 outcome,
+		LinkRows:                linkRows,
+		FallbackRows:            fallbackRows,
+		DroppedRows:             droppedRows,
+		NativeCoverIssues:       nativeCoverIssues,
+		NativeCoverPullRequests: nativeCoverPullRequests,
+		constructed:             true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewTeamLinkedMixNativeFirstFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f TeamLinkedMixNativeFirstFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns TeamLinkedMixNativeFirst's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f TeamLinkedMixNativeFirstFields) SlogArgs() []any {
+	return []any{
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"link_rows", f.LinkRows,
+		"fallback_rows", f.FallbackRows,
+		"dropped_rows", f.DroppedRows,
+		"native_cover_issues", f.NativeCoverIssues,
+		"native_cover_pull_requests", f.NativeCoverPullRequests,
+	}
+}
+
+// TeamLinkedMixSetFields is devhealthfacts.team_linked_mix_set's generated typed construction interface
+// (CHAOS-5516): one Go field per Field TeamLinkedMixSet.Fields declares in spec.go.
+type TeamLinkedMixSetFields struct {
+	Outcome            string
+	Teams              int
+	LinkedPullRequests int
+	ScopeMode          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every TeamLinkedMixSetFields uniformly, set ONLY by NewTeamLinkedMixSetFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewTeamLinkedMixSetFields is the generated constructor for TeamLinkedMixSetFields -- every
+// field TeamLinkedMixSet.Fields declares is a required parameter.
+func NewTeamLinkedMixSetFields(outcome string, teams int, linkedPullRequests int, scopeMode string) TeamLinkedMixSetFields {
+	return TeamLinkedMixSetFields{
+		Outcome:            outcome,
+		Teams:              teams,
+		LinkedPullRequests: linkedPullRequests,
+		ScopeMode:          scopeMode,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewTeamLinkedMixSetFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f TeamLinkedMixSetFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns TeamLinkedMixSet's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f TeamLinkedMixSetFields) SlogArgs() []any {
+	return []any{
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"teams", f.Teams,
+		"linked_pull_requests", f.LinkedPullRequests,
+		"scope_mode", contextfabric.SanitizeLogAttr(f.ScopeMode),
+	}
+}
+
+// TeamPRLinkStateNativeFirstFields is devhealthfacts.team_pr_link_state_native_first's generated typed construction interface
+// (CHAOS-5516): one Go field per Field TeamPRLinkStateNativeFirst.Fields declares in spec.go.
+type TeamPRLinkStateNativeFirstFields struct {
+	Outcome                string
+	Repositories           int
+	PullRequests           int
+	Linked                 int
+	SuppressedPullRequests int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every TeamPRLinkStateNativeFirstFields uniformly, set ONLY by NewTeamPRLinkStateNativeFirstFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewTeamPRLinkStateNativeFirstFields is the generated constructor for TeamPRLinkStateNativeFirstFields -- every
+// field TeamPRLinkStateNativeFirst.Fields declares is a required parameter.
+func NewTeamPRLinkStateNativeFirstFields(outcome string, repositories int, pullRequests int, linked int, suppressedPullRequests int) TeamPRLinkStateNativeFirstFields {
+	return TeamPRLinkStateNativeFirstFields{
+		Outcome:                outcome,
+		Repositories:           repositories,
+		PullRequests:           pullRequests,
+		Linked:                 linked,
+		SuppressedPullRequests: suppressedPullRequests,
+		constructed:            true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewTeamPRLinkStateNativeFirstFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f TeamPRLinkStateNativeFirstFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns TeamPRLinkStateNativeFirst's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f TeamPRLinkStateNativeFirstFields) SlogArgs() []any {
+	return []any{
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"repositories", f.Repositories,
+		"pull_requests", f.PullRequests,
+		"linked", f.Linked,
+		"suppressed_pull_requests", f.SuppressedPullRequests,
+	}
+}
+
 // ModelInterpretDecisionFields is genkitruntime.model_interpret_decision's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ModelInterpretDecision.Fields declares in spec.go.
 type ModelInterpretDecisionFields struct {
@@ -5926,6 +6711,8 @@ type AliasLookupFields struct {
 	Complete         bool
 	IdentityLookup   string
 	MatchedClaimants int
+	TermCount        int
+	MatchedKinds     []string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every AliasLookupFields uniformly, set ONLY by NewAliasLookupFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -5939,13 +6726,19 @@ type AliasLookupFields struct {
 
 // NewAliasLookupFields is the generated constructor for AliasLookupFields -- every
 // field AliasLookup.Fields declares is a required parameter.
-func NewAliasLookupFields(requestID string, complete bool, identityLookup string, matchedClaimants int) AliasLookupFields {
+func NewAliasLookupFields(requestID string, complete bool, identityLookup string, matchedClaimants int, termCount int, matchedKinds []string) AliasLookupFields {
+	valid := true
+	if matchedKinds == nil {
+		valid = false
+	}
 	return AliasLookupFields{
 		RequestID:        requestID,
 		Complete:         complete,
 		IdentityLookup:   identityLookup,
 		MatchedClaimants: matchedClaimants,
-		constructed:      true,
+		TermCount:        termCount,
+		MatchedKinds:     matchedKinds,
+		constructed:      valid,
 	}
 }
 
@@ -5967,6 +6760,8 @@ func (f AliasLookupFields) SlogArgs() []any {
 		"complete", f.Complete,
 		"identity_lookup", contextfabric.SanitizeLogAttr(f.IdentityLookup),
 		"matched_claimants", f.MatchedClaimants,
+		"term_count", f.TermCount,
+		"matched_kinds", contextfabric.SanitizeLogStrings(f.MatchedKinds),
 	}
 }
 
@@ -6541,6 +7336,7 @@ type DecisionFields struct {
 	TiedStatisticalTop       bool
 	SearchCandidateLimit     int
 	PopulationBasis          string
+	OfferedUnderWindowGate   bool
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every DecisionFields uniformly, set ONLY by NewDecisionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6554,7 +7350,7 @@ type DecisionFields struct {
 
 // NewDecisionFields is the generated constructor for DecisionFields -- every
 // field Decision.Fields declares is a required parameter.
-func NewDecisionFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, outcome string, winningMechanism string, commitGate string, aliasIdentityComplete bool, identityTrustGateBlocked bool, searchTruncated bool, commitBasis string, tiedStatisticalTop bool, searchCandidateLimit int, populationBasis string) DecisionFields {
+func NewDecisionFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, outcome string, winningMechanism string, commitGate string, aliasIdentityComplete bool, identityTrustGateBlocked bool, searchTruncated bool, commitBasis string, tiedStatisticalTop bool, searchCandidateLimit int, populationBasis string, offeredUnderWindowGate bool) DecisionFields {
 	return DecisionFields{
 		RequestID:                requestID,
 		Pass:                     pass,
@@ -6572,6 +7368,7 @@ func NewDecisionFields(requestID string, pass int, index int, total int, subject
 		TiedStatisticalTop:       tiedStatisticalTop,
 		SearchCandidateLimit:     searchCandidateLimit,
 		PopulationBasis:          populationBasis,
+		OfferedUnderWindowGate:   offeredUnderWindowGate,
 		constructed:              true,
 	}
 }
@@ -6606,6 +7403,7 @@ func (f DecisionFields) SlogArgs() []any {
 		"tied_statistical_top", f.TiedStatisticalTop,
 		"search_candidate_limit", f.SearchCandidateLimit,
 		"population_basis", contextfabric.SanitizeLogAttr(f.PopulationBasis),
+		"offered_under_window_gate", f.OfferedUnderWindowGate,
 	}
 }
 
@@ -6903,6 +7701,11 @@ type EvidenceRoundFields struct {
 	ShadowHandleInsensitivityEvaluated bool
 	ShadowHandleInsensitivityOutcome   string
 	ShadowCallerHintShortCircuit       bool
+	ShadowSurvivorExcludedReason       string
+	ShadowTrigger                      string
+	ShadowCallerNarrowing              string
+	ShadowNarrowedFrom                 int
+	ShadowNarrowedTo                   int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every EvidenceRoundFields uniformly, set ONLY by NewEvidenceRoundFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6916,7 +7719,7 @@ type EvidenceRoundFields struct {
 
 // NewEvidenceRoundFields is the generated constructor for EvidenceRoundFields -- every
 // field EvidenceRound.Fields declares is a required parameter.
-func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool) EvidenceRoundFields {
+func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool, shadowSurvivorExcludedReason string, shadowTrigger string, shadowCallerNarrowing string, shadowNarrowedFrom int, shadowNarrowedTo int) EvidenceRoundFields {
 	return EvidenceRoundFields{
 		RequestID:                          requestID,
 		ShadowOutcome:                      shadowOutcome,
@@ -6935,6 +7738,11 @@ func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason
 		ShadowHandleInsensitivityEvaluated: shadowHandleInsensitivityEvaluated,
 		ShadowHandleInsensitivityOutcome:   shadowHandleInsensitivityOutcome,
 		ShadowCallerHintShortCircuit:       shadowCallerHintShortCircuit,
+		ShadowSurvivorExcludedReason:       shadowSurvivorExcludedReason,
+		ShadowTrigger:                      shadowTrigger,
+		ShadowCallerNarrowing:              shadowCallerNarrowing,
+		ShadowNarrowedFrom:                 shadowNarrowedFrom,
+		ShadowNarrowedTo:                   shadowNarrowedTo,
 		constructed:                        true,
 	}
 }
@@ -6970,6 +7778,11 @@ func (f EvidenceRoundFields) SlogArgs() []any {
 		"shadow_handle_insensitivity_evaluated", f.ShadowHandleInsensitivityEvaluated,
 		"shadow_handle_insensitivity_outcome", contextfabric.SanitizeLogAttr(f.ShadowHandleInsensitivityOutcome),
 		"shadow_caller_hint_short_circuit", f.ShadowCallerHintShortCircuit,
+		"shadow_survivor_excluded_reason", contextfabric.SanitizeLogAttr(f.ShadowSurvivorExcludedReason),
+		"shadow_trigger", contextfabric.SanitizeLogAttr(f.ShadowTrigger),
+		"shadow_caller_narrowing", contextfabric.SanitizeLogAttr(f.ShadowCallerNarrowing),
+		"shadow_narrowed_from", f.ShadowNarrowedFrom,
+		"shadow_narrowed_to", f.ShadowNarrowedTo,
 	}
 }
 
