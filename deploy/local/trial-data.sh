@@ -351,6 +351,10 @@ cmd_restore_postgres() {
   log "postgres restore complete"
 }
 
+parse_clickhouse_backup_db() {
+  sed -E 's/^clickhouse-(.+)-[0-9]{8}-[0-9]{6}(-[0-9]+)?\.zip$/\1/' <<<"$1"
+}
+
 cmd_restore_clickhouse() {
   require_kubeconfig
   validate_password
@@ -371,9 +375,9 @@ cmd_restore_clickhouse() {
     local base name db extractdir
     base="$(basename "$zip")"
     name="${base%.zip}"
-    # dev-health/backups/ names each file clickhouse-<dbname>-<timestamp>.zip
-    db="$(sed -E 's/^clickhouse-(.+)-[0-9]{8}-[0-9]{6}\.zip$/\1/' <<<"$base")"
-    [[ -n "$db" && "$db" != "$base" ]] || die "could not parse a database name out of $base (expected clickhouse-<dbname>-<timestamp>.zip)"
+    # dev-health/backups/ names each file clickhouse-<dbname>-<timestamp>[-<pid>].zip
+    db="$(parse_clickhouse_backup_db "$base")"
+    [[ -n "$db" && "$db" != "$base" ]] || die "could not parse a database name out of $base (expected clickhouse-<dbname>-<timestamp>[-<pid>].zip)"
     extractdir="$workdir/$name"
     mkdir -p "$extractdir"
     log "unzipping $base locally (this server build has no 'Zip' backup engine; Disk() restore needs the tree on disk)"

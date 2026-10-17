@@ -73,7 +73,7 @@ var (
 	// ErrProjectionWatermarkNotFound is the backend-neutral classification
 	// for "ProjectionBackend.ProjectionWatermark has no durable sentinel for
 	// this (org, source)" (CHAOS-3882) -- the same
-	// ErrInvestigationResultNotFound / ErrOrgModelConfigNotFound pattern:
+	// ErrInvestigationResultNotFound pattern:
 	// every ProjectionBackend implementation wraps its own vendor-specific
 	// not-found sentinel (e.g. falkorgraph.ErrNotFound) in this one so a
 	// backend-agnostic caller (projectionrun.Coordinator) can recognize a
