@@ -136,7 +136,7 @@ func TestProjectMixPhasedReadMatchesTheSingleStatementOnTheProdShapedTableAgains
 		window devhealthfacts.ProjectMixWindow
 	}{
 		{"current axis", devhealthfacts.ProjectMixWindow{}},
-		{"range over 6 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: shape.at.Add(-6 * 24 * time.Hour), End: shape.at}},
+		{"range over 7 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: shape.at.Add(-6 * 24 * time.Hour), End: shape.at.Add(24 * time.Hour)}},
 	} {
 		t.Run(w.name, func(t *testing.T) {
 			single := runRollupStatement(t, ctx, query, "SingleRollup", devhealthfacts.ProjectRollupStatement(w.window), orgID, ids, w.window)

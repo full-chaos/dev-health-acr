@@ -93,8 +93,8 @@ type tableSpec struct {
 const unitsInWindow = `work_unit_id IN (
 	SELECT work_unit_id FROM work_unit_investments
 	WHERE org_id = {org:String}
-	  AND from_ts < toDateTime64({end:String}, 3, 'UTC')
-	  AND to_ts >= toDateTime64({start:String}, 3, 'UTC'))`
+	  AND to_ts >= toDateTime64({start:String}, 3, 'UTC')
+	  AND to_ts < toDateTime64({end:String}, 3, 'UTC'))`
 
 // extractTables are the tables the value-compared pairs read.
 var extractTables = []tableSpec{

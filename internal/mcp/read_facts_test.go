@@ -278,7 +278,7 @@ func TestReadFactsRefusesAWindowBeyondEveryKindWithAdviceLocally(t *testing.T) {
 	args := `{"kinds":["investment"],"subjects":[{"kind":"team","canonical_id":"team-payments"}],"window":{"mode":"trailing","days":366}}`
 	result := callReadFacts(t, newReadFactsBootstrap(t, hosted, true), args)
 	text := toolResultText(result)
-	if !result.IsError || !strings.Contains(text, "do not add shorter windows") || !strings.Contains(text, "at most 365 days") {
+	if !result.IsError || !strings.Contains(text, "in the window that holds its end stamp") || strings.Contains(text, "do not add shorter windows") || !strings.Contains(text, "at most 365 days") {
 		t.Fatalf("366 d refusal lacks the advice: %v %s", result.IsError, text)
 	}
 	if hosted.calls != 0 {

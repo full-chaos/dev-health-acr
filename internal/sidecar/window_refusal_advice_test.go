@@ -20,7 +20,7 @@ func TestWindowRefusalMessageIsFixedAndKeyedOnTheClosedMaxDays(t *testing.T) {
 		t.Fatalf("60 d: %+v", got)
 	}
 	got = window(map[string]any{"max_days": float64(365)})
-	if got.MaxDays != 365 || !strings.Contains(got.Message, "do not add shorter windows") {
+	if got.MaxDays != 365 || !strings.Contains(got.Message, "in the window that holds its end stamp") || strings.Contains(got.Message, "do not add shorter windows") {
 		t.Fatalf("365 d: %+v", got)
 	}
 	for _, bad := range []any{float64(0), float64(-1), float64(367), 60.5, "60", nil} {

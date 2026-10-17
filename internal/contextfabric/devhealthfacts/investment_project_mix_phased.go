@@ -119,7 +119,7 @@ func projectMixScopeStatement(timeBound factTimeBound) string {
 
 func projectMixScopeStatementScoped(timeBound factTimeBound, scope membershipScope) string {
 	return `SELECT groupArrayIf(work_unit_id, in_window) AS unit_ids, groupArrayIf(toUnixTimestamp64Milli(latest_at), in_window) AS version_ms, min(span_from) AS span_from FROM (
-    SELECT work_unit_id, latest_at, from_ts, to_ts, min(from_ts) OVER () AS span_from, (1` + themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts") + `) AS in_window FROM (
+    SELECT work_unit_id, latest_at, from_ts, to_ts, min(from_ts) OVER () AS span_from, (1` + workUnitEndStampPredicate(timeBound, "to_ts") + `) AS in_window FROM (
         SELECT work_unit_id, max(computed_at) AS latest_at,
             argMax(from_ts, computed_at) AS from_ts,
             argMax(to_ts, computed_at) AS to_ts

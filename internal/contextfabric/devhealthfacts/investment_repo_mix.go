@@ -69,16 +69,16 @@ func mixWindowParams(i int) (startParam, endParam string) {
 	return fmt.Sprintf("%s_w%d", boundStartParam, i), fmt.Sprintf("%s_w%d", boundEndParam, i)
 }
 
-// mixWindowPredicate is window i's row predicate over the latest-row columns
-// from_ts/to_ts (the same half-open rule as themeInvestmentRangePredicate: a
-// unit is in the window when it starts before the end and its inclusive last
-// evidence instant is at or after the start). An inactive bound is always true.
+// mixWindowPredicate is window i's row predicate over the latest-row column
+// to_ts (the same rule as workUnitEndStampPredicate: a unit is in the window
+// that holds its end stamp, so windows add up). An inactive bound is always
+// true.
 func mixWindowPredicate(i int, b factTimeBound) string {
 	if !b.active {
 		return "1"
 	}
 	startParam, endParam := mixWindowParams(i)
-	predicate := "from_ts < {" + endParam + ":DateTime64(6,'UTC')}"
+	predicate := "to_ts < {" + endParam + ":DateTime64(6,'UTC')}"
 	if b.hasStart {
 		predicate += " AND to_ts >= {" + startParam + ":DateTime64(6,'UTC')}"
 	}

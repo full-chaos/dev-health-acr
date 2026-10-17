@@ -13,6 +13,7 @@ const (
 	wantProjectRepository = "A project reaches repositories only through its issues' linked pull requests; no repository is mapped to a team by a project directly."
 	wantHomeRunOperation  = "`home` is served by run_operation (when listed) only, by design."
 	wantInvestmentScopes  = "Per-team, per-repository, per-project and organization investment is served by `read_facts` (when listed) kind `investment`; the organization subject is kind `organization` with canonical_id `organization:<your organization id>` (`find_subjects` (when listed) kind `organization` returns it): one fact over every repository once (never a sum of team facts), and a repository-bound credential gets a limitation instead. `investmentBreakdown` serves the organization only."
+	wantInvestmentWindows = "Investment windows are additive: a work unit counts once, in the window that holds its end stamp (a unit that spans a window boundary counts whole in the window it ends in), so stitched windows add up to the whole period."
 )
 
 func TestGuidanceSentencesAtEverySurface(t *testing.T) {
@@ -49,6 +50,7 @@ func TestGuidanceSentencesAtEverySurface(t *testing.T) {
 		{"project to repository", wantProjectRepository, []string{"server instructions", "guide data.md", "read_relationships description"}},
 		{"home run_operation only", wantHomeRunOperation, []string{"server instructions", "guide data.md", "data_catalog description"}},
 		{"investment scopes", wantInvestmentScopes, []string{"server instructions", "guide data.md", "data_catalog description"}},
+		{"investment windows by end stamp", wantInvestmentWindows, []string{"server instructions", "guide data.md"}},
 	}
 	for _, row := range rows {
 		for _, site := range row.sites {
@@ -61,6 +63,7 @@ func TestGuidanceSentencesAtEverySurface(t *testing.T) {
 		for _, stale := range []string{
 			"Investment per team or repository is not served",
 			"a team shape is not served here",
+			"a sum of stitched windows overcounts it",
 		} {
 			if strings.Contains(text, stale) {
 				t.Errorf("%s still carries stale wording %q", site, stale)

@@ -1252,7 +1252,12 @@ import (
 // rule_basis_as_of_day, the calendar day of the score the rule read, when the
 // rule's rationale names it. An answer saved under v242 states the rule basis
 // without that day.
-const QueryVersion = "devhealthfacts.clickhouse.v243"
+//
+// v243 -> v244: every Investment work-unit read dates a unit by its end stamp:
+// the unit counts once, in the window that holds its to_ts, so adjacent
+// windows add up. An answer saved under v243 counted a unit that spans a
+// window boundary in every window it overlapped.
+const QueryVersion = "devhealthfacts.clickhouse.v244"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

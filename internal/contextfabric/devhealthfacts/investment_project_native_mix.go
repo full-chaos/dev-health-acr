@@ -112,7 +112,7 @@ FROM (
                         WHERE org_id = {org_id:String}`+supersededWorkUnitIDsFilter()+investmentMembershipScopeFilter()+`
                         GROUP BY work_unit_id
                     )
-                    WHERE 1`+themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts")+`
+                    WHERE 1`+workUnitEndStampPredicate(timeBound, "to_ts")+`
                 ) AS unit
                 ARRAY JOIN unit.issue_refs AS issue_ref
             ) AS ui

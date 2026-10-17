@@ -46,7 +46,7 @@ func TestWindowMaximumIsDeclaredPerKind(t *testing.T) {
 func TestWindowRefusalAdviceFollowsTheKind(t *testing.T) {
 	reader := &FactsReader{now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
 	_, _, err := reader.window(&RequestWindow{Mode: WindowTrailing, Days: 366}, MaxRangeDaysFor([]contextfabric.FactKind{contextfabric.FactInvestment}))
-	if err == nil || !strings.Contains(err.Error(), "do not add shorter windows") || strings.Contains(err.Error(), "as several windows") {
+	if err == nil || !strings.Contains(err.Error(), "read a longer period as several windows") || !strings.Contains(err.Error(), "in the window that holds its end stamp") || strings.Contains(err.Error(), "do not add shorter windows") {
 		t.Errorf("investment refusal: %v", err)
 	}
 	_, _, err = reader.window(&RequestWindow{Mode: WindowTrailing, Days: 61}, MaxRangeDaysFor([]contextfabric.FactKind{contextfabric.FactHealth}))

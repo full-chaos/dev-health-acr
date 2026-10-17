@@ -54,7 +54,7 @@ func ProjectNativeStatement(w ProjectMixWindow, rowLimit int) string {
 func OracleProjectRollupStatement(w ProjectMixWindow) string {
 	timeBound := w.bound()
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	rangePredicate := themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts")
+	rangePredicate := workUnitEndStampPredicate(timeBound, "to_ts")
 	return withRowProbeLimit(`SELECT * FROM (
 WITH latest AS (
 	SELECT work_unit_id,
@@ -221,7 +221,7 @@ WITH latest AS (
     GROUP BY work_unit_id
 ),
 windowed AS (
-    SELECT * FROM latest WHERE 1`+themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts")+`
+    SELECT * FROM latest WHERE 1`+workUnitEndStampPredicate(timeBound, "to_ts")+`
 ),
 unit_issue AS (
     SELECT work_unit_id, issue_ref

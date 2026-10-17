@@ -191,8 +191,8 @@ func lastServerException(ctx context.Context, direct clickhousedriver.Conn) stri
 
 // A range request reads the current AND the prior comparable window; both
 // come from the SAME single pass, each window picks the latest version of a
-// unit (append-only history, argMax), and a unit that overlaps both windows
-// counts in each.
+// unit (append-only history, argMax), and a unit that spans both windows
+// counts once, in the window that holds its end stamp.
 func TestTeamThemeMixCurrentAndPriorWindowsShareOnePassAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
@@ -251,13 +251,13 @@ func TestTeamThemeMixCurrentAndPriorWindowsShareOnePassAgainstRealClickHouse(t *
 		if cur.Number == nil || *cur.Number != 1.0 {
 			t.Fatalf("current feature share = %v, want 1.0", cur.Number)
 		}
-		// prior window: prior (1 risk) + prior-stale (1 risk) + both
-		// (1 feature); each unit weighs 1; outside excluded; the stale
-		// version is never counted.
+		// prior window: prior (1 risk) + prior-stale (1 risk); both ends in
+		// the current window, so it is not in the prior one; each unit
+		// weighs 1; outside excluded; the stale version is never counted.
 		priorRisk := f.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeRisk)].Number
 		priorFeature := f.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeFeatureDelivery)].Number
-		if priorRisk == nil || priorFeature == nil || *priorRisk < 2.0/3-1e-9 || *priorRisk > 2.0/3+1e-9 || *priorFeature < 1.0/3-1e-9 || *priorFeature > 1.0/3+1e-9 {
-			t.Fatalf("prior shares risk=%v feature=%v, want %v / %v", priorRisk, priorFeature, 2.0/3, 1.0/3)
+		if priorRisk == nil || priorFeature == nil || *priorRisk != 1.0 || *priorFeature != 0.0 {
+			t.Fatalf("prior shares risk=%v feature=%v, want 1 / 0 (both counts in the current window only)", priorRisk, priorFeature)
 		}
 	}
 	if !found {

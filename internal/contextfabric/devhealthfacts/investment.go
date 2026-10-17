@@ -638,19 +638,29 @@ func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZer
 // discriminating.
 const evidenceVoteAttributedPredicate = "nullIf(t.team_id, '') IS NOT NULL"
 
-// themeInvestmentRangePredicate mirrors dev-health-go's
-// readers.TimeBound.rangePredicate (investment_theme.go, unexported there):
-// a work_unit_investments row is included whenever any part of its own
-// [from_ts, to_ts] evidence window overlaps the requested [start, end) --
-// to_ts is the INCLUSIVE last-evidence instant, so a unit whose to_ts equals
-// the window start is inside it (ops api/queries/investment.py:518,555,593
-// use the same `to_ts >= start_ts`; ops is the authority for investment
-// semantics) --
-// an overlap test against a row's own two-sided range, unlike
-// factTimeBound's dayPredicate/timestampPredicate (a single row-level
-// column compared to one instant or a half-open range). An inactive bound
-// (the current axis) applies no predicate.
-func themeInvestmentRangePredicate(b factTimeBound, fromColumn, toColumn string) string {
+// workUnitEndStampPredicate is the one window rule of every work-unit read of
+// Investment: a unit belongs to the window [start, end) that holds its end
+// stamp (toColumn, the unit's last-evidence instant), whole, in exactly one
+// window, so adjacent windows add up to the whole period. A unit that spans a
+// window boundary counts in the window it ends in, never in both. This is ops'
+// analytics.InvestmentWindowClause. An inactive bound (the current axis)
+// applies no predicate.
+func workUnitEndStampPredicate(b factTimeBound, toColumn string) string {
+	if !b.active {
+		return ""
+	}
+	predicate := " AND " + toColumn + " < {" + boundEndParam + ":DateTime64(6,'UTC')}"
+	if b.hasStart {
+		predicate += " AND " + toColumn + " >= {" + boundStartParam + ":DateTime64(6,'UTC')}"
+	}
+	return predicate
+}
+
+// rangeOverlapPredicate includes a row whose own [fromColumn, toColumn] range
+// overlaps the requested [start, end). It is for rows that are not work units
+// (a pull request's open-to-close life); work units use
+// workUnitEndStampPredicate. An inactive bound applies no predicate.
+func rangeOverlapPredicate(b factTimeBound, fromColumn, toColumn string) string {
 	if !b.active {
 		return ""
 	}
@@ -812,7 +822,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// population_window states, in the fact's own structure, which axis
 		// the disclosed population/basis fields above were computed over --
 		// this producer supports both current and an explicit requested
-		// range (themeInvestmentRangePredicate), unlike the sibling
+		// range (workUnitEndStampPredicate), unlike the sibling
 		// completion roll-up's current-only scope.
 		if timeBound.active {
 			fields["population_window"] = contextfabric.StringFactValue("requested_range")
