@@ -285,6 +285,23 @@ jobs:
       - name: Render every fenced mermaid block under docs/**, and prove the check rejects a broken one
         run: scripts/docs/test-verify-mermaid.sh
 
+  # Renders the Helm chart (default values, development values, every negative
+  # scenario) so a chart or values change that breaks values.schema.json fails
+  # a required check before merge. The path filter lives inside the script: a
+  # job-level `paths:` filter would leave this lane `skipped`, and `verify`
+  # requires a literal success from every light lane.
+  helm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Render the chart and run the negative scenarios when the chart changed
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+        run: scripts/ci/helm-chart-check.sh "$BASE_REF"
+
   # Runner-routing contract: unit is hosted, like every lane now. Routed
   # to the pool in an earlier version of #410; a real pool run (after
   # fixing the concurrency-driven test-timeout failure with
@@ -1603,6 +1620,7 @@ jobs:
       - scripts
       - lint
       - docs-mermaid
+      - helm
       - unit
       - race
       - race-devhealthschema
@@ -1700,7 +1718,7 @@ jobs:
           # Every other lane is heavy: a literal success when heavy=true, and
           # when heavy=false (a draft PR without the ci-full label) it must be
           # exactly `skipped` -- a failed or cancelled heavy lane never passes.
-          light=" plan mirror-preflight scripts lint docs-mermaid unit reports "
+          light=" plan mirror-preflight scripts lint docs-mermaid helm unit reports "
           while IFS=$'\t' read -r job result; do
             printf '%s: %s\n' "$job" "$result"
             if [ "$result" != success ]; then
