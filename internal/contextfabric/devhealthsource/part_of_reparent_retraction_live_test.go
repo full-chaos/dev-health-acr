@@ -293,5 +293,6 @@ func TestEdgeRetractionOnRealStores(t *testing.T) {
 	t.Run("a re-parent and a cleared parent", func(t *testing.T) { partOfReparentLeavesOneOpenEdge(t, adapter) })
 	t.Run("parent id resolution", func(t *testing.T) { partOfParentResolution(t, adapter) })
 	t.Run("a parent key that gains a second holder", func(t *testing.T) { partOfParentKeyGainsASecondHolder(t, adapter) })
+	t.Run("an epic as the parent", func(t *testing.T) { partOfEpicParent(t, adapter) })
 	t.Run("a removed blocks link", func(t *testing.T) { removedBlockerLinkLeavesNoOpenEdgeInTheGraph(t, adapter) })
 }
