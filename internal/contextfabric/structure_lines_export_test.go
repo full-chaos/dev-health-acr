@@ -117,3 +117,35 @@ func ProjectedRowsOfClaimsForTest(kinds []string) (int, map[FactKind]int, bool) 
 	_, rows, byKind, truncated := attachCanonicalRows(claims, nil)
 	return rows, byKind, truncated
 }
+
+// SynthesizeWithTelemetryForTest runs the real synthesizer over the closure
+// fixture, with the draft edited by variant, and writes its telemetry to sink.
+// Variants: "clean", "collision" (two drivers share an id), "stripped" (a claim
+// carries a model authored table), "source_state" (a driver claims a source
+// state its grounded fact does not have).
+func SynthesizeWithTelemetryForTest(ctx context.Context, sink EngineTelemetry, variant string) error {
+	input, draft := closureFixture()
+	switch variant {
+	case "collision":
+		second := draft.Drivers[0]
+		second.Standing = DriverContributing
+		second.Category = string(contractsv1.ContextFabricDriverCategoryNarrative)
+		second.ClaimedFactIDs = nil
+		second.Title = "A second, different contribution"
+		draft.Drivers = append(draft.Drivers, second)
+	case "stripped":
+		draft.ClaimedFacts[0].Rows = []ClaimedFactRow{{}}
+	case "source_state":
+		draft.Drivers[0].SourceState = SourceTruncated
+	case "clean":
+	default:
+		panic("unknown variant " + variant)
+	}
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime:   fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:      &fakeReceiptSink{},
+		Telemetry: sink,
+	}
+	_, err := synthesizer.Synthesize(ctx, storage.Principal{OrgID: "org_1"}, input)
+	return err
+}
