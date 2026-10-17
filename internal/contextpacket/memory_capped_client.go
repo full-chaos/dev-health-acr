@@ -29,6 +29,24 @@ const NearCapRatio = 0.5
 
 type statementMemoryCapKey struct{}
 
+type statementMaxThreadsKey struct{}
+
+// StatementMaxThreadsFromContext reports the max_threads default
+// NewMemoryCappedQueryClient put on ctx, when WithMaxThreads set one.
+func StatementMaxThreadsFromContext(ctx context.Context) (uint64, bool) {
+	threads, ok := ctx.Value(statementMaxThreadsKey{}).(uint64)
+	return threads, ok
+}
+
+// WithMaxThreads sends max_threads = threads with every statement. Per-thread
+// join and sort buffers scale with the server's default thread count (64 on
+// the venue), so a from-zero read of a 140k-row organization used 274 MiB for a
+// statement that needs 15 MiB at 16 threads or fewer. A SETTINGS clause inside
+// a statement still overrides it.
+func WithMaxThreads(threads uint64) MemoryCapOption {
+	return func(c *memoryCappedQueryClient) { c.maxThreads = threads }
+}
+
 // StatementMemoryCapFromContext reports the cap NewMemoryCappedQueryClient put
 // on ctx. It exists so a test double behind the decorator can observe the cap
 // (the driver keeps its own settings unexported).
@@ -87,6 +105,7 @@ type memoryCappedQueryClient struct {
 	observer   MemoryNearCapObserver
 	unobserved MemoryPeakUnobservedObserver
 	ratio      float64
+	maxThreads uint64
 }
 
 // NewMemoryCappedQueryClient wraps inner so every statement is sent with
@@ -106,8 +125,13 @@ func NewMemoryCappedQueryClient(inner ClickHouseQueryClient, capBytes uint64, op
 
 func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bindings []ClickHouseBinding) (ClickHouseRowScanner, error) {
 	ctx = context.WithValue(ctx, statementMemoryCapKey{}, c.capBytes)
+	settings := clickhousedriver.Settings{"max_memory_usage": c.capBytes}
+	if c.maxThreads > 0 {
+		settings["max_threads"] = c.maxThreads
+		ctx = context.WithValue(ctx, statementMaxThreadsKey{}, c.maxThreads)
+	}
 	var peak atomic.Uint64
-	driverOptions := []clickhousedriver.QueryOption{clickhousedriver.WithSettings(clickhousedriver.Settings{"max_memory_usage": c.capBytes})}
+	driverOptions := []clickhousedriver.QueryOption{clickhousedriver.WithSettings(settings)}
 	if c.observer != nil || c.unobserved != nil {
 		driverOptions = append(driverOptions, clickhousedriver.WithProfileEvents(func(events []clickhousedriver.ProfileEvent) {
 			for _, event := range events {
