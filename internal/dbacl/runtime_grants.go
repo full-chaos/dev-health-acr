@@ -84,7 +84,7 @@ var RuntimeGrants = []Grant{
 		Why: "SELECT internal/contextfabric/pginvestigation/store.go:748, INSERT and upsert store.go:1290"},
 	{Table: "context_fabric_org_model_config", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
 		Sequences: []string{"context_fabric_org_model_config_generation_seq"},
-		Why:       "SELECT internal/contextfabric/pgmodelconfig/store.go:138, INSERT and upsert store.go:95, DELETE store.go:195; generation draws from an explicit sequence"},
+		Why:       "no acr code reads or writes this table any more (BYO config lives in the ops settings store); the grant stays until the table drop"},
 	{Table: "context_fabric_model_execution_receipts", Privileges: []string{"INSERT"},
 		Why: "insert-only: internal/contextfabric/pgmodelreceipts/store.go:80"},
 	{Table: "context_fabric_graph_lifecycle", Privileges: []string{"SELECT", "INSERT", "UPDATE"},

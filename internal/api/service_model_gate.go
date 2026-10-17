@@ -110,7 +110,7 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 	return listed
 }
 
-// orgHasOwnModel reports whether the organization stored a model
+// orgHasOwnModel reports whether the organization has a BYO model
 // configuration. A stored configuration counts even when its credential cannot
 // be used: that turn then fails on the organization's own model, never on the
 // deployment's.
@@ -118,14 +118,14 @@ func (a *App) orgHasOwnModel(ctx context.Context, principal storage.Principal) (
 	if a.runtime.OrgModelConfigs == nil {
 		return false, nil
 	}
-	_, err := a.runtime.OrgModelConfigs.GetOrgModelConfig(ctx, principal)
+	_, found, err := a.runtime.OrgModelConfigs.ResolveOrgModelConfig(ctx, principal.OrgID)
 	switch {
-	case err == nil:
+	case errors.Is(err, entitlements.ErrLLMConfigUnusable):
 		return true, nil
-	case errors.Is(err, contextfabric.ErrOrgModelConfigNotFound):
-		return false, nil
-	default:
+	case err != nil:
 		return false, errServiceModelOwnModelUnavailable
+	default:
+		return found, nil
 	}
 }
 
