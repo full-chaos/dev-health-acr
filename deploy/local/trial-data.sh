@@ -30,6 +30,8 @@
 #   ACR_TRIAL_DATA_NAMESPACE   namespace (default: acr-trial-data)
 #   ACR_TRIAL_PG_PASSWORD      postgres/clickhouse shared password (default:
 #                              acr-trial-dev; DEV ONLY; [A-Za-z0-9._~-] only)
+#   ACR_TRIAL_CH_DB            clickhouse database the dsn output points at
+#                              (default: default; [A-Za-z0-9_] only)
 #   ACR_TRIAL_PG_STORAGE       postgres PVC size (default: 20Gi)
 #   ACR_TRIAL_CH_STORAGE       clickhouse data PVC size (default: 30Gi)
 #   ACR_TRIAL_CH_BACKUPS_STORAGE  clickhouse backups-staging PVC size (default: 5Gi)
@@ -61,6 +63,7 @@ TEMPLATE="$SCRIPT_DIR/templates/trial-data.yaml"
 
 NAMESPACE="${ACR_TRIAL_DATA_NAMESPACE:-acr-trial-data}"
 PG_PASSWORD="${ACR_TRIAL_PG_PASSWORD:-acr-trial-dev}"
+CH_DB="${ACR_TRIAL_CH_DB:-default}"
 PG_STORAGE="${ACR_TRIAL_PG_STORAGE:-20Gi}"
 CH_STORAGE="${ACR_TRIAL_CH_STORAGE:-30Gi}"
 CH_BACKUPS_STORAGE="${ACR_TRIAL_CH_BACKUPS_STORAGE:-5Gi}"
@@ -91,6 +94,11 @@ usage() {
 require_kubeconfig() {
   [[ -n "${KUBECONFIG:-}" && -f "$KUBECONFIG" ]] \
     || die "KUBECONFIG must be set to an existing file (e.g. \$(deploy/local/kiac.sh kubeconfig)); refusing to use the ambient default cluster"
+}
+
+validate_ch_db() {
+  [[ "$CH_DB" =~ ^[A-Za-z0-9_]+$ ]] \
+    || die "ACR_TRIAL_CH_DB may only contain [A-Za-z0-9_] (substituted into a DSN verbatim)"
 }
 
 validate_password() {
@@ -251,6 +259,7 @@ live_nodeport() {
 cmd_dsn() {
   require_kubeconfig
   validate_password
+  validate_ch_db
   local env_mode=0
   [[ "${1:-}" == "--env" ]] && env_mode=1
   local ip password
@@ -295,7 +304,7 @@ cmd_dsn() {
     printf 'ACR_TEST_TRIAL_CH_HTTP_PORT=%s\n' "$CH_HTTP_NODEPORT"
     printf 'ACR_TEST_TRIAL_CH_USER=%s\n' "ch"
     printf 'ACR_TEST_TRIAL_CH_PASSWORD=%s\n' "$password"
-    printf 'ACR_TEST_TRIAL_CH_DB=%s\n' "default"
+    printf 'ACR_TEST_TRIAL_CH_DB=%s\n' "$CH_DB"
     printf 'ACR_TEST_TRIAL_FALKOR_HOST=%s\n' "$ip"
     printf 'ACR_TEST_TRIAL_FALKOR_PORT=%s\n' "$FALKOR_NODEPORT"
     # ACR_CONTEXT_FABRIC_FALKOR_TLS / ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE
@@ -317,7 +326,7 @@ cmd_dsn() {
   fi
 
   printf 'ACR_TEST_TRIAL_POSTGRES_DSN=postgres://devhealth:%s@%s:%d/acr?sslmode=disable\n' "$password" "$ip" "$PG_NODEPORT"
-  printf 'ACR_TEST_TRIAL_CLICKHOUSE_DSN=clickhouse://ch:%s@%s:%d/default\n' "$password" "$ip" "$CH_NATIVE_NODEPORT"
+  printf 'ACR_TEST_TRIAL_CLICKHOUSE_DSN=clickhouse://ch:%s@%s:%d/%s\n' "$password" "$ip" "$CH_NATIVE_NODEPORT" "$CH_DB"
   printf 'ACR_TEST_TRIAL_FALKOR_ADDR=%s:%d\n' "$ip" "$FALKOR_NODEPORT"
   printf '# clickhouse HTTP (for RESTORE/BACKUP admin queries): http://%s:%d\n' "$ip" "$CH_HTTP_NODEPORT"
   printf '# structured key=value handoff for scripting: trial-data.sh dsn --env\n'
