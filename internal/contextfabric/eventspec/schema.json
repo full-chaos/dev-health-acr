@@ -2308,6 +2308,56 @@
     ]
   },
   {
+    "id": "contextfabric.confirmed_need_ledger_window",
+    "msg": "context fabric confirmed need ledger window",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when the admitted ledger held a window entry.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "applied"
+        ]
+      },
+      {
+        "key": "source_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "applied_window",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "absolute",
+          "trailing_30d",
+          "trailing_90d",
+          "trailing_365d",
+          "all_time"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.count_population_scope",
     "msg": "context fabric count population scope",
     "level": "info",
@@ -5921,6 +5971,114 @@
     ]
   },
   {
+    "id": "contextfabric.kind_carry",
+    "msg": "context fabric kind carry",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when a carry was attempted.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "hit",
+          "miss_no_reference",
+          "miss_unloadable",
+          "miss_stale_graph_epoch",
+          "miss_no_confirmed_kind",
+          "miss_depth_exceeded",
+          "miss_vetoed_carrier",
+          "dropped_redeemed_kind_differs",
+          "miss_conflicting_kinds",
+          "miss_question_drift",
+          "miss_question_indeterminate"
+        ]
+      },
+      {
+        "key": "chain_depth",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "carried_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "redeemed_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "seed_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "receipt",
+          "parent_field",
+          "both"
+        ]
+      },
+      {
+        "key": "via_stored_ancestry",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.operation_read",
     "msg": "context fabric operation read",
     "level": "info",
@@ -8257,6 +8415,86 @@
     ]
   },
   {
+    "id": "contextfabric.stated_window_axis_decision",
+    "msg": "context fabric stated window axis decision",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most two lines per investigation: the calendar commit withdrawal (a series or comparison frame, or an as-of reading) and then one of the mutually exclusive stated window branches that follow.",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "mcp",
+          "other"
+        ]
+      },
+      {
+        "key": "origin",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_window",
+          "question_phrase",
+          "interpreter_range"
+        ]
+      },
+      {
+        "key": "interpreted_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "current",
+          "valid_time",
+          "observed_time",
+          "range"
+        ]
+      },
+      {
+        "key": "executed_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "current",
+          "valid_time",
+          "observed_time",
+          "range"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "agreed",
+          "overridden_to_current",
+          "vetoed",
+          "stated_range",
+          "withdrawn_point_in_time",
+          "withdrawn_period_shape"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.stored_answerability",
     "msg": "context fabric stored clarification answerability",
     "level": "info",
@@ -9501,6 +9739,184 @@
     ]
   },
   {
+    "id": "contextfabric.window_binder_outcome",
+    "msg": "context fabric window binder outcome",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when the binder proposes.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "mcp",
+          "other"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_span",
+          "temporal_span_unbound",
+          "temporal_span_ambiguous",
+          "binder_span_routed_inferred"
+        ]
+      },
+      {
+        "key": "relative_id",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "trailing_30d",
+          "trailing_90d",
+          "trailing_365d",
+          "all_time"
+        ]
+      },
+      {
+        "key": "grammar",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "trailing_month",
+          "trailing_quarter",
+          "trailing_year",
+          "trailing_30_days",
+          "trailing_90_days",
+          "trailing_3_months",
+          "trailing_365_days",
+          "trailing_12_months"
+        ]
+      },
+      {
+        "key": "spans_bound",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.window_canonicalization_outcome",
+    "msg": "context fabric window canonicalization outcome",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per canonicalization recording.",
+    "data_dependent_bound": "one line per canonicalization recording; the recorder is called from the veto, gate and decisive paths of one investigation pass, and a gated pass writes it beside the gated line.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "request_stated",
+          "receipt_confirmed",
+          "inferred_default",
+          "veto_unresolved",
+          "veto_conflict",
+          "veto_axis_conflict",
+          "veto_stale_superseded_offer",
+          "gated_class_default",
+          "gated_refused_no_clarification",
+          "carried"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.window_carry",
+    "msg": "context fabric window carry",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, written when a carry was attempted.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "hit",
+          "miss_no_reference",
+          "miss_unloadable",
+          "miss_stale_graph_epoch",
+          "miss_no_confirmed_window",
+          "miss_depth_exceeded",
+          "miss_conflicting_windows",
+          "miss_question_drift",
+          "miss_question_indeterminate"
+        ]
+      },
+      {
+        "key": "chain_depth",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "seed_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "receipt",
+          "parent_field",
+          "both"
+        ]
+      },
+      {
+        "key": "via_stored_ancestry",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.window_continuation_decision",
     "msg": "context fabric window continuation decision",
     "level": "info",
@@ -10278,6 +10694,81 @@
         "key": "request_id",
         "type": "string",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.window_gated_for_confirmation",
+    "msg": "context fabric window gated for confirmation",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the gate ends the pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "mcp",
+          "other"
+        ]
+      },
+      {
+        "key": "origin",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "gated_class_default",
+          "gated_refused_no_clarification"
+        ]
+      },
+      {
+        "key": "relative_id",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "trailing_30d",
+          "trailing_90d",
+          "trailing_365d",
+          "all_time"
+        ]
+      },
+      {
+        "key": "provenance",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "inferred_default",
+          "question_stated",
+          "clarification_confirmed"
+        ]
+      },
+      {
+        "key": "window_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "trend_assessment",
+          "recent_activity_lookup",
+          "state_snapshot",
+          "explicit_window"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },
