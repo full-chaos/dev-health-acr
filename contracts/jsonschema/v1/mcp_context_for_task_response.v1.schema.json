@@ -675,6 +675,28 @@
             "maxLength": 256
           },
           "uniqueItems": true
+        },
+        "cause_event": {
+          "type": "object",
+          "required": [
+            "entity_type",
+            "entity_id",
+            "occurred_at"
+          ],
+          "properties": {
+            "entity_type": {
+              "const": "deployment"
+            },
+            "entity_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "occurred_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         }
       },
       "allOf": [
@@ -690,6 +712,20 @@
             "properties": {
               "evidence_ref_ids": {
                 "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cause_event"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "cause"
               }
             }
           }

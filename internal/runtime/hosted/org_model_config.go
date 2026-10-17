@@ -65,7 +65,7 @@ func buildOrgModelConfigStore(postgres postgresComponents, lookup func(string) (
 // this resolver builds reports RecordModelRowsStripped through the SAME
 // sink the deployment-default runtime uses (open()'s own engineTelemetry),
 // never a second, independently-resolved instance.
-func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs *pgmodelconfig.Store, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
+func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs contextfabric.OrgModelConfigResolver, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
 	if orgConfigs == nil {
 		return deploymentDefault, nil, nil
 	}

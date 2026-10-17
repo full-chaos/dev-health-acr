@@ -196,7 +196,7 @@ func jsonFieldName(field reflect.StructField) (name string, omitempty, skip bool
 		name = field.Name
 	}
 	for _, opt := range parts[1:] {
-		if opt == "omitempty" {
+		if opt == "omitempty" || opt == "omitzero" {
 			omitempty = true
 		}
 	}
