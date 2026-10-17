@@ -121,37 +121,14 @@ type RuntimeDependencies struct {
 	// same gate. Nil when the graph cannot serve bounded edge pages; the
 	// route then fails closed as unavailable.
 	DirectRelationships *directread.RelationshipsReader
-	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
-	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
-	// configured), the model-config routes stay registered, authorized, and
-	// audited, and answer a clean 503 for every request, exactly like the
-	// investigations route does with a nil Investigator.
-	OrgModelConfigs contextfabric.OrgModelConfigStore
+	// OrgModelConfigs resolves an organization's BYO LLM configuration from
+	// the ops settings store. Nil when no per-organization source is wired.
+	OrgModelConfigs contextfabric.OrgModelConfigResolver
 	// ServiceModelOpen lets every credential caller run an investigation on
 	// the deployment's own model (ACR_MCP_SERVICE_MODEL_DEFAULT=on). Off,
 	// only an organization with the acr_service_model entitlement or its own
 	// model configuration may; see service_model_gate.go.
 	ServiceModelOpen bool
-	// OrgModelRuntimeEvictor is optional and may be nil even when
-	// OrgModelConfigs is non-nil (e.g. investigations disabled, so no
-	// modelruntimeresolver.Resolver was ever constructed to evict from --
-	// see internal/runtime/hosted's buildContextFabricInvestigator). When
-	// nil, the DELETE model-config handler skips eviction entirely: there
-	// is no cached runtime anywhere to purge if no resolver exists.
-	OrgModelRuntimeEvictor contextfabric.OrgModelRuntimeEvictor
-	// ReuseInvalidator is optional (CHAOS-3786, codex round-1 P1(b)) and
-	// may be nil even when OrgModelConfigs is non-nil (e.g. answer reuse
-	// itself is disabled -- ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE unset
-	// -- so no reuse-capable investigation-result store was ever
-	// composed). When non-nil, the model-config PUT and DELETE handlers
-	// call InvalidateOrganizationReuse(principal.OrgID) after a
-	// successful write: a chain change (primary or fallback model) must
-	// invalidate reuse for that organization going forward, because a
-	// stored candidate's chain-membership match is authorized by the
-	// CURRENT chain, and a reconfiguration changes what that chain
-	// vouches for. When nil, both handlers skip invalidation entirely --
-	// there is no reuse-capable store to invalidate against.
-	ReuseInvalidator contextfabric.ReuseInvalidator
 	// ReadinessChecks gates /readyz -- the k8s readinessProbe target, which
 	// pulls the WHOLE pod from every Service's endpoints (including the
 	// OAuth/authorization-server routes) the moment any one check fails. It

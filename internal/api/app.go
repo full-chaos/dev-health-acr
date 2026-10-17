@@ -83,9 +83,6 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, false, http.HandlerFunc(a.handleEpisode)))
 	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
 	mux.Handle("GET "+ContextFabricInvestigationResultPath, a.ContextFabricInvestigationResultHandler(a.investigationResults(), a.storedResultGate()))
-	mux.Handle("GET "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigGetHandler(a.orgModelConfigs()))
-	mux.Handle("PUT "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigPutHandler(a.orgModelConfigs(), a.reuseInvalidator()))
-	mux.Handle("DELETE "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigDeleteHandler(a.orgModelConfigs(), a.orgModelRuntimeEvictor(), a.reuseInvalidator()))
 	// CHAOS-7071: direct data routes (CHAOS-7036 E.5). Bearer only (no web
 	// assertions), entitlement required; handlers are stubs until S1a/S2.
 	mux.Handle("GET "+ContextFabricDataCatalogPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.requireDataStoresReady(a.contextFabricDataCatalogHandler())))

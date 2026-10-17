@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-go/llm"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -31,49 +29,36 @@ type entitlementWithLLMConfig struct {
 	*fakeOrgLLMSource
 }
 
-func TestBuildOrgModelConfigResolverPicksOneStore(t *testing.T) {
+func TestBuildOrgModelConfigResolverPicksTheOpsSource(t *testing.T) {
 	source := &fakeOrgLLMSource{}
 	withOps := entitlementWithLLMConfig{fakeOrgLLMSource: source}
 	env := func(value string) func(string) (string, bool) {
 		return envLookup(map[string]string{EnvOrgLLMConfigSource: value})
 	}
-	got, err := buildOrgModelConfigResolver(nil, withOps, env(""), discardLogger())
+	got, err := buildOrgModelConfigResolver(withOps, env(""), discardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := got.(opsOrgModelConfigs); !ok {
 		t.Fatalf("unset must default to the ops source, got %T", got)
 	}
-	if got, err := buildOrgModelConfigResolver(nil, localEntitlement{}, env(""), discardLogger()); err != nil || got != nil {
+	if got, err := buildOrgModelConfigResolver(localEntitlement{}, env(""), discardLogger()); err != nil || got != nil {
 		t.Fatalf("unset without the Dev Health client: %v %v, want a nil interface", got, err)
 	}
-	store := &pgmodelconfig.Store{}
-	if _, err := buildOrgModelConfigResolver(store, withOps, env(""), discardLogger()); err == nil || !strings.Contains(err.Error(), "one BYO store") {
-		t.Fatalf("unset beside acr's own store: err = %v, want the one-store refusal", err)
+	if got, err := buildOrgModelConfigResolver(withOps, env("off"), discardLogger()); err != nil || got != nil {
+		t.Fatalf("off: %v %v, want a nil interface", got, err)
 	}
-	if _, err := buildOrgModelConfigResolver(store, localEntitlement{}, env(""), discardLogger()); err == nil || !strings.Contains(err.Error(), "one BYO store") {
-		t.Fatalf("unset beside acr's own store without the client: err = %v, want the one-store refusal", err)
-	}
-	if got, err := buildOrgModelConfigResolver(nil, withOps, env("off"), discardLogger()); err != nil || got != nil {
-		t.Fatalf("off with no acr store: %v %v, want a nil interface", got, err)
-	}
-	if got, err := buildOrgModelConfigResolver(store, withOps, env("off"), discardLogger()); err != nil || got != contextfabric.OrgModelConfigResolver(store) {
-		t.Fatalf("off beside acr's own store must use it: %v %v", got, err)
-	}
-	got, err = buildOrgModelConfigResolver(nil, withOps, env("ops"), discardLogger())
+	got, err = buildOrgModelConfigResolver(withOps, env("ops"), discardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := got.(opsOrgModelConfigs); !ok {
 		t.Fatalf("ops source = %T", got)
 	}
-	if _, err := buildOrgModelConfigResolver(nil, localEntitlement{}, env("ops"), discardLogger()); err == nil {
+	if _, err := buildOrgModelConfigResolver(localEntitlement{}, env("ops"), discardLogger()); err == nil {
 		t.Fatal("ops source without the Dev Health entitlement client was accepted")
 	}
-	if _, err := buildOrgModelConfigResolver(&pgmodelconfig.Store{}, withOps, env("ops"), discardLogger()); err == nil || !strings.Contains(err.Error(), "one BYO store") {
-		t.Fatalf("ops source beside acr's store: err = %v", err)
-	}
-	if _, err := buildOrgModelConfigResolver(nil, withOps, env("bogus"), discardLogger()); err == nil {
+	if _, err := buildOrgModelConfigResolver(withOps, env("bogus"), discardLogger()); err == nil {
 		t.Fatal("an unknown source was accepted")
 	}
 }

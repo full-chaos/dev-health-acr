@@ -179,20 +179,12 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Window: request.config.RequestControls.Auth.Window, AttemptLimit: request.config.RequestControls.Auth.Requests,
 		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys, MaxInFlight: request.config.RequestControls.AuthMaxInFlight,
 	})
-	// CHAOS-3775: composed independently of the investigator/graph gating
-	// below -- see buildOrgModelConfigStore's doc comment -- so a customer
-	// can save their organization's BYO LLM configuration whether or not
-	// the graph backend is separately wired.
-	orgModelConfigStore, err := buildOrgModelConfigStore(postgres, os.LookupEnv)
-	if err != nil {
-		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config store: %w", err))
-	}
-	orgModelConfigResolver, err := buildOrgModelConfigResolver(orgModelConfigStore, entitlement, os.LookupEnv, request.options.Logger)
+	orgModelConfigResolver, err := buildOrgModelConfigResolver(entitlement, os.LookupEnv, request.options.Logger)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config source: %w", err))
 	}
 	request.sourceHealthOperations = devhealthfacts.NewOperationHolder()
-	investigator, investigationResultStore, runtimeEvictor, resultReuseInvalidator, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigResolver)
+	investigator, investigationResultStore, _, _, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigResolver)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -212,21 +204,6 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// CHAOS-3927 P4: structureSelectionSink gets the identical treatment,
 	// same reasoning, same nil-guarded unconditional Close.
 	runtime.structureSelectionSink = structureSelectionSink
-	// orgModelConfigStore is a concrete *pgmodelconfig.Store, possibly nil;
-	// runtimeEvictor is a concrete *modelruntimeresolver.Resolver, possibly
-	// nil. Assigning either nil pointer directly into its interface-typed
-	// field below would produce a non-nil interface wrapping a nil value
-	// (the classic typed-nil trap -- see (*App).orgModelConfigs' and
-	// (*App).investigator's matching doc comments), so both nil checks
-	// happen here, before the interface conversion, not after.
-	var orgModelConfigs contextfabric.OrgModelConfigStore
-	if orgModelConfigStore != nil {
-		orgModelConfigs = orgModelConfigStore
-	}
-	var orgModelRuntimeEvictor contextfabric.OrgModelRuntimeEvictor
-	if runtimeEvictor != nil {
-		orgModelRuntimeEvictor = runtimeEvictor
-	}
 	// Same typed-nil guard: investigationResultStore is a concrete
 	// *pginvestigation.Store and is nil whenever the investigator itself
 	// was not composed.
@@ -306,15 +283,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DataGraphQL:                dataReads.graphql,
 			DataSubjects:               dataReads.subjects,
 			DirectRelationships:        directRelationships,
-			OrgModelConfigs:            orgModelConfigs,
+			OrgModelConfigs:            orgModelConfigResolver,
 			ServiceModelOpen:           request.config.ServiceModelOpen,
-			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
-			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
-			// already nil-or-a-real-*pginvestigation.Store as an interface
-			// value (buildContextFabricInvestigator's own reuseEnabled
-			// guard decides that before returning it), so it needs no
-			// second typed-nil check here.
-			ReuseInvalidator: resultReuseInvalidator,
 			// CHAOS-4013: nil unless ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
 			// and ACR_WORKLOAD_TRUST_DOMAIN are both set -- see
 			// buildWorkloadTokenExchange's own doc comment.
@@ -358,9 +328,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // it.
 //
 // The third return value is that same Resolver, exposed only as
-// contextfabric.OrgModelRuntimeEvictor -- open() wires it into
-// api.RuntimeDependencies.OrgModelRuntimeEvictor so the DELETE model-config
-// route can purge a cached runtime immediately (Codex round-1 finding F4).
+// contextfabric.OrgModelRuntimeEvictor; open() does not use it now that no
+// route deletes a configuration.
 // falkorGraphTelemetry builds the falkorgraph.GraphTelemetry sink this
 // package wires into every graph adapter it constructs. Factored out to a
 // named, directly-testable function (CHAOS-3835 round-4 finding 3) rather
@@ -801,10 +770,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// stay nil when reuse is disabled -- Engine then never queries
 	// checkpoints for a snapshot it would immediately discard
 	// (reuseColumnsFor short-circuits on !s.reuseEnabled before ever
-	// consulting one), and the model-config PUT/DELETE routes
-	// (CHAOS-3786, codex round-1 P1(b)) skip invalidation entirely --
-	// there is nothing to invalidate for a store that never wrote a
-	// reuse column in the first place.
+	// consulting one).
 	var reuseInvalidator contextfabric.ReuseInvalidator
 	if reuseEnabled {
 		reuseInvalidator = investigationStore
