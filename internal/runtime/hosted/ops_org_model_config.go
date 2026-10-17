@@ -13,45 +13,58 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 )
 
-// EnvOrgLLMConfigSource picks where per-organization BYO LLM configuration
-// comes from. "ops" reads it from Dev Health's own settings store (the web
-// AI Setup > BYO LLM page writes it) through ops' internal llm-config route,
-// with the entitlement credential; acr then holds no BYO store and no
-// settings encryption key. Unset keeps acr's own store, used only when its
-// credential encryption keys are configured.
+// EnvOrgLLMConfigSource overrides where per-organization BYO LLM
+// configuration comes from. The default (unset or "ops") is Dev Health's own
+// settings store (the web AI Setup > BYO LLM page writes it), read through
+// ops' internal llm-config route with the entitlement credential; acr then
+// holds no BYO store and no settings encryption key. "off" turns the ops
+// source off: acr's own store when its credential encryption keys are
+// configured, else no per-organization source.
 const EnvOrgLLMConfigSource = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
 
-const orgLLMConfigSourceOps = "ops"
+const (
+	orgLLMConfigSourceOps = "ops"
+	orgLLMConfigSourceOff = "off"
+)
 
 type orgLLMConfigSource interface {
 	OrgLLMConfig(ctx context.Context, orgID string) (entitlements.OrgLLMConfig, bool, error)
 }
 
 // buildOrgModelConfigResolver returns the per-organization config source, or
-// a nil interface when there is none. One store only: the ops source refuses
-// to start beside acr's own store.
+// a nil interface when there is none. One store only: ops. Unset behaves as
+// "ops" and refuses to start beside acr's own store; the one lenient case is
+// no Dev Health entitlement client (local/dev), which means no per-org source.
+// An explicit "ops" without the client is an error.
 func buildOrgModelConfigResolver(acrStore *pgmodelconfig.Store, entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger) (contextfabric.OrgModelConfigResolver, error) {
 	value, _ := lookup(EnvOrgLLMConfigSource)
+	source, hasOps := entitlement.(orgLLMConfigSource)
 	switch strings.TrimSpace(value) {
-	case "":
-		if acrStore == nil {
-			return nil, nil
-		}
-		return acrStore, nil
-	case orgLLMConfigSourceOps:
+	case "", orgLLMConfigSourceOps:
+		explicit := strings.TrimSpace(value) != ""
 		if acrStore != nil {
 			return nil, fmt.Errorf("%s=ops needs acr's own model config store off (one BYO store): unset the credential encryption keys", EnvOrgLLMConfigSource)
 		}
-		source, ok := entitlement.(orgLLMConfigSource)
-		if !ok {
-			return nil, fmt.Errorf("%s=ops needs the Dev Health entitlement client (ACR_DEV_HEALTH_ENTITLEMENT_URL and its token file)", EnvOrgLLMConfigSource)
+		if !hasOps {
+			if explicit {
+				return nil, fmt.Errorf("%s=ops needs the Dev Health entitlement client (ACR_DEV_HEALTH_ENTITLEMENT_URL and its token file)", EnvOrgLLMConfigSource)
+			}
+			if logger != nil {
+				logger.Info("context fabric org model config source: none (no Dev Health entitlement client configured); the platform model answers every organization")
+			}
+			return nil, nil
 		}
 		if logger != nil {
 			logger.Info("context fabric org model config source", "source", contextfabric.SanitizeLogAttr(orgLLMConfigSourceOps))
 		}
 		return opsOrgModelConfigs{source: source, generations: &versionGenerations{}}, nil
+	case orgLLMConfigSourceOff:
+		if acrStore == nil {
+			return nil, nil
+		}
+		return acrStore, nil
 	default:
-		return nil, fmt.Errorf("%s must be empty or %q", EnvOrgLLMConfigSource, orgLLMConfigSourceOps)
+		return nil, fmt.Errorf("%s must be empty, %q or %q", EnvOrgLLMConfigSource, orgLLMConfigSourceOps, orgLLMConfigSourceOff)
 	}
 }
 
