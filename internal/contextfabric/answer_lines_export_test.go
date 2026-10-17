@@ -115,3 +115,26 @@ func LedgerWindowObservedForTest(appliedValue string) string {
 
 // LedgerWindowAbsoluteValueForTest is an applied value that names an absolute window.
 func LedgerWindowAbsoluteValueForTest() string { return windowAbsoluteAppliedValuePrefix + "1:2" }
+
+// StatedWindowAxisRecordsPerRequestForTest drives the period shape scenarios of
+// the engine (series and comparison frames over every supplied range variant on
+// the MCP surface) and returns how many stated window axis lines each request
+// wrote.
+func StatedWindowAxisRecordsPerRequestForTest(t *testing.T) []int {
+	t.Helper()
+	var counts []int
+	for _, temporal := range []TemporalIntent{TemporalIntentTimeSeries, TemporalIntentPeriodComparison} {
+		for _, variant := range []suppliedTimeVariant{suppliedRangeEqual, suppliedRangeDifferent, suppliedRangeAbsent} {
+			cells := reachableFamilyCells(WindowClassExplicitWindow, true, temporal, periodShapeQuestion(temporal, periodQuestionNamed))
+			cell := cells[0]
+			cell.time = variant
+			cell.question = map[TemporalIntent]string{
+				TemporalIntentTimeSeries:       "How did the Ask Dev project's throughput change last month?",
+				TemporalIntentPeriodComparison: "How does the Ask Dev project's throughput compare with before, last month?",
+			}[temporal]
+			_, _, telemetry := runSuppliedRangeCellRig(t, cell, mcpSurface)
+			counts = append(counts, len(telemetry.statedWindowAxes))
+		}
+	}
+	return counts
+}

@@ -74,13 +74,20 @@ func TestStatedWindowAxisLineCertifiesEveryProducerValueAndRefusesAnyOther(t *te
 		var buf bytes.Buffer
 		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
 		sink.RecordStatedWindowAxis(ctx, principalOrg1, windowBinderSurface, contextfabric.StatedWindowOriginField, contextfabric.TemporalAxis(axis), contextfabric.TemporalAxis(axis), contextfabric.StatedWindowAxisAgreed)
-		certifyRequestLine(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, map[string]any{"interpreted_axis": axis, "executed_axis": axis})
+		certifyRequestLine(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, map[string]any{"interpreted_axis": axis, "executed_axis": axis, "outcome": "agreed"})
 	}
-	long := strings.Repeat("s", 200)
 	var buf bytes.Buffer
 	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
-	sink.RecordStatedWindowAxis(ctx, principalOrg1, long, contextfabric.StatedWindowOriginField, "current", "current", contextfabric.StatedWindowAxisAgreed)
-	certifyRequestLine(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, map[string]any{"surface": long})
+	for surface, want := range map[string]string{
+		"mcp": "mcp", " mcp ": "mcp", "workbench": "other", "Which team owns payments-api?": "other", strings.Repeat("s", 200): "other",
+	} {
+		buf.Reset()
+		sink.RecordStatedWindowAxis(ctx, principalOrg1, surface, contextfabric.StatedWindowOriginField, "current", "current", contextfabric.StatedWindowAxisAgreed)
+		if strings.Contains(buf.String(), "payments-api") {
+			t.Fatalf("a caller-supplied surface reached the log: %s", buf.String())
+		}
+		certifyRequestLine(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, map[string]any{"surface": want, "outcome": "agreed"})
+	}
 	buf.Reset()
 	sink.RecordStatedWindowAxis(ctx, principalOrg1, windowBinderSurface, "future_origin", "current", "current", contextfabric.StatedWindowAxisAgreed)
 	certifyRefused(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, "an unknown origin")
@@ -174,4 +181,41 @@ func TestCarryAndLedgerWindowLinesCertifyEveryProducerValue(t *testing.T) {
 func kindsOf() []contractsv1.ContextFabricSubjectKind {
 	all := contractsv1.ContextFabricSubjectKindVocabulary()
 	return all[:]
+}
+
+// TestStatedWindowAxisMultiplicityCoversWhatTheEngineWrites drives the engine's
+// period shape scenarios and requires the declared multiplicity to allow the
+// number of stated window axis lines one request writes.
+func TestStatedWindowAxisMultiplicityCoversWhatTheEngineWrites(t *testing.T) {
+	t.Parallel()
+	most := 0
+	for _, count := range contextfabric.StatedWindowAxisRecordsPerRequestForTest(t) {
+		if count > most {
+			most = count
+		}
+	}
+	event := eventspec.StatedWindowAxisDecision
+	allowed := 1
+	if event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
+		allowed = event.MaxLinesPerScope
+	}
+	if most > allowed {
+		t.Fatalf("a request wrote %d stated window axis lines, the declaration (%s, max %d) allows %d", most, event.Multiplicity, event.MaxLinesPerScope, allowed)
+	}
+	if most < 2 {
+		t.Fatalf("the period shape scenarios wrote at most %d lines per request; the scenario no longer reaches the second line this test exists for", most)
+	}
+}
+
+func TestStatedWindowAxisLinesCertifyAsTwoInOneRequestAndRefuseAThird(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordStatedWindowAxis(ctx, principalOrg1, "mcp", contextfabric.StatedWindowOriginQuestionPhrase, "current", "range", contextfabric.StatedWindowAxisWithdrawnPeriodShape)
+	sink.RecordStatedWindowAxis(ctx, principalOrg1, "mcp", contextfabric.StatedWindowOriginQuestionPhrase, "current", "range", contextfabric.StatedWindowAxisStatedRange)
+	for _, outcome := range []string{"withdrawn_period_shape", "stated_range"} {
+		certifyRequestLine(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, map[string]any{"outcome": outcome})
+	}
+	sink.RecordStatedWindowAxis(ctx, principalOrg1, "mcp", contextfabric.StatedWindowOriginQuestionPhrase, "current", "range", contextfabric.StatedWindowAxisStatedRange)
+	certifyRefused(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, "a third stated window axis line in one request", map[string]any{"outcome": "stated_range"})
 }

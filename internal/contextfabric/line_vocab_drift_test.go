@@ -13,10 +13,10 @@ import (
 
 // constantsOfType returns the string values of every package-level constant
 // declared with the given type name in the non-test files of this package.
-func constantsOfType(t *testing.T, typeName string) []string {
+func constantsOfType(t *testing.T, dir, typeName string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(info fs.FileInfo) bool {
+	pkgs, err := parser.ParseDir(fset, dir, func(info fs.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
 	}, 0)
 	if err != nil {
@@ -54,7 +54,7 @@ func constantsOfType(t *testing.T, typeName string) []string {
 // vocabulary function was not extended with it.
 func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 	t.Parallel()
-	for typeName, vocabulary := range map[string][]string{
+	for key, vocabulary := range map[string][]string{
 		"WindowCarryOutcome":                WindowCarryOutcomeVocabulary(),
 		"KindCarryOutcome":                  KindCarryOutcomeVocabulary(),
 		"StatedWindowAxisOutcome":           StatedWindowAxisOutcomeVocabulary(),
@@ -66,8 +66,16 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		"SynthesisStatusOverrideReason":     SynthesisStatusOverrideReasonVocabulary(),
 		"StoredAnswerabilityStep":           StoredAnswerabilityStepVocabulary(),
 		"StoredAnswerabilityDetermination":  append(StoredAnswerabilityDeterminationVocabulary(), string(StoredAnswerabilityNotApplicable)),
+		// The contract enums the lines declare by hand-listed members.
+		"contracts:ContextFabricWindowProvenance":      WindowProvenanceLogVocabulary(),
+		"contracts:ContextFabricInvestigationStatus":   InvestigationStatusLogVocabulary(),
+		"contracts:ContextFabricSubjectMatchMechanism": CommitWinningMechanismVocabulary(),
 	} {
-		declared := constantsOfType(t, typeName)
+		dir, typeName := ".", key
+		if name, ok := strings.CutPrefix(key, "contracts:"); ok {
+			dir, typeName = "../contracts/v1", name
+		}
+		declared := constantsOfType(t, dir, typeName)
 		var members []string
 		for _, value := range declared {
 			if value != "" {
@@ -75,10 +83,15 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 			}
 		}
 		sort.Strings(members)
-		want := append([]string(nil), vocabulary...)
+		var want []string
+		for _, value := range vocabulary {
+			if value != "" {
+				want = append(want, value)
+			}
+		}
 		sort.Strings(want)
 		if strings.Join(members, "|") != strings.Join(want, "|") {
-			t.Errorf("%s: constants %v, vocabulary %v", typeName, members, want)
+			t.Errorf("%s: constants %v, vocabulary %v", key, members, want)
 		}
 	}
 }

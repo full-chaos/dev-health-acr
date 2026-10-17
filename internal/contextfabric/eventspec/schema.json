@@ -8418,11 +8418,12 @@
     "id": "contextfabric.stated_window_axis_decision",
     "msg": "context fabric stated window axis decision",
     "level": "info",
-    "multiplicity": "zero_or_one_per_request",
+    "multiplicity": "zero_or_many_per_request",
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "at most one line per investigation: the four stated window branches are mutually exclusive.",
+    "bounded_aggregation": "at most two lines per investigation: the calendar commit withdrawal (a series or comparison frame, or an as-of reading) and then one of the mutually exclusive stated window branches that follow.",
+    "max_lines_per_scope": 2,
     "fields": [
       {
         "key": "org_id",
@@ -8433,7 +8434,10 @@
         "key": "surface",
         "type": "string",
         "presence": "required",
-        "applicability": "the caller-supplied consumer surface, 1 to 200 characters after request validation, printable ASCII after sanitizing; not a closed set"
+        "closed_vocabulary": [
+          "mcp",
+          "other"
+        ]
       },
       {
         "key": "origin",
@@ -9753,7 +9757,10 @@
         "key": "surface",
         "type": "string",
         "presence": "required",
-        "applicability": "the caller-supplied consumer surface, 1 to 200 characters after request validation, printable ASCII after sanitizing; not a closed set"
+        "closed_vocabulary": [
+          "mcp",
+          "other"
+        ]
       },
       {
         "key": "reason",
@@ -10709,7 +10716,10 @@
         "key": "surface",
         "type": "string",
         "presence": "required",
-        "applicability": "the caller-supplied consumer surface, 1 to 200 characters after request validation, printable ASCII after sanitizing; not a closed set"
+        "closed_vocabulary": [
+          "mcp",
+          "other"
+        ]
       },
       {
         "key": "origin",

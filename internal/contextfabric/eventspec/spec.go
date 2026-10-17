@@ -1886,9 +1886,6 @@ func noneOrJoinedPattern(members []string) string {
 
 const requestIDApplicability = "written when the request context carries a request ID"
 
-// consumerSurfaceApplicability states the bound on a consumer surface: the caller supplies it, the request validator bounds it to 1 to 200 characters, and the log sanitizer leaves 0x20 to 0x7e only. It has no closed vocabulary.
-const consumerSurfaceApplicability = "the caller-supplied consumer surface, 1 to 200 characters after request validation, printable ASCII after sanitizing; not a closed set"
-
 // WindowBinderOutcome is the Info line of the temporal binder's proposal for a question: the closed reason, the routed window and grammar, and how many spans were bound.
 var WindowBinderOutcome = Event{
 	ID:                       "contextfabric.window_binder_outcome",
@@ -1900,7 +1897,7 @@ var WindowBinderOutcome = Event{
 	BoundedAggregation:       "at most one line per investigation, written when the binder proposes.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "surface", Type: FieldString, Presence: PresenceRequired, Applicability: consumerSurfaceApplicability},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConsumerSurfaceLogClassVocabulary()},
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowBindReasonVocabulary()},
 		{Key: "relative_id", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RelativeWindowIDLogVocabulary()},
 		{Key: "grammar", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowBindGrammarVocabulary()},
@@ -1914,13 +1911,14 @@ var StatedWindowAxisDecision = Event{
 	ID:                       "contextfabric.stated_window_axis_decision",
 	Msg:                      "context fabric stated window axis decision",
 	Level:                    LevelInfo,
-	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
-	BoundedAggregation:       "at most one line per investigation: the four stated window branches are mutually exclusive.",
+	BoundedAggregation:       "at most two lines per investigation: the calendar commit withdrawal (a series or comparison frame, or an as-of reading) and then one of the mutually exclusive stated window branches that follow.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "surface", Type: FieldString, Presence: PresenceRequired, Applicability: consumerSurfaceApplicability},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConsumerSurfaceLogClassVocabulary()},
 		{Key: "origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatedWindowOriginVocabulary()},
 		{Key: "interpreted_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TemporalAxisLogVocabulary()},
 		{Key: "executed_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TemporalAxisLogVocabulary()},
@@ -1940,7 +1938,7 @@ var WindowGatedForConfirmation = Event{
 	BoundedAggregation:       "at most one line per investigation: the gate ends the pass.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "surface", Type: FieldString, Presence: PresenceRequired, Applicability: consumerSurfaceApplicability},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConsumerSurfaceLogClassVocabulary()},
 		{Key: "origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowGatedOriginVocabulary()},
 		{Key: "relative_id", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RelativeWindowIDLogVocabulary()},
 		{Key: "provenance", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowProvenanceLogVocabulary()},

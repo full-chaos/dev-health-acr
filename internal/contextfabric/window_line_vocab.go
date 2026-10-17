@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"strings"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -126,4 +128,23 @@ func ConfirmedNeedLedgerAppliedWindowVocabulary() []string {
 		out = append(out, string(id))
 	}
 	return out
+}
+
+// consumerSurfaceLogClassOther is the class every consumer surface other than mcp is logged as.
+const consumerSurfaceLogClassOther = "other"
+
+// consumerSurfaceLogClass maps the caller-supplied consumer surface to the
+// bounded class a window line carries. The engine itself distinguishes only
+// the mcp surface, and the raw value is free text from the caller, so the line
+// never carries it.
+func consumerSurfaceLogClass(surface string) string {
+	if strings.TrimSpace(surface) == mcpSurface {
+		return mcpSurface
+	}
+	return consumerSurfaceLogClassOther
+}
+
+// ConsumerSurfaceLogClassVocabulary is the closed set of surface classes a window line carries.
+func ConsumerSurfaceLogClassVocabulary() []string {
+	return []string{mcpSurface, consumerSurfaceLogClassOther}
 }
