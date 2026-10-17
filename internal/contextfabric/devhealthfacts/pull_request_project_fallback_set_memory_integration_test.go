@@ -22,7 +22,7 @@ const (
 	pullRequestFallbackSetResultBytes  = uint64(16 << 10)
 	pullRequestFallbackSetWarmRuns     = 3
 	// pullRequestFallbackSetMarker is in the logged text of the project links
-	// statement, before and after the rule moved into it, and no other.
+	// statement and of its fallback decision statement, and no other.
 	pullRequestFallbackSetMarker = "AS pr_key"
 )
 
@@ -92,8 +92,8 @@ SELECT ?, concat(?, toString(number)), 1, 1, 'heuristic', '', ?, ? FROM numbers(
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, pullRequestFallbackSetMarker).Scan(&runPeak, &runResult, &runs); err != nil {
 				t.Fatalf("read query_log: %v", err)
 			}
-			if runs != 1 {
-				t.Fatalf("measurement did not happen: %d project links statements logged, want 1", runs)
+			if runs != 2 {
+				t.Fatalf("measurement did not happen: %d project links statements logged, want 2 (the links and the fallback decision)", runs)
 			}
 			if run == 0 || runPeak < peak {
 				peak = runPeak
@@ -120,5 +120,55 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`
 		if result > pullRequestFallbackSetResultBytes {
 			t.Errorf("project links response %d bytes at %d fallback links of one group, over the %d-byte bound: the group carries its links", result, links, pullRequestFallbackSetResultBytes)
 		}
+	}
+}
+
+// A pull request whose many links to one project are all native needs no
+// fallback decision: the read sends the project links statement alone and
+// stays under the query client's default read cap of 64 MiB (the dev-health-go
+// default; acr's own configuration defaults to 256 MiB). The decision
+// statement's native sets would read the link table three more times.
+func TestPullRequestProjectAllNativeGroupStaysUnderTheReadCapOnRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	const orgID = "org-pr-project-all-native"
+	at := ts(2026, 9, 18, 0, 0, 0)
+	exec := func(what, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", what, err)
+		}
+	}
+	repo := repoUUID("repo-all-native")
+	exec("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repo, orgID, "acme/all-native", "github", at)
+	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"proj-native", orgID, "linear", nil, "proj-native", uint8(1), "active", "", at)
+	exec("pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
+		repo, orgID, uint32(1), "pr", "open", at, at, "feature", "")
+	const links = 300_000
+	exec("issues", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at)
+SELECT concat('native-', toString(number)), ?, ?, 'title', 'open', '', ?, '', 'linear', 'proj-native', NULL FROM numbers(?)`, repo, orgID, at, uint64(links))
+	exec("links", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, concat('native-', toString(number)), 1, 1, 'native', '', ?, ? FROM numbers(?)`, repo, at, orgID, uint64(links))
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
+	mark := serverNowMicros(t, ctx, direct)
+	facts, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{pullRequestSubjectByRepoLabel("repo-all-native", 1)},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts with %d native links of one group under the default read cap: %v", links, err)
+	}
+	table := facts.Facts[0].Fields["project_breakdown"].Table
+	if table == nil || len(table.Rows) != 1 || *table.Rows[0].Fields["link_tier"].String != "native" {
+		t.Fatalf("project_breakdown = %+v, want proj-native at native", facts.Facts[0].Fields["project_breakdown"])
+	}
+	if _, _, decisions := statementRuns(t, ctx, direct, mark, pullRequestFallbackDecisionMarker); decisions != 0 {
+		t.Errorf("an all-native read sent %d fallback decision statements, want 0", decisions)
 	}
 }

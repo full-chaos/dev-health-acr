@@ -93,85 +93,91 @@ func TestPullRequestProjectRowsDropFallbackLinksCoveredByNativeAgainstRealClickH
 	}
 }
 
-// The project links statement's bounds at the largest organization's shape.
-// Measured locally: 16.67 MiB and 138,074 rows read for 24,024 link rows (the
-// statement before the rule moved into it: 13.54 MiB and 66,002 rows, plus the
-// separate cover statement's 4.54 MiB and 24,024 rows).
+// The fallback decision statement's bounds at the largest organization's
+// shape, half its links explicit_text. Measured locally: 14.84 MiB and 114,050
+// rows read for 24,024 link rows (before the decision moved out of it, the one
+// statement read 16.67 MiB and 138,074 rows; before the fallback-only rule,
+// 13.54 MiB and 66,002 rows plus a 4.54 MiB, 24,024-row cover statement).
 const (
 	pullRequestProjectLinksPeakBoundMiB    = 24.0
 	pullRequestProjectLinksReadRowsPerLink = 7.0
 )
 
-// pullRequestProjectLinksMarker is in the pull request project links
-// statement and no other, in the text the client sends and in the text the
-// server logs (which it reformats).
-const pullRequestProjectLinksMarker = "argMaxIf(lk.provenance, lk.link_rank"
-
 // nativeCoverLogMarker is in the logged text of the separate native cover
 // statement (readNativeCover) and no other.
 const nativeCoverLogMarker = "groupUniqArray(work_item_id)"
 
-// pullRequestProjectLinksRuns reads, from the server's query log since mark,
-// the peak memory, the most rows read and the count of the finished project
-// links statements.
-func pullRequestProjectLinksRuns(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64) (peak, readRows, runs uint64) {
+// statementRuns reads, from the server's query log since mark, the peak
+// memory, the most rows read and the count of the finished statements whose
+// logged text holds marker.
+func statementRuns(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark int64, marker string) (peak, readRows, runs uint64) {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", err)
 	}
 	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), count() FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, ?) > 0`, mark, pullRequestProjectLinksMarker).Scan(&peak, &readRows, &runs); err != nil {
+  AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, ?) > 0`, mark, marker).Scan(&peak, &readRows, &runs); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	return peak, readRows, runs
 }
 
-// At the largest real organization's shape (24,024 link rows, half of them
-// explicit_text next to native links) a read of pull request facts applies the
-// fallback-only rule in one statement: no separate cover statement, and the
-// statement stays small, whatever the number of pull requests asked for.
+// At the largest real organization's shape (24,024 link rows) a read of pull
+// request facts sends the project links statement once, and the fallback
+// decision statement once when half the links are explicit_text next to
+// native ones and never when every link is native; no separate native cover
+// statement runs, and the decision statement stays small.
 func TestPullRequestProjectCoverCostAtTheLargestOrgShape(t *testing.T) {
 	ctx := context.Background()
-	const orgID = "org-pr-project-cover-cost"
-	shape := linkedMemoryProdShape
-	shape.fallbackEvery = 2
-	query, direct, _, _ := newLinkedProdShapeStore(t, ctx, orgID, shape)
-	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
-	var subjects []contextfabric.SubjectRef
-	for repo := 0; repo < shape.ownedRepos; repo++ {
-		for number := uint32(1); number <= 20; number++ {
-			subjects = append(subjects, pullRequestSubjectByRepoLabel(fmt.Sprintf("shape-r-%d", repo), number))
-		}
-	}
-	readOnce := func() {
-		t.Helper()
-		if _, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactPullRequests, Subjects: subjects,
-		}); err != nil {
-			t.Fatalf("ReadFacts: %v", err)
-		}
-	}
-	readOnce()
-	mark := serverNowMicros(t, ctx, direct)
-	readOnce()
-	peak, readRows, runs := pullRequestProjectLinksRuns(t, ctx, direct, mark)
-	t.Logf("pull request project links at the largest org shape: %d link rows, %d pull requests asked, %d statements for one read; peak %.2f MiB (bound %.0f), read_rows %d (bound %.0f)",
-		shape.links, len(subjects), runs, float64(peak)/(1<<20), pullRequestProjectLinksPeakBoundMiB, readRows, pullRequestProjectLinksReadRowsPerLink*float64(shape.links))
-	if runs != 1 {
-		t.Errorf("the project links statement ran %d times for one read, want 1", runs)
-	}
-	if float64(peak)/(1<<20) > pullRequestProjectLinksPeakBoundMiB {
-		t.Errorf("the project links statement peaked at %.2f MiB, bound %.0f MiB", float64(peak)/(1<<20), pullRequestProjectLinksPeakBoundMiB)
-	}
-	if float64(readRows) > pullRequestProjectLinksReadRowsPerLink*float64(shape.links) {
-		t.Errorf("the project links statement read %d rows for a %d row link table, bound %.0f", readRows, shape.links, pullRequestProjectLinksReadRowsPerLink*float64(shape.links))
-	}
-	var covers uint64
-	if err := direct.QueryRow(ctx, `SELECT count() FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, nativeCoverLogMarker).Scan(&covers); err != nil {
-		t.Fatalf("read query_log: %v", err)
-	}
-	if covers != 0 {
-		t.Errorf("a separate native cover statement ran %d times for the pull request read, want 0", covers)
+	for _, c := range []struct {
+		name          string
+		fallbackEvery int
+		decisions     uint64
+	}{{"half explicit_text", 2, 1}, {"all native", 0, 0}} {
+		t.Run(c.name, func(t *testing.T) {
+			orgID := "org-pr-project-cover-cost-" + fmt.Sprint(c.fallbackEvery)
+			shape := linkedMemoryProdShape
+			shape.fallbackEvery = c.fallbackEvery
+			query, direct, _, _ := newLinkedProdShapeStore(t, ctx, orgID, shape)
+			provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
+			var subjects []contextfabric.SubjectRef
+			for repo := 0; repo < shape.ownedRepos; repo++ {
+				for number := uint32(1); number <= 20; number++ {
+					subjects = append(subjects, pullRequestSubjectByRepoLabel(fmt.Sprintf("shape-r-%d", repo), number))
+				}
+			}
+			readOnce := func() {
+				t.Helper()
+				if _, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactPullRequests, Subjects: subjects,
+				}); err != nil {
+					t.Fatalf("ReadFacts: %v", err)
+				}
+			}
+			readOnce()
+			mark := serverNowMicros(t, ctx, direct)
+			readOnce()
+			_, _, links := statementRuns(t, ctx, direct, mark, "AS pr_key")
+			peak, readRows, decisions := statementRuns(t, ctx, direct, mark, pullRequestFallbackDecisionMarker)
+			t.Logf("pull request project links at the largest org shape (%s): %d link rows, %d pull requests asked, %d link statements and %d decision statements for one read; decision peak %.2f MiB (bound %.0f), read_rows %d (bound %.0f)",
+				c.name, shape.links, len(subjects), links, decisions, float64(peak)/(1<<20), pullRequestProjectLinksPeakBoundMiB, readRows, pullRequestProjectLinksReadRowsPerLink*float64(shape.links))
+			if links != 1+c.decisions || decisions != c.decisions {
+				t.Errorf("one read sent %d statements with the pr_key alias and %d decision statements, want %d and %d", links, decisions, 1+c.decisions, c.decisions)
+			}
+			if float64(peak)/(1<<20) > pullRequestProjectLinksPeakBoundMiB {
+				t.Errorf("the decision statement peaked at %.2f MiB, bound %.0f MiB", float64(peak)/(1<<20), pullRequestProjectLinksPeakBoundMiB)
+			}
+			if float64(readRows) > pullRequestProjectLinksReadRowsPerLink*float64(shape.links) {
+				t.Errorf("the decision statement read %d rows for a %d row link table, bound %.0f", readRows, shape.links, pullRequestProjectLinksReadRowsPerLink*float64(shape.links))
+			}
+			var covers uint64
+			if err := direct.QueryRow(ctx, `SELECT count() FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, nativeCoverLogMarker).Scan(&covers); err != nil {
+				t.Fatalf("read query_log: %v", err)
+			}
+			if covers != 0 {
+				t.Errorf("a separate native cover statement ran %d times for the pull request read, want 0", covers)
+			}
+		})
 	}
 }

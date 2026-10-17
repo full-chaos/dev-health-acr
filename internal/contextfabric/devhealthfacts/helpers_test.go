@@ -41,6 +41,10 @@ type capturedQuery struct {
 	bindings  []contextpacket.ClickHouseBinding
 }
 
+// pullRequestFallbackDecisionMarker is in the pull request project fallback
+// decision statement and no other.
+const pullRequestFallbackDecisionMarker = "argMaxIf(lk.provenance, lk.link_rank"
+
 // linkedNativeCoverMarker is in the native cover statement of fallback links and no other.
 const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id IN {ids:Array(String)}"
 
@@ -62,6 +66,17 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	if strings.Contains(statement, "arraySort(groupArray((st, c)))") {
 		for _, table := range c.tables {
 			if strings.Contains(table.match, "arraySort(groupArray((st, c)))") {
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
+	// The fallback-only decision of the pull request project rows below native
+	// is read only when such a row exists; a test that did not seed it gets no
+	// decision, so its rows below native keep no uncovered link.
+	if strings.Contains(statement, pullRequestFallbackDecisionMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, pullRequestFallbackDecisionMarker) {
 				return &fakeScanner{rows: table.rows}, nil
 			}
 		}

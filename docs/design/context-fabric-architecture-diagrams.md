@@ -468,8 +468,9 @@ same rows; no edge is provider-specific. Producers are in
   (`devhealthfacts/native_first_cover.go`), as does a pull request's
   project_breakdown (`devhealthfacts/pull_request_project_rows.go` and
   `pull_request_project_cover.go`: a project reached only through covered
-  fallback links is not served; the statement decides the cover with a fixed
-  state per pull request and project, so a group's links are never collected),
+  fallback links is not served; a second statement, sent only for the pull
+  requests with a row below native, decides the cover with a fixed state per
+  pull request and project, so a group's links are never collected),
   as ops does at
   the source (`issueprlinks/fallback.go`). The issue end is the issue's own `work_items` row (its own `repo_id`);
   the table's `repo_id` is the pull request's repository. A row is projected
