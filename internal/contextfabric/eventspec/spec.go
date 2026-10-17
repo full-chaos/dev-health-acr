@@ -2022,6 +2022,178 @@ var ConfirmedNeedLedgerWindow = Event{
 	},
 }
 
+// StructureNeedsDisclosed is the Info line of one structure member a clarification names as missing: one line per member of the disclosed needs.
+var StructureNeedsDisclosed = Event{
+	ID:                       "contextfabric.structure_needs_disclosed",
+	Msg:                      "context fabric structure needs disclosed",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         5,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per missing member of one disclosed needs block, at most one block per investigation (the subjectless terminal and the window gated terminal end the pass), so at most one line per structure member.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureNeedKindLogVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// GatedOfferResolution is the Info line of the offers-only resolution under a window gate: whether it composed offers beside the window offer, and if not why.
+var GatedOfferResolution = Event{
+	ID:                       "contextfabric.gated_offer_resolution",
+	Msg:                      "context fabric gated offer resolution",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the window gate ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.GatedOfferResolutionOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// CohortStructureGate is the Info line of the class conditional structure gate: which side of the family decision one offer material landed on, and the shape the interpreter reported.
+var CohortStructureGate = Event{
+	ID:                       "contextfabric.cohort_structure_gate",
+	Msg:                      "context fabric cohort structure gate",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per gate call; the gate has two call sites, the window gated terminal and the subjectless terminal, and each ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortStructureGateOutcomeVocabulary()},
+		{Key: "shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InvestigationShapeLogVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// WindowGateOfferDisclosure is the Info line of a window gated terminal: whether its needs carried a window expand offer.
+var WindowGateOfferDisclosure = Event{
+	ID:                       "contextfabric.window_gate_offer_disclosure",
+	Msg:                      "context fabric window gate offer disclosure",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the window gate ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "offered", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// WindowExpandOfferRedeemed is the Info line of a redeemed window receipt that the stored result had also offered as its window expand recommendation.
+var WindowExpandOfferRedeemed = Event{
+	ID:                       "contextfabric.window_expand_offer_redeemed",
+	Msg:                      "context fabric window expand offer redeemed",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the receipt loop stops at the first receipt the offer names.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// InterpretedTimeBound is the Info line of the verdict on the time bound the interpreter produced: the axis, the closed outcome, whether a clamp applied and the width of a range.
+var InterpretedTimeBound = Event{
+	ID:                       "contextfabric.interpreted_time_bound",
+	Msg:                      "context fabric interpreted time bound",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written on every arm that reaches the verdict.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InterpretedTimeBoundAxisLogVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InterpretedTimeBoundOutcomeLogVocabulary()},
+		{Key: "clamp_applied", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "range_days", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// StructureOfferCount is the Info line of how many offers one structure member carried from one source: written for each member and source with a nonzero count.
+var StructureOfferCount = Event{
+	ID:                       "contextfabric.structure_offer_count",
+	Msg:                      "context fabric structure offer count",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         10,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per member and source with a nonzero count of one disclosed needs block, at most one block per investigation, so at most one line per member and source pair.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureNeedKindLogVocabulary()},
+		{Key: "source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureOfferSourceLogVocabulary()},
+		{Key: "count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// StructureReceipt is the Info line of the outcome of one structure member that carried a receipt.
+var StructureReceipt = Event{
+	ID:                       "contextfabric.structure_receipt",
+	Msg:                      "context fabric structure receipt",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         4,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per receipt bearing member (kind, anchor, handle, candidate), written once per investigation: at a pre-flight veto or after the confirming save.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureNeedKindLogVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureReceiptOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// StructureReceiptVeto is the Warn line of which exit of the receipt loop vetoed a follow up.
+var StructureReceiptVeto = Event{
+	ID:                       "contextfabric.structure_receipt_veto",
+	Msg:                      "context fabric structure receipt veto",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: a veto ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "detail", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureVetoDetailVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// StructureExplicit is the Info line of the outcome of one explicit structure field, an expected kind or a subject handle.
+var StructureExplicit = Event{
+	ID:                       "contextfabric.structure_explicit",
+	Msg:                      "context fabric structure explicit",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per explicit member (expected kind, subject handle), written once per investigation: at a pre-flight veto, after the confirming save, or at a save time supersession.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureNeedKindLogVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureExplicitOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // PriorSubjectReceiptsSkipped is the Warn line of the prior-subject receipts a turn skipped: how many, never which.
 var PriorSubjectReceiptsSkipped = Event{
 	ID:                       "contextfabric.prior_subject_receipts_skipped",
@@ -4804,6 +4976,16 @@ var All = []Event{
 	WindowCarry,
 	KindCarry,
 	ConfirmedNeedLedgerWindow,
+	StructureNeedsDisclosed,
+	GatedOfferResolution,
+	CohortStructureGate,
+	WindowGateOfferDisclosure,
+	WindowExpandOfferRedeemed,
+	InterpretedTimeBound,
+	StructureOfferCount,
+	StructureReceipt,
+	StructureReceiptVeto,
+	StructureExplicit,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
