@@ -211,18 +211,18 @@ func TestCollectEmbedTargetsSkipsIDOnlyCIRunsAndCountsThemSeparately(t *testing.
 	}
 	targets, _, skipped := collectEmbedTargets(batch, embedprovider.MinimumMaxTextRunes, false)
 
-	if skipped.Kind != 1 {
-		t.Errorf("skipped.Kind = %d, want 1 (the organization node)", skipped.Kind)
+	if skipped.Kind != 2 {
+		t.Errorf("skipped.Kind = %d, want 2 (the organization node and the named CI run, CHAOS-10031)", skipped.Kind)
 	}
 	if skipped.IDOnly != 1 {
 		t.Errorf("skipped.IDOnly = %d, want 1 (the id-only CI run)", skipped.IDOnly)
 	}
-	if skipped.Total() != 2 {
-		t.Errorf("skipped.Total() = %d, want 2", skipped.Total())
+	if skipped.Total() != 3 {
+		t.Errorf("skipped.Total() = %d, want 3", skipped.Total())
 	}
 
-	if len(targets) != 1 || targets[0].canonicalID != "ci_pipeline_run:run-10" {
-		t.Fatalf("expected exactly the named CI run as an embed target, got %+v", targets)
+	if len(targets) != 0 {
+		t.Fatalf("no CI run is embedded since CHAOS-10031, got %+v", targets)
 	}
 
 	// The write path must still compose the id-only row's ordinary lexical

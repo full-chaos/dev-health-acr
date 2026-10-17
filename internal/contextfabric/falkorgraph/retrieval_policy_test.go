@@ -26,9 +26,12 @@ import (
 // activating graphrank's commit-path carve-out for the first time -- a
 // question that previously resolved ambiguous can now commit for the
 // identical text, see composition.go's rp4 -> rp5 rationale.
+//
+// CHAOS-10031 bumped it again to "rp6": the calibrated entry is re-keyed
+// t3 -> t4 when ci_pipeline_run vectors are dropped.
 func TestRetrievalPolicyVersionBumpedByCHAOS3829(t *testing.T) {
-	if RetrievalPolicyVersion != "rp5" {
-		t.Fatalf("RetrievalPolicyVersion = %q, want rp5 (CHAOS-3829's commit-path carve-out changes the commit decision for the identical question text, which per spec §4 R3's rule must bump the constant)", RetrievalPolicyVersion)
+	if RetrievalPolicyVersion != "rp6" {
+		t.Fatalf("RetrievalPolicyVersion = %q, want rp6 (CHAOS-10031 re-keyed the calibrated retrieval-policy entry t3 -> t4, which must bump the constant)", RetrievalPolicyVersion)
 	}
 }
 
@@ -40,7 +43,7 @@ func TestRetrievalPolicyVersionBumpedByCHAOS3829(t *testing.T) {
 // identity pinning IS the safety mechanism, see LookupRetrievalPolicy's doc
 // comment.
 func TestLookupRetrievalPolicy_KnownIdentityReturnsCalibratedEntry(t *testing.T) {
-	policy, ok := LookupRetrievalPolicy("openai/text-embedding-3-large#t3:r2000:b0:pnone", 3072)
+	policy, ok := LookupRetrievalPolicy("openai/text-embedding-3-large#t4:r2000:b0:pnone", 3072)
 	if !ok {
 		t.Fatal("LookupRetrievalPolicy() ok = false, want true for the calibrated CHAOS-3834 entry")
 	}
@@ -62,22 +65,23 @@ func TestLookupRetrievalPolicy_UnknownIdentityKeepsConservativeDefault(t *testin
 		identity  string
 		dimension int
 	}{
-		{"openai/text-embedding-3-small#t3:r2000:b0:pnone", 3072},
-		{"lmstudio/nomic-embed-text#t3:r2000:b0:pnomic", 768},
+		{"openai/text-embedding-3-small#t4:r2000:b0:pnone", 3072},
+		{"lmstudio/nomic-embed-text#t4:r2000:b0:pnomic", 768},
 		// The entry's PRE-inheritance key (codex round-9 P1): the t2-keyed
 		// entry was DROPPED entirely at CHAOS-3835 integration, and a
 		// t3-constant binary (embedTextTemplateVersion) can never produce a
 		// t2-tagged identity again -- this must miss now, where it used to
 		// hit before the inheritance commit.
 		{"openai/text-embedding-3-large#t2:r2000:b0:pnone", 3072},
+		{"openai/text-embedding-3-large#t3:r2000:b0:pnone", 3072},
 		// Same model, DIFFERENT composition tag -- must NOT match the
 		// calibrated entry; a policy is scoped to one exact composition.
-		{"openai/text-embedding-3-large#t3:r2000:b1:pnone", 3072},
+		{"openai/text-embedding-3-large#t4:r2000:b1:pnone", 3072},
 		// Same model, SAME composition tag, DIFFERENT dimension (codex
 		// round-3 P1) -- a BYO endpoint truncating text-embedding-3-large
 		// to 1536 via OpenAI's `dimensions` param must NOT silently
 		// inherit the 3072-measured calibration.
-		{"openai/text-embedding-3-large#t3:r2000:b0:pnone", 1536},
+		{"openai/text-embedding-3-large#t4:r2000:b0:pnone", 1536},
 		{"none", 0},
 	} {
 		policy, ok := LookupRetrievalPolicy(tc.identity, tc.dimension)
