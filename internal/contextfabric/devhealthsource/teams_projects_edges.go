@@ -479,11 +479,6 @@ func membershipStatement(cursor cursorState, ingest, pruned bool) string {
 			// left is the per-thread buffers of the three arms (about 50 MB at
 			// 4 threads, 17 MB at one), not the data.
 			incrementalSettings = " SETTINGS max_threads = 1"
-		} else {
-			// An unpruned page (the first backfill page and every keyset page
-			// after it) read 701 MiB of per-thread buffers at 64 threads on a
-			// 140k-row organization, 67 MiB at 4, against the 192 MiB cap.
-			incrementalSettings = " SETTINGS max_threads = 4"
 		}
 	}
 	// toDateTime64(0, 3, 'UTC') matches project_membership_transitions.
