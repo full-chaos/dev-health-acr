@@ -278,6 +278,20 @@ func goVarName(e Event) string {
 		return "BindingEpochMoved"
 	case BindingEpochUnchanged.ID:
 		return "BindingEpochUnchanged"
+	case WindowBinderOutcome.ID:
+		return "WindowBinderOutcome"
+	case StatedWindowAxisDecision.ID:
+		return "StatedWindowAxisDecision"
+	case WindowGatedForConfirmation.ID:
+		return "WindowGatedForConfirmation"
+	case WindowCanonicalizationOutcome.ID:
+		return "WindowCanonicalizationOutcome"
+	case WindowCarry.ID:
+		return "WindowCarry"
+	case KindCarry.ID:
+		return "KindCarry"
+	case ConfirmedNeedLedgerWindow.ID:
+		return "ConfirmedNeedLedgerWindow"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:

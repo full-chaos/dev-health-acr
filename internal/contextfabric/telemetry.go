@@ -377,7 +377,7 @@ func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, princi
 // binder route a question), never itself a sign anything is wrong.
 func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, surface string, outcome WindowBindOutcome) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "reason", SanitizeLogAttr(string(outcome.Reason)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(consumerSurfaceLogClass(surface)), "reason", SanitizeLogAttr(string(outcome.Reason)),
 		"relative_id", SanitizeLogAttr(string(outcome.RelativeID)), "grammar", SanitizeLogAttr(outcome.Grammar),
 		"spans_bound", outcome.SpansBound,
 	}, requestIDLogAttrs(ctx)...)
@@ -388,7 +388,7 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 // outcome value are closed vocabularies, never question text or bounds.
 func (t SlogEngineTelemetry) RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome StatedWindowAxisOutcome) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "origin", SanitizeLogAttr(origin),
+		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(consumerSurfaceLogClass(surface)), "origin", SanitizeLogAttr(origin),
 		"interpreted_axis", SanitizeLogAttr(string(interpretedAxis)), "executed_axis", SanitizeLogAttr(string(executedAxis)),
 		"outcome", SanitizeLogAttr(string(outcome)),
 	}, requestIDLogAttrs(ctx)...)
@@ -399,7 +399,7 @@ func (t SlogEngineTelemetry) RecordStatedWindowAxis(ctx context.Context, princip
 // is a closed vocabulary member, never question text or bounds.
 func (t SlogEngineTelemetry) RecordWindowGatedForConfirmation(ctx context.Context, principal storage.Principal, surface string, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "origin", SanitizeLogAttr(string(origin)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(consumerSurfaceLogClass(surface)), "origin", SanitizeLogAttr(string(origin)),
 		"relative_id", SanitizeLogAttr(string(effective.RelativeID)), "provenance", SanitizeLogAttr(string(effective.Provenance)),
 		"window_class", SanitizeLogAttr(string(effective.WindowClass)),
 	}, requestIDLogAttrs(ctx)...)
