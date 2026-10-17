@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"strings"
 	"time"
 
@@ -230,7 +231,7 @@ WHERE org_id = $1`, orgID)
 	if err != nil {
 		return contextfabric.ResolvedOrgModelConfig{}, true, fmt.Errorf("pgmodelconfig: decrypt credential for organization %s: %w", orgID, err)
 	}
-	config.Credential = credential
+	config.Credential = llm.NewSecret(credential)
 	return config, true, nil
 }
 

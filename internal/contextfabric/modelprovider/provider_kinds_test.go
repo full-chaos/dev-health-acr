@@ -82,7 +82,7 @@ func TestProviderNamespacePicksTheClientAndItsSeedRule(t *testing.T) {
 			server := &providerKindServer{}
 			cfg := Config{
 				Provider: tc.provider, BaseURL: tc.baseURL(server.start(t)), Model: "configured-" + tc.provider,
-				APIKey: "sk-configured", Timeout: DefaultTimeout, MaxAttempts: 1, AllowInsecureBaseURL: true,
+				APIKey: llm.NewSecret("sk-configured"), Timeout: DefaultTimeout, MaxAttempts: 1, AllowInsecureBaseURL: true,
 			}
 			runtime, err := New(context.Background(), cfg)
 			if err != nil {
@@ -113,7 +113,7 @@ func TestNativeKindsDefaultToTheirOwnEndpoint(t *testing.T) {
 	for provider, wantHost := range map[string]string{
 		"anthropic": "api.anthropic.com", "gemini": "generativelanguage.googleapis.com", "openai": "api.openai.com",
 	} {
-		clients, err := newLLMClients(Config{Provider: provider, Model: "m", APIKey: "sk-configured", Timeout: DefaultTimeout}, "m")
+		clients, err := newLLMClients(Config{Provider: provider, Model: "m", APIKey: llm.NewSecret("sk-configured"), Timeout: DefaultTimeout}, "m")
 		if err != nil {
 			t.Fatal(err)
 		}

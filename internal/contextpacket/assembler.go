@@ -115,7 +115,7 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	bundle.Evidence = visible
 	bundle.Unavailable = append(bundle.Unavailable, hidden...)
 	packet.Freshness.Watermarks, packet.Coverage, packet.Warnings = sortedWatermarks(bundle.Watermarks), coverage(bundle), sortedUnique(append(warnings(bundle), roleWarnings(bundle.Evidence)...))
-	actionEvidence, actionReason, actionNotes := a.actionEvidence(ctx, principal, request, scope, packet.Freshness.AsOf)
+	actionEvidence, actionReason, actionNotes, actionCriteria := a.actionEvidence(ctx, principal, request, scope, packet.Freshness.AsOf)
 	packet.Warnings = sortedUnique(append(packet.Warnings, actionNotes...))
 	if len(actionNotes) > 0 {
 		markActionPartial(&packet, request)
@@ -137,11 +137,11 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	if err := applyBudget(&packet, items, laterRows); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
-	if err := finalizePacket(&packet, laterRows); err != nil {
+	if err := finalizePacket(&packet, laterRows, actionCriteria); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	setStatus(&packet, len(ranked))
-	if err := finalizePacket(&packet, laterRows); err != nil {
+	if err := finalizePacket(&packet, laterRows, actionCriteria); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	if err := validatePacket(packet); err != nil {
@@ -190,7 +190,7 @@ func (a *Assembler) degraded(ctx context.Context, packet contractsv1.ContextPack
 		summary = "Evidence was retrieved but failed validation for the requested goal."
 	}
 	packet.Coverage.DegradedReasons, packet.Warnings, packet.Summary = []string{reason}, []string{reason}, summary
-	if err := finalizePacket(&packet, nil); err != nil {
+	if err := finalizePacket(&packet, nil, nil); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	if err := validatePacket(packet); err != nil {
@@ -256,29 +256,33 @@ func packetID(p storage.Principal, r contractsv1.ContextPacketRequest) string {
 // actionEvidence turns the stored findings of the repository's owning team(s)
 // into recommendation evidence. Nothing is generated: with no source, no
 // owner, no grant or no fired finding it returns none and the closed reason.
-func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest, scope contractsv1.ResolvedScope, asOf time.Time) ([]contractsv1.EvidenceRef, string, []string) {
+func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Principal, request contractsv1.ContextPacketRequest, scope contractsv1.ResolvedScope, asOf time.Time) ([]contractsv1.EvidenceRef, string, []string, map[string][]string) {
 	if len(request.Options.RequestedCategories) > 0 && !slices.Contains(request.Options.RequestedCategories, contractsv1.CategoryAction) {
-		return nil, "", nil
+		return nil, "", nil, nil
 	}
 	if a.options.ActionFindings == nil {
-		return nil, ActionUnavailableNoSource, nil
+		return nil, ActionUnavailableNoSource, nil, nil
 	}
 	if request.Scope.AsOf != nil {
-		return nil, ActionUnavailableHistorical, nil
+		return nil, ActionUnavailableHistorical, nil, nil
 	}
 	if scope.RepoID == "" || strings.HasPrefix(scope.RepoID, "unresolved:") {
-		return nil, ActionUnavailableNoOwner, nil
+		return nil, ActionUnavailableNoOwner, nil, nil
 	}
 	result, err := a.options.ActionFindings.ActionFindings(ctx, principal, scope.RepoID)
 	if err != nil {
-		return nil, ActionUnavailableReadFailed, nil
+		return nil, ActionUnavailableReadFailed, nil, nil
 	}
 	served := []contractsv1.EvidenceRef{}
+	criteria := map[string][]string{}
 	findingsRead := 0
 	for _, team := range result.Teams {
 		findingsRead += len(team.Findings)
 		if ref, ok := actionFindingEvidence(team, asOf); ok {
 			served = append(served, ref)
+			if stated := actionFindingCriteria(team); len(stated) > 0 {
+				criteria[ref.EvidenceRefID] = stated
+			}
 		}
 	}
 	reason := ""
@@ -293,7 +297,7 @@ func (a *Assembler) actionEvidence(ctx context.Context, principal storage.Princi
 		notes = append(notes, "action_items_partial:"+ActionUnavailableNotEvaluated+":"+strconv.Itoa(result.NotEvaluatedTeams))
 	}
 	slog.InfoContext(ctx, "context packet action findings", "teams_read", len(result.Teams), "findings_read", findingsRead, "items_served", len(served), "withheld_teams", result.WithheldTeams, "not_evaluated_teams", result.NotEvaluatedTeams, "reason", reason)
-	return served, reason, notes
+	return served, reason, notes, criteria
 }
 
 // markActionSourceUnavailable records, in the packet's own coverage, that the

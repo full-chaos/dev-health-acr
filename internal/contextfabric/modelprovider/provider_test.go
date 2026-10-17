@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/llm"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,7 +105,7 @@ const validInterpretationJSON = `{
 func testConfig(provider *providerServer) Config {
 	return Config{
 		Provider: DefaultProvider, BaseURL: provider.baseURL, Model: DefaultModel,
-		APIKey: "sk-configured", Timeout: 10 * time.Second, MaxAttempts: 1,
+		APIKey: llm.NewSecret("sk-configured"), Timeout: 10 * time.Second, MaxAttempts: 1,
 		MaxTransportRetries: 0, AllowInsecureBaseURL: true,
 	}
 }
@@ -180,7 +181,7 @@ func TestNew_resolvesAnyModelIDIncludingOnesTheSDKDoesNotEnumerate(t *testing.T)
 	provider := recordingProvider(t, chatCompletion(t, validInterpretationJSON))
 	cfg := testConfig(provider)
 	cfg.Provider, cfg.Model = "local-llama", "meta-llama/Llama-3.1-8B-Instruct"
-	cfg.APIKey = ""
+	cfg.APIKey = llm.Secret{}
 
 	// When
 	if err := callProvider(t, cfg); err != nil {
