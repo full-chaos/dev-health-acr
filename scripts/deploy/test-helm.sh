@@ -676,6 +676,17 @@ falkordb_sts="$(extract_falkordb_doc StatefulSet)"
 grep -qE '^\s+image: "[^"]*falkordb/falkordb@sha256:[0-9a-f]{64}"' <<<"$falkordb_sts" \
   || fail_gate "falkordb-workload: StatefulSet image is not digest-pinned"
 grep -qF 'GRAPH.QUERY' <<<"$falkordb_sts" || fail_gate "falkordb-workload: StatefulSet probes must use the GRAPH.QUERY vocabulary, not PING alone"
+falkordb_probe() { # $1 probe name, $2 field -> its value in the StatefulSet render
+  awk -v probe="$1:" -v field="$2:" '
+    $1 == probe { inprobe = 1; next }
+    inprobe && $1 ~ /Probe:$/ { inprobe = 0 }
+    inprobe && $1 == field { print $2; exit }
+  ' <<<"$falkordb_sts"
+}
+[[ "$(falkordb_probe startupProbe failureThreshold)" == "120" && "$(falkordb_probe startupProbe periodSeconds)" == "5" ]] \
+  || fail_gate "falkordb-workload: startupProbe must allow a 10 min load (failureThreshold 120 x periodSeconds 5)"
+[[ "$(falkordb_probe livenessProbe timeoutSeconds)" == "10" && "$(falkordb_probe livenessProbe failureThreshold)" == "6" ]] \
+  || fail_gate "falkordb-workload: livenessProbe must tolerate a busy server (timeoutSeconds 10, failureThreshold 6)"
 grep -qE '^\s+mountPath: /var/lib/falkordb/data\s*$' <<<"$falkordb_sts" \
   || fail_gate "falkordb-workload: data volume must mount the image FALKORDB_DATA_PATH"
 grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_sts" \

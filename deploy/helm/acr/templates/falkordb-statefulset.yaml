@@ -95,20 +95,24 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+          # Loading a large dump and building its indexes blocks the server
+          # for minutes; the startup window (120 x 5 s = 10 min) covers it so
+          # liveness never kills a load in progress.
           startupProbe:
             exec:
               command: ["redis-cli", "GRAPH.QUERY", "_acr_health", "RETURN 1"]
             periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: 120
           # Liveness only needs the server process to answer; a restart on a
-          # missing graph module would loop without fixing anything.
+          # missing graph module would loop without fixing anything. A busy
+          # server answers PING late, so it gets 10 s and 6 misses (1 min).
           livenessProbe:
             exec:
               command: ["redis-cli", "PING"]
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
+            timeoutSeconds: 10
+            failureThreshold: 6
           resources:
             {{- toYaml $falkordb.resources | nindent 12 }}
           volumeMounts:
