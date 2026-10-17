@@ -308,6 +308,13 @@ func blockersFields() []fieldDecl {
 			// Emitted only when the blocking item resolves to exactly one
 			// repository; gated like a work item root.
 			declRef(declWorkItemRef, fStr("blocked_by_work_item_ref")),
+			// Whether this link counts in the team blocker counts: true while
+			// the blocking item is not done or canceled (blocker_status_basis
+			// names that rule). false means the team counts list the link under
+			// blocker_dependencies_excluded_by_status_current. Left out when the
+			// blocking item has no work item row.
+			fBool("blocker_active"),
+			fStr("blocker_status_basis"),
 		),
 		teamRollupCommonFields(false),
 		// Current axis only: a dependency row carries no event time, so the
