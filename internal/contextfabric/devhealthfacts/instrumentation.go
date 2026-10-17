@@ -198,7 +198,7 @@ func (r readStatsInstrumentation) StartQuery(ctx context.Context, reader string,
 	if r.now != nil {
 		started = r.now()
 	}
-	ctx, finish := r.next.StartQuery(contextWithReadStats(ctx, stats), reader, orgScoped)
+	ctx, finish := r.next.StartQuery(contextWithReadStats(contextpacket.WithStatementReader(ctx, reader), stats), reader, orgScoped)
 	return ctx, func(err error) {
 		rows, bytes := stats.Snapshot()
 		var elapsed time.Duration

@@ -2482,6 +2482,7 @@ type FactReadFailedFields struct {
 	Kind           string
 	ErrorType      string
 	ProviderReason string
+	ClickhouseCode int
 	RequestID      string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every FactReadFailedFields uniformly, set ONLY by NewFactReadFailedFields below. A caller
@@ -2496,11 +2497,12 @@ type FactReadFailedFields struct {
 
 // NewFactReadFailedFields is the generated constructor for FactReadFailedFields -- every
 // field FactReadFailed.Fields declares is a required parameter.
-func NewFactReadFailedFields(kind string, errorType string, providerReason string, requestID string) FactReadFailedFields {
+func NewFactReadFailedFields(kind string, errorType string, providerReason string, clickhouseCode int, requestID string) FactReadFailedFields {
 	return FactReadFailedFields{
 		Kind:           kind,
 		ErrorType:      errorType,
 		ProviderReason: providerReason,
+		ClickhouseCode: clickhouseCode,
 		RequestID:      requestID,
 		constructed:    true,
 	}
@@ -2522,6 +2524,7 @@ func (f FactReadFailedFields) SlogArgs() []any {
 		"kind", contextfabric.SanitizeLogAttr(f.Kind),
 		"error_type", contextfabric.SanitizeLogAttr(f.ErrorType),
 		"provider_reason", contextfabric.SanitizeLogAttr(f.ProviderReason),
+		"clickhouse_code", f.ClickhouseCode,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -1400,13 +1401,30 @@ func readFailure(action string, err error) error {
 	}
 	// The served reason is closed; the cause stays on the error for tests and
 	// is named in the log by its Go type only (never the exception text).
-	slog.Warn("devhealthfacts.read_failed", "action", contextfabric.SanitizeLogAttr(action), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)))
-	return &contextfabric.FactReadFailure{
-		State:  contextfabric.SourceUnavailable,
-		Reason: "devhealthfacts: " + action + " failed",
-		Class:  contextfabric.FactReadFailureReadFailed,
-		Cause:  err,
+	attrs := []any{"action", contextfabric.SanitizeLogAttr(action), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err))}
+	code, hasCode := clickHouseExceptionCode(err)
+	if hasCode {
+		attrs = append(attrs, "clickhouse_code", int(code))
 	}
+	slog.Warn("devhealthfacts.read_failed", attrs...)
+	return &contextfabric.FactReadFailure{
+		State:      contextfabric.SourceUnavailable,
+		Reason:     "devhealthfacts: " + action + " failed",
+		Class:      contextfabric.FactReadFailureReadFailed,
+		Cause:      err,
+		SourceCode: code,
+	}
+}
+
+// clickHouseExceptionCode is the numeric ClickHouse exception code err carries
+// or wraps. The code is a closed value a log line may carry; the exception
+// text never is.
+func clickHouseExceptionCode(err error) (int32, bool) {
+	var exception *clickhousedriver.Exception
+	if errors.As(err, &exception) {
+		return exception.Code, true
+	}
+	return 0, false
 }
 
 // The pre-CHAOS-3781 refusal (checkCurrentTimeOnly, timeUnsupportedReason)

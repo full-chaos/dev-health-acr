@@ -507,6 +507,9 @@ type FactReadFailure struct {
 	// Cause is the error the read failed with. It is for logs and tests only:
 	// Error() returns Reason alone, so a served answer never carries it.
 	Cause error
+	// SourceCode is the numeric ClickHouse exception code of Cause, 0 when it
+	// carries none. The read-failed log line carries it as clickhouse_code.
+	SourceCode int32
 	// RequestNote is a sentence true of the request whether or not this read
 	// succeeded (ownership of the requested teams); the ledger keeps it.
 	RequestNote string
@@ -2164,16 +2167,21 @@ func (r *FactCapabilityRegistry) logFactReadFailure(ctx context.Context, kind Fa
 	}
 	var failure *FactReadFailure
 	class := FactReadFailureNotTyped
+	var sourceCode int32
 	if errors.As(err, &failure) {
 		class = failure.Class
 		if !knownFactReadFailureClass(class) {
 			class = FactReadFailureUnclassified
 		}
+		sourceCode = failure.SourceCode
 	}
 	attrs := []any{
 		"kind", SanitizeLogAttr(string(kind)),
 		"error_type", SanitizeLogAttr(fmt.Sprintf("%T", err)),
 		"provider_reason", SanitizeLogAttr(string(class)),
+	}
+	if sourceCode != 0 {
+		attrs = append(attrs, "clickhouse_code", int(sourceCode))
 	}
 	attrs = append(attrs, requestIDLogAttrs(ctx)...)
 	r.logger.WarnContext(ctx, "context fabric fact read failed", attrs...)
