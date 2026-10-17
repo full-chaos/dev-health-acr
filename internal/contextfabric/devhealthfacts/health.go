@@ -1156,3 +1156,7 @@ func markSubjectLocalTruncation(facts []contextfabric.CanonicalFact) {
 		}
 	}
 }
+
+func plantedUndeclaredLog(ctx context.Context) {
+	slog.DebugContext(ctx, "planted undeclared log event")
+}
