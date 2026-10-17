@@ -97,3 +97,23 @@ func InterpretedTimeBoundDecisionsForTest(unknownAxis TemporalAxis) []Interprete
 		resolveInterpretedTimeContext(TimeContext{Axis: unknownAxis}, now),
 	}
 }
+
+// RecordPriorConsultOutcomeForTest runs the engine's producer of the prior consulted line.
+func RecordPriorConsultOutcomeForTest(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, sawCandidate, offered, revoked bool) {
+	(&Engine{telemetry: telemetry}).recordPriorConsultOutcome(ctx, principal, member, sawCandidate, offered, revoked)
+}
+
+// RecordPriorDegradationForTest runs the engine's producer of the prior degradation lines.
+func RecordPriorDegradationForTest(ctx context.Context, telemetry EngineTelemetry, principal storage.Principal, state PriorDegradationState) {
+	(&Engine{telemetry: telemetry}).recordPriorDegradation(ctx, principal, state)
+}
+
+// ProjectedRowsOfClaimsForTest runs the row attachment the synthesizer runs over a claim of every kind in kinds and returns its count, per kind counts and truncation.
+func ProjectedRowsOfClaimsForTest(kinds []string) (int, map[FactKind]int, bool) {
+	claims := make([]ClaimedFact, 0, len(kinds))
+	for _, kind := range kinds {
+		claims = append(claims, ClaimedFact{Kind: FactKind(kind)})
+	}
+	_, rows, byKind, truncated := attachCanonicalRows(claims, nil)
+	return rows, byKind, truncated
+}

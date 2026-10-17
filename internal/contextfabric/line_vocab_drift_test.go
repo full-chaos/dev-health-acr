@@ -71,6 +71,8 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		"StructureReceiptOutcome":           StructureReceiptOutcomeVocabulary(),
 		"StructureExplicitOutcome":          StructureExplicitOutcomeVocabulary(),
 		"InterpretedTimeBoundOutcome":       InterpretedTimeBoundOutcomeLogVocabulary(),
+		"PriorConsultedOutcome":             PriorConsultedOutcomeVocabulary(),
+		"PriorDegradationState":             append(append(PriorDegradationPointerDanglingVocabulary(), PriorDegradationInfoVocabulary()...), ""),
 		// The contract enums the lines declare by hand-listed members.
 		"contracts:ContextFabricWindowProvenance":      WindowProvenanceLogVocabulary(),
 		"contracts:ContextFabricInvestigationStatus":   InvestigationStatusLogVocabulary(),
@@ -78,6 +80,7 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		"contracts:ContextFabricStructureNeedKind":     StructureNeedKindLogVocabulary(),
 		"contracts:ContextFabricStructureOfferSource":  StructureOfferSourceLogVocabulary(),
 		"contracts:ContextFabricInvestigationShape":    InvestigationShapeLogVocabulary(),
+		"contracts:ContextFabricFactKind":              ProjectedRowsFactKindLogVocabulary(),
 		"contracts:ContextFabricTemporalAxis":          InterpretedTimeBoundAxisLogVocabulary(),
 	} {
 		dir, typeName := ".", key
