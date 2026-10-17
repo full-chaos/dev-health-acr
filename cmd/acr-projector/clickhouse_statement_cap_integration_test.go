@@ -43,6 +43,12 @@ func TestOpenProjectorClickHouseSendsTheStatementMemoryCapToTheServer(t *testing
 	if got := read("SELECT toString(getSetting('max_memory_usage')) SETTINGS max_memory_usage = 12345678"); got != "12345678" {
 		t.Fatalf("server saw max_memory_usage %s with a statement-level SETTINGS, want 12345678", got)
 	}
+	if got := read("SELECT toString(getSetting('max_threads'))"); got != "4" {
+		t.Fatalf("server saw max_threads %s through the projector client, want 4", got)
+	}
+	if got := read("SELECT toString(getSetting('max_threads')) SETTINGS max_threads = 1"); got != "1" {
+		t.Fatalf("server saw max_threads %s with a statement-level SETTINGS, want 1", got)
+	}
 }
 
 // Against a real server, a statement that finishes above half of its effective

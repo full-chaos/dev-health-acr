@@ -18,6 +18,7 @@ type rule struct {
 	why          string
 	cites        []string
 	subRank      int
+	event        *contractsv1.CauseEvent
 }
 
 func evidenceRule(ref contractsv1.EvidenceRef) rule {
@@ -56,31 +57,31 @@ func evidenceCategoryRule(ref contractsv1.EvidenceRef) rule {
 	// Rows whose entity type or text is free-form producer content never
 	// choose a role by that text.
 	if ref.SourceVersion == aiArtifactSourceVersion {
-		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0}
+		return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0, nil}
 	}
 	if failurePressure(ref) {
 		return pressureRule()
 	}
 	switch strings.ToLower(ref.Source.EntityType) {
 	case "deployment":
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0, nil}
 	case "recommendation", "review_action", "task":
 		if ref.SourceVersion != storedFindingsSourceVersion {
 			break
 		}
-		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, "", nil, 0}
+		return rule{"evidence.observed.action.v1", contractsv1.CategoryAction, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 4, "", nil, 0, nil}
 	case "state", "release":
-		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0}
+		return rule{"evidence.observed.state.v1", contractsv1.CategoryState, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 0, "", nil, 0, nil}
 	}
-	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0}
+	return rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, "", nil, 0, nil}
 }
 
 func pressureRule() rule {
-	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0}
+	return rule{"evidence.observed.pressure.v1", contractsv1.CategoryPressure, contractsv1.ClaimObserved, contractsv1.SeverityHigh, 1, "", nil, 0, nil}
 }
 
 func causeRule() rule {
-	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, "", nil, 0}
+	return rule{"evidence.observed.cause.v1", contractsv1.CategoryCause, contractsv1.ClaimObserved, contractsv1.SeverityWarning, 2, "", nil, 0, nil}
 }
 
 const (

@@ -3,6 +3,7 @@ package modelprovider
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"os"
 	"testing"
 	"time"
@@ -43,6 +44,9 @@ func liveConfig(t *testing.T) Config {
 	cfg := Config{
 		Provider: DefaultProvider, Model: DefaultModel, APIKey: apiKey,
 		Timeout: 90 * time.Second, MaxAttempts: 2, MaxTransportRetries: 2,
+		// The hosted default: production redraws a rejected interpretation
+		// or synthesis draw up to this many times.
+		MaxSynthesisResynthesisAttempts: genkitruntime.DefaultMaxSynthesisResynthesisAttempts,
 	}
 	if value := os.Getenv(envLiveProvider); value != "" {
 		cfg.Provider = value

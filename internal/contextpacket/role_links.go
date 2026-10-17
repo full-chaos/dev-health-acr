@@ -1,6 +1,7 @@
 package contextpacket
 
 import (
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -114,6 +115,9 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 	type prLink struct {
 		bestTier string
 		relation string
+		// event is the failed deployment of the best tier, the latest one
+		// when several carry the pull request at that tier.
+		event *contractsv1.CauseEvent
 	}
 	prLinks := map[string]*prLink{}
 	demotedBuckets := map[string]map[string]int{}
@@ -137,8 +141,12 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 			prLinks[number] = entry
 		}
 		if failed && tierRank[tier] > 0 {
-			if tierRank[tier] > tierRank[entry.bestTier] {
-				entry.bestTier = tier
+			candidate := &contractsv1.CauseEvent{EntityType: "deployment", EntityID: ref.Source.EntityID, OccurredAt: ref.ObservedAt}
+			switch {
+			case tierRank[tier] > tierRank[entry.bestTier]:
+				entry.bestTier, entry.event = tier, candidate
+			case tierRank[tier] == tierRank[entry.bestTier] && entry.event != nil && candidate.OccurredAt.After(entry.event.OccurredAt):
+				entry.event = candidate
 			}
 			addBucket(promotedBuckets, number, tier)
 			continue
@@ -200,7 +208,7 @@ func linkedCauseRefs(evidence []contractsv1.EvidenceRef) causeLinks {
 				continue
 			}
 			if entry.bestTier != "" {
-				links.causes[ref.EvidenceRefID] = linkedCause{claim: tierClaim[entry.bestTier], why: tierCauseText(ref.Source.EntityID, entry.bestTier), subRank: tierRank[entry.bestTier]}
+				links.causes[ref.EvidenceRefID] = linkedCause{claim: tierClaim[entry.bestTier], why: tierCauseText(ref.Source.EntityID, entry.bestTier), subRank: tierRank[entry.bestTier], event: entry.event}
 			} else if entry.relation != "" {
 				links.demoted[ref.EvidenceRefID] = entry.relation
 			}
@@ -231,6 +239,7 @@ type linkedCause struct {
 	why     string
 	cites   []string
 	subRank int
+	event   *contractsv1.CauseEvent
 }
 
 // roleWarnings discloses the links this pass withheld from the cause role, so
@@ -352,14 +361,21 @@ func newRoleResolver(evidence []contractsv1.EvidenceRef) roleResolver {
 	links := linkedCauseRefs(evidence)
 	for id, link := range links.causes {
 		cause := causeRule()
-		cause.why, cause.claim, cause.cites, cause.subRank = link.why, link.claim, link.cites, link.subRank
+		cause.why, cause.claim, cause.cites, cause.subRank, cause.event = link.why, link.claim, link.cites, link.subRank, link.event
 		resolver[id] = cause
 	}
+	withEvent := 0
+	for _, cause := range resolver {
+		if cause.event != nil {
+			withEvent++
+		}
+	}
+	slog.Info("context packet cause events", "event", "cause_events_attached", "causes", len(resolver), "with_event", withEvent)
 	for id := range activeBlockerRefs(evidence) {
 		resolver[id] = pressureRule()
 	}
 	for id, why := range links.demoted {
-		relation := rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, why, nil, 0}
+		relation := rule{"evidence.observed.reference.v1", contractsv1.CategoryEvidence, contractsv1.ClaimObserved, contractsv1.SeverityInfo, 3, why, nil, 0, nil}
 		resolver[id] = relation
 	}
 	return resolver
