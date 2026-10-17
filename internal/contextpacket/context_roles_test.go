@@ -397,6 +397,19 @@ func TestStoredTeamFindingsAreServedAsActionAndCarryNoUnavailableWarning(t *test
 			t.Fatalf("unexpected warning %q", warning)
 		}
 	}
+	// The finding's own success criterion is the step, not the rule template.
+	var criterionSteps int
+	for _, step := range packet.RecommendedNextSteps {
+		if step.RuleID == action.RuleID && strings.Contains(step.Label, `"active work drops"`) {
+			criterionSteps++
+		}
+		if step.RuleID == action.RuleID && strings.HasPrefix(step.Label, "Investigate retrieved evidence") {
+			t.Errorf("the action rule kept the template step: %+v", step)
+		}
+	}
+	if criterionSteps != 1 {
+		t.Errorf("criterion steps = %d in %+v, want 1", criterionSteps, packet.RecommendedNextSteps)
+	}
 }
 
 func TestUnreadableFindingsServeNoActionAndNameTheReason(t *testing.T) {
