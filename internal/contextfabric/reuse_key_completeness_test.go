@@ -79,7 +79,7 @@ var versionSetAuthorities = map[string]versionAuthority{
 	// SynthesisPromptVersion (covered). The ModelVersion half is NOT
 	// separately bound: genkitruntime defaults ModelVersion to Model
 	// whenever it is left unset (newWithGenerator), and grepped, no
-	// composition site in modelprovider or pgmodelconfig ever sets
+	// composition site in modelprovider ever sets
 	// ModelVersion independently of Model -- so today ModelVersion always
 	// equals the Model half of ModelIdentity (already a ReuseKey member).
 	// Binding it separately would be provably redundant AS LONG AS that

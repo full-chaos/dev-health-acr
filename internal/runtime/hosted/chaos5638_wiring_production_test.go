@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memorymodelconfig"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgmodelconfigfake"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -28,7 +28,7 @@ func TestTheResolverIsGivenTheServiceLogger(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	resolver := newOrgModelRuntimeResolver(
-		notSampledRuntime{}, memorymodelconfig.NewStore(nil),
+		notSampledRuntime{}, orgmodelconfigfake.NewStore(nil),
 		func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 			t.Fatal("Build must not run for an unconfigured organization")
 			return nil, nil

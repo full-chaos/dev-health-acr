@@ -48,10 +48,9 @@ in `deviceApprovalHandler` (see the JSON row), not a genuinely different
 validator. This is the strongest posture of the three repos in this
 inventory; nothing else to flag here as a cross-cutting finding.
 
-One real asymmetry, not a defect: `POST /api/v1/agent-context/episodes`,
-`PUT`/`DELETE /api/v1/context-fabric/model-config` set
-`allowWebAssertions=false` — mutating episode writes and org model-config
-writes require a bearer `fcacr_` credential; web's `AcrRuntimeClient` never
+One real asymmetry, not a defect: `POST /api/v1/agent-context/episodes` sets
+`allowWebAssertions=false` — mutating episode writes require a bearer
+`fcacr_` credential; web's `AcrRuntimeClient` never
 issues a `credential:issue`-shaped assertion for those permissions, so this
 is confirmed-consistent with web's actual call sites, not a gap.
 
@@ -221,9 +220,6 @@ name:
 
 ## Not independently re-verified in this pass (flagged, not guessed)
 
-- Whether `GET /api/v1/context-fabric/model-config`'s response body ever
-  includes the sealed BYO-LLM credential material itself vs. metadata only
-  (see the row's `gaps`).
 - `RequireRepository`'s exact call site for `POST context-packets` beyond
   the shared `protectedRuntimeHandler` wrapper.
 - `InvestigationResultStore.Get`'s org-scoping enforcement at the storage
@@ -287,14 +283,13 @@ What this does not prove (CHAOS-4780, reachability is out of scope for this
 gate):
 
 - A row anchored at a shared definition shows that the definition exists, not
-  that a given route uses it. That covers the ten rows marked by
-  `protectedRuntimeHandler`'s declaration, and the six rows marked by
+  that a given route uses it. That covers the seven rows marked by
+  `protectedRuntimeHandler`'s declaration, and the five rows marked by
   `authenticateWebAssertion`'s declaration (the reachable validator of
   `GET /api/v1/agent-context/capabilities`, `POST /api/v1/agent-context/context-packets`,
   `GET /api/v1/agent-context/evidence/{evidence_ref_id}`,
   `POST /api/v1/context-fabric/investigations`,
-  `GET /api/v1/context-fabric/investigations/{result_id}` and
-  `GET /api/v1/context-fabric/model-config`): removing the call to either from
+  `GET /api/v1/context-fabric/investigations/{result_id}`): removing the call to either from
   the code that dispatches through it leaves the declaration, and the gate green.
 - A route's own-call marker (`a.protectedRuntimeHandler(...)` in its handler
   builder) is located in the file, not bound to the route's handler builder: the
