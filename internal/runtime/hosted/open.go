@@ -757,7 +757,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// this runtime's own request.options.Logger -- see
 		// devhealthfacts.NewInstrumentedProviders' own doc comment for why
 		// this is log/slog and never readers.NewOTelInstrumentation
-		// (suppressGenkitTelemetryExport below leaves no live OTel exporter
+		// (suppressModelTelemetryExport below leaves no live OTel exporter
 		// for it to report through).
 		//
 		// CHAOS-7257: the slog instrumentation is wrapped so a ClickHouse

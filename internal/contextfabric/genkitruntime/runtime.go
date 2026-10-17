@@ -16,9 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
@@ -28,8 +26,6 @@ import (
 	"github.com/invopop/jsonschema"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
-
-const SDKVersion = "v1.11.0"
 
 const (
 	// DefaultInterpretationPromptVersion is v3 as of CHAOS-3770's live
@@ -578,7 +574,6 @@ const (
 )
 
 type Config struct {
-	Genkit   *genkit.Genkit
 	Provider string
 	Model    string
 	// ModelRef is the fully qualified Genkit action name used to select the
@@ -680,10 +675,9 @@ type generationRequest struct {
 	System string
 	Prompt string
 	// Config (CHAOS-4622, seed scheme superseded by CHAOS-4631) is an
-	// OPTIONAL provider decoding config, forwarded verbatim to genkit's
-	// ai.WithConfig. Only interpretQuestionWithSample sets this (to
+	// OPTIONAL provider decoding config, forwarded to the model call. Only interpretQuestionWithSample sets this (to
 	// chaos4631InterpretDecodingConfig, below) -- Synthesize/Phrase never
-	// set it, and sdkGenerator.Synthesize/Phrase never read it, so this
+	// set it, and Synthesize/Phrase never read it, so this
 	// field is a no-op for every call site except Interpret.
 	Config any
 }
@@ -776,12 +770,8 @@ func chaos4631InterpretDecodingConfig(seed int64) map[string]any {
 	return map[string]any{"seed": seed}
 }
 
-type sdkGenerator struct {
-	genkit *genkit.Genkit
-}
-
-// decodeRejection is the error sdkGenerator.Interpret returns when Genkit's
-// own local output check refused the draw. It carries what the model
+// decodeRejection is the error the generator returns when the
+// local output check refused the draw. It carries what the model
 // actually wrote (parsed leniently, without the schema check) so the caller
 // runs it through the SAME validator and rejection path an acr-detected
 // invalid draw takes; parsed is false when the text was not decodable JSON.
@@ -818,51 +808,8 @@ func extractGenkitJSON(text string) string {
 // structured-output mismatch error (see classifyModelError).
 const genkitSchemaMismatchPrefix = "model failed to generate output matching expected schema"
 
-func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
-	// Keep the raw model response: Genkit drops it when its local schema
-	// check fails, and the rejection path needs both the draw and its cost.
-	var rawText string
-	var rawUsage contextfabric.ModelUsage
-	capture := func(next ai.ModelFunc) ai.ModelFunc {
-		return func(callCtx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			resp, err := next(callCtx, req, cb)
-			if err == nil && resp != nil {
-				rawUsage = modelUsage(resp)
-				if resp.Message != nil {
-					rawText = resp.Message.Text()
-				}
-			}
-			return resp, err
-		}
-	}
-	output, response, err := genkit.GenerateData[interpretationOutput](ctx, g.genkit,
-		ai.WithModelName(request.Model),
-		ai.WithSystem(request.System),
-		ai.WithPrompt("%s", request.Prompt),
-		ai.WithCustomConstrainedOutput(),
-		ai.WithConfig(request.Config),
-		ai.WithMiddleware(capture),
-	)
-	if err != nil {
-		var genkitErr *core.GenkitError
-		if errors.As(err, &genkitErr) && genkitErr.Status == core.INTERNAL && strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
-			rejection := &decodeRejection{cause: err}
-			var lenient interpretationOutput
-			if json.Unmarshal([]byte(extractGenkitJSON(rawText)), &lenient) == nil {
-				rejection.output, rejection.parsed = lenient, true
-			}
-			return rejection.output, rawUsage, rejection
-		}
-		return interpretationOutput{}, contextfabric.ModelUsage{}, err
-	}
-	if output == nil {
-		return interpretationOutput{}, contextfabric.ModelUsage{}, errors.New("genkit returned no interpretation output")
-	}
-	return *output, modelUsage(response), nil
-}
-
 // decodeSynthesisRejection is decodeRejection's synthesize-side twin: the
-// error sdkGenerator.Synthesize returns when Genkit's own local output check
+// error the generator returns when the local output check
 // refused the draw, carrying what the model actually wrote (parsed
 // leniently, without the schema check) so the caller runs it through the
 // SAME toDomain/ValidateAgainst/redraw path an acr-detected invalid draw
@@ -879,83 +826,6 @@ type decodeSynthesisRejection struct {
 
 func (e *decodeSynthesisRejection) Error() string { return e.cause.Error() }
 func (e *decodeSynthesisRejection) Unwrap() error { return e.cause }
-
-func (g sdkGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
-	// Keep the raw model response: Genkit drops it when its local schema
-	// check fails, and the rejection path needs both the draw and its cost.
-	// Mirrors sdkGenerator.Interpret's own capture, above.
-	var rawText string
-	var rawUsage contextfabric.ModelUsage
-	capture := func(next ai.ModelFunc) ai.ModelFunc {
-		return func(callCtx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			resp, err := next(callCtx, req, cb)
-			if err == nil && resp != nil {
-				rawUsage = modelUsage(resp)
-				if resp.Message != nil {
-					rawText = resp.Message.Text()
-				}
-			}
-			return resp, err
-		}
-	}
-	output, response, err := genkit.GenerateData[synthesisOutput](ctx, g.genkit,
-		ai.WithModelName(request.Model),
-		ai.WithSystem(request.System),
-		ai.WithPrompt("%s", request.Prompt),
-		ai.WithCustomConstrainedOutput(),
-		ai.WithMiddleware(capture),
-	)
-	if err != nil {
-		var genkitErr *core.GenkitError
-		if errors.As(err, &genkitErr) && genkitErr.Status == core.INTERNAL && strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
-			rejection := &decodeSynthesisRejection{cause: classifyModelError(err), digest: contextfabric.DigestModelValue([]byte(rawText))}
-			var lenient synthesisOutput
-			if json.Unmarshal([]byte(extractGenkitJSON(rawText)), &lenient) == nil {
-				rejection.output, rejection.parsed = lenient, true
-			}
-			return rejection.output, rawUsage, rejection
-		}
-		return synthesisOutput{}, contextfabric.ModelUsage{}, err
-	}
-	if output == nil {
-		return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("genkit returned no synthesis output")
-	}
-	return *output, modelUsage(response), nil
-}
-
-func (g sdkGenerator) Phrase(ctx context.Context, request generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
-	output, response, err := genkit.GenerateData[phrasingOutput](ctx, g.genkit,
-		ai.WithModelName(request.Model),
-		ai.WithSystem(request.System),
-		ai.WithPrompt("%s", request.Prompt),
-		ai.WithCustomConstrainedOutput(),
-	)
-	if err != nil {
-		return phrasingOutput{}, contextfabric.ModelUsage{}, err
-	}
-	if output == nil {
-		return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("genkit returned no offer phrasing output")
-	}
-	return *output, modelUsage(response), nil
-}
-
-func modelUsage(response *ai.ModelResponse) contextfabric.ModelUsage {
-	if response == nil || response.Usage == nil {
-		return contextfabric.ModelUsage{}
-	}
-	return contextfabric.ModelUsage{
-		InputTokens:  response.Usage.InputTokens,
-		OutputTokens: response.Usage.OutputTokens,
-		TotalTokens:  response.Usage.TotalTokens,
-	}
-}
-
-func New(config Config) (*Runtime, error) {
-	if config.Genkit == nil {
-		return nil, errors.New("genkit instance is required")
-	}
-	return newWithGenerator(config, sdkGenerator{genkit: config.Genkit})
-}
 
 func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	if gen == nil {

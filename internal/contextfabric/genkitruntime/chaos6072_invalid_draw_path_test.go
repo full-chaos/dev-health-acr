@@ -8,10 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -66,47 +63,14 @@ func validDrawText(t *testing.T) string {
 	return string(encoded)
 }
 
-// scriptedGenkitRuntime is the real composed runtime: genkit.Init, a model
-// defined on it that answers call i with script[i] (the last repeats), and
-// the production sdkGenerator. seeds records the decoding seed per call.
+// scriptedGenkitRuntime is the real composed runtime: a model that answers
+// call i with script[i] (the last repeats) through the production llm
+// generator. seeds records the decoding seed per call.
 func scriptedGenkitRuntime(t *testing.T, script []string) (*Runtime, *captureLogger, *[]int64, *atomic.Int32) {
 	t.Helper()
-	ctx := context.Background()
-	g := genkit.Init(ctx)
-	var calls atomic.Int32
-	seeds := &[]int64{}
-	name := "test/chaos-6072-" + strings.ReplaceAll(t.Name(), "/", "-")
-	genkit.DefineModel(g, name, &ai.ModelOptions{
-		Label: "scripted",
-		Supports: &ai.ModelSupports{
-			Constrained: ai.ConstrainedSupportAll, SystemRole: true, Multiturn: true, Output: []string{"json"},
-		},
-	}, func(_ context.Context, request *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		i := int(calls.Add(1)) - 1
-		if cfg, ok := request.Config.(map[string]any); ok {
-			if seed, ok := cfg["seed"].(int64); ok {
-				*seeds = append(*seeds, seed)
-			}
-		}
-		if i >= len(script) {
-			i = len(script) - 1
-		}
-		return &ai.ModelResponse{
-			Message:      &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewJSONPart(script[i])}},
-			FinishReason: ai.FinishReasonStop,
-			Usage:        &ai.GenerationUsage{InputTokens: 10, OutputTokens: 4, TotalTokens: 14},
-		}, nil
-	})
 	handler, logger := newCaptureLogger()
-	rt, err := New(Config{
-		Genkit: g, Provider: "test", Model: name, ModelVersion: "test-v1",
-		Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
-		MaxSynthesisResynthesisAttempts: invalidDrawCeiling, Logger: logger,
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	return rt, handler, seeds, &calls
+	rt, client := scriptedLLMRuntime(t, "chaos-6072-", script, Config{MaxSynthesisResynthesisAttempts: invalidDrawCeiling, Logger: logger})
+	return rt, handler, client.seeds, &client.calls
 }
 
 // TestInvalidInterpretDrawTakesOneRejectionPath enumerates the outcome table
