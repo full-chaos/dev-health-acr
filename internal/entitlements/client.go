@@ -43,6 +43,8 @@ type Client struct {
 	negative time.Duration
 	cache    cache
 	now      func() time.Time
+	// llmConfigs caches OrgLLMConfig answers apart from entitlements.
+	llmConfigs *llmConfigCache
 }
 
 // New parses all untrusted configuration and token-file data before accepting
@@ -63,15 +65,16 @@ func New(config Config) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		baseURL:  config.BaseURL,
-		token:    token,
-		timeout:  config.Timeout,
-		maxBody:  config.MaxResponseBytes,
-		http:     &http.Client{Transport: transport, CheckRedirect: rejectRedirect},
-		positive: config.PositiveCacheTTL,
-		negative: config.NegativeCacheTTL,
-		cache:    newCache(config.CacheCapacity),
-		now:      time.Now,
+		baseURL:    config.BaseURL,
+		token:      token,
+		timeout:    config.Timeout,
+		maxBody:    config.MaxResponseBytes,
+		http:       &http.Client{Transport: transport, CheckRedirect: rejectRedirect},
+		positive:   config.PositiveCacheTTL,
+		negative:   config.NegativeCacheTTL,
+		cache:      newCache(config.CacheCapacity),
+		now:        time.Now,
+		llmConfigs: &llmConfigCache{},
 	}, nil
 }
 
