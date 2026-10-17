@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -50,6 +51,18 @@ const counterpartRepositoryColumnsSQL = `ifNull(c.counterpart_repo_id, ''), toUI
 
 func counterpartRepositoryJoinSQL(counterpartColumn string) string {
 	return `LEFT JOIN (SELECT work_item_id, toString(any(repo_id)) AS counterpart_repo_id, uniqExact(repo_id) AS counterpart_repo_count
+  FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS c ON c.work_item_id = ` + counterpartColumn
+}
+
+// blockerCounterpartJoinSQL is counterpartRepositoryJoinSQL for the blocking
+// item, with the blocker's open flag from the same predicate the team counts
+// use (blockerOpenPredicate): 1 while it is not done or canceled, 0 once it is,
+// and the column is NULL when the item has no work_items row. Rows of one id
+// in several repositories are open when any of them is, as the team count
+// joins the blocker by id alone.
+func blockerCounterpartJoinSQL(counterpartColumn string) string {
+	return `LEFT JOIN (SELECT work_item_id, toString(any(repo_id)) AS counterpart_repo_id, uniqExact(repo_id) AS counterpart_repo_count,
+  max(toUInt8(lower(status) NOT IN ('done', '` + workItemCancelledStatus + `'))) AS counterpart_open
   FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS c ON c.work_item_id = ` + counterpartColumn
 }
 
@@ -156,10 +169,10 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if settingsErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
 	}
-	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`
+	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`, toUInt8(ifNull(c.counterpart_open, `+strconv.Itoa(int(blockerOpenUnknown))+`))
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = `+blockedExpr("d")+`
-`+counterpartRepositoryJoinSQL(blockerExpr("d"))+`
+`+blockerCounterpartJoinSQL(blockerExpr("d"))+`
 WHERE `+blockerRowsWhereSQL(authorized)+relationcurrent.BlockerCurrentSQL("d")+` AND concat(toString(t.repo_id), ':', `+blockedExpr("d")+`) IN {ids:Array(String)}
 ORDER BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")+`, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
 LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), settings)
@@ -168,7 +181,8 @@ LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), setti
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
 		var storedSourceID, storedTargetID, relationshipType, targetRepoID, sourceRepoID string
 		var sourceRepoCount uint64
-		if err := row.Scan(&storedSourceID, &storedTargetID, &relationshipType, &targetRepoID, &sourceRepoID, &sourceRepoCount); err != nil {
+		var blockerOpen uint8
+		if err := row.Scan(&storedSourceID, &storedTargetID, &relationshipType, &targetRepoID, &sourceRepoID, &sourceRepoCount, &blockerOpen); err != nil {
 			return err
 		}
 		relationKey := dependencyrelation.Key(relationshipType)
@@ -192,6 +206,13 @@ LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), setti
 			return nil
 		}
 		fields := map[string]contextfabric.FactValue{"blocked_by_work_item_id": contextfabric.StringFactValue(blockerID)}
+		if blockerOpen != blockerOpenUnknown {
+			// The team counts take the same blocker out of
+			// blocker_dependencies_current and into
+			// blocker_dependencies_excluded_by_status_current when it is not open.
+			fields["blocker_active"] = contextfabric.BooleanFactValue(blockerOpen == 1)
+			fields["blocker_status_basis"] = contextfabric.StringFactValue(blockerStatusBasisOpen)
+		}
 		if ref, ok := counterpartWorkItemRef(sourceRepoID, sourceRepoCount, blockerID); ok {
 			fields["blocked_by_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
@@ -523,6 +544,10 @@ func blockerLinkTierName(rank int64) string {
 }
 
 const blockerStatusBasisOpen = "open"
+
+// blockerOpenUnknown marks, in the blocker read, an item with no work_items
+// row: neither active nor excluded, so the fact serves no active marker.
+const blockerOpenUnknown uint8 = 2
 
 // blockerBreakdownProjectLimitation is served beside a total that includes
 // blocked items reached through an owned project: the per-repository
