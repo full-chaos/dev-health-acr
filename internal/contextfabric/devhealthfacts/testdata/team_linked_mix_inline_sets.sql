@@ -13,7 +13,7 @@ SELECT win, work_unit_id, rp.1 AS repo_uuid, rp.2 AS pr_number,
 FROM (
             SELECT sized_unit.*, if(unit_size.issue_size > 0, unit_size.issue_size, 1.0) AS unit_size_weight,
                 if(unit_size.issue_size > 0, unit_size.issue_size, 0.0) AS unit_issue_size
-            FROM (SELECT work_unit_id, {org_id:String} AS org_id,
+            FROM (SELECT folded_units.*, {org_id:String} AS org_id FROM (SELECT work_unit_id,
 		any(theme_distribution_json) AS theme_distribution_json,
 		any(bugfix_share) AS bugfix_share,
 		any(span_from) AS span_from,
@@ -253,7 +253,7 @@ FROM (
 				GROUP BY id
 			) AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo
 	)
-	GROUP BY work_unit_id) AS sized_unit
+	GROUP BY work_unit_id) AS folded_units) AS sized_unit
             LEFT JOIN (
                 SELECT org_id, work_unit_id, argMax(issue_size, computed_at) AS issue_size
                 FROM work_unit_issue_size

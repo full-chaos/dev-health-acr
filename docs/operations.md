@@ -832,8 +832,7 @@ and canonical source, following the same pattern.
 The investigation endpoint interprets the question and synthesises the
 answer through `internal/contextfabric.ModelRuntime`. Hosted composition
 builds it in `internal/runtime/hosted.newContextFabricModelRuntime` from
-`internal/contextfabric/modelprovider`, which is the only place in this
-repository that constructs a production `genkit.Genkit` instance.
+`internal/contextfabric/modelprovider`, which builds the shared dev-health-go llm clients the runtime calls.
 
 **BYO LLM is the supported shape**, so the configuration surface names a
 provider, not a vendor: a provider kind, a base URL, a model id, and a
@@ -1251,60 +1250,23 @@ JSON at all, maps to `ErrModelOutput`. The classified error carries only a
 class and a fixed message — no provider response body, prompt fragment, or
 endpoint ever travels into logs, receipts, or telemetry built from it.
 
-Separately, Genkit's own tracing records a generation's full request and
-response (including the system prompt and the model's answer) as span
-attributes on every call, and would export them to an HTTP telemetry
-server if the ambient `GENKIT_TELEMETRY_SERVER` environment variable were
-ever set in this process — a variable ACR does not set but also does not
-control. `modelprovider.New` preempts this before constructing the Genkit
-instance, registering its own no-op OpenTelemetry tracer provider so
-Genkit's lazy telemetry wiring never activates and never consults that
-variable, regardless of the ambient environment
-(`modelprovider.TestNew_neverExportsPromptContentToGenkitTelemetry`).
-
-The same construction point closes three related paths: Genkit's action
-metrics also embed a failed generation's raw error text (which can carry a
-provider response body) as a metric attribute on the global
-`otel.Meter("genkit")`, so `modelprovider.New` registers a no-op
-`MeterProvider` alongside the no-op tracer provider
-(`modelprovider.TestNew_neverExportsErrorContentToGenkitMetrics`); `New`
-also fails composition outright if the ambient `GENKIT_ENV` variable is
-set to `dev`, which would start Genkit's local reflection server and its
-`handleNotify` endpoint — a second, independent way to register a
-telemetry exporter at runtime
-(`modelprovider.TestNew_rejectsGenkitDevEnvironment`); and Genkit's Debug-level logging of generation content was checked
-empirically, not assumed safe. Two of its paths are structurally
-unreachable or content-free on ACR's own call path: the one closure that
-logs full input/output (`DefineGenerateAction`) is registered as the
-`"generate"` action and is reachable only through Genkit's dev-only
-reflection/action-dispatch callers, never through the direct SDK call
-chain `genkitruntime` uses; and the schema-mismatch log line that IS on
-that path never echoes the offending content, even at Debug level — its
-message is `encoding/json`'s own generic parse error
-(`modelprovider.TestGenkitDebugLoggingNeverCarriesGenerationContentOnACRsPath`).
-A third path is real: `core/action.go`'s `Action.Run` wraps every action,
-including the model action itself, and its deferred Debug log records the
-raw generation error verbatim — which, for a genuine provider transport
-failure, is the OpenAI SDK's own error carrying the raw response body
-(confirmed by capturing the leak live before the fix). Rather than relying
-on ACR's log level (a property of composition, not of the SDK), this is
-sanitized at its source: the OpenAI-compatible client's own transport,
-which `modelprovider` already owns, replaces any non-2xx response body
-with a fixed, status-only shape via `option.WithMiddleware` before the SDK
-ever constructs an error from it — so every consumer of that error,
-present or future, sees sanitized text unconditionally, regardless of log
-level or call path
-(`modelprovider.TestActionRunDebugLoggingNeverCarriesProviderResponseBody`).
-The replacement preserves the HTTP status only, which is enough for every
-existing status-based classification (the SDK's own retry decision, and
-`classifyModelError`'s rate-limit detection) to behave identically
-(`modelprovider.TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy`).
-Both the tracer- and meter-provider registrations are last-writer-wins
-against any later `otel.Set{Tracer,Meter}Provider` call anywhere in the
-process; see `suppressGenkitTelemetryExport`'s doc comment in
-`internal/contextfabric/modelprovider/provider.go` for why that is a
-durable guarantee for this codebase specifically, and what a future change
+Separately, the shared llm client records a span per attempt on the global
+OpenTelemetry tracer provider. `modelprovider.New` registers its own no-op
+tracer provider and a no-op meter provider before building a runtime, so
+those spans and metrics are discarded and never reach the service's OTLP
+export (`modelprovider.TestModelCallTelemetryNeverExported`). Both
+registrations are last-writer-wins against any later
+`otel.Set{Tracer,Meter}Provider` call anywhere in the process; see
+`suppressModelTelemetryExport`'s doc comment in
+`internal/contextfabric/modelprovider/provider.go` for what a future change
 adding real OpenTelemetry export to ACR must account for.
+
+A failed model call's error carries a class and the HTTP status only: the
+shared llm client keeps provider response text out of `Error()`. The
+embeddings client, which still uses the OpenAI SDK, installs
+`modelprovider.SanitizeProviderErrorBody` to replace any non-2xx response body
+with a fixed, status-only shape
+(`modelprovider.TestSanitizedProviderErrorStillClassifiesIdenticallyThroughRetryableAndTaxonomy`).
 
 **`ACR_REQUEST_TIMEOUT` must be raised before enabling investigations.** It
 defaults to **15s**, and it bounds the whole HTTP request. A real
