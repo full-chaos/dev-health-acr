@@ -22,7 +22,7 @@ func legacySplitCore(memberships []string, unitCols, unitAgg string, spanSentine
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
 	return `			SELECT *, unit_size_weight AS effort_value
-			FROM ` + sizedUnits(`SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id, {org_id:String} AS org_id,
+			FROM ` + sizedUnitsForOrg(`SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
 				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,`+refCol+`
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
