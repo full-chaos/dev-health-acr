@@ -47,7 +47,7 @@ import (
 func TestChaos4645RigCheck_DualTableFlowFactStillServesLegacyRowsOnRealData(t *testing.T) {
 	dsn := os.Getenv("ACR_CHAOS4645_KIAC_DSN")
 	if dsn == "" {
-		dsn = "clickhouse://ch:acr-trial-dev@192.168.65.4:30502/dh_0830"
+		t.Skip("ACR_CHAOS4645_KIAC_DSN not set -- set it to run this rig check")
 	}
 	orgID := os.Getenv("ACR_CHAOS4645_KIAC_ORG_ID")
 	if orgID == "" {
