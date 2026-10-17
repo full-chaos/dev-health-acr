@@ -1886,6 +1886,142 @@ func noneOrJoinedPattern(members []string) string {
 
 const requestIDApplicability = "written when the request context carries a request ID"
 
+// WindowBinderOutcome is the Info line of the temporal binder's proposal for a question: the closed reason, the routed window and grammar, and how many spans were bound.
+var WindowBinderOutcome = Event{
+	ID:                       "contextfabric.window_binder_outcome",
+	Msg:                      "context fabric window binder outcome",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when the binder proposes.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConsumerSurfaceLogClassVocabulary()},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowBindReasonVocabulary()},
+		{Key: "relative_id", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RelativeWindowIDLogVocabulary()},
+		{Key: "grammar", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowBindGrammarVocabulary()},
+		{Key: "spans_bound", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// StatedWindowAxisDecision is the Info line of the axis decision for a window the caller stated: where it came from, the axis the interpreter proposed, the axis executed, and the closed outcome.
+var StatedWindowAxisDecision = Event{
+	ID:                       "contextfabric.stated_window_axis_decision",
+	Msg:                      "context fabric stated window axis decision",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most two lines per investigation: the calendar commit withdrawal (a series or comparison frame, or an as-of reading) and then one of the mutually exclusive stated window branches that follow.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConsumerSurfaceLogClassVocabulary()},
+		{Key: "origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatedWindowOriginVocabulary()},
+		{Key: "interpreted_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TemporalAxisLogVocabulary()},
+		{Key: "executed_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TemporalAxisLogVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatedWindowAxisOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// WindowGatedForConfirmation is the Info line of a window the investigation gated for the caller's confirmation: the origin, and the relative id, provenance and class of the window offered.
+var WindowGatedForConfirmation = Event{
+	ID:                       "contextfabric.window_gated_for_confirmation",
+	Msg:                      "context fabric window gated for confirmation",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the gate ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConsumerSurfaceLogClassVocabulary()},
+		{Key: "origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowGatedOriginVocabulary()},
+		{Key: "relative_id", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RelativeWindowIDLogVocabulary()},
+		{Key: "provenance", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowProvenanceLogVocabulary()},
+		{Key: "window_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowClassLogVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// WindowCanonicalizationOutcome is the Info line of how an investigation's window was settled, or vetoed.
+var WindowCanonicalizationOutcome = Event{
+	ID:                       "contextfabric.window_canonicalization_outcome",
+	Msg:                      "context fabric window canonicalization outcome",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	DataDependentBound:       "one line per canonicalization recording; the recorder is called from the veto, gate and decisive paths of one investigation pass, and a gated pass writes it beside the gated line.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per canonicalization recording.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowCanonicalizationOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from and whether stored ancestry supplied it.
+var WindowCarry = Event{
+	ID:                       "contextfabric.window_carry",
+	Msg:                      "context fabric window carry",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when a carry was attempted.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowCarryOutcomeVocabulary()},
+		{Key: "chain_depth", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CarrySeedSourceVocabulary()},
+		{Key: "via_stored_ancestry", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// KindCarry is the Info line of one kind carry attempt: the outcome, the chain depth, the kind carried and the kind redeemed, the seed and whether stored ancestry supplied it.
+var KindCarry = Event{
+	ID:                       "contextfabric.kind_carry",
+	Msg:                      "context fabric kind carry",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when a carry was attempted.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.KindCarryOutcomeVocabulary()},
+		{Key: "chain_depth", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "carried_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, arrayTokens(storedResultSubjectKindArr[:])...)},
+		{Key: "redeemed_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, arrayTokens(storedResultSubjectKindArr[:])...)},
+		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CarrySeedSourceVocabulary()},
+		{Key: "via_stored_ancestry", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ConfirmedNeedLedgerWindow is the Info line of the window consumer's decision on a confirmed need ledger that held a window entry: the decision, the parent result the ledger came from and the window applied, a relative id or the word absolute, never bounds.
+var ConfirmedNeedLedgerWindow = Event{
+	ID:                       "contextfabric.confirmed_need_ledger_window",
+	Msg:                      "context fabric confirmed need ledger window",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, written when the admitted ledger held a window entry.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ConfirmedNeedLedgerWindowDecisionVocabulary()},
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "applied_window", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.ConfirmedNeedLedgerAppliedWindowVocabulary()...)},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // PriorSubjectReceiptsSkipped is the Warn line of the prior-subject receipts a turn skipped: how many, never which.
 var PriorSubjectReceiptsSkipped = Event{
 	ID:                       "contextfabric.prior_subject_receipts_skipped",
@@ -4660,6 +4796,13 @@ var All = []Event{
 	AnswerReuseServedRequestID,
 	BindingEpochMoved,
 	BindingEpochUnchanged,
+	WindowBinderOutcome,
+	StatedWindowAxisDecision,
+	WindowGatedForConfirmation,
+	WindowCanonicalizationOutcome,
+	WindowCarry,
+	KindCarry,
+	ConfirmedNeedLedgerWindow,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
