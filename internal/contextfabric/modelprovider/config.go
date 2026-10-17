@@ -12,15 +12,9 @@
 // customer's gateway, vLLM, Ollama, llama.cpp) and naming its model id is
 // a pure configuration change, with no code change and no new plugin.
 //
-// The transport is Genkit's OpenAI-compatible plugin
-// (github.com/firebase/genkit/go/plugins/compat_oai), used directly rather
-// than through the higher-level plugins/compat_oai/openai wrapper on
-// purpose. That wrapper hard-codes a list of OpenAI model ids that does not
-// include gpt-5-nano, eagerly defines embedders this service never calls,
-// and panics when no API key is present -- all three are wrong for BYO LLM.
-// The compat layer underneath resolves *any* model id dynamically through
-// its api.DynamicPlugin implementation, which is exactly the property BYO
-// LLM needs.
+// The transport is the shared dev-health-go llm client: the OpenAI-compatible
+// Chat Completions client for any namespace without a native client, which
+// resolves any model id the endpoint serves.
 package modelprovider
 
 import (

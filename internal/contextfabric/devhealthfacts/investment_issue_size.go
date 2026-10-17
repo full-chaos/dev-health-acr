@@ -24,8 +24,20 @@ const investmentMeasureIssueSize = "ISSUE_SIZE"
 // table, so the read of the table keeps its plan and its memory. The result
 // is "(...) AS sized_units", ready for a FROM.
 func sizedUnits(folded string) string {
+	return sizedSource("(" + folded + ")")
+}
+
+// sizedUnitsForOrg is sizedUnits over a fold that does not carry org_id: the
+// organization column is added here, over the fold, so no fold aliases the
+// organization parameter beside its own org_id filter, where the alias would
+// win over the table column.
+func sizedUnitsForOrg(folded string) string {
+	return sizedSource("(SELECT folded_units.*, {org_id:String} AS org_id FROM (" + folded + ") AS folded_units)")
+}
+
+func sizedSource(source string) string {
 	const alias = "sized_units"
-	source, err := readers.IssueSizedSource("("+folded+") AS "+alias, alias)
+	source, err := readers.IssueSizedSource(source+" AS "+alias, alias)
 	if err != nil {
 		panic(fmt.Sprintf("devhealthfacts: sized units: %v", err))
 	}

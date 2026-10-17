@@ -292,6 +292,26 @@ func goVarName(e Event) string {
 		return "KindCarry"
 	case ConfirmedNeedLedgerWindow.ID:
 		return "ConfirmedNeedLedgerWindow"
+	case StructureNeedsDisclosed.ID:
+		return "StructureNeedsDisclosed"
+	case GatedOfferResolution.ID:
+		return "GatedOfferResolution"
+	case CohortStructureGate.ID:
+		return "CohortStructureGate"
+	case WindowGateOfferDisclosure.ID:
+		return "WindowGateOfferDisclosure"
+	case WindowExpandOfferRedeemed.ID:
+		return "WindowExpandOfferRedeemed"
+	case InterpretedTimeBound.ID:
+		return "InterpretedTimeBound"
+	case StructureOfferCount.ID:
+		return "StructureOfferCount"
+	case StructureReceipt.ID:
+		return "StructureReceipt"
+	case StructureReceiptVeto.ID:
+		return "StructureReceiptVeto"
+	case StructureExplicit.ID:
+		return "StructureExplicit"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:

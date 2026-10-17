@@ -131,6 +131,45 @@ func (l *Log) LinesWithMsg(msg string) []Line { return l.linesWithMsg(msg) }
 type Assertion struct {
 	Event eventspec.Event
 	Want  map[string]any
+	// NoAttribution names Attribution keys the line is certified WITHOUT: the
+	// line must not carry the key, and the key must be a conditional field of
+	// the event (a request id written only when the request context carries
+	// one). It stands in for the key's Want entry; a key may not be named in
+	// both.
+	NoAttribution []string
+}
+
+// absentAttribution is the scope value that matches only a line without the key.
+type absentAttribution struct{}
+
+// attributionScope builds the attempt scope of an assertion: Want's value for
+// each Attribution key, or the absent marker for a key named in NoAttribution.
+// It also refuses a NoAttribution key that is not a conditional Attribution
+// field, or that Want also names.
+func attributionScope(a Assertion) (map[string]any, error) {
+	scope := make(map[string]any, len(a.Event.Attribution))
+	absent := make(map[string]bool, len(a.NoAttribution))
+	for _, key := range a.NoAttribution {
+		field, declared := fieldForKey(a.Event, key)
+		if !declared || field.Presence != eventspec.PresenceConditional || !contains(a.Event.Attribution, key) {
+			return nil, fmt.Errorf("certify: %s: NoAttribution %q must be a conditional field in the event's Attribution", a.Event.ID, key)
+		}
+		if _, named := a.Want[key]; named {
+			return nil, fmt.Errorf("certify: %s: %q is named in both Want and NoAttribution", a.Event.ID, key)
+		}
+		absent[key] = true
+	}
+	for _, key := range a.Event.Attribution {
+		if absent[key] {
+			scope[key] = absentAttribution{}
+			continue
+		}
+		if _, ok := a.Want[key]; !ok {
+			return nil, fmt.Errorf("certify: %s: Want must include %q (one of this event's declared Attribution fields) to scope which attempt is being certified -- multiplicity is asserted per attempt, never over the whole supplied log; a line written without it is certified with NoAttribution", a.Event.ID, key)
+		}
+		scope[key] = a.Want[key]
+	}
+	return scope, nil
 }
 
 // Result is what Certify found, for a caller that wants to inspect the
@@ -189,6 +228,12 @@ func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool,
 // function makes that drift impossible going forward).
 func scopeMatch(ev eventspec.Event, scope map[string]any, line Line) bool {
 	for _, attrKey := range ev.Attribution {
+		if _, wantAbsent := scope[attrKey].(absentAttribution); wantAbsent {
+			if _, present := line[attrKey]; present {
+				return false
+			}
+			continue
+		}
 		if !jsonEqual(scope[attrKey], line[attrKey]) {
 			return false
 		}
@@ -271,17 +316,16 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		return Result{}, err
 	}
 
-	for _, attrKey := range a.Event.Attribution {
-		if _, ok := a.Want[attrKey]; !ok {
-			return Result{}, fmt.Errorf("certify: %s: Want must include %q (one of this event's declared Attribution fields) to scope which attempt is being certified -- multiplicity is asserted per attempt, never over the whole supplied log", a.Event.ID, attrKey)
-		}
+	requestScope, err := attributionScope(a)
+	if err != nil {
+		return Result{}, err
 	}
 	if err := requireScopeValueTypes(a.Event, a.Want); err != nil {
 		return Result{}, err
 	}
 
 	if a.Event.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
-		return certifyBoundedMany(log, a)
+		return certifyBoundedMany(log, a, requestScope)
 	}
 
 	requiresPass, recognisedMultiplicity := multiplicityRequiresPassField(a.Event.Multiplicity)
@@ -310,10 +354,6 @@ func Certify(log *Log, a Assertion) (Result, error) {
 	// step must collect every pass in the REQUEST so the per-pass
 	// duplicate/distinct check below can see the whole set. scopeMatch only
 	// checks "pass" when the scope map passed to it carries the key.
-	requestScope := make(map[string]any, len(a.Event.Attribution))
-	for _, attrKey := range a.Event.Attribution {
-		requestScope[attrKey] = a.Want[attrKey]
-	}
 	var scoped []Line
 	for _, line := range log.linesOfEvent(a.Event) {
 		if scopeMatch(a.Event, requestScope, line) {
@@ -539,11 +579,7 @@ func verifyBoundedManyGroup(eventID string, group []Line) error {
 // a.Want must additionally carry "index" (which of the scope's own lines is
 // being value-asserted), the same role "pass" plays for an at-most-one
 // pass-keyed event in Certify above.
-func certifyBoundedMany(log *Log, a Assertion) (Result, error) {
-	requestScope := make(map[string]any, len(a.Event.Attribution))
-	for _, attrKey := range a.Event.Attribution {
-		requestScope[attrKey] = a.Want[attrKey]
-	}
+func certifyBoundedMany(log *Log, a Assertion, requestScope map[string]any) (Result, error) {
 	var scoped []Line
 	for _, line := range log.linesWithMsg(a.Event.Msg) {
 		if scopeMatch(a.Event, requestScope, line) {
