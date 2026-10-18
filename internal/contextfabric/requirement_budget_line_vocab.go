@@ -129,9 +129,27 @@ func ItemAccountingStageLogVocabulary() []string {
 	}, BudgetAssertStageLogVocabulary()...)
 }
 
-// LedgerDisagreementPattern is the shape of the collection or bucket an item ledger names: empty for a reconciled ledger, a collection or bucket token, a token with a duplicate ordinal, or a prefixed token for an invalid debit.
+// LedgerDisagreementPattern is the shape of what an item ledger names: empty for a reconciled ledger, a charged collection with a gap ordinal, a charged collection or an item bucket, an allocator disagreement, or the prefixed token of an invalid debit.
 func LedgerDisagreementPattern() string {
-	return `^(|[a-z_]+|[a-z_]+#[0-9]+|(collection|bucket):[a-z_]*)$`
+	collections := contractsv1.ContextFabricChargedCollectionVocabulary()
+	buckets := contractsv1.ContextFabricItemBucketVocabulary()
+	collectionNames := make([]string, 0, len(collections))
+	for _, c := range collections {
+		collectionNames = append(collectionNames, string(c))
+	}
+	bucketNames := make([]string, 0, len(buckets))
+	for _, b := range buckets {
+		bucketNames = append(bucketNames, string(b))
+	}
+	allocations := AllocationDisagreementVocabulary()
+	allocationNames := make([]string, 0, len(allocations))
+	for _, a := range allocations {
+		if a != AllocationAgrees {
+			allocationNames = append(allocationNames, string(a))
+		}
+	}
+	return "^(|(" + alternation(collectionNames) + ")(#[0-9]+)?|" + alternation(bucketNames) +
+		"|allocation:(" + alternation(allocationNames) + ")|(collection|bucket):[a-z_]*)$"
 }
 
 // RequirementOutcomeTransitionCauseLogVocabulary is the closed set of a wire cause on the transition line, or none.

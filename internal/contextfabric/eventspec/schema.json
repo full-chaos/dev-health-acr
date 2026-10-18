@@ -6859,7 +6859,7 @@
         "key": "ledger_disagreement",
         "type": "string",
         "presence": "required",
-        "pattern": "^(|[a-z_]+|[a-z_]+#[0-9]+|(collection|bucket):[a-z_]*)$"
+        "pattern": "^(|(candidates|cohort_members|drivers|remaining_work|readiness_gaps|conflicts|claimed_facts)(#[0-9]+)?|global|member|group|multi_group|allocation:(grant_formula|granted_inactive_bucket|commitment_unfunded)|(collection|bucket):[a-z_]*)$"
       },
       {
         "key": "ledger_debits",

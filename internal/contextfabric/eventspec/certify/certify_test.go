@@ -758,7 +758,7 @@ func TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField(t *testing
 			t.Errorf("%s: declares unrecognised multiplicity %q", ev.ID, ev.Multiplicity)
 			continue
 		}
-		hasPass := eventHasPassField(ev.Fields)
+		hasPass := passKeyed(ev)
 		if requiresPass != hasPass {
 			t.Errorf("%s: declares multiplicity=%q (requires pass field=%v) but its own Fields declare pass field=%v -- the declaration is inconsistent",
 				ev.ID, ev.Multiplicity, requiresPass, hasPass)

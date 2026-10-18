@@ -2743,7 +2743,7 @@ var ItemAccountingDisagreement = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "accounting_stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ItemAccountingStageLogVocabulary()},
 		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.LedgerStatusLogVocabulary()},
-		{Key: "ledger_disagreement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.LedgerDisagreementPattern(), PatternExample: "paths"},
+		{Key: "ledger_disagreement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.LedgerDisagreementPattern(), PatternExample: "candidates"},
 		{Key: "ledger_debits", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "budgeted_items", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "max_items", Type: FieldInt, Presence: PresenceRequired},

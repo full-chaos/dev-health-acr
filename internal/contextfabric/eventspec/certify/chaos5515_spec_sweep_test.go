@@ -309,7 +309,7 @@ func attributionWant(ev eventspec.Event, base map[string]any) map[string]any {
 	for _, k := range ev.Attribution {
 		w[k] = base[k]
 	}
-	if eventHasPassField(ev.Fields) {
+	if passKeyed(ev) {
 		w["pass"] = base["pass"]
 	}
 	if ev.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
@@ -645,7 +645,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// uniformly, matching what Certify itself now does.
 	passMultiplicityRows := 0
 	for _, ev := range eventspec.All {
-		hasPassField := eventHasPassField(ev.Fields)
+		hasPassField := passKeyed(ev)
 		base := canonicalLineFor(ev)
 		attribution := attributionWant(ev, base)
 
