@@ -2570,3 +2570,76 @@ func TestWrapperChainMissingModuleFileFailsClosed(t *testing.T) {
 	}
 	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "go.mod")
 }
+
+func extraRow(id, method, route string, overrides map[string]any) map[string]any {
+	row := map[string]any{"id": id + " [dev-health-acr-api]", "method": method, "route": route}
+	for k, v := range overrides {
+		row[k] = v
+	}
+	return minimalValidRow(row)
+}
+
+func TestWrapperChainFindsAGuardCalledThroughALocalAliasInAHandlerLiteral(t *testing.T) {
+	extra := "\tmux.Handle(\"POST /alias\", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n" +
+		"\t\tg := a.authenticator\n\t\tg.RequireScope(\"x\", nil)\n\t}))\n"
+	f := chainFixture(t, fixtureGuardedBody, extra, "", healthzChainRow(), capabilitiesRow(nil),
+		extraRow("POST /alias", "POST", "/alias", nil))
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "POST /alias [", "Authenticator.RequireScope")
+}
+
+func TestWrapperChainCallThroughAnInterfaceWrapperIsAGap(t *testing.T) {
+	extra := "\tmux.Handle(\"POST /iface\", a.viaIface(nil, http.HandlerFunc(healthzHandler)))\n"
+	decls := "type wrapper interface {\n\tWrap(next http.Handler) http.Handler\n}\n\n" +
+		"func (a *App) viaIface(w wrapper, next http.Handler) http.Handler {\n" +
+		"\treturn http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { w.Wrap(next).ServeHTTP(rw, r) })\n}\n"
+	f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil),
+		extraRow("POST /iface", "POST", "/iface", nil))
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST /iface [", "call through interface wrapper.Wrap")
+}
+
+func TestWrapperChainAKnownGuardDoesNotMaskAnUnresolvedPath(t *testing.T) {
+	extra := "\tmux.Handle(\"POST /masked\", a.protectedRuntimeHandler(\"c\", auth.ScopeContextRead, foreign.Wrap(http.HandlerFunc(healthzHandler))))\n"
+	masked := capabilitiesRow(map[string]any{"id": "POST /masked [dev-health-acr-api]", "method": "POST", "route": "/masked"})
+	f := chainFixture(t, fixtureGuardedBody, extra, "", healthzChainRow(), capabilitiesRow(nil), masked)
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST /masked [", "unresolved callee foreign.Wrap", "found guard")
+
+	disclosed := capabilitiesRow(map[string]any{
+		"id": "POST /masked [dev-health-acr-api]", "method": "POST", "route": "/masked",
+		"gaps": []any{"primary_validator anchor is not placed in this fixture", "wrapper-chain: foreign wrapper, reviewed by hand"},
+	})
+	f = chainFixture(t, fixtureGuardedBody, extra, "", healthzChainRow(), capabilitiesRow(nil), disclosed)
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestWrapperChainDoesNotTrustALookalikeAuthenticatorPackage(t *testing.T) {
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(nil))
+	writeFile(t, filepath.Join(f.root, "other", "internal", "auth", "lookalike.go"), `package auth
+
+import "net/http"
+
+const ScopeContextRead = "context:read"
+
+type Authenticator struct{}
+
+func (a *Authenticator) MiddlewareFor(allow bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "", http.StatusUnauthorized) })
+}
+
+func (a *Authenticator) RequireScope(required string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "", http.StatusForbidden) })
+}
+`)
+	app := filepath.Join(f.root, fixtureAppFile)
+	raw, err := os.ReadFile(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped := strings.Replace(string(raw), `"example.test/fx/internal/auth"`, `"example.test/fx/other/internal/auth"`, 1)
+	if swapped == string(raw) {
+		t.Fatal("fixture import not found")
+	}
+	writeFile(t, app, swapped)
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is protected", "no guard found")
+}

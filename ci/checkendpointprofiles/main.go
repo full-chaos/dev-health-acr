@@ -1329,7 +1329,7 @@ func main() {
 
 const (
 	guardTypeName   = "Authenticator"
-	guardPkgSuffix  = "/internal/auth"
+	guardPkgSuffix  = "/internal/auth" // appended to the module path: the exact trust-root package
 	wrapperChainTag = "wrapper-chain: "
 	maxChainDepth   = 16
 	maxScanDepth    = 16
@@ -1367,6 +1367,7 @@ type chainPkg struct {
 	methods map[string]chainFunc // "Type.Method"
 	consts  map[string]ast.Expr
 	structs map[string]*ast.StructType
+	ifaces  map[string]*ast.InterfaceType
 }
 
 func importPathOf(f *ast.File, alias string) string {
@@ -1402,7 +1403,7 @@ func loadChainPkg(root, importPath string) (*chainPkg, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &chainPkg{path: importPath, fset: token.NewFileSet(), funcs: map[string]chainFunc{}, methods: map[string]chainFunc{}, consts: map[string]ast.Expr{}, structs: map[string]*ast.StructType{}}
+	p := &chainPkg{path: importPath, fset: token.NewFileSet(), funcs: map[string]chainFunc{}, methods: map[string]chainFunc{}, consts: map[string]ast.Expr{}, structs: map[string]*ast.StructType{}, ifaces: map[string]*ast.InterfaceType{}}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
@@ -1435,6 +1436,9 @@ func loadChainPkg(root, importPath string) (*chainPkg, error) {
 					case *ast.TypeSpec:
 						if st, ok := s.Type.(*ast.StructType); ok {
 							p.structs[s.Name.Name] = st
+						}
+						if it, ok := s.Type.(*ast.InterfaceType); ok {
+							p.ifaces[s.Name.Name] = it
 						}
 					}
 				}
@@ -1494,10 +1498,31 @@ type chainCtx struct {
 	recv   string
 	params map[string]ast.Expr
 	env    map[string]string
+	locals map[string]ast.Expr // name := expr in the body; a name assigned twice is dropped
 }
 
 func newChainCtx(fn chainFunc, env map[string]string) chainCtx {
-	c := chainCtx{fn: fn, params: map[string]ast.Expr{}, env: env}
+	c := chainCtx{fn: fn, params: map[string]ast.Expr{}, env: env, locals: map[string]ast.Expr{}}
+	dropped := map[string]bool{}
+	if fn.decl.Body != nil {
+		ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != len(as.Rhs) {
+				return true
+			}
+			for i, l := range as.Lhs {
+				if id, ok := l.(*ast.Ident); ok {
+					if _, seen := c.locals[id.Name]; seen || dropped[id.Name] {
+						delete(c.locals, id.Name)
+						dropped[id.Name] = true
+						continue
+					}
+					c.locals[id.Name] = as.Rhs[i]
+				}
+			}
+			return true
+		})
+	}
 	if fn.decl.Recv != nil && len(fn.decl.Recv.List) == 1 && len(fn.decl.Recv.List[0].Names) == 1 {
 		c.recv = fn.decl.Recv.List[0].Names[0].Name
 	}
@@ -1565,6 +1590,13 @@ func (w *chainWalker) typeOf(c chainCtx, e ast.Expr) (typeRef, bool) {
 		if t, ok := c.params[e.Name]; ok {
 			return w.typeFromExpr(c.fn, t)
 		}
+		if rhs, ok := c.locals[e.Name]; ok {
+			if id, isIdent := rhs.(*ast.Ident); !isIdent || id.Name != e.Name {
+				return w.typeOf(c, rhs)
+			}
+		}
+	case *ast.ParenExpr:
+		return w.typeOf(c, e.X)
 	case *ast.SelectorExpr:
 		base, ok := w.typeOf(c, e.X)
 		if !ok {
@@ -1671,7 +1703,7 @@ func (w *chainWalker) guardCall(c chainCtx, call *ast.CallExpr) (string, bool) {
 		return "", false
 	}
 	t, ok := w.typeOf(c, s.X)
-	if !ok || t.name != guardTypeName || !strings.HasSuffix(t.pkg, guardPkgSuffix) {
+	if !ok || t.name != guardTypeName || t.pkg != moduleOf(w.root)+guardPkgSuffix {
 		return "", false
 	}
 	pkg := w.pkgFor(t.pkg)
@@ -1809,13 +1841,23 @@ func (w *chainWalker) handlerExpr(c chainCtx, e ast.Expr, strict bool, depth int
 }
 
 // looksLikeHandlerArg: an unresolved call used as an ARGUMENT of a chain call
-// is a gap only when it is an obvious handler constructor, i.e. it takes a
-// handler-typed argument itself or is a net/http conversion. Anything else
-// (constants, request classes) is data, not chain.
+// is a gap only when it visibly carries a handler: one of its own arguments is
+// a net/http HandlerFunc conversion, a func literal, or a call or reference
+// the walk resolves. Anything else (constants, request classes) is data.
 func (w *chainWalker) looksLikeHandlerArg(c chainCtx, call *ast.CallExpr) bool {
 	for _, a := range call.Args {
-		if inner, ok := a.(*ast.CallExpr); ok {
-			if _, ok := w.resolveCallee(c, inner.Fun); ok {
+		switch a := a.(type) {
+		case *ast.FuncLit:
+			return true
+		case *ast.CallExpr:
+			if w.isNetHTTP(c.fn, a.Fun, "HandlerFunc") {
+				return true
+			}
+			if _, ok := w.resolveCallee(c, a.Fun); ok {
+				return true
+			}
+		case *ast.SelectorExpr, *ast.Ident:
+			if _, ok := w.resolveCallee(c, a); ok {
 				return true
 			}
 		}
@@ -1862,6 +1904,47 @@ func (w *chainWalker) calleeBody(c chainCtx, depth int) {
 	ast.Inspect(c.fn.decl.Body, visit)
 }
 
+// interfaceWrapperCall reports a call whose receiver resolves to an interface
+// type of this module with a method that returns http.Handler: the concrete
+// wrapper behind it is not knowable from source, so it is a gap, never a pass.
+func (w *chainWalker) interfaceWrapperCall(c chainCtx, call *ast.CallExpr) (string, bool) {
+	s, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	t, ok := w.typeOf(c, s.X)
+	if !ok {
+		return "", false
+	}
+	pkg := w.pkgFor(t.pkg)
+	if pkg == nil {
+		return "", false
+	}
+	it := pkg.ifaces[t.name]
+	if it == nil {
+		return "", false
+	}
+	owner := chainFunc{file: w.fileOf(pkg, it), pkg: pkg}
+	for _, m := range it.Methods.List {
+		for _, n := range m.Names {
+			ft, ok := m.Type.(*ast.FuncType)
+			if n.Name == s.Sel.Name && ok && ft.Results != nil && len(ft.Results.List) == 1 && w.isNetHTTP(owner, ft.Results.List[0].Type, "Handler") {
+				return t.name + "." + n.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (w *chainWalker) fileOf(p *chainPkg, n ast.Node) *ast.File {
+	for _, f := range p.files {
+		if f.FileStart <= n.Pos() && n.Pos() <= f.FileEnd {
+			return f
+		}
+	}
+	return nil
+}
+
 // scan looks lexically for guard calls in a body and follows resolved calls.
 func (w *chainWalker) scan(c chainCtx, body ast.Node, depth int) {
 	if body == nil {
@@ -1874,6 +1957,10 @@ func (w *chainWalker) scan(c chainCtx, body ast.Node, depth int) {
 		}
 		if g, ok := w.guardCall(c, call); ok {
 			w.addGuard(g)
+			return true
+		}
+		if what, ok := w.interfaceWrapperCall(c, call); ok {
+			w.gap("call through interface %s", what)
 			return true
 		}
 		if callee, ok := w.resolveCallee(c, call.Fun); ok && callee.decl.Body != nil {
@@ -1964,7 +2051,7 @@ func discoverChains(root string, routes []discoveredRoute) map[routeKey]chainVer
 		}
 		w := &chainWalker{root: root, api: apiPkg, pkgs: w0.pkgs, pkgErrs: w0.pkgErrs, seen: map[*ast.FuncDecl]bool{}, active: map[*ast.FuncDecl]bool{}, rejects: w0.rejects}
 		w.handlerExpr(found[0].ctx, found[0].call.Args[1], true, 0)
-		if w.cut && !w.v.guarded() {
+		if w.cut {
 			w.gap("scan depth cut at %d", maxScanDepth)
 		}
 		out[key] = w.v
@@ -1987,27 +2074,36 @@ func chainHatch(row map[string]any) (string, bool) {
 // reconcileChain compares a row's claim with the wrapper-chain verdict.
 func reconcileChain(id, classification string, row map[string]any, v chainVerdict, errs *[]string) {
 	reason, hatch := chainHatch(row)
-	switch {
-	case v.guarded():
+	disclosed := func() {
+		fmt.Fprintf(os.Stderr, "WRAPPER-CHAIN GAP DISCLOSED: row %q: %s (%s)\n", id, v.describe(), reason)
+	}
+	if v.guarded() {
 		if classification == "public" {
 			*errs = append(*errs, fmt.Sprintf("CLASSIFICATION CONTRADICTS WRAPPER CHAIN: row %q is public but discovery found %s", id, v.describe()))
 		}
 		if row["primary_validator"] == nil {
 			*errs = append(*errs, fmt.Sprintf("NULL PRIMARY VALIDATOR ON GUARDED ROW: row %q has primary_validator=null but discovery found %s", id, v.describe()))
 		}
-	case len(v.Gaps) > 0:
-		if classification == "public" {
-			*errs = append(*errs, fmt.Sprintf("UNRESOLVED WRAPPER CHAIN: row %q is public and discovery could not rule out a guard: %s (a public row has no gaps escape; resolve the chain)", id, v.describe()))
-		} else if !hatch {
-			*errs = append(*errs, fmt.Sprintf("UNRESOLVED WRAPPER CHAIN: row %q is protected and discovery could not resolve its chain: %s (disclose with a gaps entry `%s<reason>` or resolve it)", id, v.describe(), wrapperChainTag))
+	}
+	// A gap is a path the walk could not read, so it holds whatever else was
+	// found: a guard on one path says nothing about the unread one.
+	if len(v.Gaps) > 0 && classification != "public" {
+		if hatch {
+			disclosed()
 		} else {
-			fmt.Fprintf(os.Stderr, "WRAPPER-CHAIN GAP DISCLOSED: row %q: %s (%s)\n", id, v.describe(), reason)
+			*errs = append(*errs, fmt.Sprintf("UNRESOLVED WRAPPER CHAIN: row %q is protected and discovery could not resolve part of its chain: gaps %s; found %s (disclose with a gaps entry `%s<reason>` or resolve it)", id, strings.Join(v.Gaps, "; "), v.describe(), wrapperChainTag))
 		}
-	case classification == "protected":
-		if !hatch {
-			*errs = append(*errs, fmt.Sprintf("CLASSIFICATION CONTRADICTS WRAPPER CHAIN: row %q is protected but discovery found %s (disclose with a gaps entry `%s<reason>` if the protection is outside this chain)", id, v.describe(), wrapperChainTag))
+		return
+	}
+	if len(v.Gaps) > 0 && classification == "public" && !v.guarded() {
+		*errs = append(*errs, fmt.Sprintf("UNRESOLVED WRAPPER CHAIN: row %q is public and discovery could not rule out a guard: %s (a public row has no gaps escape; resolve the chain)", id, v.describe()))
+		return
+	}
+	if !v.guarded() && classification == "protected" {
+		if hatch {
+			disclosed()
 		} else {
-			fmt.Fprintf(os.Stderr, "WRAPPER-CHAIN GAP DISCLOSED: row %q: %s (%s)\n", id, v.describe(), reason)
+			*errs = append(*errs, fmt.Sprintf("CLASSIFICATION CONTRADICTS WRAPPER CHAIN: row %q is protected but discovery found %s (disclose with a gaps entry `%s<reason>` if the protection is outside this chain)", id, v.describe(), wrapperChainTag))
 		}
 	}
 }

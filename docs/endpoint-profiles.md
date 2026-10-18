@@ -304,8 +304,8 @@ surface checks):
 | a guard in the chain | `public` | `CLASSIFICATION CONTRADICTS WRAPPER CHAIN`; no hatch |
 | a guard in the chain | `primary_validator: null` | `NULL PRIMARY VALIDATOR ON GUARDED ROW` |
 | no guard, chain fully resolved | `protected` | `CLASSIFICATION CONTRADICTS WRAPPER CHAIN` unless the hatch below is present |
-| a gap (see below) | `public` | `UNRESOLVED WRAPPER CHAIN`; no hatch |
-| a gap | `protected` | `UNRESOLVED WRAPPER CHAIN` unless the hatch below is present |
+| a gap (see below), guard or not | `public` and nothing found | `UNRESOLVED WRAPPER CHAIN`; no hatch |
+| a gap (see below), guard or not | `protected` | `UNRESOLVED WRAPPER CHAIN` unless the hatch below is present |
 
 The hatch is an exact entry in the row's `gaps`: `wrapper-chain: <reason>`,
 prefix exact and reason non-empty. A loose mention of "wrapper chain", a
@@ -313,12 +313,16 @@ substring inside another entry, or a tag with no reason is not accepted. The
 gate prints each disclosed reason. A public row never gets the hatch.
 
 A **gap** is any of: a callee on the handler path that the walk cannot resolve
-(another package, a function value, an unsupported expression); a chain deeper
-than the depth bound; a scan cut by its depth bound while no guard was found;
-a route with no matching parsed registration; a guard package that cannot be
-parsed. A found guard stays a found guard when a gap is also present; a gap
-only matters when nothing was found, because absence cannot be claimed over
-code the walk did not read.
+(another package, a function value, an unsupported expression); a call through
+an interface type whose method returns `http.Handler`; a chain deeper than the
+depth bound; a scan cut by its depth bound; a route with no matching parsed
+registration; a missing `go.mod` or a guard package that cannot be parsed. A
+found guard does not settle a gap: the guard says nothing about the path the
+walk did not read, so a protected row with any gap needs the hatch. The guard
+type is trusted only at the exact module-relative `internal/auth` import path.
+Local variables are followed only when assigned from a typed expression in the
+same function (`g := a.authenticator`); a guard reached through any other value
+the walk cannot type is not seen.
 
 The reconciliation is **lexical**. It states that a guard call sits in the
 route's wrapper chain. It does not prove control flow reaches the call, that
@@ -340,8 +344,9 @@ gate):
   `POST /api/v1/context-fabric/investigations`,
   `GET /api/v1/context-fabric/investigations/{result_id}`): removing the call to either from
   the code that dispatches through it leaves the declaration. The wrapper-chain
-  reconciliation above now fails a row whose route no longer reaches a guard, so
-  the shared-definition anchor alone is no longer the only evidence.
+  reconciliation above fails a protected row whose route's lexical chain no
+  longer contains a guard call, so the shared-definition anchor is no longer the
+  only evidence. It still does not prove control flow reaches the guard.
 - A route's own-call marker (`a.protectedRuntimeHandler(...)` in its handler
   builder) is located in the file, not bound to the route's handler builder: the
   route fails if that call is removed or renamed, but moving the call to another
