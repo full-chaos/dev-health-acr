@@ -7,9 +7,9 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// A pull request reached through an issue link serves the link's tier beside
-// the unchanged activity_proxy basis; one reached through its repository only
-// serves no tier.
+// A pull request serves, per root, the tier of that root's own issue link beside
+// the unchanged activity_proxy basis; a root that reached it through the
+// repository only serves none.
 func TestDirectReadPullRequestReachedFromCarriesTheLinkTier(t *testing.T) {
 	linked := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: "pull_request:linked", Label: "#1"}
 	proxied := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: "pull_request:proxied", Label: "#2"}
@@ -19,7 +19,10 @@ func TestDirectReadPullRequestReachedFromCarriesTheLinkTier(t *testing.T) {
 			TargetRoot: map[string]contextfabric.SubjectRef{
 				contextfabric.FactSubjectKey(linked): projectP, contextfabric.FactSubjectKey(proxied): projectP,
 			},
-			TargetLinkTier: map[string]string{contextfabric.FactSubjectKey(linked): "native"},
+			TargetRoots: map[string][]contextfabric.SubjectRef{
+				contextfabric.FactSubjectKey(linked): {projectP, projectQ}, contextfabric.FactSubjectKey(proxied): {projectP},
+			},
+			TargetLinkTier: map[string]map[string]string{contextfabric.FactSubjectKey(linked): {contextfabric.FactSubjectKey(projectP): "native"}},
 			Counts:         contextfabric.FactScopeExpansionCounts{CandidateCount: 2},
 		}
 	}}
@@ -33,15 +36,25 @@ func TestDirectReadPullRequestReachedFromCarriesTheLinkTier(t *testing.T) {
 	}
 	reader := directExpandingReader(t, graphOfOrgA(), expander, nil, provider)
 	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"pull_requests"}, Subjects: []RequestSubject{
-		{Kind: "project", CanonicalID: projectP.CanonicalID},
+		{Kind: "project", CanonicalID: projectP.CanonicalID}, {Kind: "project", CanonicalID: projectQ.CanonicalID},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for subject, wantTier := range map[contextfabric.SubjectRef]string{linked: "native", proxied: ""} {
+	want := map[string]map[string]string{
+		linked.CanonicalID:  {projectP.CanonicalID: "native", projectQ.CanonicalID: ""},
+		proxied.CanonicalID: {projectP.CanonicalID: ""},
+	}
+	for _, subject := range []contextfabric.SubjectRef{linked, proxied} {
 		fact := servedOn(response, "pull_requests", subject)
-		if fact == nil || len(fact.ReachedFrom) != 1 || fact.ReachedFrom[0].Basis != "activity_proxy" || fact.ReachedFrom[0].LinkTier != wantTier {
-			t.Fatalf("pull request %s reached_from = %s, want basis activity_proxy and link tier %q", subject.CanonicalID, mustJSON(t, response.Facts), wantTier)
+		if fact == nil || len(fact.ReachedFrom) != len(want[subject.CanonicalID]) {
+			t.Fatalf("pull request %s reached_from = %s, want roots %v", subject.CanonicalID, mustJSON(t, response.Facts), want[subject.CanonicalID])
+		}
+		for _, reach := range fact.ReachedFrom {
+			tier, ok := want[subject.CanonicalID][reach.CanonicalID]
+			if !ok || reach.Basis != "activity_proxy" || reach.LinkTier != tier {
+				t.Fatalf("pull request %s reached from %s = basis %q tier %q, want activity_proxy and tier %q", subject.CanonicalID, reach.CanonicalID, reach.Basis, reach.LinkTier, tier)
+			}
 		}
 	}
 }

@@ -1477,11 +1477,12 @@ type FactScopeExpansionResult struct {
 	// truncation detection (Limit+1) or cross-origin duplicates can never
 	// inflate the count.
 	TargetAttributionSource map[string]string
-	// TargetLinkTier is an OPTIONAL per-target provenance tier of the
-	// issue-to-pull-request link row the target was reached through, keyed by
-	// the SAME FactSubjectKey(target). A target missing from the map was
-	// reached by a repository proxy and carries no tier.
-	TargetLinkTier map[string]string
+	// TargetLinkTier is an OPTIONAL provenance tier of the issue-to-pull-request
+	// link row a target was reached through, keyed by FactSubjectKey(target) and
+	// then by the FactSubjectKey of the root it was reached from. A target or
+	// root missing from the map was reached by a repository proxy and carries
+	// no tier.
+	TargetLinkTier map[string]map[string]string
 	// TargetRoot is CHAOS-4260's addition: an OPTIONAL per-target override of
 	// the SPECIFIC origin subject a target was reached through, keyed by the
 	// SAME FactSubjectKey(target). Absent (nil, or a target missing from the
@@ -2353,7 +2354,6 @@ func (r *FactReadScopeResolver) expand(
 		return []SubjectRef{root}
 	}
 	recordDerivations := func(target SubjectRef, key string, basis FactScopeBasis) {
-		linkTier := result.TargetLinkTier[key]
 		recorded := map[string]struct{}{}
 		for _, idx := range derivationIndex[key] {
 			recorded[canonicalFactSubjectKey(scope.Derivations[idx].Root)] = struct{}{}
@@ -2367,7 +2367,7 @@ func (r *FactReadScopeResolver) expand(
 				Target:   target,
 				Policy:   rule.Policy,
 				Basis:    basis,
-				LinkTier: linkTier,
+				LinkTier: result.TargetLinkTier[key][canonicalFactSubjectKey(root)],
 			})
 			derivationIndex[key] = append(derivationIndex[key], len(scope.Derivations)-1)
 		}

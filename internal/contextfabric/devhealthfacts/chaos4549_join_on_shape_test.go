@@ -243,9 +243,9 @@ func sweepScopeExpander(ctx context.Context, orgID string) []capturedQuery {
 	client := &fakeClient{tables: []fakeTable{
 		// projectPullRequestLinkTiers: its select shares the first hop's
 		// aggregate text, so it is matched first by its own GROUP BY.
-		// Column order: repo id, pull request number, strongest tier.
-		{match: "GROUP BY toString(l.pr_repo_id), l.pr_number", rows: [][]any{
-			{scopeRepoID, uint32(1), "native"},
+		// Column order: project id, repo id, pull request number, strongest tier.
+		{match: "GROUP BY p.id, toString(l.pr_repo_id), l.pr_number", rows: [][]any{
+			{"proj-4549-scope", scopeRepoID, uint32(1), "native"},
 		}},
 		// projectRepositories' first hop (chaos4099_scope_expander.go).
 		// Column order: toString(l.pr_repo_id), ifNull(r.repo, ''),
