@@ -1296,6 +1296,25 @@ sed 's|run: go test ./ci/checkendpointprofiles/...|run: go test ./ci/checkendpoi
 assert_check_fails 'made the gate step swallow its own failure with || true' \
   check_endpoint_profile_gate_step "$gate_swallows_failure"
 
+# (q2) the other forms of the same class: a gate whose failure cannot fail the job.
+gate_swallows_colon="$tmpdir/gate-swallows-colon.yml"
+sed 's|run: go test ./ci/checkendpointprofiles/...|run: go test ./ci/checkendpointprofiles/... \|\| :|' \
+  "$workflow" > "$gate_swallows_colon"
+assert_check_fails 'made the gate step swallow its own failure with || :' \
+  check_endpoint_profile_gate_step "$gate_swallows_colon"
+
+gate_swallows_exit0="$tmpdir/gate-swallows-exit0.yml"
+sed 's|run: go test ./ci/checkendpointprofiles/...|run: go test ./ci/checkendpointprofiles/...; exit 0|' \
+  "$workflow" > "$gate_swallows_exit0"
+assert_check_fails 'made the gate step swallow its own failure with ; exit 0' \
+  check_endpoint_profile_gate_step "$gate_swallows_exit0"
+
+gate_continue_on_error="$tmpdir/gate-continue-on-error.yml"
+sed 's|^\( *\)- name: Verify endpoint-profile inventory against the pinned ops contract|&\n\1  continue-on-error: true|' \
+  "$workflow" > "$gate_continue_on_error"
+assert_check_fails 'made the gate step continue-on-error: true' \
+  check_endpoint_profile_gate_step "$gate_continue_on_error"
+
 # (r) loosen the real pin regex but leave a decoy in a comment, which is what
 # defeated the document-wide grep.
 pin_decoy_comment="$tmpdir/pin-decoy-comment.yml"
