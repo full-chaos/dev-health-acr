@@ -110,7 +110,12 @@ check_verify_if_always() {
   # spin up on a run that was cancelled/superseded (#414's
   # cancel-in-progress) -- `always()` does not distinguish those two
   # cases, `!cancelled()` does.
-  job_block "$file" verify | grep -Eq "^ {4}if: '!cancelled\(\)'" || {
+  # Captured first, never piped into grep -q: grep -q exits on its first match,
+  # and a writer still flushing then dies of SIGPIPE, which pipefail reports as
+  # a missing condition (seen on hosted runners once this block grew).
+  local block
+  block="$(job_block "$file" verify)"
+  grep -Eq "^ {4}if: '!cancelled\(\)'" <<<"$block" || {
     printf 'verify job is missing "if: '"'"'!cancelled()'"'"'"\n' >&2
     return 1
   }
