@@ -6,7 +6,8 @@
 -- authenticate but fail validation on self-rotate and self-revoke.
 --
 -- 1. An unredeemed device authorization (pending or approved) whose scope
---    would be EMPTY after the strip is deleted, with its OAuth grant or
+--    would be EMPTY after the strip (empty tokens from repeated or trailing
+--    spaces do not count) is deleted, with its OAuth grant or
 --    request (ON DELETE CASCADE). These rows live ten minutes, and an empty
 --    scope string means "scope omitted", which the OAuth exchange would
 --    answer with the default scopes: the migration must never widen a grant
@@ -36,12 +37,12 @@ BEGIN
                 SELECT 1 FROM acr.oauth_device_grants g
                  WHERE g.device_code_hash = d.device_code_hash
                    AND 'context:admin' = ANY (string_to_array(g.scope, ' '))
-                   AND array_remove(string_to_array(g.scope, ' '), 'context:admin') = ARRAY[]::text[])
+                   AND array_remove(array_remove(string_to_array(g.scope, ' '), 'context:admin'), '') = ARRAY[]::text[])
          OR EXISTS (
                 SELECT 1 FROM acr.oauth_authorization_requests r
                  WHERE r.device_code_hash = d.device_code_hash
                    AND 'context:admin' = ANY (string_to_array(r.scope, ' '))
-                   AND array_remove(string_to_array(r.scope, ' '), 'context:admin') = ARRAY[]::text[])
+                   AND array_remove(array_remove(string_to_array(r.scope, ' '), 'context:admin'), '') = ARRAY[]::text[])
        );
     GET DIAGNOSTICS abandoned_devices = ROW_COUNT;
 
@@ -56,12 +57,12 @@ BEGIN
     GET DIAGNOSTICS devices_stripped = ROW_COUNT;
 
     UPDATE acr.oauth_device_grants
-       SET scope = array_to_string(array_remove(string_to_array(scope, ' '), 'context:admin'), ' ')
+       SET scope = array_to_string(array_remove(array_remove(string_to_array(scope, ' '), 'context:admin'), ''), ' ')
      WHERE 'context:admin' = ANY (string_to_array(scope, ' '));
     GET DIAGNOSTICS grants_stripped = ROW_COUNT;
 
     UPDATE acr.oauth_authorization_requests
-       SET scope = array_to_string(array_remove(string_to_array(scope, ' '), 'context:admin'), ' ')
+       SET scope = array_to_string(array_remove(array_remove(string_to_array(scope, ' '), 'context:admin'), ''), ' ')
      WHERE 'context:admin' = ANY (string_to_array(scope, ' '));
     GET DIAGNOSTICS requests_stripped = ROW_COUNT;
 

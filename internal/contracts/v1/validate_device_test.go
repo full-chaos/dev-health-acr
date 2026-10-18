@@ -390,22 +390,19 @@ func TestCredentialAckRequestAcceptsAnOmittedCredentialID(t *testing.T) {
 	}
 }
 
-func TestClientCredentialRejectsTheRetiredContextAdminScope(t *testing.T) {
+func TestClientCredentialStillAcceptsTheRetiredContextAdminScopeForReading(t *testing.T) {
 	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	expiresAt := createdAt.Add(deviceCredentialLifetime)
 	credential := validDeviceTokenResponse(createdAt, expiresAt).Credential
-	if err := validateCredentialMetadata(credential); err != nil {
-		t.Fatalf("baseline credential rejected: %v", err)
-	}
 	credential.Scopes = []string{"context:read", "context:admin"}
-	if err := validateCredentialMetadata(credential); err == nil {
-		t.Fatal("validator accepted the retired context:admin scope")
+	if err := validateCredentialMetadata(credential); err != nil {
+		t.Fatalf("v1 validator rejected a credential that carries the retired scope: %v", err)
 	}
 	body, err := json.Marshal(credential)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := contractcheck.ValidateSerialized("", "acr_client_credential.v1.schema.json", body); err == nil {
-		t.Fatal("schema accepted the retired context:admin scope")
+	if err := contractcheck.ValidateSerialized("", "acr_client_credential.v1.schema.json", body); err != nil {
+		t.Fatalf("v1 schema rejected a credential that carries the retired scope: %v", err)
 	}
 }
