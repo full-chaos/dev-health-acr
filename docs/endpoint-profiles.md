@@ -321,8 +321,13 @@ found guard does not settle a gap: the guard says nothing about the path the
 walk did not read, so a protected row with any gap needs the hatch. The guard
 type is trusted only at the exact module-relative `internal/auth` import path.
 Local variables are followed only when assigned from a typed expression in the
-same function (`g := a.authenticator`); a guard reached through any other value
-the walk cannot type is not seen.
+same function (`g := a.authenticator`). A value the walk cannot type in a
+handler or wrapper position is a gap too: `ServeHTTP` on a receiver of unknown
+type, a call of a function value (index element, call result, local variable)
+or of a handler-typed function parameter, when the call hands a `net/http`
+handler, response writer or request to it. Untyped function values that take
+no `net/http` value (a store lookup, a callback on plain data) are not
+handler positions and are not gaps.
 
 The reconciliation is **lexical**. It states that a guard call sits in the
 route's wrapper chain. It does not prove control flow reaches the call, that

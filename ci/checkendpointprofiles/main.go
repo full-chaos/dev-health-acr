@@ -1506,6 +1506,15 @@ func newChainCtx(fn chainFunc, env map[string]string) chainCtx {
 	dropped := map[string]bool{}
 	if fn.decl.Body != nil {
 		ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.FuncLit); ok && lit.Type.Params != nil {
+				for _, f := range lit.Type.Params.List {
+					for _, nm := range f.Names {
+						if _, have := c.params[nm.Name]; !have {
+							c.params[nm.Name] = f.Type
+						}
+					}
+				}
+			}
 			as, ok := n.(*ast.AssignStmt)
 			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != len(as.Rhs) {
 				return true
@@ -1597,6 +1606,13 @@ func (w *chainWalker) typeOf(c chainCtx, e ast.Expr) (typeRef, bool) {
 		}
 	case *ast.ParenExpr:
 		return w.typeOf(c, e.X)
+	case *ast.CallExpr:
+		if _, ok := w.guardCall(c, e); ok {
+			return typeRef{"net/http", "Handler"}, true
+		}
+		if callee, ok := w.resolveCallee(c, e.Fun); ok && w.returnsHandler(callee) {
+			return typeRef{"net/http", "Handler"}, true
+		}
 	case *ast.SelectorExpr:
 		base, ok := w.typeOf(c, e.X)
 		if !ok {
@@ -1936,6 +1952,91 @@ func (w *chainWalker) interfaceWrapperCall(c chainCtx, call *ast.CallExpr) (stri
 	return "", false
 }
 
+// untypedHandlerCall reports a call in a handler body that invokes a value the
+// walk cannot type, in a position where that value is a handler or a wrapper:
+// ServeHTTP on a receiver of unknown type, a call of a function value (index
+// element, call result, local variable), or a call of a function-typed
+// parameter that takes or returns http.Handler. Such a value could be a guard,
+// so it is a gap, never a pass.
+func (w *chainWalker) untypedHandlerCall(c chainCtx, call *ast.CallExpr) (string, bool) {
+	switch f := call.Fun.(type) {
+	case *ast.ParenExpr, *ast.IndexExpr, *ast.CallExpr:
+		if w.passesHTTPValue(c, call) {
+			return "call of an untyped function value " + w.text(c.fn, call.Fun, nil), true
+		}
+	case *ast.Ident:
+		if _, isFunc := c.fn.pkg.funcs[f.Name]; isFunc {
+			return "", false
+		}
+		if rhs, ok := c.locals[f.Name]; ok {
+			if _, lit := rhs.(*ast.FuncLit); !lit && w.passesHTTPValue(c, call) {
+				return "call of a local function value " + f.Name, true
+			}
+			return "", false
+		}
+		if t, ok := c.params[f.Name]; ok {
+			if ft, ok := t.(*ast.FuncType); ok && w.funcTypeMentionsHandler(c.fn, ft) {
+				return "call of a handler-typed function parameter " + f.Name, true
+			}
+		}
+	case *ast.SelectorExpr:
+		if f.Sel.Name != "ServeHTTP" {
+			return "", false
+		}
+		if id, ok := f.X.(*ast.Ident); ok {
+			if t, ok := c.params[id.Name]; ok {
+				if w.isNetHTTP(c.fn, t, "Handler") || w.isNetHTTP(c.fn, t, "HandlerFunc") {
+					return "", false
+				}
+			}
+		}
+		if _, ok := w.typeOf(c, f.X); !ok {
+			return "ServeHTTP on a value of unknown type " + w.text(c.fn, f.X, nil), true
+		}
+	}
+	return "", false
+}
+
+// passesHTTPValue: a call hands a net/http handler-side value (handler,
+// response writer, request) to its callee, which makes the callee a handler or
+// wrapper whatever it is called.
+func (w *chainWalker) passesHTTPValue(c chainCtx, call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		switch a := a.(type) {
+		case *ast.Ident:
+			if t, ok := c.params[a.Name]; ok {
+				if st, ok := t.(*ast.StarExpr); ok {
+					t = st.X
+				}
+				for _, n := range []string{"Handler", "HandlerFunc", "ResponseWriter", "Request"} {
+					if w.isNetHTTP(c.fn, t, n) {
+						return true
+					}
+				}
+			}
+		case *ast.CallExpr:
+			if w.isNetHTTP(c.fn, a.Fun, "HandlerFunc") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (w *chainWalker) funcTypeMentionsHandler(fn chainFunc, ft *ast.FuncType) bool {
+	for _, fl := range []*ast.FieldList{ft.Params, ft.Results} {
+		if fl == nil {
+			continue
+		}
+		for _, f := range fl.List {
+			if w.isNetHTTP(fn, f.Type, "Handler") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (w *chainWalker) fileOf(p *chainPkg, n ast.Node) *ast.File {
 	for _, f := range p.files {
 		if f.FileStart <= n.Pos() && n.Pos() <= f.FileEnd {
@@ -1961,6 +2062,10 @@ func (w *chainWalker) scan(c chainCtx, body ast.Node, depth int) {
 		}
 		if what, ok := w.interfaceWrapperCall(c, call); ok {
 			w.gap("call through interface %s", what)
+			return true
+		}
+		if what, ok := w.untypedHandlerCall(c, call); ok {
+			w.gap("%s", what)
 			return true
 		}
 		if callee, ok := w.resolveCallee(c, call.Fun); ok && callee.decl.Body != nil {

@@ -2643,3 +2643,47 @@ func (a *Authenticator) RequireScope(required string, next http.Handler) http.Ha
 	writeFile(t, app, swapped)
 	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is protected", "no guard found")
 }
+
+func TestWrapperChainUntypedHandlerValuesAreGaps(t *testing.T) {
+	for _, tc := range []struct {
+		name, route, handler, want string
+	}{
+		{"index element", "/idx", `http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { table[0](w, r) })`, "call of an untyped function value"},
+		{"call result", "/res", `http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { pick()(w, r) })`, "call of an untyped function value"},
+		{"local function value", "/loc", `http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { g := table[0]; g(w, r) })`, "call of a local function value g"},
+		{"serve on unknown", "/srv", `http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { table2[0].ServeHTTP(w, r) })`, "ServeHTTP on a value of unknown type"},
+		{"handler-typed function parameter", "/prm", `a.viaParam(func(h http.Handler) http.Handler { return h }, http.HandlerFunc(healthzHandler))`, "call of a handler-typed function parameter wrap"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decls := "var table = []func(http.ResponseWriter, *http.Request){}\nvar table2 = []http.Handler{}\nfunc pick() func(http.ResponseWriter, *http.Request) { return nil }\n" +
+				"func (a *App) viaParam(wrap func(http.Handler) http.Handler, next http.Handler) http.Handler {\n" +
+				"\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { wrap(next).ServeHTTP(w, r) })\n}\n"
+			extra := "\tmux.Handle(\"POST " + tc.route + "\", " + tc.handler + ")\n"
+			pub := extraRow("POST "+tc.route, "POST", tc.route, nil)
+			f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), pub)
+			mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+
+			prot := capabilitiesRow(map[string]any{"id": "POST " + tc.route + " [dev-health-acr-api]", "method": "POST", "route": tc.route})
+			f = chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), prot)
+			mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "wrapper-chain: ")
+
+			hatch := capabilitiesRow(map[string]any{
+				"id": "POST " + tc.route + " [dev-health-acr-api]", "method": "POST", "route": tc.route,
+				"gaps": []any{"primary_validator anchor is not placed in this fixture", "wrapper-chain: handler value dispatched from a table, reviewed by hand"},
+			})
+			f = chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), hatch)
+			if errs := f.check(t); len(errs) != 0 {
+				t.Fatalf("expected no errors with the hatch, got:\n%s", strings.Join(errs, "\n"))
+			}
+		})
+	}
+}
+
+func TestWrapperChainAnUntypedFunctionValueThatTakesNoHTTPValueIsNotAGap(t *testing.T) {
+	extra := "\tmux.Handle(\"POST /data\", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { n := table[0]; _ = n; lookup := lookups[0]; lookup(\"key\") }))\n"
+	decls := "var table = []int{}\nvar lookups = []func(string) string{}\n"
+	f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), extraRow("POST /data", "POST", "/data", nil))
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
