@@ -205,6 +205,10 @@ func t4Cases() []t4Case {
 
 	// ---- commitment
 	add(t4Case{name: "commitment/project_stated", kind: contextfabric.FactCommitment, subjects: proj, tables: []fakeTable{
+		{match: commitmentDueDatesMatch, rows: [][]any{
+			commitmentDueDateRow("linear", "proj-1", "i-1", "in_progress", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+			commitmentDueDateRow("linear", "proj-1", "i-2", "todo", time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)),
+		}},
 		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("linear", "proj-1", "started", "linear.project.state", "2026-11-01", true)}},
 		{match: commitmentItemsMatch, rows: [][]any{commitmentItemRow("linear", "proj-1", commitmentCounts{
 			total: 3, open: 2, closed: 1, withDueAt: 2, pastDueOpen: 1, sprints: 1, nextSprints: 1,
@@ -212,10 +216,12 @@ func t4Cases() []t4Case {
 		})}},
 	}})
 	add(t4Case{name: "commitment/project_unreachable", kind: contextfabric.FactCommitment, subjects: proj, tables: []fakeTable{
+		{match: commitmentDueDatesMatch},
 		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("linear", "proj-1", "", "", "", false)}},
 	}})
 	githubProject := []contextfabric.SubjectRef{projectSubject("github", "proj-1")}
 	add(t4Case{name: "commitment/project_unreadable_github", kind: contextfabric.FactCommitment, subjects: githubProject, tables: []fakeTable{
+		{match: commitmentDueDatesMatch},
 		{match: commitmentProjectsMatch, rows: [][]any{commitmentProjectRow("github", "proj-1", "", "", "", true)}},
 		{match: commitmentItemsMatch, rows: [][]any{commitmentItemRow("github", "proj-1", commitmentCounts{all: 3, total: 2, open: 1, unknown: 1, unresolved: 1})}},
 	}})
@@ -241,6 +247,14 @@ func t4Cases() []t4Case {
 			return readinessDailySeriesRow("linear:proj-1", day, 18, 2, 20)
 		})},
 	}})
+
+	add(t4Case{name: "readiness/project_past_scan_budget", kind: contextfabric.FactReadiness,
+		subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1"), projectSubject("linear", "proj-late")}, tables: []fakeTable{
+			{match: projectPopulationMarker, rows: [][]any{{"linear:proj-1", int64(1), int64(1)}, {"linear:proj-late", int64(2), int64(2)}}},
+			{match: readinessOriginalQueryMatch, rows: [][]any{
+				readinessProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", "linear", 18, 2, 20, 0.9),
+			}},
+		}})
 
 	// ---- workload
 	add(t4Case{name: "workload/team", kind: contextfabric.FactWorkload, subjects: team, tables: []fakeTable{

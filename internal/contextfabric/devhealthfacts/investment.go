@@ -117,7 +117,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}()
 
 	var mixUnavailable string
-	var projectsNoMix []contextfabric.SubjectRef
+	var projectsNoMix, projectsMixCut []contextfabric.SubjectRef
 	var teamsRequested int
 	var teamsOwningNothing, teamsNoUnit []contextfabric.SubjectRef
 	var teamsZeroEffort []teamZeroEffort
@@ -161,23 +161,25 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// units but no positive effort, so a native mix that replaces it can
 		// still disclose that population.
 		unusableRollup := map[string]int64{}
-		themeRowCount, themeScanErr := p.readProjectThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
+		themeRowCount, themeCutAfter, themeScanErr := p.readProjectThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
 		if themeScanErr != nil {
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project theme mix", themeScanErr)
 		}
-		truncated = truncated || themeRowCount > maxFactRowsPerQuery
+		truncated = truncated || themeRowCount > maxProjectPopulationRows
 		// The project's OWN attribution replaces the roll-up's shares for a
 		// project that has any, and leaves the roll-up in place for one that
 		// has none. It reads after the roll-up so it can merge onto the same
 		// fact and move the roll-up's population beside it.
-		nativeRowCount, nativeScanErr := p.readProjectNativeThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
+		nativeRowCount, nativeCutAfter, nativeScanErr := p.readProjectNativeThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
 		if nativeScanErr != nil {
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
-		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+		truncated = truncated || nativeRowCount > maxProjectPopulationRows
 		// Missing is not healthy: a project with no canonical mix serves no
 		// fact, and says so by a NAMED reason instead of a silent absence.
-		projectsNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
+		// A project the cap cut off the end of a read is not a project with
+		// no mix: it was never evaluated.
+		projectsNoMix, projectsMixCut = splitProjectsCutByRowCap(projectSubjects, facts, themeCutAfter, nativeCutAfter)
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
@@ -266,6 +268,10 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if len(projectsNoMix) > 0 {
 		addRequestNote(&result, investmentProjectNoCanonicalMixReason(len(projectsNoMix), len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
 		addSubjectReasons(&result, projectsNoMix, investmentProjectNoCanonicalMixOwnReason)
+	}
+	if len(projectsMixCut) > 0 {
+		addRequestNote(&result, investmentProjectMixCutReason(len(projectsMixCut), len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
+		addSubjectReasons(&result, projectsMixCut, investmentProjectMixCutOwnReason)
 	}
 	if timeBound.active {
 		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), investmentOwnershipAsSynced)
@@ -526,25 +532,58 @@ func investmentProjectNoCanonicalMixReason(noMix, requested int) string {
 	return fmt.Sprintf("%s for %d of %d requested projects: no canonical theme mix (work_unit_investments) for the project in the requested window; the deprecated per-team investment_area breakdown is not served", investmentProjectNoCanonicalMix, noMix, requested)
 }
 
-// projectsWithoutInvestmentFact lists the project subjects of valid shape that have no
-// FactInvestment fact after the project reads.
-func projectsWithoutInvestmentFact(subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) []contextfabric.SubjectRef {
-	have := map[string]bool{}
-	for _, f := range *facts {
-		if f.Kind == contextfabric.FactInvestment {
-			have[contextfabric.FactSubjectKey(f.Subject)] = true
-		}
-	}
-	var missing []contextfabric.SubjectRef
-	for _, subject := range subjects {
-		if projectSpanKey(subject) == "" {
+// investmentProjectMixCut is the closed reason token of a project the row cap
+// cut off the end of a project mix read: the project was not evaluated, which
+// is not the same as having no mix.
+const investmentProjectMixCut = "investment_project_mix_cut_by_row_cap"
+
+const investmentProjectMixCutOwnReason = investmentProjectMixCut + ": the project theme mix read reached its row cap before this project; the project was not fully evaluated (a native mix may exist beyond the cap, and any mix served for it is the owning-team roll-up), and that is not a finding that it has no mix"
+
+func investmentProjectMixCutReason(cut, requested int) string {
+	return fmt.Sprintf("%s for %d of %d requested projects: the project theme mix read reached its row cap of %d before these projects; they were not fully evaluated (a native mix may exist beyond the cap, and any mix served for them is the owning-team roll-up), and that is not a finding that they have no mix", investmentProjectMixCut, cut, requested, maxProjectPopulationRows)
+}
+
+// splitProjectsCutByRowCap separates the projects a capped read never reached
+// from the rest. A read returns its projects in key order and serves up to a
+// cap of them, so a project whose key sorts after the last served key of a cut
+// read was not reached by it. A project with no fact that a cut read did not
+// reach was never evaluated. A project served from the owning-team roll-up
+// whose native read was cut before it may also have a native mix, which would
+// replace the roll-up, so it is cut as well. A fact that carries no mix (only a
+// count) hides a roll-up the same way, so either cut reaches it.
+func splitProjectsCutByRowCap(subjects []contextfabric.SubjectRef, facts []contextfabric.CanonicalFact, rollupCutAfter, nativeCutAfter string) (noMix, cut []contextfabric.SubjectRef) {
+	served := map[string]string{}
+	for _, f := range facts {
+		if f.Kind != contextfabric.FactInvestment {
 			continue
 		}
-		if !have[contextfabric.FactSubjectKey(subject)] {
-			missing = append(missing, subject)
+		source := ""
+		if value, ok := f.Fields[contextfabric.FactFieldInvestmentMixSource]; ok && value.String != nil {
+			source = *value.String
+		}
+		served[contextfabric.FactSubjectKey(f.Subject)] = source
+	}
+	for _, subject := range subjects {
+		key := projectSpanKey(subject)
+		if key == "" {
+			continue
+		}
+		source, hasFact := served[contextfabric.FactSubjectKey(subject)]
+		nativeUnreached := nativeCutAfter != "" && key > nativeCutAfter
+		rollupUnreached := rollupCutAfter != "" && key > rollupCutAfter
+		switch {
+		case hasFact && source == contextfabric.InvestmentMixSourceProjectNative:
+		case hasFact && source == contextfabric.InvestmentMixSourceOwningTeamRollup && nativeUnreached:
+			cut = append(cut, subject)
+		case hasFact && source != contextfabric.InvestmentMixSourceOwningTeamRollup && (nativeUnreached || rollupUnreached):
+			cut = append(cut, subject)
+		case !hasFact && (nativeUnreached || rollupUnreached):
+			cut = append(cut, subject)
+		case !hasFact:
+			noMix = append(noMix, subject)
 		}
 	}
-	return missing
+	return noMix, cut
 }
 
 // rejectedProjectCount: project subjects whose id has no project v2 shape.
@@ -729,10 +768,10 @@ func rangeOverlapPredicate(b factTimeBound, fromColumn, toColumn string) string 
 // sitting exactly at the served cap is distinguishable from one that
 // overflowed it -- the same discipline workItemProjectCompletionStatement
 // documents for its own project-grain aggregate.
-func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, err error) {
+func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, cutAfter string, err error) {
 	ids, bySubject, _ := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, "", nil
 	}
 	// readers.QueryOrgScopedNamed, never p.facts.query: this is genuinely
 	// raw SQL (not a readers.ReadXxx call), but it must still report
@@ -755,8 +794,9 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	// phase reports through readers.QueryOrgScopedNamed.
 	mixRows, readErr := readProjectRollupMixRows(ctx, p.facts.client, orgID, ids, timeBound, p)
 	if readErr != nil {
-		return 0, readErr
+		return 0, "", readErr
 	}
+	lastServedKey := ""
 	serve := func(mix projectRollupMixRow) error {
 		rowCount++
 		if mix.WorkUnits > 0 {
@@ -769,9 +809,11 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// check reports Truncated, but it must not itself be served -- an
 		// unbounded LIMIT+1 read still needs the SAME served-output cap
 		// every other provider here enforces.
-		if rowCount > maxFactRowsPerQuery {
+		if rowCount > maxProjectPopulationRows {
+			cutAfter = lastServedKey
 			return nil
 		}
+		lastServedKey = projectKey
 		subject, ok := bySubject[projectKey]
 		if !ok {
 			return nil
@@ -837,10 +879,10 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	}
 	for _, mix := range mixRows {
 		if serveErr := serve(mix); serveErr != nil {
-			return rowCount, serveErr
+			return rowCount, cutAfter, serveErr
 		}
 	}
-	return rowCount, nil
+	return rowCount, cutAfter, nil
 }
 
 // mergeProjectInvestmentFact merges fields onto the project's existing
@@ -895,19 +937,22 @@ const projectNativeMixBasis = "project_work_items_issue_evidence_work_unit_inves
 // were counted through such an id (a data defect shows as a non-zero count),
 // on the mix fact when there is a native mix and on the project's fact (the
 // roll-up's, or a fact carrying only that count) when there is not.
-func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, err error) {
+func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, cutAfter string, err error) {
 	ids, bySubject, _ := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, "", nil
 	}
-	rows, sizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe, p)
+	rows, sizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxProjectPopulationProbe, p)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	rowCount = len(rows)
+	if rowCount > maxProjectPopulationRows {
+		cutAfter = rows[maxProjectPopulationRows-1].ProjectSubjectKey
+	}
 	for i, row := range rows {
 		// The probe row is evidence of truncation, never served.
-		if i >= maxFactRowsPerQuery {
+		if i >= maxProjectPopulationRows {
 			break
 		}
 		subject, ok := bySubject[row.ProjectSubjectKey]
@@ -970,7 +1015,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		}
 		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link", "sizing_coverage", "sizing_note"})
 	}
-	return rowCount, nil
+	return rowCount, cutAfter, nil
 }
 
 // projectSpanKey is the "provider:id" key the project mixes name a project by

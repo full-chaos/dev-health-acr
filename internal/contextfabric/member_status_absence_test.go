@@ -166,7 +166,7 @@ func statusLoweringSites(t *testing.T, dir string) map[string]int {
 // limitation of its own; a new site, a removed site, or a file outside this
 // table fails until the exit is classified here.
 var statusLoweringExits = map[string]int{
-	"budget_trim.go": 1, "claim_depth_narrowing.go": 1, "fact_row_truncation.go": 1, "model_runtime.go": 1,
+	"budget_trim.go": 1, "claim_depth_narrowing.go": 1, "fact_row_truncation.go": 1, "model_runtime.go": 2,
 	"path_drop.go": 1, "synthesis_model_failure.go": 1, "synthesis_status_floor.go": 7, "work_item_authorization_gap.go": 1,
 }
 

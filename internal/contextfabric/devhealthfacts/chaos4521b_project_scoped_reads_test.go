@@ -38,8 +38,8 @@ func TestChaos4521b_ProjectFlowKeysOnTheProjectsOwnWorkScope(t *testing.T) {
 	// (queryProjectFlowDailySeries, for the additive daily_flow time_series)
 	// after the original -- queries[0] is still the original query this
 	// test's assertions are about, since call order is preserved.
-	if len(client.queries) != 2 {
-		t.Fatalf("queries = %d, want exactly two (original + CHAOS-4645 daily series)", len(client.queries))
+	if len(client.queries) != 3 {
+		t.Fatalf("queries = %d, want exactly three (original, daily series, project population)", len(client.queries))
 	}
 	statement := client.queries[0].statement
 

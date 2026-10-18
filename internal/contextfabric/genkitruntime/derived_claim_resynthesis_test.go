@@ -50,7 +50,7 @@ func TestAGroundedDerivationIsServedOnTheFirstDrawWithItsInputs(t *testing.T) {
 	}
 }
 
-// An ungrounded derivation stays rejected, every redraw stays inside the
+// An ungrounded derivation with nothing grounded beside it stays rejected, every redraw stays inside the
 // bound, and each rejected draw's reason is on the decision line.
 func TestAnUngroundedDerivationStaysRejectedWithinTheBoundAndLogsEachReason(t *testing.T) {
 	t.Parallel()
@@ -59,6 +59,8 @@ func TestAnUngroundedDerivationStaysRejectedWithinTheBoundAndLogsEachReason(t *t
 	subject := input.Facts.Facts[0].Subject
 	wrongValue := derivedOutput(subject, 11, contractsv1.ContextFabricDerivationInput{FactID: open, Field: "open_items"}, contractsv1.ContextFabricDerivationInput{FactID: closed, Field: "closed_items"})
 	unknownInput := derivedOutput(subject, 10, contractsv1.ContextFabricDerivationInput{FactID: open, Field: "open_items"}, contractsv1.ContextFabricDerivationInput{FactID: "fact_missing", Field: "closed_items"})
+	// Nothing grounded is left once the derivation is dropped, so the draw is still rejected.
+	wrongValue.Drivers, unknownInput.Drivers = nil, nil
 	gen := &drawSequenceGenerator{outputs: []synthesisOutput{wrongValue, unknownInput, wrongValue, wrongValue}}
 	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
 	_, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, input)
