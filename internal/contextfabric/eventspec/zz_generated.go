@@ -28,6 +28,7 @@ var ByID = map[string]Event{
 	"contextfabric.answer_reuse_served_request_id":     AnswerReuseServedRequestID,
 	"contextfabric.binding_epoch_moved":                BindingEpochMoved,
 	"contextfabric.binding_epoch_unchanged":            BindingEpochUnchanged,
+	"contextfabric.category_fact_composition":          CategoryFactComposition,
 	"contextfabric.client_synthesis_decision":          ClientSynthesisDecision,
 	"contextfabric.cohort_driver_narration":            CohortDriverNarration,
 	"contextfabric.cohort_kind_fulltext":               CohortKindFulltext,
@@ -39,6 +40,8 @@ var ByID = map[string]Event{
 	"contextfabric.confirmed_need_ledger":              ConfirmedNeedLedger,
 	"contextfabric.confirmed_need_ledger_window":       ConfirmedNeedLedgerWindow,
 	"contextfabric.count_population_scope":             CountPopulationScope,
+	"contextfabric.coverage_disclosure_phrasing":       CoverageDisclosurePhrasing,
+	"contextfabric.coverage_entries_capped":            CoverageEntriesCapped,
 	"contextfabric.direct_read":                        DirectRead,
 	"contextfabric.direct_read_authorization":          DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":          DirectRelationshipsRead,
@@ -48,6 +51,7 @@ var ByID = map[string]Event{
 	"contextfabric.engine_fact_gate_info":              EngineFactGateInfo,
 	"contextfabric.engine_fact_gate_warn":              EngineFactGateWarn,
 	"contextfabric.evidence_expansion":                 EvidenceExpansion,
+	"contextfabric.evidence_label_fallback":            EvidenceLabelFallback,
 	"contextfabric.fact_evaluation_coverage":           FactEvaluationCoverage,
 	"contextfabric.fact_read":                          FactRead,
 	"contextfabric.fact_read_failed":                   FactReadFailed,
@@ -69,6 +73,7 @@ var ByID = map[string]Event{
 	"contextfabric.operation_read":                     OperationRead,
 	"contextfabric.organization_subject_read":          OrganizationSubjectRead,
 	"contextfabric.ownership_routing":                  OwnershipRouting,
+	"contextfabric.period_delta_composition":           PeriodDeltaComposition,
 	"contextfabric.plan_carry":                         PlanCarry,
 	"contextfabric.plan_carry_outcome":                 PlanCarryOutcome,
 	"contextfabric.prior_consulted":                    PriorConsulted,
@@ -916,6 +921,60 @@ func (f BindingEpochUnchangedFields) SlogArgs() []any {
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"flip_during_investigation", f.FlipDuringInvestigation,
 		"binding_epoch_delta", f.BindingEpochDelta,
+	}
+}
+
+// CategoryFactCompositionFields is contextfabric.category_fact_composition's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CategoryFactComposition.Fields declares in spec.go.
+type CategoryFactCompositionFields struct {
+	OrgID           string
+	RequirementKind string
+	SubjectKind     string
+	ComposedKinds   []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CategoryFactCompositionFields uniformly, set ONLY by NewCategoryFactCompositionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCategoryFactCompositionFields is the generated constructor for CategoryFactCompositionFields -- every
+// field CategoryFactComposition.Fields declares is a required parameter.
+func NewCategoryFactCompositionFields(orgID string, requirementKind string, subjectKind string, composedKinds []string) CategoryFactCompositionFields {
+	valid := true
+	if composedKinds == nil {
+		valid = false
+	}
+	return CategoryFactCompositionFields{
+		OrgID:           orgID,
+		RequirementKind: requirementKind,
+		SubjectKind:     subjectKind,
+		ComposedKinds:   composedKinds,
+		constructed:     valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCategoryFactCompositionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CategoryFactCompositionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CategoryFactComposition's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CategoryFactCompositionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement_kind", contextfabric.SanitizeLogAttr(f.RequirementKind),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"composed_kinds", contextfabric.SanitizeLogStrings(f.ComposedKinds),
 	}
 }
 
@@ -1845,6 +1904,109 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 	}
 }
 
+// CoverageDisclosurePhrasingFields is contextfabric.coverage_disclosure_phrasing's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CoverageDisclosurePhrasing.Fields declares in spec.go.
+type CoverageDisclosurePhrasingFields struct {
+	OrgID     string
+	Outcome   string
+	Violation string
+	Phrased   int
+	Total     int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CoverageDisclosurePhrasingFields uniformly, set ONLY by NewCoverageDisclosurePhrasingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCoverageDisclosurePhrasingFields is the generated constructor for CoverageDisclosurePhrasingFields -- every
+// field CoverageDisclosurePhrasing.Fields declares is a required parameter.
+func NewCoverageDisclosurePhrasingFields(orgID string, outcome string, violation string, phrased int, total int) CoverageDisclosurePhrasingFields {
+	return CoverageDisclosurePhrasingFields{
+		OrgID:       orgID,
+		Outcome:     outcome,
+		Violation:   violation,
+		Phrased:     phrased,
+		Total:       total,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCoverageDisclosurePhrasingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CoverageDisclosurePhrasingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CoverageDisclosurePhrasing's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CoverageDisclosurePhrasingFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"violation", contextfabric.SanitizeLogAttr(f.Violation),
+		"phrased", f.Phrased,
+		"total", f.Total,
+	}
+}
+
+// CoverageEntriesCappedFields is contextfabric.coverage_entries_capped's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CoverageEntriesCapped.Fields declares in spec.go.
+type CoverageEntriesCappedFields struct {
+	OrgID                  string
+	CoverageEntriesServed  int
+	CoverageEntriesOmitted int
+	CoverageEntriesBound   int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CoverageEntriesCappedFields uniformly, set ONLY by NewCoverageEntriesCappedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCoverageEntriesCappedFields is the generated constructor for CoverageEntriesCappedFields -- every
+// field CoverageEntriesCapped.Fields declares is a required parameter.
+func NewCoverageEntriesCappedFields(orgID string, coverageEntriesServed int, coverageEntriesOmitted int, coverageEntriesBound int) CoverageEntriesCappedFields {
+	return CoverageEntriesCappedFields{
+		OrgID:                  orgID,
+		CoverageEntriesServed:  coverageEntriesServed,
+		CoverageEntriesOmitted: coverageEntriesOmitted,
+		CoverageEntriesBound:   coverageEntriesBound,
+		constructed:            true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCoverageEntriesCappedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CoverageEntriesCappedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CoverageEntriesCapped's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CoverageEntriesCappedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"coverage_entries_served", f.CoverageEntriesServed,
+		"coverage_entries_omitted", f.CoverageEntriesOmitted,
+		"coverage_entries_bound", f.CoverageEntriesBound,
+	}
+}
+
 // DirectReadFields is contextfabric.direct_read's generated typed construction interface
 // (CHAOS-5516): one Go field per Field DirectRead.Fields declares in spec.go.
 type DirectReadFields struct {
@@ -2541,6 +2703,50 @@ func (f EvidenceExpansionFields) SlogArgs() []any {
 		"source_rows", f.SourceRows,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// EvidenceLabelFallbackFields is contextfabric.evidence_label_fallback's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceLabelFallback.Fields declares in spec.go.
+type EvidenceLabelFallbackFields struct {
+	OrgID                   string
+	CfEvidenceLabelFallback int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceLabelFallbackFields uniformly, set ONLY by NewEvidenceLabelFallbackFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceLabelFallbackFields is the generated constructor for EvidenceLabelFallbackFields -- every
+// field EvidenceLabelFallback.Fields declares is a required parameter.
+func NewEvidenceLabelFallbackFields(orgID string, cfEvidenceLabelFallback int) EvidenceLabelFallbackFields {
+	return EvidenceLabelFallbackFields{
+		OrgID:                   orgID,
+		CfEvidenceLabelFallback: cfEvidenceLabelFallback,
+		constructed:             true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceLabelFallbackFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceLabelFallbackFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceLabelFallback's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceLabelFallbackFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cf_evidence_label_fallback", f.CfEvidenceLabelFallback,
 	}
 }
 
@@ -4456,6 +4662,75 @@ func (f OwnershipRoutingFields) SlogArgs() []any {
 		"truncated", f.Truncated,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// PeriodDeltaCompositionFields is contextfabric.period_delta_composition's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PeriodDeltaComposition.Fields declares in spec.go.
+type PeriodDeltaCompositionFields struct {
+	OrgID            string
+	RequirementKind  string
+	SubjectKind      string
+	Grain            string
+	ComposedKinds    []string
+	PriorReadIssued  bool
+	FailureReason    string
+	UnservedCount    int
+	TransitionCounts map[string]int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PeriodDeltaCompositionFields uniformly, set ONLY by NewPeriodDeltaCompositionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPeriodDeltaCompositionFields is the generated constructor for PeriodDeltaCompositionFields -- every
+// field PeriodDeltaComposition.Fields declares is a required parameter.
+func NewPeriodDeltaCompositionFields(orgID string, requirementKind string, subjectKind string, grain string, composedKinds []string, priorReadIssued bool, failureReason string, unservedCount int, transitionCounts map[string]int) PeriodDeltaCompositionFields {
+	valid := true
+	if composedKinds == nil {
+		valid = false
+	}
+	return PeriodDeltaCompositionFields{
+		OrgID:            orgID,
+		RequirementKind:  requirementKind,
+		SubjectKind:      subjectKind,
+		Grain:            grain,
+		ComposedKinds:    composedKinds,
+		PriorReadIssued:  priorReadIssued,
+		FailureReason:    failureReason,
+		UnservedCount:    unservedCount,
+		TransitionCounts: transitionCounts,
+		constructed:      valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPeriodDeltaCompositionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PeriodDeltaCompositionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PeriodDeltaComposition's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PeriodDeltaCompositionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement_kind", contextfabric.SanitizeLogAttr(f.RequirementKind),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"grain", contextfabric.SanitizeLogAttr(f.Grain),
+		"composed_kinds", contextfabric.SanitizeLogStrings(f.ComposedKinds),
+		"prior_read_issued", f.PriorReadIssued,
+		"failure_reason", contextfabric.SanitizeLogAttr(f.FailureReason),
+		"unserved_count", f.UnservedCount,
+		"transition_counts", f.TransitionCounts,
 	}
 }
 

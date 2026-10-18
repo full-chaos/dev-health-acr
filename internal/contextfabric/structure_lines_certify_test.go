@@ -347,7 +347,31 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 	} {
 		cases = append(cases, extra)
 	}
-	if len(cases) != 19 {
+	cases = append(cases, []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.EvidenceLabelFallback, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordEvidenceLabelFallback(c, principalOrg1, 2)
+		}},
+		{eventspec.CoverageEntriesCapped, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordCoverageEntriesCapped(c, principalOrg1, 105, 3)
+		}},
+		{eventspec.CoverageDisclosurePhrasing, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordCoverageDisclosurePhrasing(c, principalOrg1, contextfabric.CoverageDisclosureAbsent, "", 0, 2)
+		}},
+		{eventspec.CategoryFactComposition, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordCategoryFactComposition(c, principalOrg1, contextfabric.CategoryFactCompositionEvent{RequirementKind: contextfabric.FactStatus, SubjectKind: contextfabric.SubjectTeam, ComposedKinds: []contextfabric.FactKind{contextfabric.FactHealth}})
+		}},
+		{eventspec.PeriodDeltaComposition, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPeriodDeltaComposition(c, principalOrg1, contextfabric.PeriodDeltaCompositionEvent{
+				RequirementKind: contextfabric.FactStatus, SubjectKind: contextfabric.SubjectTeam, Grain: contextfabric.SubjectTeam,
+				ComposedKinds: []contextfabric.FactKind{contextfabric.FactHealth}, FailureReason: contextfabric.PeriodDeltaFailureAnchorUnresolved,
+				TransitionCounts: map[contextfabric.PeriodDeltaTransition]int{contextfabric.PeriodDeltaTransitionAnchorUnresolved: 1},
+			})
+		}},
+	}...)
+	if len(cases) != 24 {
 		t.Fatalf("want one case per declared line, have %d", len(cases))
 	}
 	for _, tc := range cases {
@@ -542,4 +566,115 @@ func TestSynthesisCountLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
 	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 1, "secondary_rows_bytes": 1})
 	sink.RecordDualTableFacts(ctx, principalOrg1, 2, 2)
 	certifyRefused(t, buf.Bytes(), eventspec.DualTableFacts, "a third dual table line in one request (two synthesis calls)", map[string]any{"dual_table_claims": 2})
+}
+
+func TestStatusCategoryCompositionLinesCertifyWhatTheEngineWrites(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	contextfabric.E6StatusCategoryCompositionForTest(ctx, sink)
+	if got := bytes.Count(buf.Bytes(), []byte(eventspec.CategoryFactComposition.Msg)); got != 3 {
+		t.Fatalf("a status requirement over repository, team, project and work item subjects wrote %d composition lines, want 3 (the work item composes nothing)", got)
+	}
+	seen := map[string]bool{}
+	for _, kind := range contextfabric.StatusCategoryComposedSubjectKindVocabulary() {
+		line := certifyRequestLine(t, buf.Bytes(), eventspec.CategoryFactComposition, map[string]any{"org_id": "org_1", "requirement_kind": "status", "subject_kind": kind})
+		if len(line["composed_kinds"].([]any)) == 0 {
+			t.Errorf("%s: no composed kinds", kind)
+		}
+		seen[kind] = true
+	}
+	sameMembers(t, "composed subject kinds", keysOf(seen), contextfabric.StatusCategoryComposedSubjectKindVocabulary())
+	buf.Reset()
+	sink.RecordCategoryFactComposition(ctx, principalOrg1, contextfabric.CategoryFactCompositionEvent{RequirementKind: contextfabric.FactStatus, SubjectKind: "future_kind"})
+	certifyRefused(t, buf.Bytes(), eventspec.CategoryFactComposition, "an unknown subject kind")
+	buf.Reset()
+	sink.RecordCategoryFactComposition(ctx, principalOrg1, contextfabric.CategoryFactCompositionEvent{RequirementKind: contextfabric.FactStatus, SubjectKind: contextfabric.SubjectTeam, ComposedKinds: []contextfabric.FactKind{"future_fact"}})
+	certifyRefused(t, buf.Bytes(), eventspec.CategoryFactComposition, "an unknown composed fact kind")
+}
+
+func TestPeriodDeltaLinesCertifyEveryOutcomeTheEngineWrites(t *testing.T) {
+	t.Parallel()
+	failures := map[string]bool{}
+	for scenario, want := range map[string]struct {
+		failure string
+		issued  bool
+	}{
+		"compared": {"", true}, "deadline": {"deadline_exceeded", false}, "canceled": {"canceled", false},
+		"read_failed": {"read_failed", false}, "anchor": {"anchor_unresolved", false},
+	} {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		contextfabric.PeriodDeltaForTest(ctx, sink, scenario)
+		if got := bytes.Count(buf.Bytes(), []byte(eventspec.PeriodDeltaComposition.Msg)); got != 2 {
+			t.Fatalf("%s: %d period delta lines for a team and a project, want 2", scenario, got)
+		}
+		for _, kind := range contextfabric.PeriodDeltaSubjectKindVocabulary() {
+			line := certifyRequestLine(t, buf.Bytes(), eventspec.PeriodDeltaComposition, map[string]any{
+				"org_id": "org_1", "requirement_kind": "status", "subject_kind": kind, "grain": kind,
+			})
+			counts := line["transition_counts"].(map[string]any)
+			keys := map[string]bool{}
+			total := 0.0
+			for transition, count := range counts {
+				keys[transition] = true
+				total += count.(float64)
+			}
+			sameMembers(t, scenario+" transition keys (zeros included)", keysOf(keys), contextfabric.PeriodDeltaTransitionLogVocabulary())
+			if total != 1 {
+				t.Errorf("%s/%s: transitions counted %v subjects, want 1", scenario, kind, total)
+			}
+			if kind == "team" && scenario != "compared" && line["failure_reason"] != want.failure {
+				t.Errorf("%s: failure_reason = %v, want %q", scenario, line["failure_reason"], want.failure)
+			}
+			failures[line["failure_reason"].(string)] = true
+		}
+	}
+	sameMembers(t, "period delta failure reasons", keysOf(failures), contextfabric.PeriodDeltaFailureReasonVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordPeriodDeltaComposition(ctx, principalOrg1, contextfabric.PeriodDeltaCompositionEvent{
+		RequirementKind: contextfabric.FactStatus, SubjectKind: contextfabric.SubjectTeam, Grain: contextfabric.SubjectTeam,
+		TransitionCounts: map[contextfabric.PeriodDeltaTransition]int{"future_transition": 1},
+	})
+	certifyRefused(t, buf.Bytes(), eventspec.PeriodDeltaComposition, "a transition outside the vocabulary")
+}
+
+func TestCoverageLinesCertifyWhatTheEngineWrites(t *testing.T) {
+	t.Parallel()
+	served, omitted, fallbacks := contextfabric.CoverageCapAndLabelsForTest()
+	if served != 105 || omitted != 5 || fallbacks == 0 {
+		t.Fatalf("cap and labels reported served=%d omitted=%d fallbacks=%d, want 105, 5 and a nonzero fallback count", served, omitted, fallbacks)
+	}
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordCoverageEntriesCapped(ctx, principalOrg1, served, omitted)
+	sink.RecordEvidenceLabelFallback(ctx, principalOrg1, fallbacks)
+	certifyRequestLine(t, buf.Bytes(), eventspec.CoverageEntriesCapped, map[string]any{"org_id": "org_1", "coverage_entries_served": served, "coverage_entries_omitted": omitted, "coverage_entries_bound": 105})
+	certifyRequestLine(t, buf.Bytes(), eventspec.EvidenceLabelFallback, map[string]any{"org_id": "org_1", "cf_evidence_label_fallback": fallbacks})
+	sink.RecordCoverageEntriesCapped(ctx, principalOrg1, served, omitted)
+	certifyRequestLine(t, buf.Bytes(), eventspec.CoverageEntriesCapped, map[string]any{"coverage_entries_omitted": omitted})
+	sink.RecordCoverageEntriesCapped(ctx, principalOrg1, served, omitted)
+	certifyRefused(t, buf.Bytes(), eventspec.CoverageEntriesCapped, "a third capped line in one request", map[string]any{"coverage_entries_omitted": omitted})
+	sink.RecordEvidenceLabelFallback(ctx, principalOrg1, 1)
+	certifyRefused(t, buf.Bytes(), eventspec.EvidenceLabelFallback, "a second label fallback line in one request")
+
+	outcomes, violations := map[string]bool{}, map[string]bool{}
+	for _, verdict := range contextfabric.CoverageDisclosureVerdictsForTest() {
+		buf.Reset()
+		sink.RecordCoverageDisclosurePhrasing(ctx, principalOrg1, verdict.Outcome, verdict.Violation, verdict.Phrased, verdict.Total)
+		certifyRequestLine(t, buf.Bytes(), eventspec.CoverageDisclosurePhrasing, map[string]any{
+			"org_id": "org_1", "outcome": string(verdict.Outcome), "violation": string(verdict.Violation), "phrased": verdict.Phrased, "total": verdict.Total,
+		})
+		outcomes[string(verdict.Outcome)] = true
+		violations[string(verdict.Violation)] = true
+	}
+	sameMembers(t, "disclosure outcomes", keysOf(outcomes), contextfabric.CoverageDisclosureOutcomeVocabulary())
+	sameMembers(t, "disclosure violations", keysOf(violations), contextfabric.CoverageDisclosureViolationVocabulary())
+	buf.Reset()
+	sink.RecordCoverageDisclosurePhrasing(ctx, principalOrg1, "future_outcome", "", 0, 0)
+	certifyRefused(t, buf.Bytes(), eventspec.CoverageDisclosurePhrasing, "an unknown disclosure outcome")
+	buf.Reset()
+	sink.RecordCoverageDisclosurePhrasing(ctx, principalOrg1, contextfabric.CoverageDisclosureRejectedByGuard, "future_violation", 0, 0)
+	certifyRefused(t, buf.Bytes(), eventspec.CoverageDisclosurePhrasing, "an unknown disclosure violation")
 }
