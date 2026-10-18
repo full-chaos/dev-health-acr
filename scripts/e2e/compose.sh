@@ -425,12 +425,14 @@ mint_ops_service_token() {
 # wait_go_api polls the Go api internal listener from the compose network with the svc_acr_ bearer, so
 # readiness also proves the auth path: the internal listener answers 401 to a request without it. The
 # go-api image is distroless (no shell, no wget), so the probe runs in the nginx image already pinned
-# here. The failure names the last HTTP status seen, so a rejected credential (401) reads differently
+# here. The token reaches the probe through the environment by NAME only, never on a command line.
+# The failure names the last HTTP status seen, so a rejected credential (401) reads differently
 # from a listener that is not accepting connections.
 wait_go_api() {
   local token="$1" attempt output status=''
   for attempt in $(seq 1 90); do
-    if output="$(compose run --rm --no-deps -T --entrypoint wget acr-tls-proxy -S -O /dev/null --header "Authorization: Bearer ${token}" http://go-api:8091/api/v1/internal/acr/health 2>&1)"; then
+    # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN is expanded by the probe container's sh, not here.
+    if output="$(ACR_PROBE_TOKEN="$token" compose run --rm --no-deps -T -e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null --header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' 2>&1)"; then
       return 0
     fi
     status="$(sed -nE 's#.*HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' <<<"$output" | tail -n 1)"

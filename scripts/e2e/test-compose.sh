@@ -32,7 +32,14 @@ fi
 grep -Fq 'Ops organization provisioning failed' "$script"
 # The ops internal listener answers 401 to a request without the svc_acr_ bearer (ops CHAOS-9993): the
 # credential is minted before the readiness probe, the probe sends it, and a rejection is named.
-grep -Fq -- '--header "Authorization: Bearer ${token}" http://go-api:8091/api/v1/internal/acr/health' "$script"
+grep -Fq -- '-e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c' "$script"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' "$script"
+# No secret on a command line: the readiness probe never expands the bearer value into an argv.
+if sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -nE 'Bearer \$\{token\}|Bearer \$token'; then
+  printf 'the svc_acr_ token must reach the probe by environment name, not a command line\n' >&2
+  exit 1
+fi
 grep -Fq 'mint_ops_service_token()' "$script"
 mint_line="$(grep -n 'token="$(mint_ops_service_token)"' "$script" | head -n 1 | cut -d: -f1)"
 wait_line="$(grep -n '^  wait_go_api "$token"' "$script" | head -n 1 | cut -d: -f1)"
