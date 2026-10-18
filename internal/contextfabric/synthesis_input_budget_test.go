@@ -17,12 +17,18 @@ import (
 
 type budgetTurn struct {
 	result     InvestigationResult
+	telemetry  *recordingTelemetry
 	collected  *contractsv1.ContextFabricSynthesisInput
 	totalBytes int
 	err        error
 }
 
 func runBudgetTurn(t *testing.T, teams, noteBytes, budget int) budgetTurn {
+	t.Helper()
+	return runBudgetTurnWithRules(t, teams, noteBytes, budget, []string{"rule"})
+}
+
+func runBudgetTurnWithRules(t *testing.T, teams, noteBytes, budget int, rules []string) budgetTurn {
 	t.Helper()
 	members := make([]CohortMember, 0, teams)
 	facts := make([]CanonicalFact, 0, teams)
@@ -33,6 +39,7 @@ func runBudgetTurn(t *testing.T, teams, noteBytes, budget int) budgetTurn {
 			"severity": StringFactValue("high"), "note": StringFactValue(strings.Repeat("x", noteBytes)),
 		}})
 	}
+	tel := &recordingTelemetry{}
 	interpretation := InterpretedQuestion{
 		Shape: ShapeDiscoveredCohort, RequestedJudgment: "teams_under_pressure",
 		TimeContext:      TimeContext{Axis: TemporalCurrent},
@@ -59,14 +66,15 @@ func runBudgetTurn(t *testing.T, teams, noteBytes, budget int) budgetTurn {
 			}, nil
 		}),
 		Synthesizer: RuntimeAnswerSynthesizer{
-			Runtime: &clientRuntime{},
-			Options: RuntimeAnswerSynthesizerOptions{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
+			Telemetry: tel,
+			Runtime:   &clientRuntime{},
+			Options:   RuntimeAnswerSynthesizerOptions{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
 			ClientSynthesis: &ClientSynthesisAssembly{
 				PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")),
-				Rules: []string{"rule"}, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode,
+				Rules: rules, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode,
 			},
 		},
-		Results: &resultStoreStub{}, Telemetry: &recordingTelemetry{},
+		Results: &resultStoreStub{}, Telemetry: tel,
 	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(300, 0).UTC() }, NewResultID: func() string { return "result_94480001" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
@@ -78,7 +86,7 @@ func runBudgetTurn(t *testing.T, teams, noteBytes, budget int) budgetTurn {
 	request.Options.MaxSerializedBytes = budget
 	ctx, collected := WithSynthesisInputCollector(context.Background())
 	result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org-1"}, request)
-	turn := budgetTurn{result: result, collected: collected(), err: err}
+	turn := budgetTurn{result: result, collected: collected(), err: err, telemetry: tel}
 	if err == nil && turn.collected != nil {
 		body, marshalErr := json.Marshal(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: result, SynthesisInput: turn.collected})
 		if marshalErr != nil {
@@ -156,10 +164,55 @@ func TestClientSynthesisCoreOverTheBudgetShareIsABudgetRefusal(t *testing.T) {
 	t.Parallel()
 	turn := runBudgetTurn(t, 4, 6000, 8192)
 	var refusal AnswerBudgetRefusal
-	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) || refusal.MaxSerializedBytes != int64(clientSynthesisBodyShare(8192)) || refusal.MeasuredBytes <= refusal.MaxSerializedBytes || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
-		t.Fatalf("Investigate() error = %v, want the byte budget refusal naming the input share of 8192 with measured above it", turn.err)
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) || refusal.MaxSerializedBytes != 8192 || refusal.MeasuredBytes <= refusal.MaxSerializedBytes || refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal naming the caller's 8192 with measured above it", turn.err)
 	}
 	if turn.collected != nil {
 		t.Fatal("a synthesis input was delivered with the refusal")
+	}
+}
+
+// The refusal states the caller's own byte limit, not the half of it the
+// synthesis input is first cut to.
+func TestClientSynthesisBudgetRefusalStatesTheCallerLimit(t *testing.T) {
+	t.Parallel()
+	const budget = 16384
+	turn := runBudgetTurn(t, 1, 14000, budget)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal", turn.err)
+	}
+	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes <= budget {
+		t.Fatalf("refusal states a %d-byte limit with %d measured, want the caller's %d with measured above it", refusal.MaxSerializedBytes, refusal.MeasuredBytes, budget)
+	}
+	if !strings.Contains(turn.err.Error(), fmt.Sprintf("%d-byte budget", budget)) {
+		t.Fatalf("refusal text = %q, want it to name the %d-byte budget", turn.err.Error(), budget)
+	}
+}
+
+// A budget whose half share cannot hold the envelope is refused with the size
+// the turn needs: the envelope, the smallest input and the answer floor.
+func TestClientSynthesisEnvelopeRefusalMeasuresTheSmallestInput(t *testing.T) {
+	t.Parallel()
+	const budget = 8192
+	rules := []string{strings.Repeat("r", 5300)}
+	turn := runBudgetTurnWithRules(t, 1, 2000, budget, rules)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal", turn.err)
+	}
+	assembly := &ClientSynthesisAssembly{PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")), Rules: rules, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode}
+	envelope, err := assembly.envelopeBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientSynthesisBodyShare(budget) >= envelope {
+		t.Fatalf("envelope %d fits the %d share, the early refusal is not reached", envelope, clientSynthesisBodyShare(budget))
+	}
+	if len(turn.telemetry.synthesisInputBounds) != 0 {
+		t.Fatalf("the refusal measurement emitted %d input bound events %+v, want none", len(turn.telemetry.synthesisInputBounds), turn.telemetry.synthesisInputBounds)
+	}
+	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes < int64(envelope+2000+ClientSynthesisAnswerFloorBytes) {
+		t.Fatalf("refusal measured %d against %d, want the caller's %d and at least envelope %d + input 2000 + floor %d", refusal.MeasuredBytes, refusal.MaxSerializedBytes, budget, envelope, ClientSynthesisAnswerFloorBytes)
 	}
 }

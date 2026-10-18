@@ -2150,6 +2150,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	graphRequest := request
 	// carryCtx (installed above, before window-receipt redemption) is the
 	// per-request memo every prior-result load below shares.
+	const maxSubjectHints = 50
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorOutcomes []priorSubjectReceiptOutcome
@@ -2183,8 +2184,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// 1:1 index-aligned from resolvePriorSubjectHints, but diverge
 		// here on purpose -- each feeds a consumer with its own bound (or
 		// none).
-		const maxSubjectHints = 50
-		if available := maxSubjectHints - len(request.RequestedScope.SubjectHints); len(priorHints) > available {
+		available := maxSubjectHints - len(request.RequestedScope.SubjectHints)
+		if _, picked := confirmedCandidateHint(structureCanon.Confirmed); picked {
+			// The pick this turn's candidate receipt made takes the last
+			// slot before a prior-subject receipt does.
+			available--
+		}
+		if len(priorHints) > available {
 			if available < 0 {
 				available = 0
 			}
@@ -2214,6 +2220,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		for _, receipt := range request.PriorSubjectReceipts {
 			priorOutcomes = append(priorOutcomes, priorSubjectReceiptOutcome{receipt: receipt, preGraphSkipReason: priorSubjectReceiptSkipUnloadable})
 		}
+	}
+
+	if pick, ok := confirmedCandidateHint(structureCanon.Confirmed); ok {
+		hints := append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...)
+		if len(hints) >= maxSubjectHints {
+			hints = hints[:maxSubjectHints-1]
+			confirmedNeedLedger.CandidateHintEvicted = true
+		}
+		graphRequest.RequestedScope.SubjectHints = append(hints, pick)
 	}
 
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
@@ -3253,7 +3268,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		issuers := parentReceiptIssuers{named: carryParentSeed(request), issuedFor: substitutionInput.Parent.IssuedFor, loaded: priorLoadedResults}
 		origin := subjectSubstitutionOriginOf(substitutionCommitted, substitutionInput.Parent.Subject, issuers, priorOutcomes, request.RequestedScope.SubjectHints, appliedNeeds)
 		substitutionInput.Origin, substitutionInput.OriginReceiptResultID, substitutionInput.OriginReceiptID, substitutionInput.OriginIssuedFor = origin.Origin, origin.ReceiptResultID, origin.ReceiptID, origin.IssuedFor
-		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, issuers, priorOutcomes)
+		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, issuers, priorOutcomes) || subjectSubstitutionRedeemedCandidate(substitutionCommitted, issuers, structureCanon.Confirmed)
 		// The re-read costs a keyed graph call, so it is asked only when its
 		// answer can change what this turn hands back: the identities already
 		// differ and the caller did not pick this one, so the guard is about

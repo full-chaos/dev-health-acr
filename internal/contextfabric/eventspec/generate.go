@@ -322,6 +322,24 @@ func goVarName(e Event) string {
 		return "ProjectedRowsCount"
 	case ProjectedRowsByFactKind.ID:
 		return "ProjectedRowsByFactKind"
+	case DualTableFacts.ID:
+		return "DualTableFacts"
+	case ModelRowsStripped.ID:
+		return "ModelRowsStripped"
+	case DriverSourceStateCorrected.ID:
+		return "DriverSourceStateCorrected"
+	case DriverIdentityCollisions.ID:
+		return "DriverIdentityCollisions"
+	case EvidenceLabelFallback.ID:
+		return "EvidenceLabelFallback"
+	case CoverageEntriesCapped.ID:
+		return "CoverageEntriesCapped"
+	case CoverageDisclosurePhrasing.ID:
+		return "CoverageDisclosurePhrasing"
+	case CategoryFactComposition.ID:
+		return "CategoryFactComposition"
+	case PeriodDeltaComposition.ID:
+		return "PeriodDeltaComposition"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:

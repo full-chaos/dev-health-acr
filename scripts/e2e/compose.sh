@@ -395,17 +395,56 @@ dho() {
     query-api "$@"
 }
 
-# wait_go_api polls the Go api internal listener from the compose network. The go-api image is
-# distroless (no shell, no wget), so the probe runs in the nginx image already pinned here.
-wait_go_api() {
-  local i
-  for i in $(seq 1 90); do
-    if compose run --rm --no-deps -T --entrypoint wget acr-tls-proxy -q -O /dev/null http://go-api:8091/api/v1/internal/acr/health >/dev/null 2>&1; then
+# mint_ops_service_token creates the svc_acr_ credential the ops internal listener requires on every
+# request (ops CHAOS-9993). It talks to Postgres directly through dho, so it needs no running api, but
+# the schema may still be migrating when the services are first started: it retries, bounded by an
+# attempt count and a deadline, and logs each retry with the first line of dho's stderr and the final
+# outcome. The token is printed on stdout only; nothing else is.
+mint_ops_service_token() {
+  local attempt=1 max_attempts=30 deadline=$((SECONDS + 180)) token reason errfile
+  errfile="$(mktemp)"
+  while :; do
+    if token="$(dho service-credentials create --service acr --scope entitlements:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
+      rm -f "$errfile"
+      note "ops service credential minted (attempt ${attempt})"
+      printf '%s' "$token"
       return 0
+    fi
+    reason="$(head -n 1 "$errfile" | cut -c1-200)"
+    if (( attempt >= max_attempts || SECONDS >= deadline )); then
+      rm -f "$errfile"
+      note "ops service credential not minted after ${attempt} attempts: ${reason:-no error output}"
+      return 1
+    fi
+    note "ops service credential not minted yet (attempt ${attempt}/${max_attempts}): ${reason:-no error output}"
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+}
+
+# wait_go_api polls the Go api internal listener from the compose network with the svc_acr_ bearer, so
+# readiness also proves the auth path: the internal listener answers 401 to a request without it. The
+# go-api image is distroless (no shell, no wget), so the probe runs in the nginx image already pinned
+# here. The token reaches the probe through the environment by NAME only, never on a command line.
+# The failure names the last HTTP status seen, so a rejected credential (401) reads differently
+# from a listener that is not accepting connections.
+wait_go_api() {
+  local token="$1" attempt output status=''
+  for attempt in $(seq 1 90); do
+    # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN is expanded by the probe container's sh, not here.
+    if output="$(ACR_PROBE_TOKEN="$token" compose run --rm --no-deps -T -e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null --header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' 2>&1)"; then
+      return 0
+    fi
+    status="$(sed -nE 's#.*HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' <<<"$output" | tail -n 1)"
+    if (( attempt % 10 == 0 )); then
+      note "Go ops api internal listener not ready (probe ${attempt}/90, last HTTP status: ${status:-none})"
     fi
     sleep 2
   done
-  die 'Go ops api internal listener did not become ready'
+  if [[ "$status" == 401 || "$status" == 403 ]]; then
+    die "Go ops api internal listener rejected the svc_acr_ credential (last HTTP status ${status})"
+  fi
+  die "Go ops api internal listener did not become ready (last HTTP status: ${status:-none, not accepting connections})"
 }
 
 ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
@@ -421,7 +460,9 @@ provision_ops_control_plane() {
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
   compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
-  wait_go_api
+  token="$(mint_ops_service_token)" || die 'Ops credential provisioning failed'
+  write_secret "$STATE/secrets/ops-token" "$token"
+  wait_go_api "$token"
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -429,9 +470,6 @@ provision_ops_control_plane() {
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || die 'Ops org provisioning did not return an ID'
   dho admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated compose E2E' --expires-days 1 >/dev/null
-  token="$(dho service-credentials create --service acr --scope entitlements:read)"
-  [[ "$token" == svc_acr_* ]] || die 'Ops credential provisioning returned an invalid token shape'
-  write_secret "$STATE/secrets/ops-token" "$token"
   # This is the one secret file the entitlement client reads through readRestrictedFile /
   # isPrivateSecret (internal/entitlements/file_owner_unix.go), not the more common
   # internal/config.SecretValue path the rest of write_secret()'s files go through.
@@ -663,13 +701,29 @@ expect_typed_http_error() {
   "$REPO_ROOT/scripts/e2e/validate-error-receipt.sh" "$expected_http_status" "$expected_code" "$http_status" "$response_body" || die "expected HTTP ${expected_http_status} response with typed ${expected_code} error"
 }
 
+run_oneshot() {
+  local service="$1" failure="$2" attempts=0 row state exit_code
+  compose up -d "$service" >/dev/null
+  while :; do
+    row="$(compose ps -a --format '{{.State}} {{.ExitCode}}' "$service" 2>/dev/null | head -1)"
+    state="${row%% *}"
+    exit_code="${row##* }"
+    if [[ "$state" == 'exited' ]]; then
+      [[ "$exit_code" == '0' ]] && return 0
+      break
+    fi
+    attempts=$((attempts + 1))
+    [[ "$attempts" -lt 90 ]] || break
+    sleep 2
+  done
+  compose logs --no-color --tail 50 "$service" 2>&1 | redact_log || true
+  die "$failure (state=${state:-none} exit=${exit_code:-none})"
+}
+
 prepare_acr_database() {
-  compose up -d acr-db-init >/dev/null
-  compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'
-  compose up -d acr-migrate >/dev/null
-  compose wait acr-migrate >/dev/null || die 'ACR migration failed'
-  compose up -d acr-db-acl >/dev/null
-  compose wait acr-db-acl >/dev/null || die 'ACR runtime ACL reconciliation failed'
+  run_oneshot acr-db-init 'ACR role initialization failed'
+  run_oneshot acr-migrate 'ACR migration failed'
+  run_oneshot acr-db-acl 'ACR runtime ACL reconciliation failed'
 }
 
 run_failure() {
@@ -684,7 +738,7 @@ run_failure() {
     clickhouse-read-denied)
       start_happy; expect_clickhouse_readonly_denial; SAFE_BOUNDARY='read-only ClickHouse user rejected an E2E-only granted insert with exact code 164 before it could mutate evidence' ;;
     migration-failure)
-      bootstrap_ops; compose up -d acr-db-init >/dev/null; compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'; migration_one_checksum="$(openssl dgst -sha256 "$REPO_ROOT/migrations/postgres/0001_acr_core.sql")"; migration_one_checksum="${migration_one_checksum##* }"; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 < "$REPO_ROOT/migrations/postgres/0001_acr_core.sql" >/dev/null; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c "CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); INSERT INTO acr.schema_migrations (version, name, checksum) VALUES (1, '0001_acr_core.sql', '${migration_one_checksum}'); ALTER TABLE acr.agent_episodes ADD CONSTRAINT agent_episodes_org_repo_idempotency_key_key CHECK (false);" >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
+      bootstrap_ops; run_oneshot acr-db-init 'ACR role initialization failed'; migration_one_checksum="$(openssl dgst -sha256 "$REPO_ROOT/migrations/postgres/0001_acr_core.sql")"; migration_one_checksum="${migration_one_checksum##* }"; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 < "$REPO_ROOT/migrations/postgres/0001_acr_core.sql" >/dev/null; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c "CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); INSERT INTO acr.schema_migrations (version, name, checksum) VALUES (1, '0001_acr_core.sql', '${migration_one_checksum}'); ALTER TABLE acr.agent_episodes ADD CONSTRAINT agent_episodes_org_repo_idempotency_key_key CHECK (false);" >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
   esac
   note "expected failure verified: ${SAFE_BOUNDARY}"
   return 1

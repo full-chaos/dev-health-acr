@@ -30,6 +30,25 @@ if grep -Eq 'acr-ops-tls|acr-pki-init|acr_e2e_(postgres|clickhouse)_tls|sslmode=
   exit 1
 fi
 grep -Fq 'Ops organization provisioning failed' "$script"
+# The ops internal listener answers 401 to a request without the svc_acr_ bearer (ops CHAOS-9993): the
+# credential is minted before the readiness probe, the probe sends it, and a rejection is named.
+grep -Fq -- '-e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c' "$script"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' "$script"
+# No secret on a command line: the readiness probe never expands the bearer value into an argv.
+if sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -nE 'Bearer \$\{token\}|Bearer \$token'; then
+  printf 'the svc_acr_ token must reach the probe by environment name, not a command line\n' >&2
+  exit 1
+fi
+grep -Fq 'mint_ops_service_token()' "$script"
+mint_line="$(grep -n 'token="$(mint_ops_service_token)"' "$script" | head -n 1 | cut -d: -f1)"
+wait_line="$(grep -n '^  wait_go_api "$token"' "$script" | head -n 1 | cut -d: -f1)"
+[[ -n "$mint_line" && -n "$wait_line" && "$mint_line" -lt "$wait_line" ]]
+if grep -Fq 'wget -q -O /dev/null http://go-api:8091' "$script"; then
+  printf 'the ops readiness probe must send the svc_acr_ bearer\n' >&2
+  exit 1
+fi
+grep -Fq 'rejected the svc_acr_ credential (last HTTP status' "$script"
 grep -Fq 'actual_status="$?"' "$script"
 grep -Fq 'expected failure diagnostics' "$script"
 grep -Fq 'for tool in docker openssl curl git jq' "$script"
@@ -68,6 +87,8 @@ grep -Fq "GRANT INSERT ON \${db}.acr_e2e_readonly_probe TO acr_reader;" "$script
 grep -Fq "INSERT INTO acr_\${PROJECT//-/}_e2e.acr_e2e_readonly_probe" "$script"
 grep -Fq 'redact_log()' "$script"
 grep -Fq 'acr-migrate acr-api' "$script"
+grep -Fq 'run_oneshot()' "$script"
+if grep -Eq 'compose wait ' "$script"; then exit 1; fi
 grep -Fq 'ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
 if grep -Eq 'ACR_(POSTGRES_DSN|CLICKHOUSE_DSN|EVIDENCE_ID_ACTIVE_KID|EVIDENCE_ID_KEYS):' "$script"; then exit 1; fi

@@ -229,6 +229,9 @@ type confirmedNeedLedgerResult struct {
 	Entries        []confirmedStructureMember
 	Dropped        []ConfirmedNeedMemberDrop
 	SourceResultID string
+	// CandidateHintEvicted is set by the engine when this turn's redeemed
+	// candidate pick took the last hint slot from a caller-supplied hint.
+	CandidateHintEvicted bool
 	// Parent is what the named parent SERVED, read from its stored result
 	// payload and retained on every outcome -- admitted or refused, and
 	// whether or not its semantic snapshot read. Admission decides whether the parent's
@@ -794,6 +797,9 @@ type ConfirmedNeedLedgerEvent struct {
 	AppliedHandleKind         contractsv1.ContextFabricSubjectKind
 	AppliedHandleValueHash    string
 	Dropped                   []ConfirmedNeedMemberDrop
+	// CandidateHintEvicted: the redeemed candidate pick displaced the last
+	// caller-supplied hint because all 50 hint slots were taken.
+	CandidateHintEvicted bool
 	// AppliedAnchorBasis is the applied subject_anchor entry's own closed
 	// basis (ConfirmedNeedBasis) -- "" for an ordinary receipt-redeemed
 	// entry, "engine_committed" for one the engine bound with no offer ever
@@ -904,7 +910,7 @@ type ConfirmedNeedLedgerEvent struct {
 func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, captureSkipReason CaptureSkipReason, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition, substitution subjectSubstitutionDecision) ConfirmedNeedLedgerEvent {
 	event := ConfirmedNeedLedgerEvent{
 		Outcome: ledger.Outcome, SourceResultID: ledger.SourceResultID,
-		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
+		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped, CandidateHintEvicted: ledger.CandidateHintEvicted,
 		CaptureDecision: captureDecision, CaptureSkipReason: captureSkipReason,
 		AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
 		SubstitutionGuard:                  substitution.Outcome,

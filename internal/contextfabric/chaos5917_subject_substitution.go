@@ -849,6 +849,27 @@ func subjectSubstitutionRedeemedChoice(committed []SubjectRef, issuers parentRec
 	return false
 }
 
+// subjectSubstitutionRedeemedCandidate is subjectSubstitutionRedeemedChoice's
+// twin for a candr_ pick: the one committed identity is the candidate this
+// turn's receipt redeemed, and the result that issued that receipt is the
+// parent this turn continues. A candidate offer is the parent asking which
+// subject is meant, so the pick answers it.
+func subjectSubstitutionRedeemedCandidate(committed []SubjectRef, issuers parentReceiptIssuers, confirmed []confirmedStructureMember) bool {
+	if len(committed) != 1 {
+		return false
+	}
+	chosen := committed[0]
+	for _, c := range confirmed {
+		if c.Member != contractsv1.ContextFabricStructureNeedSubjectCandidate || !issuers.issues(c.PriorResultID) {
+			continue
+		}
+		if c.AppliedKind == chosen.Kind && c.AppliedValue == chosen.CanonicalID {
+			return true
+		}
+	}
+	return false
+}
+
 // subjectSubstitutionClarificationPrompt is the sentence a guarded turn
 // carries. It states what happened -- the parent's subject, this turn's
 // reading, and that nothing was read for either -- and asks the one question
