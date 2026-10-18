@@ -187,3 +187,90 @@ func TestInterpretDoesNotRetryAModelRefusal(t *testing.T) {
 		t.Fatalf("requests = %d waits = %v, want 1 call and no wait for a refusal", len(client.requests), log.waits)
 	}
 }
+
+func TestWithRetryOnlyRetriesWhenTheDeadlineCoversTheWaitAndTheNextAttempt(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		deadline  time.Duration
+		fallback  bool
+		wantCalls int
+	}{
+		{"no deadline retries", 0, false, 2},
+		{"room for the wait and one attempt", 3 * time.Second, false, 2},
+		{"wait plus attempt does not fit", 1200 * time.Millisecond, false, 1},
+		{"room for the fallback attempt too", 4 * time.Second, true, 2},
+		{"fallback attempt would be starved", 2200 * time.Millisecond, true, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			override := Config{MaxAttempts: 2}
+			if tc.fallback {
+				override.Fallback = erroringFallbackRuntime{err: errors.New("fallback")}
+			}
+			runtime := mustRuntime(t, &generatorStub{}, override)
+			runtime.sleep = (&sleepLog{}).sleep
+			ctx := context.Background()
+			if tc.deadline > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.deadline)
+				defer cancel()
+			}
+			calls := 0
+			_, _ = runtime.withRetry(ctx, func(context.Context) error {
+				calls++
+				return clientError(llm.ClassServer)
+			})
+			if calls != tc.wantCalls {
+				t.Fatalf("calls = %d, want %d", calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestWithRetryRetriesEveryClientClassAtEveryAttemptBound(t *testing.T) {
+	t.Parallel()
+	retried := []llm.ErrorClass{llm.ClassRateLimit, llm.ClassServer, llm.ClassTimeout, llm.ClassTransport}
+	refused := []llm.ErrorClass{llm.ClassAuth, llm.ClassModelNotFound, llm.ClassInvalidRequest, llm.ClassContextLength, llm.ClassOutput, llm.ClassGeneric, llm.ClassBatchTimeout}
+	for maxAttempts := 1; maxAttempts <= 3; maxAttempts++ {
+		wantRetried := min(maxAttempts, 2)
+		for _, class := range retried {
+			runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: maxAttempts})
+			runtime.sleep = (&sleepLog{}).sleep
+			calls := 0
+			_, _ = runtime.withRetry(context.Background(), func(context.Context) error {
+				calls++
+				return clientError(class)
+			})
+			if calls != wantRetried {
+				t.Fatalf("class %s at MaxAttempts %d: calls = %d, want %d", class, maxAttempts, calls, wantRetried)
+			}
+		}
+		for _, class := range refused {
+			runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: maxAttempts})
+			runtime.sleep = (&sleepLog{}).sleep
+			calls := 0
+			_, _ = runtime.withRetry(context.Background(), func(context.Context) error {
+				calls++
+				return clientError(class)
+			})
+			if calls != 1 {
+				t.Fatalf("class %s at MaxAttempts %d: calls = %d, want 1", class, maxAttempts, calls)
+			}
+		}
+	}
+}
+
+func TestSleepContextStopsWhenTheContextEnds(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	if err := sleepContext(ctx, time.Minute); !errors.Is(err, context.Canceled) || time.Since(started) > 5*time.Second {
+		t.Fatalf("sleepContext on a cancelled context = %v after %s, want context.Canceled at once", err, time.Since(started))
+	}
+	if err := sleepContext(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("sleepContext = %v, want nil after the wait", err)
+	}
+}

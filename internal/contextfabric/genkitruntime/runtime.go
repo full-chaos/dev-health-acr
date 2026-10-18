@@ -2753,6 +2753,16 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 				r.logRetryDecision(ctx, class, attempt, wait, false)
 				return outcomes, err
 			}
+			if deadline, ok := ctx.Deadline(); ok {
+				need := wait + r.config.Timeout
+				if r.config.Fallback != nil {
+					need += r.config.Timeout
+				}
+				if time.Until(deadline) < need {
+					r.logRetryDecision(ctx, class, attempt, wait, false)
+					return outcomes, err
+				}
+			}
 			r.logRetryDecision(ctx, class, attempt, wait, true)
 			if sleepErr := r.sleep(ctx, wait); sleepErr != nil {
 				return outcomes, err
@@ -2772,8 +2782,11 @@ const baseLLMRetryWait = 500 * time.Millisecond
 // sent one, otherwise baseLLMRetryWait. A shared-client failure is retried at
 // most once whatever Config.MaxAttempts is (MaxAttempts still bounds every
 // other retry), so the worst case is the client's own two calls times two
-// runtime attempts. ok is false for an error that is not the shared client's,
-// which keeps its immediate retry.
+// runtime attempts. A retry also needs the caller's remaining deadline to
+// cover the wait, one full attempt budget and, when a fallback exists, its
+// attempt budget, so a wait never eats time the draw loops reserved. ok is
+// false for an error that is not the shared client's, which keeps its
+// immediate retry.
 func llmRetryWait(err error) (time.Duration, bool) {
 	var typed *llm.Error
 	if _, isClient := llm.ClassOf(err); !isClient || !errors.As(err, &typed) {
