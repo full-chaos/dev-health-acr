@@ -75,7 +75,7 @@ func themeEntrySumSQL(theme string) string {
 func projectRollupMixStatement(timeBound factTimeBound) string {
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	rangePredicate := workUnitEndStampPredicate(timeBound, "to_ts")
-	return withRowProbeLimit(`SELECT * FROM (
+	return withProjectPopulationLimit(`SELECT * FROM (
 WITH project_team AS (
 	SELECT DISTINCT provider AS project_provider, id AS project_id, team_id
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `

@@ -354,7 +354,7 @@ type readinessProjectPopulation struct {
 // uncapped row and team counts. Inactive teams are filtered the way the
 // reader's result is filtered afterwards.
 func (p *ReadinessProvider) queryProjectReadinessPopulation(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]readinessProjectPopulation, order []string, rowCount int, err error) {
-	statement := withRowProbeLimit(`SELECT concat(p.provider, ':', p.id), toInt64(count()), toInt64(uniqExactIf(ec.team_key, ec.has_team = 1))
+	statement := withProjectPopulationLimit(`SELECT concat(p.provider, ':', p.id), toInt64(count()), toInt64(uniqExactIf(ec.team_key, ec.has_team = 1))
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	SELECT toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS team_key, work_scope_id, provider,
@@ -485,8 +485,8 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	if populationErr != nil {
 		return 0, rejected, false, populationErr
 	}
-	if populationRowCount > rowCount {
-		rowCount = populationRowCount
+	if populationRowCount >= maxProjectPopulationProbe {
+		rowCount = max(rowCount, maxFactRowsPerQuery)
 	}
 	emissionOrder := append([]string(nil), populationOrder...)
 	for _, projectKey := range projectOrder {

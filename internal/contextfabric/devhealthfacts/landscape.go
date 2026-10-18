@@ -347,7 +347,7 @@ ORDER BY team_id, map_name`)
 // row-capped scan is still known, with its uncapped count of teams that hold a
 // live identity.
 func (p *LandscapeProvider) queryProjectLandscapePopulation(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]int64, order []string, rowCount int, err error) {
-	statement := withRowProbeLimit(`SELECT project_key, toInt64(count())
+	statement := withProjectPopulationLimit(`SELECT project_key, toInt64(count())
 FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, il.team_id AS population_team_key
 	FROM ` + projectOwnershipJoinSQL(ownershipValidityPredicate(timeBound)) + `
@@ -467,7 +467,10 @@ ORDER BY p.provider, p.id, il.team_id, il.map_name`)
 	if populationErr != nil {
 		return max(rowCount, coordinateRows), 0, rejected, populationErr
 	}
-	rowCount = max(rowCount, coordinateRows, populationRowCount)
+	rowCount = max(rowCount, coordinateRows)
+	if populationRowCount >= maxProjectPopulationProbe {
+		rowCount = max(rowCount, maxFactRowsPerQuery)
+	}
 	emissionOrder := append([]string(nil), populationOrder...)
 	for _, projectKey := range projectOrder {
 		if _, known := populationByProject[projectKey]; !known {

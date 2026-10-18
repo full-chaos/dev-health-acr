@@ -641,7 +641,7 @@ type flowProjectPopulation struct {
 // project whose per-team rows sort past the shared row-capped breakdown scan is
 // still known, with its uncapped team count and totals.
 func (p *FlowProvider) queryProjectFlowPopulation(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]flowProjectPopulation, order []string, rowCount int, err error) {
-	statement := withRowProbeLimit(`SELECT concat(p.provider, ':', p.id), toInt64(uniqExact(wm.team_id)), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed))
+	statement := withProjectPopulationLimit(`SELECT concat(p.provider, ':', p.id), toInt64(uniqExact(wm.team_id)), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed))
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (` + flowProjectLatestScopeSQL(timeBound) + `) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id
@@ -765,8 +765,8 @@ ORDER BY p.id, wm.team_id`)
 	if populationErr != nil {
 		return rowCount, 0, rejected, populationErr
 	}
-	if populationRowCount > rowCount {
-		rowCount = populationRowCount
+	if populationRowCount >= maxProjectPopulationProbe {
+		rowCount = max(rowCount, maxFactRowsPerQuery)
 	}
 	emissionOrder := append([]string(nil), populationOrder...)
 	for _, projectKey := range projectOrder {

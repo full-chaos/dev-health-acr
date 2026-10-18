@@ -165,7 +165,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		if themeScanErr != nil {
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project theme mix", themeScanErr)
 		}
-		truncated = truncated || themeRowCount > maxFactRowsPerQuery
+		truncated = truncated || themeRowCount > maxProjectPopulationRows
 		// The project's OWN attribution replaces the roll-up's shares for a
 		// project that has any, and leaves the roll-up in place for one that
 		// has none. It reads after the roll-up so it can merge onto the same
@@ -174,7 +174,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		if nativeScanErr != nil {
 			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
-		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+		truncated = truncated || nativeRowCount > maxProjectPopulationRows
 		// Missing is not healthy: a project with no canonical mix serves no
 		// fact, and says so by a NAMED reason instead of a silent absence.
 		// A project the cap cut off the end of a read is not a project with
@@ -540,7 +540,7 @@ const investmentProjectMixCut = "investment_project_mix_cut_by_row_cap"
 const investmentProjectMixCutOwnReason = investmentProjectMixCut + ": the project theme mix read reached its row cap before this project; the project was not fully evaluated (a native mix may exist beyond the cap, and any mix served for it is the owning-team roll-up), and that is not a finding that it has no mix"
 
 func investmentProjectMixCutReason(cut, requested int) string {
-	return fmt.Sprintf("%s for %d of %d requested projects: the project theme mix read reached its row cap of %d before these projects; they were not fully evaluated (a native mix may exist beyond the cap, and any mix served for them is the owning-team roll-up), and that is not a finding that they have no mix", investmentProjectMixCut, cut, requested, maxFactRowsPerQuery)
+	return fmt.Sprintf("%s for %d of %d requested projects: the project theme mix read reached its row cap of %d before these projects; they were not fully evaluated (a native mix may exist beyond the cap, and any mix served for them is the owning-team roll-up), and that is not a finding that they have no mix", investmentProjectMixCut, cut, requested, maxProjectPopulationRows)
 }
 
 // splitProjectsCutByRowCap separates the projects a capped read never reached
@@ -809,7 +809,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// check reports Truncated, but it must not itself be served -- an
 		// unbounded LIMIT+1 read still needs the SAME served-output cap
 		// every other provider here enforces.
-		if rowCount > maxFactRowsPerQuery {
+		if rowCount > maxProjectPopulationRows {
 			cutAfter = lastServedKey
 			return nil
 		}
@@ -942,17 +942,17 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	if len(ids) == 0 {
 		return 0, "", nil
 	}
-	rows, sizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe, p)
+	rows, sizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxProjectPopulationProbe, p)
 	if err != nil {
 		return 0, "", err
 	}
 	rowCount = len(rows)
-	if rowCount > maxFactRowsPerQuery {
-		cutAfter = rows[maxFactRowsPerQuery-1].ProjectSubjectKey
+	if rowCount > maxProjectPopulationRows {
+		cutAfter = rows[maxProjectPopulationRows-1].ProjectSubjectKey
 	}
 	for i, row := range rows {
 		// The probe row is evidence of truncation, never served.
-		if i >= maxFactRowsPerQuery {
+		if i >= maxProjectPopulationRows {
 			break
 		}
 		subject, ok := bySubject[row.ProjectSubjectKey]

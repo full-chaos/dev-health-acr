@@ -3,6 +3,8 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +36,9 @@ type fakeTable struct {
 	match string
 	rows  [][]any
 	err   error
+	// honorLimit cuts the canned rows at the statement's own trailing LIMIT,
+	// as the server would.
+	honorLimit bool
 }
 
 type capturedQuery struct {
@@ -62,7 +67,7 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	if strings.Contains(statement, projectPopulationMarker) {
 		for _, table := range c.tables {
 			if strings.Contains(table.match, projectPopulationMarker) {
-				return &fakeScanner{rows: table.rows}, nil
+				return &fakeScanner{rows: table.rowsFor(statement)}, nil
 			}
 		}
 		return &fakeScanner{}, nil
@@ -109,10 +114,31 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 			if table.err != nil {
 				return nil, table.err
 			}
-			return &fakeScanner{rows: table.rows}, nil
+			return &fakeScanner{rows: table.rowsFor(statement)}, nil
 		}
 	}
 	return &fakeScanner{}, nil
+}
+
+func (t fakeTable) rowsFor(statement string) [][]any {
+	if t.honorLimit {
+		return limitedRows(statement, t.rows)
+	}
+	return t.rows
+}
+
+var trailingLimit = regexp.MustCompile(`\nLIMIT (\d+)\s*$`)
+
+// limitedRows applies the statement's own trailing LIMIT to canned rows, as the
+// server would, so a case that returns more rows than the statement admits
+// reads only what the statement admits.
+func limitedRows(statement string, rows [][]any) [][]any {
+	if m := trailingLimit.FindStringSubmatch(statement); m != nil {
+		if limit, err := strconv.Atoi(m[1]); err == nil && len(rows) > limit {
+			return rows[:limit]
+		}
+	}
+	return rows
 }
 
 func (c *fakeClient) seedsOwnership() bool {

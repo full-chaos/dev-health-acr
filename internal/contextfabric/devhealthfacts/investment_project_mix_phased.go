@@ -233,7 +233,7 @@ func readProjectMixLinks(ctx context.Context, client contextpacket.ClickHouseQue
 // a repo_id, joined to the project's owned repositories. It reads the theme map
 // and neither structural_evidence_json nor the subcategory map.
 func projectRollupRepoThemesStatement() string {
-	return withRowProbeLimit(`SELECT * FROM (
+	return withProjectPopulationLimit(`SELECT * FROM (
 WITH ` + projectMixBoundLinkCTE + `
 SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
@@ -279,7 +279,7 @@ ORDER BY project_key`)
 // and reads the subcategory map instead of the theme map, so no statement reads
 // both maps.
 func projectRollupRepoBugfixStatement() string {
-	return withRowProbeLimit(`SELECT * FROM (
+	return withProjectPopulationLimit(`SELECT * FROM (
 WITH ` + projectMixBoundLinkCTE + `
 SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
@@ -310,7 +310,7 @@ ORDER BY project_key`)
 // (work_units_without_repo_link). It does not read the theme or subcategory
 // maps: that arm never carried a theme value.
 func projectRollupEvidenceArmStatement() string {
-	return withRowProbeLimit(`SELECT * FROM (
+	return withProjectPopulationLimit(`SELECT * FROM (
 WITH ` + projectMixBoundLinkCTE + `,
 repo_lookup AS (
 	SELECT toString(id) AS repo_uuid,

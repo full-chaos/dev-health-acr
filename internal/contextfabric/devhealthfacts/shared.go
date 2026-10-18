@@ -1319,6 +1319,21 @@ func withRowLimit(statement string) string {
 // deliberately separate -- see withRowProbeLimit.
 const maxFactRowsProbe = maxFactRowsPerQuery + 1
 
+// maxProjectPopulationRows is the most projects one project-grain read
+// serves: the answer projection carries up to this many subjects, so a cohort
+// of that size must be read in full. maxProjectPopulationProbe is that plus
+// one, so a population exactly at the bound differs from one that overflowed it.
+const (
+	maxProjectPopulationRows  = contractsv1.ContextFabricProjectedSubjectsMaxCount
+	maxProjectPopulationProbe = maxProjectPopulationRows + 1
+)
+
+// withProjectPopulationLimit bounds a project-grain SELECT (one row per
+// project) to maxProjectPopulationProbe.
+func withProjectPopulationLimit(statement string) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxProjectPopulationProbe)
+}
+
 // withRowProbeLimit is withRowLimit's limit+1 twin: it bounds a provider's
 // SELECT to maxFactRowsProbe so the caller can tell a full page from a
 // truncated one. A provider using it MUST also bound its own output at
