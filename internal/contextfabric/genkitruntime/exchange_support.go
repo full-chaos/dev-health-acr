@@ -3,8 +3,6 @@ package genkitruntime
 import (
 	"encoding/json"
 
-	"github.com/firebase/genkit/go/core"
-
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
@@ -95,16 +93,11 @@ func ParseInterpretationOutputWindow(raw []byte, defaultTime contextfabric.TimeC
 // as a JSON Schema document -- the same contract a non-genkit responder
 // must be told to follow.
 //
-// Uses core.InferSchemaMap -- the SAME function genkit's own
-// ai.WithOutputType (called by GenerateData, which sdkGenerator.Interpret
-// uses) derives the constrained-output schema from. It flattens $ref/$defs
-// (DoNotReference: true) exactly as production's OpenAI structured-output
-// binding requires, rather than the invopop/jsonschema default nested-$ref
-// form (sol review F9, upgraded from a documented gap to a fix once
-// core.InferSchemaMap -- genkit's own public flattening mapper -- was
-// confirmed reusable without reimplementing it).
+// Uses inferSchemaMap, which flattens $ref/$defs (DoNotReference: true) as
+// production's OpenAI structured-output binding requires, rather than the
+// invopop/jsonschema default nested-$ref form.
 func InterpretationOutputSchema() ([]byte, error) {
-	return json.MarshalIndent(core.InferSchemaMap(interpretationOutput{}), "", "  ")
+	return json.MarshalIndent(inferSchemaMap(interpretationOutput{}), "", "  ")
 }
 
 // BuildSynthesisPrompt renders the exact bounded-JSON user payload
@@ -135,9 +128,9 @@ func ParseSynthesisOutput(raw []byte) (contextfabric.SynthesisDraft, error) {
 // SynthesisOutputSchema reflects the exact Go type genkit's constrained
 // structured output binds SynthesizeAnswer's model call to, as a JSON
 // Schema document -- see InterpretationOutputSchema's doc comment for why
-// core.InferSchemaMap, not raw jsonschema.Reflect.
+// inferSchemaMap, not raw jsonschema.Reflect.
 func SynthesisOutputSchema() ([]byte, error) {
-	return json.MarshalIndent(core.InferSchemaMap(synthesisOutput{}), "", "  ")
+	return json.MarshalIndent(inferSchemaMap(synthesisOutput{}), "", "  ")
 }
 
 // InterpretationOutputFamily is the CHAOS-4632 shadow capture

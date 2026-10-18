@@ -1,0 +1,1 @@
+{"additionalProperties":false,"properties":{"phrasings":{"items":{"additionalProperties":false,"properties":{"option_id":{"type":"string"},"phrasing":{"type":"string"}},"required":["option_id","phrasing"],"type":"object"},"type":"array"}},"required":["phrasings"],"type":"object"}

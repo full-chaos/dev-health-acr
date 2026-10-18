@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -566,7 +567,8 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 
 	t.Run("served_output_capped_at_the_row_limit_with_truncation_disclosed", func(t *testing.T) {
 		const orgID = "org-limit-probe-5930"
-		const exactLimit = 200
+		// exactLimit is the most projects one read serves: the answer projection's subject maximum.
+		const exactLimit = contractsv1.ContextFabricProjectedSubjectsMaxCount
 		subjects := make([]contextfabric.SubjectRef, 0, exactLimit+1)
 		for i := 0; i < exactLimit+1; i++ {
 			label := fmt.Sprintf("limit-%04d", i)
