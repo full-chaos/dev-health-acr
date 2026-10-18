@@ -341,6 +341,41 @@ ORDER BY team_id, map_name`)
 	return max(rowCount, coordinateRows), 0, rejected, nil
 }
 
+// queryProjectLandscapePopulation is the project population of
+// readProjectLandscape: one row per project from a server-side aggregate over
+// the same team rows, so a project whose team rows sort past the shared
+// row-capped scan is still known, with its uncapped count of teams that hold a
+// live identity.
+func (p *LandscapeProvider) queryProjectLandscapePopulation(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]int64, order []string, rowCount int, err error) {
+	statement := withProjectPopulationLimit(`SELECT project_key, toInt64(count())
+FROM (
+	SELECT concat(p.provider, ':', p.id) AS project_key, il.team_id AS population_team_key
+	FROM ` + projectOwnershipJoinSQL(ownershipValidityPredicate(timeBound)) + `
+	INNER JOIN (
+` + landscapeOneCopySQL("", timeBound) + `
+	) AS il ON il.team_id = p.team_id
+	GROUP BY p.id, p.provider, il.team_id
+	HAVING sum(il.live_identity) > 0
+)
+GROUP BY project_key
+ORDER BY project_key -- project population`)
+	byProject = make(map[string]int64)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var key string
+		var teams int64
+		if err := row.Scan(&key, &teams); err != nil {
+			return err
+		}
+		if _, seen := byProject[key]; !seen {
+			order = append(order, key)
+		}
+		byProject[key] = teams
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, order, rowCount, scanErr
+}
+
 // readProjectLandscape rolls FactLandscape up for a project through
 // projects -> team_project_ownership -> ic_landscape_rolling_30d: every team
 // currently (or, for a bounded historical query, AS OF the requested
@@ -424,10 +459,32 @@ ORDER BY p.provider, p.id, il.team_id, il.map_name`)
 	if scanErr != nil {
 		return max(rowCount, coordinateRows), 0, rejected, scanErr
 	}
-	totalOmitted := 0
+	// The population is the aggregate's, never the capped scan's: the scan
+	// shares one row budget across every requested project, so a project
+	// sorting late can be absent from it. A project the scan reached is kept
+	// even when the aggregate does not list it.
+	populationByProject, populationOrder, populationRowCount, populationErr := p.queryProjectLandscapePopulation(ctx, orgID, ids, timeBound)
+	if populationErr != nil {
+		return max(rowCount, coordinateRows), 0, rejected, populationErr
+	}
+	rowCount = max(rowCount, coordinateRows)
+	if populationRowCount >= maxProjectPopulationProbe {
+		rowCount = max(rowCount, maxFactRowsPerQuery)
+	}
+	emissionOrder := append([]string(nil), populationOrder...)
 	for _, projectKey := range projectOrder {
+		if _, known := populationByProject[projectKey]; !known {
+			emissionOrder = append(emissionOrder, projectKey)
+		}
+	}
+	totalOmitted := 0
+	for _, projectKey := range emissionOrder {
 		rows := byProject[projectKey]
-		subject := bySubject[projectKey]
+		subject, known := bySubject[projectKey]
+		if !known {
+			continue
+		}
+		populationTeams, hasPopulation := populationByProject[projectKey]
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
 		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
@@ -441,15 +498,22 @@ ORDER BY p.provider, p.id, il.team_id, il.map_name`)
 				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, entry.teamID))
 			}
 		}
-		if len(teamRows) == 0 {
+		if len(teamRows) == 0 && !hasPopulation {
 			continue
 		}
 		teamRows, omitted := capFactValueRows(teamRows)
+		teamCount := int64(len(seenTeams))
+		if hasPopulation {
+			omitted = max(omitted, int(populationTeams)-len(teamRows))
+			teamCount = populationTeams
+		}
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis": contextfabric.StringFactValue("team_project_ownership_landscape"),
-			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
-			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+			"team_count":   contextfabric.IntegerFactValue(teamCount),
+		}
+		if len(teamRows) > 0 {
+			fields["team_breakdown"] = contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"team_id", "as_of_day"},
 				Measures: []string{
@@ -458,7 +522,7 @@ ORDER BY p.provider, p.id, il.team_id, il.map_name`)
 				},
 				Grain: timeBound.effectiveGrain(grainDaily),
 				Rows:  teamRows,
-			}),
+			})
 		}
 		if omitted > 0 {
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))

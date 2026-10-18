@@ -34,7 +34,7 @@ func matchingParen(text string, open int) int {
 }
 
 // TestEveryRowLimitedStatementOrdersItsRows requires a top-level ORDER BY on
-// every statement that is cut by withRowLimit or withRowProbeLimit: a LIMIT
+// every statement that is cut by withRowLimit, withRowProbeLimit or withProjectPopulationLimit: a LIMIT
 // over an unordered set changes WHICH rows are served, which no later sort
 // can repair.
 func TestEveryRowLimitedStatementOrdersItsRows(t *testing.T) {
@@ -53,7 +53,7 @@ func TestEveryRowLimitedStatementOrdersItsRows(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(raw)
-		for _, marker := range []string{"withRowLimit(", "withRowProbeLimit("} {
+		for _, marker := range []string{"withRowLimit(", "withRowProbeLimit(", "withProjectPopulationLimit("} {
 			for from := 0; ; {
 				at := strings.Index(text[from:], marker)
 				if at < 0 {

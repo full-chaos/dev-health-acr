@@ -464,7 +464,7 @@ type workloadP50MaxRow struct {
 // two) from "no reachable rows at all" (this project never appears in the
 // result, and readProjectWorkload serves no fact for it).
 func (p *WorkloadProvider) queryProjectWorkloadP50Max(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]workloadP50MaxRow, order []string, rowCount int, err error) {
-	statement := withRowProbeLimit(`SELECT project_key,
+	statement := withProjectPopulationLimit(`SELECT project_key,
 	countIf(team_key != '' AND isNotNull(p50_days)),
 	countIf(team_key = ''),
 	countIf(team_key != '' AND isNull(p50_days)),
@@ -578,7 +578,7 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 	if p50Err != nil {
 		return 0, rejected, false, p50Err
 	}
-	if p50RowCount >= maxFactRowsProbe {
+	if p50RowCount >= maxProjectPopulationProbe {
 		breakdownTruncated = true
 	}
 	if p50RowCount > rowCount {

@@ -615,6 +615,54 @@ func (r teamFlowAggregateRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: fields}
 }
 
+// flowProjectLatestScopeSQL is the latest row per (team_id, provider,
+// work_scope_id) the project rollup and its population aggregate both read, so
+// the two can never disagree about which rows exist.
+func flowProjectLatestScopeSQL(timeBound factTimeBound) string {
+	return `
+	-- One row per (team_id, provider, work_scope_id) triple, latest day
+	-- first (same discipline queryTeamScopeRows uses). The aggregation to
+	-- one row per team happens OUTSIDE this subquery now, because which
+	-- rows belong to the answer depends on the project each is matched
+	-- against -- a fact this subquery cannot see.
+	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
+	FROM work_item_metrics_daily
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
+`
+}
+
+type flowProjectPopulation struct {
+	teams, itemsStarted, itemsCompleted int64
+}
+
+// queryProjectFlowPopulation is the project population of readProjectFlow: one
+// row per project from a server-side aggregate over the same rows, so a
+// project whose per-team rows sort past the shared row-capped breakdown scan is
+// still known, with its uncapped team count and totals.
+func (p *FlowProvider) queryProjectFlowPopulation(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]flowProjectPopulation, order []string, rowCount int, err error) {
+	statement := withProjectPopulationLimit(`SELECT concat(p.provider, ':', p.id), toInt64(uniqExact(wm.team_id)), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed))
+FROM ` + projectIdentityJoinSQL() + `
+INNER JOIN (` + flowProjectLatestScopeSQL(timeBound) + `) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
+GROUP BY p.provider, p.id
+ORDER BY p.provider, p.id -- project population`)
+	byProject = make(map[string]flowProjectPopulation)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var key string
+		var pop flowProjectPopulation
+		if err := row.Scan(&key, &pop.teams, &pop.itemsStarted, &pop.itemsCompleted); err != nil {
+			return err
+		}
+		if _, seen := byProject[key]; !seen {
+			order = append(order, key)
+		}
+		byProject[key] = pop
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, order, rowCount, scanErr
+}
+
 func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
 	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
@@ -653,17 +701,7 @@ func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjec
 	` + flowMeasureAggregateSQL("wm.", flowMeasureBugCompletedRatio, "avgIf") + `,
 	` + flowMeasureAggregateSQL("wm.", flowMeasureStoryPointsCompleted, "sumIf") + `
 FROM ` + projectIdentityJoinSQL() + `
-INNER JOIN (
-	-- One row per (team_id, provider, work_scope_id) triple, latest day
-	-- first (same discipline queryTeamScopeRows uses). The aggregation to
-	-- one row per team happens OUTSIDE this subquery now, because which
-	-- rows belong to the answer depends on the project each is matched
-	-- against -- a fact this subquery cannot see.
-	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
-	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
-) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
+INNER JOIN (` + flowProjectLatestScopeSQL(timeBound) + `) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id, wm.team_id
 ORDER BY p.id, wm.team_id`)
 	rowCount := 0
@@ -718,10 +756,32 @@ ORDER BY p.id, wm.team_id`)
 	if windowErr != nil {
 		return rowCount, 0, rejected, windowErr
 	}
-	totalOmitted := 0
+	// The population is the aggregate's, never the capped breakdown scan's:
+	// the scan shares one row budget across every requested project, so a
+	// project sorting late can be absent from it. The scan-reached projects
+	// not in the aggregate are kept, so a row the scan did read is never
+	// dropped.
+	populationByProject, populationOrder, populationRowCount, populationErr := p.queryProjectFlowPopulation(ctx, orgID, ids, timeBound)
+	if populationErr != nil {
+		return rowCount, 0, rejected, populationErr
+	}
+	if populationRowCount >= maxProjectPopulationProbe {
+		rowCount = max(rowCount, maxFactRowsPerQuery)
+	}
+	emissionOrder := append([]string(nil), populationOrder...)
 	for _, projectKey := range projectOrder {
+		if _, known := populationByProject[projectKey]; !known {
+			emissionOrder = append(emissionOrder, projectKey)
+		}
+	}
+	totalOmitted := 0
+	for _, projectKey := range emissionOrder {
 		rows := byProject[projectKey]
-		subject := bySubject[projectKey]
+		subject, known := bySubject[projectKey]
+		if !known {
+			continue
+		}
+		population, hasPopulation := populationByProject[projectKey]
 		seenTeams := make(map[string]bool, len(rows))
 		var totalStarted, totalCompleted int64
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
@@ -739,10 +799,17 @@ ORDER BY p.id, wm.team_id`)
 			teamRows = append(teamRows, teamRow)
 			evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.teamID))
 		}
-		if len(teamRows) == 0 {
+		if len(teamRows) == 0 && !hasPopulation {
 			continue
 		}
 		teamRows, omitted := capFactValueRows(teamRows)
+		teamCount := int64(len(seenTeams))
+		if hasPopulation {
+			// The aggregate's counts cover every team row the project has;
+			// the scan's cover only the rows it reached.
+			omitted += max(0, int(population.teams)-len(seenTeams))
+			teamCount, totalStarted, totalCompleted = population.teams, population.itemsStarted, population.itemsCompleted
+		}
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis": contextfabric.StringFactValue("project_work_scope_sum"),
@@ -752,14 +819,16 @@ ORDER BY p.id, wm.team_id`)
 			// happens -- provenance describing a chain the read did not
 			// traverse. This path groups the project's OWN work-scope
 			// rows; no ownership edge is consulted.
-			"team_count":                 contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			"team_count":                 contextfabric.IntegerFactValue(teamCount),
 			"items_started_latest_day":   contextfabric.IntegerFactValue(totalStarted),
 			"items_completed_latest_day": contextfabric.IntegerFactValue(totalCompleted),
 			// CHAOS-4633 P1: Key = [team_id] -- one row per team
 			// (seenTeams dedupe above), each already SUMMED/AVERAGED
 			// across that team's own scopes (teamFlowAggregateRow's own
 			// doc comment).
-			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+		}
+		if len(teamRows) > 0 {
+			fields["team_breakdown"] = contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"team_id"},
 				Measures: []string{
@@ -772,7 +841,7 @@ ORDER BY p.id, wm.team_id`)
 				Observations: flowMeasureReasonColumns(),
 				Grain:        timeBound.effectiveGrain(grainDaily),
 				Rows:         teamRows,
-			}),
+			})
 		}
 		addFlowWindowFields(fields, timeBound, windowByProject[projectKey])
 		if omitted > 0 {

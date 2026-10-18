@@ -353,6 +353,9 @@ type OperationRunnerCounters struct {
 	RowsForeign   int64
 	PathsRemoved  int64
 	PathsWithheld int64
+	// PageCuts counts answers cut to a whole-row page to fit max_bytes: the
+	// expected path of an over-budget list, not an error.
+	PageCuts int64
 }
 
 // Counters returns the process totals of foreign rows refused, output values
