@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/llm"
@@ -484,7 +483,7 @@ func TestRuntimeRecordsTheFinalLegsFailureWhenInterpretationFallbackAlsoFails(t 
 	fallbackReceipt := validReceipt(contextfabric.ModelOperationInterpret)
 	fallbackReceipt.Outcome = "unavailable"
 	runtime := mustRuntime(t, &generatorStub{
-		interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "primary quota exhausted"),
+		interpretErr: newModelStatusError(statusResourceExhausted, "primary quota exhausted"),
 	}, Config{
 		MaxAttempts: 1,
 		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
@@ -515,7 +514,7 @@ func TestRuntimeRecordsTheFinalLegsFailureWhenSynthesisFallbackAlsoFails(t *test
 	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
 	fallbackReceipt.Outcome = "invalid_output"
 	runtime := mustRuntime(t, &generatorStub{
-		synthesisErr: core.NewError(core.RESOURCE_EXHAUSTED, "primary quota exhausted"),
+		synthesisErr: newModelStatusError(statusResourceExhausted, "primary quota exhausted"),
 	}, Config{
 		MaxAttempts: 1,
 		Fallback:    erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
@@ -771,14 +770,14 @@ func TestClassifyModelErrorDistinguishesRateLimitUnavailableAndInvalidOutput(t *
 		err    error
 		wantIs error
 	}{
-		{"rate_limited", core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted: %s", sensitive), contextfabric.ErrModelRateLimited},
-		{"unavailable_status", core.NewError(core.UNAVAILABLE, "backend down: %s", sensitive), contextfabric.ErrModelUnavailable},
-		{"deadline_status", core.NewError(core.DEADLINE_EXCEEDED, "slow: %s", sensitive), contextfabric.ErrModelUnavailable},
-		{"aborted_status", core.NewError(core.ABORTED, "aborted: %s", sensitive), contextfabric.ErrModelUnavailable},
-		{"invalid_argument_status", core.NewError(core.INVALID_ARGUMENT, "bad request: %s", sensitive), contextfabric.ErrModelOutput},
-		{"internal_schema_mismatch", core.NewError(core.INTERNAL, "model failed to generate output matching expected schema: %s", sensitive), contextfabric.ErrModelOutput},
-		{"internal_generic", core.NewError(core.INTERNAL, "unexpected panic: %s", sensitive), contextfabric.ErrModelUnavailable},
-		{"unmapped_status", core.NewError(core.NOT_FOUND, "route missing: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"rate_limited", newModelStatusError(statusResourceExhausted, "quota exhausted: %s", sensitive), contextfabric.ErrModelRateLimited},
+		{"unavailable_status", newModelStatusError(statusUnavailable, "backend down: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"deadline_status", newModelStatusError(statusDeadlineExceeded, "slow: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"aborted_status", newModelStatusError(statusAborted, "aborted: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"invalid_argument_status", newModelStatusError(statusInvalidArgument, "bad request: %s", sensitive), contextfabric.ErrModelOutput},
+		{"internal_schema_mismatch", newModelStatusError(statusInternal, "model failed to generate output matching expected schema: %s", sensitive), contextfabric.ErrModelOutput},
+		{"internal_generic", newModelStatusError(statusInternal, "unexpected panic: %s", sensitive), contextfabric.ErrModelUnavailable},
+		{"unmapped_status", newModelStatusError("NOT_FOUND", "route missing: %s", sensitive), contextfabric.ErrModelUnavailable},
 		{"plain_rate_limit_string", errors.New("received 429 Too Many Requests"), contextfabric.ErrModelRateLimited},
 		{"plain_opaque_string", errors.New("boom"), contextfabric.ErrModelUnavailable},
 	}
@@ -999,14 +998,14 @@ func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"resource_exhausted_retryable", core.NewError(core.RESOURCE_EXHAUSTED, "quota"), true},
-		{"unavailable_retryable", core.NewError(core.UNAVAILABLE, "down"), true},
-		{"deadline_exceeded_status_retryable", core.NewError(core.DEADLINE_EXCEEDED, "slow"), true},
-		{"aborted_retryable", core.NewError(core.ABORTED, "aborted"), true},
-		{"invalid_argument_not_retryable", core.NewError(core.INVALID_ARGUMENT, "bad schema: invented_kind value present in response"), false},
-		{"internal_not_retryable_even_with_transient_wording", core.NewError(core.INTERNAL, "unexpected panic: connection reset while parsing"), false},
+		{"resource_exhausted_retryable", newModelStatusError(statusResourceExhausted, "quota"), true},
+		{"unavailable_retryable", newModelStatusError(statusUnavailable, "down"), true},
+		{"deadline_exceeded_status_retryable", newModelStatusError(statusDeadlineExceeded, "slow"), true},
+		{"aborted_retryable", newModelStatusError(statusAborted, "aborted"), true},
+		{"invalid_argument_not_retryable", newModelStatusError(statusInvalidArgument, "bad schema: invented_kind value present in response"), false},
+		{"internal_not_retryable_even_with_transient_wording", newModelStatusError(statusInternal, "unexpected panic: connection reset while parsing"), false},
 		{"context_canceled_not_retryable", context.Canceled, false},
-		// CHAOS-3770 F2: an UNSTRUCTURED error (not *core.GenkitError -- what
+		// CHAOS-3770 F2: an UNSTRUCTURED error (not a modelStatusError -- what
 		// the real OpenAI SDK returns, since compat_oai/generate.go wraps the
 		// SDK's own error with plain fmt.Errorf rather than producing a
 		// GenkitError) must never be retried by sniffing its message for a
@@ -1066,7 +1065,7 @@ func TestRuntimeDoesNotRetryAnUnstructuredNonTransientErrorWithTheSamePayload(t 
 func TestRuntimeClassifiesRateLimitedGenerationError(t *testing.T) {
 	t.Parallel()
 	runtime := mustRuntime(t, &generatorStub{
-		interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted for org_1"),
+		interpretErr: newModelStatusError(statusResourceExhausted, "quota exhausted for org_1"),
 	}, Config{MaxAttempts: 1})
 	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
 	if err == nil || !errors.Is(err, contextfabric.ErrModelRateLimited) {
@@ -1278,7 +1277,7 @@ func TestDecisionEventPrimaryFailureClassificationSurvivesSuccessfulFallback(t *
 		t.Parallel()
 		handler, logger := newCaptureLogger()
 		runtime := mustRuntime(t, &generatorStub{
-			interpretErr: core.NewError(core.RESOURCE_EXHAUSTED, "quota exhausted for org_1"),
+			interpretErr: newModelStatusError(statusResourceExhausted, "quota exhausted for org_1"),
 		}, Config{
 			Logger:   logger,
 			Fallback: fallbackRuntime{interpreted: validInterpretedQuestion(), draft: validDraft()},
