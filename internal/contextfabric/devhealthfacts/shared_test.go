@@ -726,3 +726,15 @@ func TestQueryVersionMovedPastTheCommitmentDueDateTable(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v246 or later -- an answer saved when a commitment fact had no due date table must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheProjectPopulationRead(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 247 {
+		t.Fatalf("QueryVersion = %q, want v247 or later -- an answer saved when a project past the shared scan budget was omitted must not be reused", devhealthfacts.QueryVersion)
+	}
+}
