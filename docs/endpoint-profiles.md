@@ -333,7 +333,12 @@ invokes `ServeHTTP` on anything but a `net/http` handler or a module type with a
 readable `ServeHTTP`; when it calls an untyped function value, or a function
 parameter that takes or returns a handler, response writer or request, and is
 handed such a value; when it passes a handler to a package outside the module;
-or when it goes through an interface whose method returns `http.Handler`. Calls
+or when it goes through an interface whose method returns `http.Handler`. Handler
+values are followed as values: an argument at a handler-typed parameter of a
+followed callee is a handler position (an unresolved callee there is a gap), a
+local handler is the union of its assignments and `var` initialisers, a
+composite literal of a module type is followed into its `ServeHTTP`, and
+`net/http` types are matched through aliases (`type H = http.Handler`). Calls
 that are not handler wrappers (store reads, logging, encoding) are data and are
 not gaps. Boundary: a guard reached only by a function value that closes over
 the writer and request elsewhere and is then called with no `net/http` value is

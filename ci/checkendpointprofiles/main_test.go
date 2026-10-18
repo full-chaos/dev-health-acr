@@ -467,6 +467,14 @@ func (a *Authenticator) RequireScope(required string, next http.Handler) http.Ha
 
 func (a *Authenticator) Passthrough(next http.Handler) http.Handler { return next }
 
+type Handler = http.Handler
+
+func (a *Authenticator) AliasWrap(next http.Handler) Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "", http.StatusUnauthorized)
+	})
+}
+
 func (a *Authenticator) Describe() string { return "not a handler wrapper" }
 
 func (a *Authenticator) Status() int { return http.StatusUnauthorized }
@@ -2832,4 +2840,75 @@ func (a *App) leaf(next http.Handler) http.Handler {
 	extra := "\tmux.Handle(\"POST /ext\", a.leaf(http.HandlerFunc(healthzHandler)))\n"
 	f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), extraRow("POST /ext", "POST", "/ext", nil))
 	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST /ext [", "handler passed to foreign.Serve outside the module")
+}
+
+func TestWrapperChainHandlerValueFlowFindsOrFlagsEveryHandlerSource(t *testing.T) {
+	var deep strings.Builder
+	for i := 0; i <= maxScanDepth+2; i++ {
+		deep.WriteString("func (a *App) s" + strconv.Itoa(i) + "() { a.s" + strconv.Itoa(i+1) + "() }\n")
+	}
+	deep.WriteString("func (a *App) s" + strconv.Itoa(maxScanDepth+3) + "() {}\n")
+	const decls = `
+type modH struct{ g *auth.Authenticator }
+
+func (m *modH) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.g.Middleware(nil) }
+
+func (a *App) logLine(next http.Handler) http.Handler { return next }
+
+func (a *App) varInit() http.Handler {
+	var h http.Handler = a.authenticator.RequireScope("x", http.HandlerFunc(healthzHandler))
+	return h
+}
+
+func (a *App) useParam(h *modH) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) })
+}
+
+func (a *App) aliasWrapped(next http.Handler) http.Handler { return a.authenticator.AliasWrap(next) }
+
+func (a *App) localToForeign(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := next
+		foreign.Process(h)
+	})
+}
+
+func (a *App) deepLeaf() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { a.s0() })
+}
+
+func (a *App) ping() { a.pong() }
+func (a *App) pong() { a.ping() }
+
+func (a *App) cycleLeaf() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { a.ping() })
+}
+`
+	for _, tc := range []struct{ name, route, handler, kind, want string }{
+		{"var-initialised handler holding a guard", "/vin", `a.varInit()`, "guard", "Authenticator.RequireScope"},
+		{"module handler type passed as a value", "/mod", `a.logLine(&modH{})`, "guard", "Authenticator.Middleware"},
+		{"typed module handler parameter", "/prm", `a.useParam(nil)`, "guard", "Authenticator.Middleware"},
+		{"unresolved handler-producing call in a handler argument", "/mk", `a.logLine(foreign.MakeHandler())`, "gap", "unresolved callee foreign.MakeHandler"},
+		{"guard whose result type aliases http.Handler", "/als", `a.aliasWrapped(http.HandlerFunc(healthzHandler))`, "guard", "Authenticator.AliasWrap"},
+		{"local handler alias passed outside the module", "/loc", `a.localToForeign(http.HandlerFunc(healthzHandler))`, "gap", "handler passed to foreign.Process outside the module"},
+		{"scan depth cut", "/dpt", `a.deepLeaf()`, "gap", "scan depth cut"},
+		{"call cycle without a guard is clean", "/cyc", `a.cycleLeaf()`, "clean", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := "\tmux.Handle(\"POST " + tc.route + "\", " + tc.handler + ")\n"
+			pub := extraRow("POST "+tc.route, "POST", tc.route, nil)
+			f := chainFixture(t, fixtureGuardedBody, extra, decls+deep.String(), healthzChainRow(), capabilitiesRow(nil), pub)
+			errs := f.check(t)
+			switch tc.kind {
+			case "gap":
+				mustContain(t, errs, "UNRESOLVED WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+			case "guard":
+				mustContain(t, errs, "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+			default:
+				if len(errs) != 0 {
+					t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+				}
+			}
+		})
+	}
 }

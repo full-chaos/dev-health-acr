@@ -1567,6 +1567,12 @@ type chainWalker struct {
 	cut          bool
 	rejects      map[string]bool
 	handlerNames map[string]bool
+	localActive  map[localKey]bool
+}
+
+type localKey struct {
+	decl *ast.FuncDecl
+	name string
 }
 
 func (w *chainWalker) pkgFor(path string) *chainPkg {
@@ -1629,6 +1635,14 @@ func (w *chainWalker) typeOf(c chainCtx, e ast.Expr) (typeRef, bool) {
 		}
 	case *ast.ParenExpr:
 		return w.typeOf(c, e.X)
+	case *ast.UnaryExpr:
+		if e.Op == token.AND {
+			return w.typeOf(c, e.X)
+		}
+	case *ast.CompositeLit:
+		if e.Type != nil {
+			return w.typeFromExpr(c.fn, e.Type)
+		}
 	case *ast.CallExpr:
 		if _, ok := w.guardCall(c, e); ok {
 			return typeRef{"net/http", "Handler"}, true
@@ -1703,9 +1717,49 @@ func (w *chainWalker) isNetHTTP(fn chainFunc, e ast.Expr, name string) bool {
 	return ok && importPathOf(fn.file, id.Name) == "net/http"
 }
 
+// httpTypeIs reports whether a type expression resolves, through aliases, to one
+// of the named net/http types (a leading * is ignored).
+func (w *chainWalker) httpTypeIs(fn chainFunc, t ast.Expr, names ...string) bool {
+	if st, ok := t.(*ast.StarExpr); ok {
+		t = st.X
+	}
+	ref, ok := w.typeFromExpr(fn, t)
+	if !ok || ref.pkg != "net/http" {
+		return false
+	}
+	for _, n := range names {
+		if ref.name == n {
+			return true
+		}
+	}
+	return false
+}
+
+// exprHTTP reports whether an expression is, by established type or by an
+// http.HandlerFunc conversion, one of the named net/http values.
+func (w *chainWalker) exprHTTP(c chainCtx, e ast.Expr, names ...string) bool {
+	if call, ok := e.(*ast.CallExpr); ok && w.isNetHTTP(c.fn, call.Fun, "HandlerFunc") {
+		for _, n := range names {
+			if n == "HandlerFunc" || n == "Handler" {
+				return true
+			}
+		}
+	}
+	t, ok := w.typeOf(c, e)
+	if !ok || t.pkg != "net/http" {
+		return false
+	}
+	for _, n := range names {
+		if t.name == n {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *chainWalker) returnsHandler(fn chainFunc) bool {
 	r := fn.decl.Type.Results
-	return r != nil && len(r.List) == 1 && len(r.List[0].Names) <= 1 && w.isNetHTTP(fn, r.List[0].Type, "Handler")
+	return r != nil && len(r.List) == 1 && len(r.List[0].Names) <= 1 && w.httpTypeIs(fn, r.List[0].Type, "Handler")
 }
 
 // rejecting reports whether a guard-type method body reaches a 401/403 status
@@ -1869,8 +1923,8 @@ func (w *chainWalker) handlerExpr(c chainCtx, e ast.Expr, strict bool, depth int
 	case *ast.CallExpr:
 		if g, ok := w.guardCall(c, e); ok {
 			w.addGuard(g)
-			for _, a := range e.Args {
-				w.handlerExpr(c, a, false, depth+1)
+			for i, a := range e.Args {
+				w.handlerExpr(c, a, i == len(e.Args)-1, depth+1)
 			}
 			return
 		}
@@ -1886,12 +1940,28 @@ func (w *chainWalker) handlerExpr(c chainCtx, e ast.Expr, strict bool, depth int
 			return
 		}
 		w.v.Chain = append(w.v.Chain, callee.decl.Name.Name)
-		for _, a := range e.Args {
-			w.handlerExpr(c, a, false, depth+1)
+		for i, a := range e.Args {
+			pt := paramTypeAt(callee.decl, i)
+			w.handlerExpr(c, a, pt != nil && w.httpTypeIs(callee, pt, "Handler", "HandlerFunc"), depth+1)
 		}
 		w.calleeBody(newChainCtx(callee, bindArgs(c, w, callee, e)), depth+1)
 	case *ast.SelectorExpr, *ast.Ident:
 		if id, ok := e.(*ast.Ident); ok {
+			if rhss, isLocal := c.locals[id.Name]; isLocal {
+				key := localKey{c.fn.decl, id.Name}
+				if w.localActive[key] {
+					return
+				}
+				w.localActive[key] = true
+				defer delete(w.localActive, key)
+				for _, rhs := range rhss {
+					if rid, same := rhs.(*ast.Ident); same && rid.Name == id.Name {
+						continue
+					}
+					w.handlerExpr(c, rhs, strict, depth+1)
+				}
+				return
+			}
 			if _, isParam := c.params[id.Name]; isParam {
 				return // a wrapped handler: the caller walked this argument
 			}
@@ -1905,11 +1975,46 @@ func (w *chainWalker) handlerExpr(c chainCtx, e ast.Expr, strict bool, depth int
 		}
 		w.v.Chain = append(w.v.Chain, callee.decl.Name.Name)
 		w.scan(newChainCtx(callee, nil), callee.decl.Body, depth+1)
+	case *ast.CompositeLit, *ast.UnaryExpr:
+		t, ok := w.typeOf(c, e)
+		if !ok {
+			if strict {
+				w.gap("handler value of unestablished type %s", w.text(c.fn, e, nil))
+			}
+			return
+		}
+		p := w.pkgFor(t.pkg)
+		if p == nil || p.methods[t.name+".ServeHTTP"].decl == nil {
+			if strict {
+				w.gap("handler value of type %s has no ServeHTTP declaration the walk can read", t.name)
+			}
+			return
+		}
+		w.v.Chain = append(w.v.Chain, t.name+".ServeHTTP")
+		w.scan(newChainCtx(p.methods[t.name+".ServeHTTP"], nil), p.methods[t.name+".ServeHTTP"].decl.Body, depth+1)
 	default:
 		if strict {
 			w.gap("unsupported handler expression %T", e)
 		}
 	}
+}
+
+func paramTypeAt(d *ast.FuncDecl, i int) ast.Expr {
+	n := 0
+	if d.Type.Params == nil {
+		return nil
+	}
+	for _, f := range d.Type.Params.List {
+		cnt := len(f.Names)
+		if cnt == 0 {
+			cnt = 1
+		}
+		if i < n+cnt {
+			return f.Type
+		}
+		n += cnt
+	}
+	return nil
 }
 
 // looksLikeHandlerArg: an unresolved call used as an ARGUMENT of a chain call
@@ -1970,6 +2075,15 @@ func (w *chainWalker) calleeBody(c chainCtx, depth int) {
 				}
 			}
 			return false
+		case *ast.ValueSpec:
+			for _, r := range n.Values {
+				if call, ok := r.(*ast.CallExpr); ok {
+					w.handlerExpr(c, call, false, depth+1)
+				} else if fl, ok := r.(*ast.FuncLit); ok {
+					w.scan(c, fl.Body, depth)
+				}
+			}
+			return false
 		}
 		return true
 	}
@@ -2000,7 +2114,7 @@ func (w *chainWalker) interfaceWrapperCall(c chainCtx, call *ast.CallExpr) (stri
 	for _, m := range it.Methods.List {
 		for _, n := range m.Names {
 			ft, ok := m.Type.(*ast.FuncType)
-			if n.Name == s.Sel.Name && ok && ft.Results != nil && len(ft.Results.List) == 1 && w.isNetHTTP(owner, ft.Results.List[0].Type, "Handler") {
+			if n.Name == s.Sel.Name && ok && ft.Results != nil && len(ft.Results.List) == 1 && w.httpTypeIs(owner, ft.Results.List[0].Type, "Handler") {
 				return t.name + "." + n.Name, true
 			}
 		}
@@ -2057,15 +2171,8 @@ func (w *chainWalker) unestablishedWrapperCall(c chainCtx, call *ast.CallExpr) (
 		path := importPathOf(c.fn.file, id.Name)
 		if path != "net/http" && !strings.HasPrefix(path, moduleOf(w.root)+"/") {
 			for _, a := range call.Args {
-				switch a := a.(type) {
-				case *ast.Ident:
-					if t, ok := c.params[a.Name]; ok && (w.isNetHTTP(c.fn, t, "Handler") || w.isNetHTTP(c.fn, t, "HandlerFunc")) {
-						return "handler passed to " + w.text(c.fn, call.Fun, nil) + " outside the module", true
-					}
-				case *ast.CallExpr:
-					if w.isNetHTTP(c.fn, a.Fun, "HandlerFunc") {
-						return "handler passed to " + w.text(c.fn, call.Fun, nil) + " outside the module", true
-					}
+				if w.exprHTTP(c, a, "Handler", "HandlerFunc") {
+					return "handler passed to " + w.text(c.fn, call.Fun, nil) + " outside the module", true
 				}
 			}
 		}
@@ -2139,22 +2246,8 @@ func (w *chainWalker) untypedHandlerCall(c chainCtx, call *ast.CallExpr) (string
 // wrapper whatever it is called.
 func (w *chainWalker) passesHTTPValue(c chainCtx, call *ast.CallExpr) bool {
 	for _, a := range call.Args {
-		switch a := a.(type) {
-		case *ast.Ident:
-			if t, ok := c.params[a.Name]; ok {
-				if st, ok := t.(*ast.StarExpr); ok {
-					t = st.X
-				}
-				for _, n := range []string{"Handler", "HandlerFunc", "ResponseWriter", "Request"} {
-					if w.isNetHTTP(c.fn, t, n) {
-						return true
-					}
-				}
-			}
-		case *ast.CallExpr:
-			if w.isNetHTTP(c.fn, a.Fun, "HandlerFunc") {
-				return true
-			}
+		if w.exprHTTP(c, a, "Handler", "HandlerFunc", "ResponseWriter", "Request") {
+			return true
 		}
 	}
 	return false
@@ -2166,14 +2259,8 @@ func (w *chainWalker) funcTypeMentionsHandler(fn chainFunc, ft *ast.FuncType) bo
 			continue
 		}
 		for _, f := range fl.List {
-			t := f.Type
-			if st, ok := t.(*ast.StarExpr); ok {
-				t = st.X
-			}
-			for _, n := range []string{"Handler", "HandlerFunc", "ResponseWriter", "Request"} {
-				if w.isNetHTTP(fn, t, n) {
-					return true
-				}
+			if w.httpTypeIs(fn, f.Type, "Handler", "HandlerFunc", "ResponseWriter", "Request") {
+				return true
 			}
 		}
 	}
@@ -2301,7 +2388,7 @@ func discoverChains(root string, routes []discoveredRoute) map[routeKey]chainVer
 			out[key] = chainVerdict{Gaps: []string{fmt.Sprintf("%d parsed registrations match %q", len(found), pat)}}
 			continue
 		}
-		w := &chainWalker{root: root, api: apiPkg, pkgs: w0.pkgs, pkgErrs: w0.pkgErrs, seen: map[*ast.FuncDecl]bool{}, active: map[*ast.FuncDecl]bool{}, rejects: w0.rejects}
+		w := &chainWalker{root: root, api: apiPkg, pkgs: w0.pkgs, pkgErrs: w0.pkgErrs, seen: map[*ast.FuncDecl]bool{}, active: map[*ast.FuncDecl]bool{}, localActive: map[localKey]bool{}, rejects: w0.rejects}
 		w.handlerExpr(found[0].ctx, found[0].call.Args[1], true, 0)
 		if w.cut {
 			w.gap("scan depth cut at %d", maxScanDepth)
