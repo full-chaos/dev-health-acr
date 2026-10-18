@@ -297,3 +297,46 @@ func TestRecordWorkItemAuthorizationGapWithoutTelemetryIsQuiet(t *testing.T) {
 	census := &WorkItemTupleCensus{gap: &workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 2, Denied: 2}}
 	(&Engine{}).recordWorkItemAuthorizationGap(context.Background(), storage.Principal{OrgID: "org-1"}, census, InvestigationResult{})
 }
+
+func TestAuthorizationGapSurvivesAFullLimitationListAndALaterDisclosure(t *testing.T) {
+	gaps := []workItemAuthorizationGap{
+		{AnchorKind: SubjectProject, State: WorkItemMembershipCensusExact, Observed: 5, Authorized: 2, Denied: 3},
+		{AnchorKind: SubjectRepository, State: WorkItemMembershipCensusFloor, Observed: 2001, Authorized: 2001, Denied: 3},
+	}
+	for _, gap := range gaps {
+		candidate := validInvestigationResult()
+		candidate.Limitations = modelLimitations(contractsv1.ContextFabricLimitationsMaxCount)
+		candidate = applyWorkItemAuthorizationGap(candidate, gap)
+		if !hasWorkItemAuthorizationGapLimitation(candidate.Limitations) {
+			t.Fatalf("gap sentence missing after the gap disclosure: %q", gap.Limitation())
+		}
+		if err := candidate.Validate(); err != nil {
+			t.Fatalf("result with a full list and the gap disclosure does not validate: %v", err)
+		}
+		candidate.Limitations, _ = withRetrievalDegradation(candidate.Limitations)
+		var kept bool
+		for _, limitation := range candidate.Limitations {
+			kept = kept || limitation == gap.Limitation()
+		}
+		if !kept {
+			t.Fatalf("a later service disclosure displaced the gap sentence: %q", gap.Limitation())
+		}
+	}
+}
+
+func TestAuthorizationGapSentencesAreServiceAuthored(t *testing.T) {
+	for _, gap := range []workItemAuthorizationGap{
+		{AnchorKind: SubjectProject, Observed: 7, Denied: 7},
+		{AnchorKind: SubjectRepository, Observed: 7, Denied: 7},
+		{AnchorKind: SubjectProject, State: WorkItemMembershipCensusFloor, Observed: 9, Authorized: 6, Denied: 3},
+		{AnchorKind: SubjectRepository, Incomplete: true, Observed: 9, Authorized: 6, Denied: 3},
+		{AnchorKind: SubjectProject, Observed: 9, Authorized: 6, Denied: 3},
+	} {
+		if !isServiceAuthoredLimitation(gap.Limitation()) {
+			t.Errorf("not recognised as service-authored: %q", gap.Limitation())
+		}
+	}
+	if isServiceAuthoredLimitation(workItemAuthorizationGapPrefix + ": a model caveat that only opens like the disclosure.") {
+		t.Error("a model caveat sharing the prefix was treated as service-authored")
+	}
+}

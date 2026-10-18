@@ -2,9 +2,9 @@ package contextfabric
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -45,17 +45,7 @@ func (g workItemAuthorizationGap) NoneAuthorized() bool { return g.Authorized ==
 
 // Limitation is the answer-facing disclosure of the partition.
 func (g workItemAuthorizationGap) Limitation() string {
-	prefix := workItemAuthorizationGapPrefix
-	if g.AnchorKind == SubjectRepository {
-		prefix = workItemRepositoryAuthorizationGapPrefix
-	}
-	if g.NoneAuthorized() {
-		return fmt.Sprintf("%s: %d work items were observed and none are authorized, so no work item can be listed or counted.", prefix, g.Denied)
-	}
-	if g.State == WorkItemMembershipCensusFloor || g.Incomplete {
-		return fmt.Sprintf("%s: the census stopped at its bound, with at least %d work items authorized and at least %d more denied and not counted.", prefix, g.Authorized, g.Denied)
-	}
-	return fmt.Sprintf("%s: %d work items are authorized and %d more are denied and are not counted.", prefix, g.Authorized, g.Denied)
+	return contractsv1.ContextFabricWorkItemAuthorizationGapLimitation(g.AnchorKind == SubjectRepository, g.Authorized, g.Denied, g.State == WorkItemMembershipCensusFloor || g.Incomplete)
 }
 
 func hasWorkItemAuthorizationGapLimitation(limitations []string) bool {
