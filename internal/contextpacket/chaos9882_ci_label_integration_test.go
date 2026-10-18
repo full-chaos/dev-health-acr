@@ -38,6 +38,11 @@ func TestCIRunLabelOnARealStore(t *testing.T) {
 		"edge-unicode": strings.Repeat("é", 81),
 		"edge-inner":   "build  and\ttest",
 		"edge-exact":   strings.Repeat("b", 80),
+		"edge-ci":      "CI",
+		"edge-ci-low":  "ci",
+		"edge-ci-mix":  "Ci build",
+		"edge-ci-pad":  "\t CI \n",
+		"edge-cix":     "CIX",
 	}
 	for id, name := range edgeNames {
 		scopeExec(t, ctx, direct, fmt.Sprintf(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id, pipeline_name) VALUES ('%s', '%s', 'success', %s, %s, '%s', '%s')`, scopeRepoID, id, event, synced, scopeOrgA, name))
