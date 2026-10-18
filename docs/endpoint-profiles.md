@@ -279,6 +279,16 @@ number of distinct sites the rows declare for it (rows citing one shared
 definition line are one site; a `func` declaration is always one site). More is
 `AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
 
+### Several registrations on one line
+
+The gate does not require one registration per line. Because a row is matched
+by `source.file` + `method` + `route`, two `mux.Handle*` calls on the same
+physical line are accepted when each has its own row. A registration without a
+row fails as `UNOWNED SURFACE`, whichever line it shares. A registration the
+discoverer cannot parse (wrapped across lines, or an unrecognised shape) is not
+dropped: it fails as `UNRESOLVED REGISTRATION`. Writing one registration per
+line is still the readable form, and the gate does not depend on it.
+
 ## Wrapper-chain reconciliation
 
 `ci/checkendpointprofiles` parses `internal/api` and, for every discovered
