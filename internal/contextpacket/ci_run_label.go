@@ -14,8 +14,9 @@ const ciRunLabelNameMaxRunes = 80
 const ciRunLabelSpace = " \t\n\v\f\r"
 
 // CIRunLabel is the one rule that names a CI run: "CI <pipeline_name> #<run_id>"
-// when a pipeline name is stored, "CI <run_id>" otherwise. No job name is
-// stored, so none is shown. CIRunLabelSQL is the same rule as a ClickHouse
+// when a pipeline name is stored, "CI <run_id>" otherwise. When the name's
+// first token is already "CI" (any case), the fixed prefix is dropped so the
+// word is not doubled. No job name is stored, so none is shown. CIRunLabelSQL is the same rule as a ClickHouse
 // expression; both read the constants above.
 func CIRunLabel(pipelineName, runID string) string {
 	name := strings.Trim(pipelineName, ciRunLabelSpace)
@@ -25,6 +26,13 @@ func CIRunLabel(pipelineName, runID string) string {
 	if name == "" {
 		return "CI " + runID
 	}
+	token := name
+	if i := strings.IndexAny(name, ciRunLabelSpace); i >= 0 {
+		token = name[:i]
+	}
+	if strings.EqualFold(token, "CI") {
+		return name + " #" + runID
+	}
 	return "CI " + name + " #" + runID
 }
 
@@ -32,5 +40,7 @@ func CIRunLabel(pipelineName, runID string) string {
 // pipeline name and run id column expressions.
 func CIRunLabelSQL(pipelineNameExpr, runIDExpr string) string {
 	trimmed := "replaceRegexpAll(ifNull(" + pipelineNameExpr + ", ''), '^[[:space:]]+|[[:space:]]+$', '')"
-	return "if(lengthUTF8(" + trimmed + ") = 0, concat('CI ', " + runIDExpr + "), concat('CI ', leftUTF8(" + trimmed + ", " + strconv.Itoa(ciRunLabelNameMaxRunes) + "), ' #', " + runIDExpr + "))"
+	prefixed := "concat('CI ', leftUTF8(" + trimmed + ", " + strconv.Itoa(ciRunLabelNameMaxRunes) + "), ' #', " + runIDExpr + ")"
+	bare := "concat(leftUTF8(" + trimmed + ", " + strconv.Itoa(ciRunLabelNameMaxRunes) + "), ' #', " + runIDExpr + ")"
+	return "multiIf(lengthUTF8(" + trimmed + ") = 0, concat('CI ', " + runIDExpr + "), match(" + trimmed + ", '^[Cc][Ii]([[:space:]]|$)'), " + bare + ", " + prefixed + ")"
 }
