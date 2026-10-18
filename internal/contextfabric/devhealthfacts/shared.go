@@ -1258,11 +1258,21 @@ import (
 // windows add up. An answer saved under v243 counted a unit that spans a
 // window boundary in every window it overlapped.
 //
+// v244 -> v245: a candidate receipt redeemed this turn resolves the subject it
+// names. An answer saved under v244 for such a request holds the no-match
+// that left the offered pool unresolved and must not be reused.
+//
+// v245 -> v246: a project's commitment fact serves a bounded table of its
+// dated issues (id, due date, status, past due) beside the counts, with a
+// truncated flag at 25 rows. An answer saved under v245 has no such table.
+//
 // v246 -> v247: a project past the shared row budget of a flow, readiness or
 // landscape project read is served (its team count from the uncapped
 // aggregate, its omitted rows named), and an investment project the row cap
 // cut off is named cut, not as having no mix. An answer saved before omitted
-// such a project or called it empty.
+// such a project or called it empty. The project population reads of flow,
+// readiness, landscape, health, workload and the investment mix read up to 250
+// projects, where they read 200.
 const QueryVersion = "devhealthfacts.clickhouse.v247"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

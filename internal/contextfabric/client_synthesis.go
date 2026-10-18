@@ -325,7 +325,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	maxBytes, err := assembly.inputBoundWithin(budget)
 	measure.MaxBytes = maxBytes
 	if err != nil {
-		return InvestigationResult{}, nil, measure, clientSynthesisBudgetRefusal(err, 0)
+		return InvestigationResult{}, nil, measure, r.clientSynthesisEnvelopeRefusal(ctx, principal, input, err, budget)
 	}
 	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes, assembly.widenedInputBound(budget, maxBytes))
 	if maxBytes < assembly.MaxBytes && err != nil {
@@ -333,7 +333,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		if envelopeErr != nil {
 			return InvestigationResult{}, nil, measure, envelopeErr
 		}
-		err = clientSynthesisBudgetRefusal(err, envelope)
+		err = clientSynthesisBudgetRefusal(err, envelope, budget)
 	}
 	bounded := bound != nil
 	measure.FactsGiven, measure.Bounded = len(given.Facts.Facts), bounded
@@ -365,6 +365,28 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, err
 	}
 	return result, bundle, measure, nil
+}
+
+// clientSynthesisEnvelopeRefusal is the refusal for a budget whose half share
+// cannot hold the envelope: it measures the smallest input the facts reduce to
+// beside the envelope, so the measured size is the one the turn needs. The
+// probe runs without telemetry: it is a measurement, not a bounding outcome.
+func (r RuntimeAnswerSynthesizer) clientSynthesisEnvelopeRefusal(ctx context.Context, principal storage.Principal, input SynthesisInput, shareErr error, budget int) error {
+	envelope, envelopeErr := r.ClientSynthesis.envelopeBytes()
+	if envelopeErr != nil {
+		return envelopeErr
+	}
+	quiet := r
+	quiet.Telemetry = nil
+	_, _, _, minimumErr := quiet.encodeWithinInputBound(ctx, principal, input, r.ClientSynthesis.Encode, 1, 0)
+	var overflow *ModelInputOverflow
+	if errors.As(minimumErr, &overflow) {
+		return clientSynthesisBudgetRefusal(minimumErr, envelope, budget)
+	}
+	if minimumErr != nil {
+		return minimumErr
+	}
+	return clientSynthesisBudgetRefusal(shareErr, envelope, budget)
 }
 
 func stampClientInterpretationVersion(ctx context.Context, versions *VersionSet) {
@@ -700,18 +722,18 @@ func (a *ClientSynthesisAssembly) envelopeBytes() (int, error) {
 }
 
 // clientSynthesisBudgetRefusal turns "the input cannot be cut to the caller's
-// share" into the budget refusal the route serves as a 413: the smallest input
-// the facts reduce to, with its envelope, is larger than the share of the
-// caller's budget the input may take. Both numbers are body bytes of the input
-// and its envelope, so the refusal reads measured above maximum. Any other
-// error passes.
-func clientSynthesisBudgetRefusal(err error, envelope int) error {
+// share" into the budget refusal the route serves as a 413. It states the
+// caller's own budget as the limit, and measures the smallest body the turn
+// needs against it: the smallest input, its envelope and the answer floor. The
+// half share of the budget is an internal split and never the stated limit.
+// Any other error passes.
+func clientSynthesisBudgetRefusal(err error, envelope, budget int) error {
 	var overflow *ModelInputOverflow
 	if !errors.As(err, &overflow) {
 		return err
 	}
 	return AnswerBudgetRefusal{
-		Overrun: contractsv1.ContextFabricBudgetOverrunBytes, MeasuredBytes: int64(overflow.Bytes + envelope), MaxSerializedBytes: int64(overflow.MaxBytes + envelope),
+		Overrun: contractsv1.ContextFabricBudgetOverrunBytes, MeasuredBytes: int64(overflow.Bytes + envelope + ClientSynthesisAnswerFloorBytes), MaxSerializedBytes: int64(budget),
 		NothingLeftToCut: true, Stage: StageSynthesis,
 	}
 }

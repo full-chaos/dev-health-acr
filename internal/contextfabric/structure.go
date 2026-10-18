@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -1909,6 +1910,24 @@ func confirmedAnchorSelection(confirmed []confirmedStructureMember, applied map[
 		return &ConfirmedAnchorSelection{Kind: entry.AppliedKind, CanonicalID: entry.AppliedValue}
 	}
 	return nil
+}
+
+// confirmedCandidateHint turns the pick this turn's candr_ receipt redeemed
+// into the exact subject hint resolution commits on. The pick answers the
+// clarification that raised the offer, so leaving it as disclosure alone
+// returns the same ambiguous pool the caller just chose from. Only a receipt
+// redeemed this turn is a pick: a remembered entry is not, and reaches no
+// resolution parameter.
+func confirmedCandidateHint(confirmed []confirmedStructureMember) (SubjectHint, bool) {
+	for _, c := range confirmed {
+		if c.Member == contractsv1.ContextFabricStructureNeedSubjectCandidate && c.AppliedKind != "" && c.AppliedValue != "" {
+			return SubjectHint{
+				Kind: c.AppliedKind, ID: c.AppliedValue, Label: c.AppliedValue,
+				Source: string(hintsource.ConfirmedCandidateReceipt),
+			}, true
+		}
+	}
+	return SubjectHint{}, false
 }
 
 // StructureReceiptOutcome is the closed vocabulary RecordStructureReceipt

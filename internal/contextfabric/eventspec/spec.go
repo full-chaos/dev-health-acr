@@ -2351,6 +2351,104 @@ var DriverIdentityCollisions = Event{
 	},
 }
 
+// EvidenceLabelFallback is the Info line of how many evidence refs of a served result fell back to the generic label; written only when the count is above zero.
+var EvidenceLabelFallback = Event{
+	ID:                       "contextfabric.evidence_label_fallback",
+	Msg:                      "context fabric evidence ref label fell back to the generic label",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the label stamp runs once on the result the request serves.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cf_evidence_label_fallback", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// CoverageEntriesCapped is the Info line of a served result whose coverage entries were cut to the write bound: how many were served, how many omitted and the bound; written only when entries were omitted.
+var CoverageEntriesCapped = Event{
+	ID:                       "contextfabric.coverage_entries_capped",
+	Msg:                      "context fabric coverage entries capped",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most two lines per investigation: the cap runs on the served result, and once more after the model failure degrade files its detail.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "coverage_entries_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "coverage_entries_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "coverage_entries_bound", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// CoverageDisclosurePhrasing is the Info line of the coverage disclosure guard's outcome for one synthesis: the closed outcome, the violation that discarded the set, and how many details were phrased of the total.
+var CoverageDisclosurePhrasing = Event{
+	ID:                       "contextfabric.coverage_disclosure_phrasing",
+	Msg:                      "context fabric coverage disclosure phrasing",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that composes a result; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CoverageDisclosureOutcomeVocabulary()},
+		{Key: "violation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CoverageDisclosureViolationVocabulary()},
+		{Key: "phrased", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// CategoryFactComposition is the Info line of a status category requirement expanded into its composed fact kinds for one subject kind.
+var CategoryFactComposition = Event{
+	ID:                       "contextfabric.category_fact_composition",
+	Msg:                      "context fabric status category fact composition",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         3,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per composed subject kind of one investigation, written once before the facts are read; the composition table has three subject kinds.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatusCategoryRequirementKindVocabulary()},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatusCategoryComposedSubjectKindVocabulary()},
+		{Key: "composed_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatusCategoryComposedFactKindVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// PeriodDeltaComposition is the Info line of a period delta comparison decision for one subject kind: the grain, the fact kinds the prior read asked for, whether a prior read ran, why none did, the subjects no served fact could carry, and the count of every transition.
+var PeriodDeltaComposition = Event{
+	ID:                       "contextfabric.period_delta_composition",
+	Msg:                      "context fabric period delta composition",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per eligible subject kind (team and project) the comparison touched, written once per investigation.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatusCategoryRequirementKindVocabulary()},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PeriodDeltaSubjectKindVocabulary()},
+		{Key: "grain", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PeriodDeltaSubjectKindVocabulary()},
+		{Key: "composed_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StatusCategoryComposedFactKindVocabulary()},
+		{Key: "prior_read_issued", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "failure_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PeriodDeltaFailureReasonVocabulary()},
+		{Key: "unserved_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "transition_counts", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PeriodDeltaTransitionLogVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // PriorSubjectReceiptsSkipped is the Warn line of the prior-subject receipts a turn skipped: how many, never which.
 var PriorSubjectReceiptsSkipped = Event{
 	ID:                       "contextfabric.prior_subject_receipts_skipped",
@@ -5152,6 +5250,11 @@ var All = []Event{
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
 	DriverIdentityCollisions,
+	EvidenceLabelFallback,
+	CoverageEntriesCapped,
+	CoverageDisclosurePhrasing,
+	CategoryFactComposition,
+	PeriodDeltaComposition,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
@@ -5356,6 +5459,7 @@ var ConfirmedNeedLedger = Event{
 		{Key: "substitution_parent_chain", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionParentChainTokens},
 		{Key: "substitution_parent_chain_depth", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "substitution_parent_chain_error", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionChainErrorTokens},
+		{Key: "candidate_hint_evicted", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
