@@ -34,9 +34,16 @@ set -euo pipefail
 #      unit-dedicated packages (test-shard.sh --print-unit-dedicated-packages)
 #      is skipped when every race job that runs those packages is scheduled
 #      (not in skip_jobs); those race jobs then cover the same tests under
-#      -race. Their job keys go to dedup_needs, and verify requires each of
-#      them to succeed. With --heavy false (a draft without ci-full) no race
-#      job runs, so no unit leg is skipped this way.
+#      -race. A leg is kept when any test it runs is skipped under -race: a
+#      Test func whose body names raceDetectorEnabled, race.Enabled or
+#      testing.Short, or one declared in a `//go:build` file excluding race
+#      (race_skipped_tests below); the leg's own test set is read from its
+#      -run/-skip race-split.sh list in ci.yml. Their job keys go to
+#      dedup_needs, and verify requires each of them to succeed. With --heavy
+#      false (a draft without ci-full) no race job runs, so no unit leg is
+#      skipped this way. scripts/ci/test-unit-race-dedup.sh proves, by
+#      compiled test lists, that every dropped leg's tests run in its race
+#      jobs.
 #
 # Output (stdout, GITHUB_OUTPUT lines):
 #   reach_mode=full|reached   reached only for a pull_request
@@ -98,6 +105,45 @@ list_jobs() {
     in_jobs && /^[^[:space:]]/ { in_jobs=0 }
     in_jobs && /^  [A-Za-z0-9_-]+:/ { line=$0; sub(/^  /, "", line); sub(/:.*/, "", line); print line }
   ' "$workflow"
+}
+
+# race_skipped_tests DIR -> the top-level Test funcs of DIR's test files that
+# do not run under -race: the body names raceDetectorEnabled, race.Enabled or
+# testing.Short(), or the file's //go:build line excludes race.
+race_skipped_tests() {
+  local files=("$1"/*_test.go)
+  [ -e "${files[0]}" ] || return 0
+  awk '
+    function flush() { if (name != "" && hit) print name; name = ""; hit = 0 }
+    FNR == 1 { flush(); norace = 0 }
+    /^\/\/go:build/ && /!race/ { norace = 1 }
+    /^func Test[A-Za-z0-9_]*\(/ { flush(); name = $2; sub(/\(.*/, "", name); hit = norace; next }
+    /^func / { flush(); next }
+    name != "" && /raceDetectorEnabled|race\.Enabled|testing\.Short\(\)/ { hit = 1 }
+    END { flush() }
+  ' "${files[@]}" | LC_ALL=C sort -u
+}
+
+# leg_regime N -> "run|skip <space-separated names>" for unit leg N's
+# GOFLAGS -run/-skip race-split.sh list in ci.yml, or "all" when it has none.
+leg_regime() {
+  local line flag split mode regex
+  line="$(job_block unit | grep -E "^ +$1\) export GOFLAGS=" | head -n1 || true)"
+  if [ -z "$line" ]; then
+    printf 'all\n'
+    return 0
+  fi
+  flag="$(sed -nE 's/.*-trimpath -(run|skip)=\$\(scripts\/ci\/race-split\.sh [a-z]+ [a-z-]+\)".*/\1/p' <<<"$line")"
+  split="$(sed -nE 's/.*race-split\.sh ([a-z]+) ([a-z-]+)\)".*/\1/p' <<<"$line")"
+  mode="$(sed -nE 's/.*race-split\.sh ([a-z]+) ([a-z-]+)\)".*/\2/p' <<<"$line")"
+  if [ -z "$flag" ] || [ -z "$split" ] || [ -z "$mode" ]; then
+    printf 'reached-shards: unit leg %s GOFLAGS line not understood: %s\n' "$1" "$line" >&2
+    return 1
+  fi
+  regex="$(cd "$repo_root" && scripts/ci/race-split.sh "$split" "$mode")" || return 1
+  case "$regex" in '^('*')$') ;; *) printf 'reached-shards: race-split.sh %s %s printed %s\n' "$split" "$mode" "$regex" >&2; return 1 ;; esac
+  regex="${regex#'^('}"
+  printf '%s %s\n' "$flag" "${regex%')$'}" | tr '|' ' '
 }
 
 has_testdata_dir() { # path: true when a directory component is testdata
@@ -399,6 +445,22 @@ select_shards() {
           covers+=" $job"
         done
         [ "$cover" -eq 1 ] || ok=0
+      done
+      [ "$ok" -eq 1 ] || continue
+      local regime names skipped t
+      regime="$(leg_regime "${key#unit:}")" || { rm -rf "$legdir"; return 1; }
+      names=" ${regime#* } "
+      for pkg in "${pkgs[@]}"; do
+        skipped="$(race_skipped_tests "$repo_root/${pkg#"$module_path"/}")"
+        for t in $skipped; do
+          case "$regime" in
+            all) ok=0 ;;
+            run\ *) case "$names" in *" $t "*) ok=0 ;; esac ;;
+            skip\ *) case "$names" in *" $t "*) ;; *) ok=0 ;; esac ;;
+          esac
+          [ "$ok" -eq 1 ] || { printf 'reached-shards: keep %s: %s skips under -race\n' "$key" "$t" >&2; break; }
+        done
+        [ "$ok" -eq 1 ] || break
       done
       [ "$ok" -eq 1 ] || continue
       printf 'reached-shards: skip %s (race duplicate of%s)\n' "$key" "$covers" >&2

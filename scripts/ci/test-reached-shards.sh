@@ -257,10 +257,25 @@ run_reached pr-dedup-facts pull_request "$facts_go"
 unit_skip="$(out_value pr-dedup-facts unit_skip)"
 dedup="$(out_value pr-dedup-facts dedup_needs)"
 skip_jobs="$(out_value pr-dedup-facts skip_jobs)"
+# A devhealthfacts leg is dropped unless a test it runs skips under -race;
+# then the selector must say which test, and that test must really skip.
+dropped_facts=0
+kept_facts=0
 for n in $facts_legs; do
-  grep -qF "{\"shard\":$n}" <<<"$unit_skip" \
-    || fail "pr-dedup-facts: unit leg $n holds only devhealthfacts, whose race jobs run, but it is not skipped (unit_skip=$unit_skip)"
+  if grep -qF "{\"shard\":$n}" <<<"$unit_skip"; then
+    dropped_facts=$((dropped_facts + 1))
+    continue
+  fi
+  kept_facts=$((kept_facts + 1))
+  t="$(sed -nE "s/^reached-shards: keep unit:$n: ([A-Za-z0-9_]+) skips under -race$/\1/p" "$tmp/pr-dedup-facts.err" | head -n1)"
+  if [ -z "$t" ]; then
+    fail "pr-dedup-facts: unit leg $n holds only devhealthfacts, whose race jobs run, but it is neither skipped nor kept for a race-skipped test (unit_skip=$unit_skip)"
+  elif ! awk -v t="$t" '$0 ~ "^func " t "\\(" { g=1; next } g && /^func / { g=0 } g && /raceDetectorEnabled/ { found=1 } END { exit !found }' "$repo_root"/internal/contextfabric/devhealthfacts/*_test.go; then
+    fail "pr-dedup-facts: unit leg $n is kept for $t, which does not skip under -race"
+  fi
 done
+[ "$dropped_facts" -gt 0 ] || fail "pr-dedup-facts: no devhealthfacts unit leg was dropped"
+[ "$kept_facts" -gt 0 ] || fail "pr-dedup-facts: every devhealthfacts unit leg was dropped although two of its tests skip under -race"
 for job in race-devhealthfacts race-devhealthfacts-heavy race-devhealthfacts-mid race-devhealthfacts-fourth; do
   grep -qF "\"$job\"" <<<"$dedup" || fail "pr-dedup-facts: dedup_needs lacks $job (dedup_needs=$dedup)"
   grep -qF "\"$job\"" <<<"$skip_jobs" && fail "pr-dedup-facts: $job is skipped while a unit leg relies on it"
@@ -268,7 +283,7 @@ done
 for n in 1 2 3 4; do
   grep -qF "{\"shard\":$n}" <<<"$unit_skip" && fail "pr-dedup-facts: round-robin unit leg $n was dropped as a race duplicate"
 done
-[ "$fails" -eq 0 ] && ok "pr-dedup-facts drops unit legs $(tr '\n' ' ' <<<"$facts_legs")and needs their 4 race jobs"
+[ "$fails" -eq 0 ] && ok "pr-dedup-facts drops $dropped_facts devhealthfacts unit leg(s), keeps $kept_facts for race-skipped tests, needs the 4 race jobs"
 
 HEAVY=false run_reached pr-dedup-draft pull_request "$facts_go"
 unit_skip="$(out_value pr-dedup-draft unit_skip)"
@@ -296,8 +311,8 @@ for n in $(matrix_legs unit); do
   done <<<"$pkgs"
   if grep -qF "{\"shard\":$n}" <<<"$unit_skip"; then
     [ "$dedicated_only" -eq 1 ] || fail "pr-dedup-gomod: unit leg $n holds a non-dedicated package and is skipped"
-  else
-    [ "$dedicated_only" -eq 0 ] || fail "pr-dedup-gomod: unit leg $n holds only dedicated packages, all race jobs run, and it still runs"
+  elif [ "$dedicated_only" -eq 1 ] && ! grep -qE "^reached-shards: keep unit:$n: [A-Za-z0-9_]+ skips under -race$" "$tmp/pr-dedup-gomod.err"; then
+    fail "pr-dedup-gomod: unit leg $n holds only dedicated packages, all race jobs run, and it still runs with no race-skipped test named"
   fi
 done
 [ "$fails" -eq "$before" ] && ok "pr-dedup-gomod skips exactly the dedicated-only unit legs (unit_skip=$unit_skip)"
@@ -352,9 +367,9 @@ whole_unit_some_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"uni
 whole_race_partial='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":1}]","dedup_needs":"[]"}'
 whole_race_all='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":4},{\"shard\":1},{\"shard\":3},{\"shard\":2}]","dedup_needs":"[]"}'
 no_reach_lists='{"heavy":"true","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
-dedup_facts='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":5},{\"shard\":7}]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\",\"race-devhealthfacts-heavy\",\"race-devhealthfacts-mid\",\"race-devhealthfacts-fourth\"]"}'
+dedup_facts='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":7}]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\",\"race-devhealthfacts-heavy\",\"race-devhealthfacts-mid\",\"race-devhealthfacts-fourth\"]"}'
 dedup_full='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\"]"}'
-dedup_draft='{"heavy":"false","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":5},{\"shard\":7}]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\",\"race-devhealthfacts-heavy\",\"race-devhealthfacts-mid\",\"race-devhealthfacts-fourth\"]"}'
+dedup_draft='{"heavy":"false","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":7}]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\",\"race-devhealthfacts-heavy\",\"race-devhealthfacts-mid\",\"race-devhealthfacts-fourth\"]"}'
 dedup_missing='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":5}]","race_skip":"[]"}'
 bad_reach='{"heavy":"true","reach_mode":"partial","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
 draft_full='{"heavy":"false","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
