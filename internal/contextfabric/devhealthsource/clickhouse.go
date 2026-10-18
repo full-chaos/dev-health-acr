@@ -169,9 +169,10 @@ const SourceName = "dev_health_clickhouse"
 //
 // (v18, one relationship id per dependency whatever the spelling of its type:
 // the id derives from the trimmed lower-case type, so 'blocks' and 'BLOCKS'
-// are one edge. Edges projected from a spelling that is not already trimmed
-// lower case, and from the BLOCKED_BY aliases, carry the old id; the rebuild
-// re-projects them under the new one.)
+// are one edge. Edges projected from an unmapped spelling that is not already
+// trimmed lower case, and from the BLOCKED_BY and IS_BLOCKED_BY aliases, carry
+// the old id; the rebuild re-projects them under the new one. The RELATES
+// alias already derived "relates_to" and keeps its id.)
 const ClickHouseSourceVersion = "devhealthsource.clickhouse.v18"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
