@@ -202,7 +202,7 @@ FactIncidents
   fields             incident_attribution_basis incidents_count_window org_incidents_not_attributable_count_window owned_repositories owned_repositories_omitted_count owned_repository_count project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name repository_tables_basis resolved_incidents_count_window rollup_basis severity status window_basis window_end window_start
 
 FactInvestment
-  reached_funcs      250
+  reached_funcs      249
   dynamic_key_sites  10
   leaked_call_sites  66
     leak interface_method     35
@@ -210,7 +210,7 @@ FactInvestment
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         10
-    calls followed            1303
+    calls followed            1301
     calls accounted           15
     calls not_a_call          49
     calls excluded_by_design  759

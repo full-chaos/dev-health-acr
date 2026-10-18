@@ -177,10 +177,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
 		// Missing is not healthy: a project with no canonical mix serves no
 		// fact, and says so by a NAMED reason instead of a silent absence.
-		projectsNoMix = projectsWithoutInvestmentFact(projectSubjects, &facts)
 		// A project the cap cut off the end of a read is not a project with
 		// no mix: it was never evaluated.
-		projectsNoMix, projectsMixCut = splitProjectsCutByRowCap(projectsNoMix, themeCutAfter, nativeCutAfter)
+		projectsNoMix, projectsMixCut = splitProjectsCutByRowCap(projectSubjects, facts, themeCutAfter, nativeCutAfter)
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
@@ -538,53 +537,48 @@ func investmentProjectNoCanonicalMixReason(noMix, requested int) string {
 // is not the same as having no mix.
 const investmentProjectMixCut = "investment_project_mix_cut_by_row_cap"
 
-const investmentProjectMixCutOwnReason = investmentProjectMixCut + ": the project theme mix read reached its row cap before this project; the project was not evaluated, and that is not a finding that it has no mix"
+const investmentProjectMixCutOwnReason = investmentProjectMixCut + ": the project theme mix read reached its row cap before this project; the project was not fully evaluated (a native mix may exist beyond the cap, and any mix served for it is the owning-team roll-up), and that is not a finding that it has no mix"
 
 func investmentProjectMixCutReason(cut, requested int) string {
-	return fmt.Sprintf("%s for %d of %d requested projects: the project theme mix read reached its row cap of %d before these projects; they were not evaluated, and that is not a finding that they have no mix", investmentProjectMixCut, cut, requested, maxFactRowsPerQuery)
+	return fmt.Sprintf("%s for %d of %d requested projects: the project theme mix read reached its row cap of %d before these projects; they were not fully evaluated (a native mix may exist beyond the cap, and any mix served for them is the owning-team roll-up), and that is not a finding that they have no mix", investmentProjectMixCut, cut, requested, maxFactRowsPerQuery)
 }
 
-// splitProjectsCutByRowCap separates the projects with no fact into those a
-// capped read never reached and those it reached with no mix. A read returns
-// its projects in key order and serves up to a cap of them, so a project whose
-// key sorts after the last served key of a cut read was not reached by it.
-func splitProjectsCutByRowCap(noFact []contextfabric.SubjectRef, cutAfterKeys ...string) (noMix, cut []contextfabric.SubjectRef) {
-	for _, subject := range noFact {
-		key := projectSpanKey(subject)
-		reached := true
-		for _, cutAfter := range cutAfterKeys {
-			if cutAfter != "" && key > cutAfter {
-				reached = false
-			}
+// splitProjectsCutByRowCap separates the projects a capped read never reached
+// from the rest. A read returns its projects in key order and serves up to a
+// cap of them, so a project whose key sorts after the last served key of a cut
+// read was not reached by it. A project with no fact that a cut read did not
+// reach was never evaluated. A project served from the owning-team roll-up
+// whose native read was cut before it may also have a native mix, which would
+// replace the roll-up, so it is cut as well.
+func splitProjectsCutByRowCap(subjects []contextfabric.SubjectRef, facts []contextfabric.CanonicalFact, rollupCutAfter, nativeCutAfter string) (noMix, cut []contextfabric.SubjectRef) {
+	served := map[string]string{}
+	for _, f := range facts {
+		if f.Kind != contextfabric.FactInvestment {
+			continue
 		}
-		if reached {
-			noMix = append(noMix, subject)
-		} else {
+		source := ""
+		if value, ok := f.Fields[contextfabric.FactFieldInvestmentMixSource]; ok && value.String != nil {
+			source = *value.String
+		}
+		served[contextfabric.FactSubjectKey(f.Subject)] = source
+	}
+	for _, subject := range subjects {
+		key := projectSpanKey(subject)
+		if key == "" {
+			continue
+		}
+		source, hasFact := served[contextfabric.FactSubjectKey(subject)]
+		nativeUnreached := nativeCutAfter != "" && key > nativeCutAfter
+		switch {
+		case hasFact && nativeUnreached && source != contextfabric.InvestmentMixSourceProjectNative:
 			cut = append(cut, subject)
+		case !hasFact && (nativeUnreached || (rollupCutAfter != "" && key > rollupCutAfter)):
+			cut = append(cut, subject)
+		case !hasFact:
+			noMix = append(noMix, subject)
 		}
 	}
 	return noMix, cut
-}
-
-// projectsWithoutInvestmentFact lists the project subjects of valid shape that have no
-// FactInvestment fact after the project reads.
-func projectsWithoutInvestmentFact(subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) []contextfabric.SubjectRef {
-	have := map[string]bool{}
-	for _, f := range *facts {
-		if f.Kind == contextfabric.FactInvestment {
-			have[contextfabric.FactSubjectKey(f.Subject)] = true
-		}
-	}
-	var missing []contextfabric.SubjectRef
-	for _, subject := range subjects {
-		if projectSpanKey(subject) == "" {
-			continue
-		}
-		if !have[contextfabric.FactSubjectKey(subject)] {
-			missing = append(missing, subject)
-		}
-	}
-	return missing
 }
 
 // rejectedProjectCount: project subjects whose id has no project v2 shape.
