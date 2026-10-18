@@ -139,3 +139,23 @@ func TestUnnamedRecogniserIsLabelledOther(t *testing.T) {
 		t.Fatalf("id = %q", got)
 	}
 }
+
+func TestNoLookalikeSurvivesTheStripSoTheClassifierSeesOnlyEngineText(t *testing.T) {
+	draft := append([]string{}, contractsv1.ContextFabricServiceAuthoredLimitations()...)
+	for i := 0; i < 20; i++ {
+		draft = append(draft, workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Authorized: 10 + i, Denied: 50 + i}.Limitation())
+	}
+	draft = append(draft, "A genuine model caveat.")
+	kept, dropped, _ := stripServiceAuthoredLookalikes(draft)
+	if dropped != len(draft)-1 || !slices.Equal(kept, []string{"A genuine model caveat."}) {
+		t.Fatalf("kept = %q dropped = %d", kept, dropped)
+	}
+	for _, limitation := range kept {
+		if isServiceAuthoredLimitation(limitation) {
+			t.Fatalf("a recogniser-accepted entry survived the strip: %q", limitation)
+		}
+	}
+	if lastModelAuthoredLimitation(kept) != len(kept)-1 {
+		t.Fatal("the displacement classifier sees a service entry in stripped model text")
+	}
+}
