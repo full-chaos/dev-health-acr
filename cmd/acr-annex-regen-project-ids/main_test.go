@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 )
 
+// Throwaway change: one test-only line for a reached-shard CI measurement.
 // TestFindStaleProjectIDs_ScopedToCasesOnly is the regression test for
 // codex adversarial review round 2 (MEDIUM, confirmed): an earlier version
 // scanned the ENTIRE raw JSON document for `"project:<raw>"` string
