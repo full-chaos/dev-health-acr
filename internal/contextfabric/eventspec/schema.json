@@ -2346,6 +2346,11 @@
         ]
       },
       {
+        "key": "candidate_hint_evicted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

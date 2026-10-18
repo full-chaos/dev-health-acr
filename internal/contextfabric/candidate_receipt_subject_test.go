@@ -74,3 +74,26 @@ func TestConfirmedCandidateHintKeepsItsSlotAheadOfPriorSubjectHints(t *testing.T
 		t.Fatalf("hints = %d entries, last = %#v, want 49 caller hints and the redeemed candidate in the last slot", len(hints), hints[len(hints)-1])
 	}
 }
+
+func TestConfirmedCandidateHintEvictsTheLastCallerHintWhenAllSlotsAreTaken(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	one := h.turn(needTurnRequest("request_candidate_evict_one", true), candidateOfferingNeedResponse())
+	offer := one.result.StructureNeeds.CandidateOptions[0]
+	request := needTurnRequest("request_candidate_evict_two", true)
+	for i := 0; i < 50; i++ {
+		request.RequestedScope.SubjectHints = append(request.RequestedScope.SubjectHints, SubjectHint{Kind: SubjectRepository, ID: fmt.Sprintf("repository:caller-%02d", i), Label: "caller", Source: "caller"})
+	}
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: offer.ReceiptID}}
+	two := h.turn(request, committingNeedResponse())
+	hints := lastPortCall(t, two).request.RequestedScope.SubjectHints
+	if len(hints) != 50 || hints[49].ID != offer.CanonicalID || hints[48].ID != "repository:caller-48" {
+		t.Fatalf("hints = %d entries, last two = %#v, want the redeemed candidate in slot 50 after caller hint 48", len(hints), hints[len(hints)-2:])
+	}
+	if !soleLedgerEvent(t, two).CandidateHintEvicted {
+		t.Fatal("ledger event CandidateHintEvicted = false, want the eviction recorded")
+	}
+	if soleLedgerEvent(t, one).CandidateHintEvicted {
+		t.Fatal("ledger event CandidateHintEvicted = true on a turn that evicted nothing")
+	}
+}

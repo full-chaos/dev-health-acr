@@ -2222,8 +2222,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 
-	if pick, ok := confirmedCandidateHint(structureCanon.Confirmed); ok && len(graphRequest.RequestedScope.SubjectHints) < maxSubjectHints {
-		graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), pick)
+	if pick, ok := confirmedCandidateHint(structureCanon.Confirmed); ok {
+		hints := append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...)
+		if len(hints) >= maxSubjectHints {
+			hints = hints[:maxSubjectHints-1]
+			confirmedNeedLedger.CandidateHintEvicted = true
+		}
+		graphRequest.RequestedScope.SubjectHints = append(hints, pick)
 	}
 
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
