@@ -133,3 +133,10 @@ func TestNormalizeRevocationTreatsBlankReasonAsNoReason(t *testing.T) {
 		t.Fatalf("got %q err %v", got.Reason, err)
 	}
 }
+
+func TestValidateCreateInputRejectsTheRetiredContextAdminScope(t *testing.T) {
+	input := validResourceTestInput()
+	input.Scopes = []string{"context:read", "context:admin"}
+
+	require.ErrorIs(t, ValidateCreateInput(input), ErrInvalidInput)
+}

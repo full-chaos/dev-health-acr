@@ -2,8 +2,7 @@ package auth
 
 // RoleScopes maps a WorkloadBinding's role to its fixed scope set (design
 // brief: "read = context:read + evidence:read; ops = read +
-// episode:write; context:admin stays an explicit overlay, never implicit
-// in ops"). An unrecognized role returns nil -- callers building an
+// episode:write"). An unrecognized role returns nil -- callers building an
 // authverify.WorkloadBinding treat a nil/empty GrantedScopes as
 // authverify.ErrWorkloadBindingNotFound rather than granting nothing
 // silently (see authverify.ResolveRequestedScope).

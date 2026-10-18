@@ -750,7 +750,7 @@ func TestRedeemForResourceNeverWidensTheApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.approveDevice(t, started.DeviceCodeHash, []string{"org/repo"})
-	for _, scopes := range [][]string{{ScopeContextAdmin}, {ScopeContextRead, ScopeEpisodeWrite}, {}} {
+	for _, scopes := range [][]string{{"context:admin"}, {ScopeContextRead, ScopeEpisodeWrite}, {}} {
 		if issued, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, scopes); err == nil {
 			t.Fatalf("scopes %v redeemed as %v", scopes, issued.Credential.Scopes)
 		}

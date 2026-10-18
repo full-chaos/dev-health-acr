@@ -9,7 +9,7 @@ import (
 )
 
 // catalogScopeTokens are the scopes the caller section may name.
-var catalogScopeTokens = []string{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeEpisodeWrite, auth.ScopeContextAdmin, auth.ScopeDataRead}
+var catalogScopeTokens = []string{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeEpisodeWrite, auth.ScopeDataRead}
 
 // contextFabricDataCatalogHandler serves data_catalog (CHAOS-7072, S1a;
 // design C.3). The catalogue is built for THIS caller: its grant class
