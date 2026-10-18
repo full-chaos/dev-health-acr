@@ -140,6 +140,24 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 		"sprint_kind": "cycle", "next_sprint_end": "2026-10-20T00:00:00Z", "latest_sprint_end": "2026-10-27T00:00:00Z",
 	})
 	wantAbsent(t, fact, "items_unavailable_reason", "items_unreadable_reason", "iteration_basis")
+	wantServed(t, fact, map[string]any{"issue_due_dates_truncated": false})
+	wantDueDates := []servedDueDate{
+		{"L1", "2026-10-01T00:00:00Z", "in_progress", "true"},
+		{"L2", "2026-10-01T00:00:00Z", "done", "false"},
+		{"L8", "2026-10-01T00:00:00Z", "unknown", "false"},
+		{"L7", "2026-10-02T00:00:00Z", "done", "false"},
+		{"L3", "2026-10-05T00:00:00Z", "canceled", "false"},
+		{"L4", "2026-12-01T00:00:00Z", "todo", "false"},
+	}
+	gotDueDates := servedDueDates(t, fact)
+	if len(gotDueDates) != len(wantDueDates) {
+		t.Fatalf("issue_due_dates = %+v, want %+v", gotDueDates, wantDueDates)
+	}
+	for i := range wantDueDates {
+		if gotDueDates[i] != wantDueDates[i] {
+			t.Errorf("issue_due_dates[%d] = %+v, want %+v", i, gotDueDates[i], wantDueDates[i])
+		}
+	}
 
 	fact = servedCommitment(t, response, jira)
 	wantServed(t, fact, map[string]any{

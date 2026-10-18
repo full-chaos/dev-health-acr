@@ -112,7 +112,8 @@
 // FactCommitment (commitment.go) serves a project subject from
 // projects.target_date/state/state_source, the project's issues in
 // work_items (due_at, sprint_id, status) and the sprints their sprint_id
-// names (ended_at): raw dates and counts as of the request, no judgment.
+// names (ended_at): raw dates and counts as of the request, no judgment,
+// and a table of at most 25 dated issues, past due open ones first.
 //
 // FactFileHotspots (file_hotspots.go) serves a repository subject from
 // file_hotspot_daily: the files of the repository's latest stored run inside
