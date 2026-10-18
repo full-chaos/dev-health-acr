@@ -443,7 +443,9 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		// accepts it, and one whose members do not refuses it. The two
 		// rules are independent and both must hold, so they conjoin: the
 		// cross-line index/total constraint is not a vocabulary and no
-		// membership test can satisfy it.
+		// membership test can satisfy it. "total" carries that constraint only
+		// on a bounded-many event; on any other event it is an ordinary count
+		// (the coverage disclosure phrasing line's own total of details).
 		patternAccepts := true
 		if f.Pattern != "" {
 			if text, isString := v.(string); isString {
@@ -451,7 +453,7 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 			}
 		}
 		row.wantAccept = (len(f.ClosedVocabulary) == 0 || vocabularyContainsValue(f.ClosedVocabulary, v)) &&
-			patternAccepts && f.Key != "index" && f.Key != "total"
+			patternAccepts && f.Key != "index" && !(f.Key == "total" && ev.Multiplicity == eventspec.MultiplicityBoundedManyPerPass)
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "empty_container":

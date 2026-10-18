@@ -117,3 +117,149 @@ func ProjectedRowsOfClaimsForTest(kinds []string) (int, map[FactKind]int, bool) 
 	_, rows, byKind, truncated := attachCanonicalRows(claims, nil)
 	return rows, byKind, truncated
 }
+
+// SynthesizeWithTelemetryForTest runs the real synthesizer over the closure
+// fixture, with the draft edited by variant, and writes its telemetry to sink.
+// Variants: "clean", "collision" (two drivers share an id), "stripped" (a claim
+// carries a model authored table), "source_state" (a driver claims a source
+// state its grounded fact does not have).
+func SynthesizeWithTelemetryForTest(ctx context.Context, sink EngineTelemetry, variant string) error {
+	input, draft := closureFixture()
+	switch variant {
+	case "collision":
+		second := draft.Drivers[0]
+		second.Standing = DriverContributing
+		second.Category = string(contractsv1.ContextFabricDriverCategoryNarrative)
+		second.ClaimedFactIDs = nil
+		second.Title = "A second, different contribution"
+		draft.Drivers = append(draft.Drivers, second)
+	case "stripped":
+		draft.ClaimedFacts[0].Rows = []ClaimedFactRow{{}}
+	case "source_state":
+		draft.Drivers[0].SourceState = SourceTruncated
+	case "clean":
+	default:
+		panic("unknown variant " + variant)
+	}
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime:   fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:      &fakeReceiptSink{},
+		Telemetry: sink,
+	}
+	_, err := synthesizer.Synthesize(ctx, storage.Principal{OrgID: "org_1"}, input)
+	return err
+}
+
+// DualTableCountsForTest runs the row attachment the synthesizer runs over a
+// claim on a fact that carries a legacy table and a time series table, and
+// returns the dual table claims and secondary bytes it reports.
+func DualTableCountsForTest() (claims, bytes int) {
+	subject := SubjectRef{Kind: SubjectProject, CanonicalID: "project:1", Label: "p"}
+	fact := dualTableProjectWorkloadFact(subject)
+	claim := ClaimedFact{ClaimID: "claim_backlog", Kind: FactWorkload, Subject: subject, Field: "backlog_size", Value: ScalarValue{}}
+	attachCanonicalRowsWithDualTableTelemetry([]ClaimedFact{claim}, []CanonicalFact{fact}, &claims, &bytes)
+	return claims, bytes
+}
+
+// CoverageCapAndLabelsForTest runs the coverage entry cap and the display
+// label stamp the engine runs on a served result that carries more coverage
+// entries than the write bound and an evidence ref no label is known for, and
+// returns the served entries, the omitted entries and the label fallbacks.
+func CoverageCapAndLabelsForTest() (served, omitted, fallbacks int) {
+	var result InvestigationResult
+	for i := 0; i < contractsv1.ContextFabricCoverageEntriesMaxCount+5; i++ {
+		result.Coverage.Details = append(result.Coverage.Details, CoverageDetail{DetailID: "cov-x", Source: "canonical_fact:readiness", Code: contractsv1.ContextFabricCoverageDetailFactPruned})
+	}
+	result.EvidenceRefIDs = []string{"evidence_without_a_known_label_0001"}
+	omitted = capCoverageEntriesToWriteBound(&result)
+	fallbacks = applyCoverageDisplayLabels(&result)
+	return len(result.Coverage.Details), omitted, fallbacks
+}
+
+// CoverageDisclosureVerdict is what the disclosure guard decides for one set.
+type CoverageDisclosureVerdict struct {
+	Outcome   CoverageDisclosureOutcome
+	Violation CoverageDisclosureViolation
+	Phrased   int
+	Total     int
+}
+
+// CoverageDisclosureVerdictsForTest runs the guard and the phrased count the
+// synthesizer runs, over a result with two coverage details, for a set of
+// every shape the guard distinguishes.
+func CoverageDisclosureVerdictsForTest() []CoverageDisclosureVerdict {
+	sets := map[string]struct {
+		disclosures []CoverageDisclosure
+		undecodable bool
+		shown       map[string]struct{}
+	}{
+		"absent":      {},
+		"undecodable": {undecodable: true},
+		"phrased":     {disclosures: []CoverageDisclosure{{DetailID: "cov-01", Text: "No data."}, {DetailID: "cov-02", Text: "Not read."}}},
+		"partial":     {disclosures: []CoverageDisclosure{{DetailID: "cov-01", Text: "No data."}}},
+		"unknown":     {disclosures: []CoverageDisclosure{{DetailID: "cov-99", Text: "x"}}},
+		"unshown":     {disclosures: []CoverageDisclosure{{DetailID: "cov-02", Text: "x"}}, shown: map[string]struct{}{"cov-01": {}}},
+		"duplicate":   {disclosures: []CoverageDisclosure{{DetailID: "cov-01", Text: "x"}, {DetailID: "cov-01", Text: "y"}}},
+		"text bound":  {disclosures: []CoverageDisclosure{{DetailID: "cov-01", Text: " padded "}}},
+		"digits":      {disclosures: []CoverageDisclosure{{DetailID: "cov-01", Text: "7 gaps"}}},
+	}
+	var verdicts []CoverageDisclosureVerdict
+	for _, set := range sets {
+		var result InvestigationResult
+		result.Coverage.Details = []CoverageDetail{
+			{DetailID: "cov-01", Source: "canonical_fact:readiness", Code: contractsv1.ContextFabricCoverageDetailFactPruned},
+			{DetailID: "cov-02", Source: "canonical_fact:status", Code: contractsv1.ContextFabricCoverageDetailFactPruned},
+		}
+		shown := set.shown
+		if shown == nil {
+			shown = coverageDetailIDSet(result.Coverage.Details)
+		}
+		draft := SynthesisDraft{CoverageDisclosures: set.disclosures, CoverageDisclosuresUndecodable: set.undecodable}
+		outcome, violation := classifyCoverageDisclosures(draft, &result, shown)
+		phrased, total := coverageDisclosurePhrasedCount(result.Coverage.Details)
+		verdicts = append(verdicts, CoverageDisclosureVerdict{outcome, violation, phrased, total})
+	}
+	return verdicts
+}
+
+// E6StatusCategoryCompositionForTest runs the composition the engine runs over a
+// bare status requirement and subjects of every kind, writing its lines to sink.
+func E6StatusCategoryCompositionForTest(ctx context.Context, sink EngineTelemetry) {
+	engine := &Engine{telemetry: sink}
+	subjects := []SubjectRef{
+		{Kind: SubjectRepository, CanonicalID: "repository:1"}, {Kind: SubjectTeam, CanonicalID: "team:1"},
+		{Kind: SubjectProject, CanonicalID: "project:1"}, {Kind: SubjectWorkItem, CanonicalID: "work_item:1"},
+	}
+	engine.composeStatusCategoryRequirements(ctx, storage.Principal{OrgID: "org_1"}, []FactRequirement{{Kind: FactStatus}}, subjects)
+}
+
+// PeriodDeltaForTest runs the period delta comparison the engine runs for a team and a project subject under a scenario of the prior read, writing its lines to sink.
+func PeriodDeltaForTest(ctx context.Context, sink EngineTelemetry, scenario string) {
+	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:T1"}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project:P1"}
+	reader := &recordingFactReader{}
+	anchored := true
+	switch scenario {
+	case "compared":
+		reader.bundle = CanonicalFactBundle{Facts: []CanonicalFact{
+			periodDeltaHealthFact(team, map[string]FactValue{"severity": StringFactValue("high"), "severity_as_of": StringFactValue("2026-08-19")}),
+		}}
+	case "deadline":
+		reader.err = context.DeadlineExceeded
+	case "canceled":
+		reader.err = context.Canceled
+	case "read_failed":
+		reader.err = errors.New("provider failed")
+	case "anchor":
+		anchored = false
+	default:
+		panic("unknown scenario " + scenario)
+	}
+	engine := &Engine{facts: reader, telemetry: sink}
+	current := []CanonicalFact{
+		periodDeltaHealthFact(team, map[string]FactValue{"severity": StringFactValue("elevated"), "severity_as_of": StringFactValue("2026-09-18")}),
+		periodDeltaHealthFact(project, map[string]FactValue{"severity": StringFactValue("low")}),
+	}
+	frame := QuestionFrame{Obligations: []AnswerObligation{ObligationPeriodDelta}}
+	engine.applyPeriodDelta(ctx, storage.Principal{OrgID: "org_1"}, frame, []SubjectRef{team, project}, current, time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), anchored)
+}

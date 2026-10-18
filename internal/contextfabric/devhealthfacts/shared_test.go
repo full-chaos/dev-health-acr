@@ -703,7 +703,7 @@ func TestQueryVersionMovedPastTheOverlapInvestmentWindow(t *testing.T) {
 	}
 }
 
-func TestQueryVersionMovedPastTheCommitmentDueDateTable(t *testing.T) {
+func TestQueryVersionMovedPastTheUnresolvedCandidateReceipt(t *testing.T) {
 	t.Parallel()
 	const prefix = "devhealthfacts.clickhouse.v"
 	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
@@ -711,6 +711,18 @@ func TestQueryVersionMovedPastTheCommitmentDueDateTable(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
 	if number < 245 {
-		t.Fatalf("QueryVersion = %q, want v245 or later -- an answer saved when a commitment fact had no due date table must not be reused", devhealthfacts.QueryVersion)
+		t.Fatalf("QueryVersion = %q, want v245 or later -- an answer saved when a redeemed candidate receipt left the subject unresolved must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+func TestQueryVersionMovedPastTheCommitmentDueDateTable(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 246 {
+		t.Fatalf("QueryVersion = %q, want v246 or later -- an answer saved when a commitment fact had no due date table must not be reused", devhealthfacts.QueryVersion)
 	}
 }
