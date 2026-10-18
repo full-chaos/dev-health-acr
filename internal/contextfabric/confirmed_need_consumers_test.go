@@ -406,7 +406,7 @@ func TestConfirmedNeedConsumers_CandidateThreeTurns(t *testing.T) {
 		}
 		call := lastPortCall(t, three)
 		if len(call.request.RequestedScope.SubjectHints) != 0 || len(call.request.SubjectHandles) != 0 || call.kind != nil || call.anchor != nil {
-			t.Fatalf("ResolveSubjects received %#v, want no candidate-derived input: a fresh candr_ receipt reaches no resolution parameter, so a remembered one reaches none", call)
+			t.Fatalf("ResolveSubjects received %#v, want no candidate-derived input: a remembered candidate is not a pick made this turn, so it reaches no resolution parameter", call)
 		}
 	})
 

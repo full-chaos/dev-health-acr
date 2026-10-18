@@ -2216,6 +2216,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 
+	if hint, ok := confirmedCandidateHint(structureCanon.Confirmed); ok && len(graphRequest.RequestedScope.SubjectHints) < 50 {
+		graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), hint)
+	}
+
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
 	// never the raw request.PriorSubjectReceipts -- see the block above.
 	interpretRequest := request

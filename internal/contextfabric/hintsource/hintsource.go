@@ -58,6 +58,12 @@ const (
 	// specific id must not abandon the turn's own resolution, only fail to
 	// contribute to it.
 	EngineCommittedAnchorCarry Source = "engine_committed_anchor_carry"
+	// ConfirmedCandidateReceipt: the subject the caller picked from a
+	// candidate offer this engine raised, redeemed by its candr_ receipt. The
+	// pick is the caller's answer to the clarification, so it names the
+	// identity outright and commits through the caller-hint short circuit,
+	// while the turn's own terms stay searchable if the lookup misses.
+	ConfirmedCandidateReceipt Source = "confirmed_candidate_receipt"
 )
 
 // Attributes are the INDEPENDENT FACTS about a source, kept apart on purpose:
@@ -193,6 +199,12 @@ var registry = map[Source]Attributes{
 	// lookup here must not end the resolution: SearchFallback stays
 	// permitted.
 	EngineCommittedAnchorCarry: {
+		EngineMinted:         true,
+		ContestExempt:        Contest(true),
+		ShortCircuitEligible: ShortCircuit(true),
+		SearchFallback:       SearchFallback(true),
+	},
+	ConfirmedCandidateReceipt: {
 		EngineMinted:         true,
 		ContestExempt:        Contest(true),
 		ShortCircuitEligible: ShortCircuit(true),
