@@ -30,6 +30,18 @@ if grep -Eq 'acr-ops-tls|acr-pki-init|acr_e2e_(postgres|clickhouse)_tls|sslmode=
   exit 1
 fi
 grep -Fq 'Ops organization provisioning failed' "$script"
+# The ops internal listener answers 401 to a request without the svc_acr_ bearer (ops CHAOS-9993): the
+# credential is minted before the readiness probe, the probe sends it, and a rejection is named.
+grep -Fq -- '--header "Authorization: Bearer ${token}" http://go-api:8091/api/v1/internal/acr/health' "$script"
+grep -Fq 'mint_ops_service_token()' "$script"
+mint_line="$(grep -n 'token="$(mint_ops_service_token)"' "$script" | head -n 1 | cut -d: -f1)"
+wait_line="$(grep -n '^  wait_go_api "$token"' "$script" | head -n 1 | cut -d: -f1)"
+[[ -n "$mint_line" && -n "$wait_line" && "$mint_line" -lt "$wait_line" ]]
+if grep -Fq 'wget -q -O /dev/null http://go-api:8091' "$script"; then
+  printf 'the ops readiness probe must send the svc_acr_ bearer\n' >&2
+  exit 1
+fi
+grep -Fq 'rejected the svc_acr_ credential (last HTTP status' "$script"
 grep -Fq 'actual_status="$?"' "$script"
 grep -Fq 'expected failure diagnostics' "$script"
 grep -Fq 'for tool in docker openssl curl git jq' "$script"

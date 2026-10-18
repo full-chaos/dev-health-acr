@@ -395,17 +395,54 @@ dho() {
     query-api "$@"
 }
 
-# wait_go_api polls the Go api internal listener from the compose network. The go-api image is
-# distroless (no shell, no wget), so the probe runs in the nginx image already pinned here.
-wait_go_api() {
-  local i
-  for i in $(seq 1 90); do
-    if compose run --rm --no-deps -T --entrypoint wget acr-tls-proxy -q -O /dev/null http://go-api:8091/api/v1/internal/acr/health >/dev/null 2>&1; then
+# mint_ops_service_token creates the svc_acr_ credential the ops internal listener requires on every
+# request (ops CHAOS-9993). It talks to Postgres directly through dho, so it needs no running api, but
+# the schema may still be migrating when the services are first started: it retries, bounded by an
+# attempt count and a deadline, and logs each retry with the first line of dho's stderr and the final
+# outcome. The token is printed on stdout only; nothing else is.
+mint_ops_service_token() {
+  local attempt=1 max_attempts=30 deadline=$((SECONDS + 180)) token reason errfile
+  errfile="$(mktemp)"
+  while :; do
+    if token="$(dho service-credentials create --service acr --scope entitlements:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
+      rm -f "$errfile"
+      note "ops service credential minted (attempt ${attempt})"
+      printf '%s' "$token"
       return 0
+    fi
+    reason="$(head -n 1 "$errfile" | cut -c1-200)"
+    if (( attempt >= max_attempts || SECONDS >= deadline )); then
+      rm -f "$errfile"
+      note "ops service credential not minted after ${attempt} attempts: ${reason:-no error output}"
+      return 1
+    fi
+    note "ops service credential not minted yet (attempt ${attempt}/${max_attempts}): ${reason:-no error output}"
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+}
+
+# wait_go_api polls the Go api internal listener from the compose network with the svc_acr_ bearer, so
+# readiness also proves the auth path: the internal listener answers 401 to a request without it. The
+# go-api image is distroless (no shell, no wget), so the probe runs in the nginx image already pinned
+# here. The failure names the last HTTP status seen, so a rejected credential (401) reads differently
+# from a listener that is not accepting connections.
+wait_go_api() {
+  local token="$1" attempt output status=''
+  for attempt in $(seq 1 90); do
+    if output="$(compose run --rm --no-deps -T --entrypoint wget acr-tls-proxy -S -O /dev/null --header "Authorization: Bearer ${token}" http://go-api:8091/api/v1/internal/acr/health 2>&1)"; then
+      return 0
+    fi
+    status="$(sed -nE 's#.*HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' <<<"$output" | tail -n 1)"
+    if (( attempt % 10 == 0 )); then
+      note "Go ops api internal listener not ready (probe ${attempt}/90, last HTTP status: ${status:-none})"
     fi
     sleep 2
   done
-  die 'Go ops api internal listener did not become ready'
+  if [[ "$status" == 401 || "$status" == 403 ]]; then
+    die "Go ops api internal listener rejected the svc_acr_ credential (last HTTP status ${status})"
+  fi
+  die "Go ops api internal listener did not become ready (last HTTP status: ${status:-none, not accepting connections})"
 }
 
 ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
@@ -421,7 +458,9 @@ provision_ops_control_plane() {
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
   compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
-  wait_go_api
+  token="$(mint_ops_service_token)" || die 'Ops credential provisioning failed'
+  write_secret "$STATE/secrets/ops-token" "$token"
+  wait_go_api "$token"
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -429,9 +468,6 @@ provision_ops_control_plane() {
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || die 'Ops org provisioning did not return an ID'
   dho admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated compose E2E' --expires-days 1 >/dev/null
-  token="$(dho service-credentials create --service acr --scope entitlements:read)"
-  [[ "$token" == svc_acr_* ]] || die 'Ops credential provisioning returned an invalid token shape'
-  write_secret "$STATE/secrets/ops-token" "$token"
   # This is the one secret file the entitlement client reads through readRestrictedFile /
   # isPrivateSecret (internal/entitlements/file_owner_unix.go), not the more common
   # internal/config.SecretValue path the rest of write_secret()'s files go through.
