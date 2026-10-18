@@ -221,7 +221,10 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	//
 	// v21 -> v22: a work item -> team edge is retracted when its attribution
 	// stops qualifying; only the rebuild clears the ones already stale.
-	if want := "devhealthsource.teams_projects.v22"; TeamsProjectsSourceVersion != want {
+	//
+	// v22 -> v23: a team proved gone at its provider carries a gone_at
+	// property; only the rebuild gives the projected teams the property.
+	if want := "devhealthsource.teams_projects.v23"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }

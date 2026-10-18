@@ -762,6 +762,12 @@ const ContextFabricTerminalNotSavedLimitation = "This answer could not be saved,
 // stated separately where there is one.
 const ContextFabricSingleSubjectCountLimitation = "This question asks for a count about one named subject, which has no set of members to count, so no member count was stated. The values given are the stored daily or period values for that subject. A total of those daily values over the stated period is stated in the answer, with the days it rests on, only where the stored values can be added; where none is stated, none was computed. A day with no stored row is either a day with no activity or a day that was not computed, and the server cannot tell which, so such a day is named and never counted as zero."
 
+// ContextFabricRemovedTeamLimitation is the sentence an answer carries when a
+// named team is one the source has proved gone at its provider. The team keeps
+// its work item, project and repository edges: the source neither asserts nor
+// retracts them, so they are served and may be out of date.
+const ContextFabricRemovedTeamLimitation = "A named team is removed at its source: its work item, project and repository edges are kept and may be out of date; they are not retracted."
+
 // ContextFabricSubjectTermsFromFrameLimitation is the sentence an answer
 // carries when the supplied interpretation had no subject_terms and the
 // subjects were read from the subject expression of its question_frame.
@@ -834,6 +840,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricBudgetTrimClaimedFactsLimitation,
 		ContextFabricUngroundedItemsDroppedLimitation,
 		ContextFabricSingleSubjectCountLimitation,
+		ContextFabricRemovedTeamLimitation,
 		ContextFabricSubjectTermsFromFrameLimitation,
 		ContextFabricSubjectTermsMissingLimitation,
 		ContextFabricSubjectTermsFrameOverBoundLimitation,
