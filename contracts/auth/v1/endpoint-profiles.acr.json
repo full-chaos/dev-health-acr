@@ -19,7 +19,7 @@
       "public_rationale": "Liveness probe; no principal, no org context.",
       "accepted_credential_classes": [],
       "primary_validator": {
-        "description": "No authenticator wrapper -- mux.HandleFunc directly.",
+        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver and entitlement_requirement are absent (not applicable): internal/api/app.go:132-138: handleHealth ignores its request and writes a constant status, service and version body; no scope check or entitlement call is on the handler.",
         "anchor": {
           "path": "internal/api/app.go",
           "line": 77,
@@ -49,7 +49,7 @@
       "public_rationale": "Readiness probe (postgres/clickhouse/entitlement checks); no principal, no org context.",
       "accepted_credential_classes": [],
       "primary_validator": {
-        "description": "No authenticator wrapper -- mux.HandleFunc directly.",
+        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver and entitlement_requirement are absent (not applicable): internal/api/app.go:140-167: handleReady reads only the request context, runs the readiness checks and writes their statuses; no scope check or entitlement call is on the handler.",
         "anchor": {
           "path": "internal/api/app.go",
           "line": 78,
