@@ -2677,7 +2677,7 @@ func drawLogFields(draws []synthesisDraw) []any {
 
 func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {
 	var last error
-	timeoutRetried := false
+	clientRetried := false
 	outcomes := make([]attemptOutcome, 0, r.config.MaxAttempts)
 	// record appends THIS attempt's outcome before any return, so the
 	// returned slice length always equals the attempt number the caller used
@@ -2741,14 +2741,14 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 		if !retryable(err) {
 			return outcomes, err
 		}
-		class, _ := llm.ClassOf(err)
-		if class == llm.ClassTimeout {
-			if timeoutRetried {
+		class, isClient := llm.ClassOf(err)
+		if isClient {
+			if clientRetried {
 				return outcomes, err
 			}
-			timeoutRetried = true
+			clientRetried = true
 		}
-		if wait, ok := llmRetryWait(err, attempt); ok {
+		if wait, ok := llmRetryWait(err); ok {
 			if wait > maxLLMRetryWait {
 				r.logRetryDecision(ctx, class, attempt, wait, false)
 				return outcomes, err
@@ -2769,9 +2769,12 @@ const baseLLMRetryWait = 500 * time.Millisecond
 
 // llmRetryWait is the pause before the next attempt after a retryable
 // shared-client failure: the provider's Retry-After for a rate limit when it
-// sent one, otherwise exponential from baseLLMRetryWait. ok is false for an
-// error that is not the shared client's, which keeps its immediate retry.
-func llmRetryWait(err error, attempt int) (time.Duration, bool) {
+// sent one, otherwise baseLLMRetryWait. A shared-client failure is retried at
+// most once whatever Config.MaxAttempts is (MaxAttempts still bounds every
+// other retry), so the worst case is the client's own two calls times two
+// runtime attempts. ok is false for an error that is not the shared client's,
+// which keeps its immediate retry.
+func llmRetryWait(err error) (time.Duration, bool) {
 	var typed *llm.Error
 	if _, isClient := llm.ClassOf(err); !isClient || !errors.As(err, &typed) {
 		return 0, false
@@ -2779,11 +2782,7 @@ func llmRetryWait(err error, attempt int) (time.Duration, bool) {
 	if typed.Class == llm.ClassRateLimit && typed.RetryAfter > 0 {
 		return typed.RetryAfter, true
 	}
-	wait := baseLLMRetryWait << uint(attempt-1)
-	if wait > maxLLMRetryWait || wait <= 0 {
-		wait = maxLLMRetryWait
-	}
-	return wait, true
+	return baseLLMRetryWait, true
 }
 
 func (r *Runtime) logRetryDecision(ctx context.Context, class llm.ErrorClass, attempt int, wait time.Duration, retrying bool) {

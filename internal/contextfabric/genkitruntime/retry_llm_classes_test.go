@@ -72,7 +72,8 @@ func TestWithRetryWaitsBetweenSharedClientRetries(t *testing.T) {
 	}{
 		{"rate limit waits its Retry-After then serves", 2, []error{rateLimitWithRetryAfter(2 * time.Second), nil}, 2, []time.Duration{2 * time.Second}, false},
 		{"rate limit without Retry-After backs off", 2, []error{clientError(llm.ClassRateLimit), nil}, 2, []time.Duration{500 * time.Millisecond}, false},
-		{"backoff doubles per attempt", 3, []error{clientError(llm.ClassServer), clientError(llm.ClassTransport), nil}, 3, []time.Duration{500 * time.Millisecond, time.Second}, false},
+		{"a shared-client failure is retried once even at MaxAttempts 3", 3, []error{clientError(llm.ClassServer), clientError(llm.ClassTransport), nil}, 2, []time.Duration{500 * time.Millisecond}, true},
+		{"a rate limit is retried once even at MaxAttempts 3", 3, []error{clientError(llm.ClassRateLimit), clientError(llm.ClassRateLimit), nil}, 2, []time.Duration{500 * time.Millisecond}, true},
 		{"Retry-After beyond the bound is not waited for", 3, []error{rateLimitWithRetryAfter(30 * time.Second)}, 1, nil, true},
 		{"a timeout is retried once whatever the attempt bound", 3, []error{clientError(llm.ClassTimeout), clientError(llm.ClassTimeout), clientError(llm.ClassTimeout)}, 2, []time.Duration{500 * time.Millisecond}, true},
 		{"a server error is retried within the bound only", 2, []error{clientError(llm.ClassServer), clientError(llm.ClassServer)}, 2, []time.Duration{500 * time.Millisecond}, true},
