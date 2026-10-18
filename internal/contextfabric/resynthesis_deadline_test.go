@@ -56,7 +56,7 @@ func TestANarrowingRetryThatLosesTheDeadlineServesTheFirstPassFacts(t *testing.T
 	if end := time.Unix(0, blocking.retryAt.Load()); !end.Before(deadline) {
 		t.Fatalf("retry ended at %v, want before the request deadline %v", end, deadline)
 	}
-	if served := factsOnlyServedEvent(telemetry); served == nil || !served.RetryAttempted {
+	if served := factsOnlyServedEvent(telemetry); served == nil || !served.RetryAttempted || served.RetryDeclined != RetryDeclinedInsufficientDeadline {
 		t.Fatalf("served event %+v, want facts-only served after a retry that ran", served)
 	}
 }
