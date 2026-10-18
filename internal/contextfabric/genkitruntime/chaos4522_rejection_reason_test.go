@@ -139,7 +139,7 @@ func TestDecisionLineCarriesTheRejectingClaimsFactGroupSize(t *testing.T) {
 		{ClaimID: "claim_flow_rejects_first", Kind: contextfabric.FactFlow, Subject: subject,
 			Field: "field_no_flow_fact_carries", Value: contextfabric.ScalarValue{Boolean: new(bool)}},
 		{ClaimID: "claim_readiness_never_reached", Kind: contextfabric.FactReadiness, Subject: subject,
-			Field: "release_ready", Value: contextfabric.ScalarValue{Boolean: new(bool)}},
+			Field: "field_no_readiness_fact_carries", Value: contextfabric.ScalarValue{Boolean: new(bool)}},
 	}
 	output.Drivers = nil
 

@@ -145,6 +145,7 @@ func TestSynthesisSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection(t *
 	claim := groundedReadinessClaim(validSynthesisInput())
 	claim.Field = "field_no_fact_carries"
 	ungrounded.ClaimedFacts = []contextfabric.ClaimedFact{claim}
+	ungrounded.Drivers = nil
 	encoded, err := json.Marshal(ungrounded)
 	if err != nil {
 		t.Fatal(err)
