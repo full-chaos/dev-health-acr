@@ -2,6 +2,10 @@ package contextfabric_test
 
 import (
 	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"log/slog"
 	"strings"
 	"testing"
@@ -183,4 +187,49 @@ func TestAtMostOneRetrySelectionDisclosureAndGroupedLinePerRequest(t *testing.T)
 	certifyRefused(t, buf.Bytes(), eventspec.SynthesisRetrySelection, "a second retry selection line in one request")
 	certifyRefused(t, buf.Bytes(), eventspec.CohortNarrowingDisclosure, "a second cohort narrowing disclosure line in one request")
 	certifyRefused(t, buf.Bytes(), eventspec.GroupedCohortCompleteness, "a second grouped cohort completeness line in one request")
+}
+
+// TestPlanNarrowingBoundCoversEveryCallSite pins the declared per-request bound
+// to the engine: the bound is the number of recordPlanNarrowing call sites times
+// the two synthesis passes of a request, so a new call site fails here until the
+// bound is reviewed.
+func TestPlanNarrowingBoundCoversEveryCallSite(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(info fs.FileInfo) bool { return !strings.HasSuffix(info.Name(), "_test.go") }, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sites := 0
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "recordPlanNarrowing" {
+					sites++
+				}
+				return true
+			})
+		}
+	}
+	const passes = 2
+	if got, want := eventspec.PlanNarrowing.MaxLinesPerScope, sites*passes; got != want {
+		t.Fatalf("plan narrowing declares %d lines per request; the engine has %d recordPlanNarrowing call sites and %d synthesis passes, want %d", got, sites, passes, want)
+	}
+}
+
+func TestPlanNarrowingLinesBeyondTheBoundAreRefused(t *testing.T) {
+	t.Parallel()
+	event := contextfabric.PlanNarrowingEvent{Family: contextfabric.QuestionFamilyUnclassified, FamilyVersion: contextfabric.QuestionFamilyTableVersion, Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Overrun: contractsv1.ContextFabricBudgetFits, LedgerStatus: contractsv1.ContextFabricLedgerReconciled, QuotaAvailability: contextfabric.ItemQuotaBounded}
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	for range eventspec.PlanNarrowing.MaxLinesPerScope {
+		sink.RecordPlanNarrowing(ctx, principalOrg1, event)
+	}
+	certifyRequestLine(t, buf.Bytes(), eventspec.PlanNarrowing, nil)
+	sink.RecordPlanNarrowing(ctx, principalOrg1, event)
+	certifyRefused(t, buf.Bytes(), eventspec.PlanNarrowing, "more plan narrowing lines than the declared bound")
 }

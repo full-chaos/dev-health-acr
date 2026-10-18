@@ -2449,6 +2449,9 @@ var PeriodDeltaComposition = Event{
 	},
 }
 
+// planNarrowingMaxLinesPerRequest is 20 plan narrowing call sites times two synthesis passes.
+const planNarrowingMaxLinesPerRequest = 40
+
 // planNarrowingFields are the keys the plan narrowing line and the synthesis retry selection line share: both are written by one formatter.
 func planNarrowingFields() []Field {
 	return []Field{
@@ -2505,10 +2508,10 @@ var PlanNarrowing = Event{
 	Msg:                      "context fabric plan narrowing",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per narrowing decision of the plan: the cardinality, synthesis input and assembled result stages, the retry, facts only, outcome reduction and refusal outcomes; the count follows the stages a request passes through and the plan's own narrowing steps (bounded by the plan's narrowing limit), not a fixed number.",
+	MaxLinesPerScope:         planNarrowingMaxLinesPerRequest,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
-	BoundedAggregation:       "at most the plan narrowing limit of steps per investigation, plus the outcome lines of the stages.",
+	BoundedAggregation:       "one line per narrowing decision: the engine records a plan narrowing decision from 20 call sites, each at most once per synthesis pass, and a request makes at most two synthesis passes (the first and one retry); the number of call sites is pinned by a test, so a new site forces this bound to be reviewed.",
 	Fields:                   planNarrowingFields(),
 }
 

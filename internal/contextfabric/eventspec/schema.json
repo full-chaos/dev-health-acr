@@ -7399,8 +7399,8 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "at most the plan narrowing limit of steps per investigation, plus the outcome lines of the stages.",
-    "data_dependent_bound": "one line per narrowing decision of the plan: the cardinality, synthesis input and assembled result stages, the retry, facts only, outcome reduction and refusal outcomes; the count follows the stages a request passes through and the plan's own narrowing steps (bounded by the plan's narrowing limit), not a fixed number.",
+    "bounded_aggregation": "one line per narrowing decision: the engine records a plan narrowing decision from 20 call sites, each at most once per synthesis pass, and a request makes at most two synthesis passes (the first and one retry); the number of call sites is pinned by a test, so a new site forces this bound to be reviewed.",
+    "max_lines_per_scope": 40,
     "fields": [
       {
         "key": "org_id",
