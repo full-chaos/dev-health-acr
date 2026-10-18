@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -66,14 +65,14 @@ func (g *sequencedGenerator) Phrase(context.Context, generationRequest) (phrasin
 }
 
 // retryableUnavailable is a STRUCTURED transport failure: retryable() only
-// trusts *core.GenkitError statuses, never message text (CHAOS-3770 F2), so a
+// trusts a modelStatusError statuses, never message text (CHAOS-3770 F2), so a
 // plain errors.New would not retry at all and the pin would measure nothing.
 func retryableUnavailable() error {
-	return &core.GenkitError{Status: core.UNAVAILABLE, Message: "provider unavailable"}
+	return &modelStatusError{Status: statusUnavailable, Message: "provider unavailable"}
 }
 
 func retryableRateLimited() error {
-	return &core.GenkitError{Status: core.RESOURCE_EXHAUSTED, Message: "rate limited"}
+	return &modelStatusError{Status: statusResourceExhausted, Message: "rate limited"}
 }
 
 func attrInt(t *testing.T, attrs map[string]any, key string) int {
