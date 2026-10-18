@@ -235,32 +235,78 @@ func TestWithRetryRetriesEveryClientClassAtEveryAttemptBound(t *testing.T) {
 	t.Parallel()
 	retried := []llm.ErrorClass{llm.ClassRateLimit, llm.ClassServer, llm.ClassTimeout, llm.ClassTransport}
 	refused := []llm.ErrorClass{llm.ClassAuth, llm.ClassModelNotFound, llm.ClassInvalidRequest, llm.ClassContextLength, llm.ClassOutput, llm.ClassGeneric, llm.ClassBatchTimeout}
+	run := func(maxAttempts int, class llm.ErrorClass) (int, []time.Duration) {
+		runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: maxAttempts})
+		log := &sleepLog{}
+		runtime.sleep = log.sleep
+		calls := 0
+		_, _ = runtime.withRetry(context.Background(), func(context.Context) error {
+			calls++
+			return clientError(class)
+		})
+		return calls, log.waits
+	}
 	for maxAttempts := 1; maxAttempts <= 3; maxAttempts++ {
-		wantRetried := min(maxAttempts, 2)
+		wantCalls, wantWaits := min(maxAttempts, 2), 1
+		if maxAttempts == 1 {
+			wantWaits = 0
+		}
 		for _, class := range retried {
-			runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: maxAttempts})
-			runtime.sleep = (&sleepLog{}).sleep
-			calls := 0
-			_, _ = runtime.withRetry(context.Background(), func(context.Context) error {
-				calls++
-				return clientError(class)
-			})
-			if calls != wantRetried {
-				t.Fatalf("class %s at MaxAttempts %d: calls = %d, want %d", class, maxAttempts, calls, wantRetried)
+			calls, waits := run(maxAttempts, class)
+			if calls != wantCalls || len(waits) != wantWaits || (wantWaits == 1 && waits[0] != 500*time.Millisecond) {
+				t.Fatalf("class %s at MaxAttempts %d: calls = %d waits = %v, want %d calls and %d wait(s) of 500ms", class, maxAttempts, calls, waits, wantCalls, wantWaits)
 			}
 		}
 		for _, class := range refused {
-			runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: maxAttempts})
-			runtime.sleep = (&sleepLog{}).sleep
-			calls := 0
-			_, _ = runtime.withRetry(context.Background(), func(context.Context) error {
-				calls++
-				return clientError(class)
-			})
-			if calls != 1 {
-				t.Fatalf("class %s at MaxAttempts %d: calls = %d, want 1", class, maxAttempts, calls)
+			if calls, waits := run(maxAttempts, class); calls != 1 || len(waits) != 0 {
+				t.Fatalf("class %s at MaxAttempts %d: calls = %d waits = %v, want 1 call and no wait", class, maxAttempts, calls, waits)
 			}
 		}
+	}
+}
+
+func TestRetryableChecksTheClientClassBeforeTheDeadlineRule(t *testing.T) {
+	t.Parallel()
+	for _, class := range []llm.ErrorClass{llm.ClassAuth, llm.ClassInvalidRequest, llm.ClassOutput} {
+		if retryable(errors.Join(clientError(class), context.DeadlineExceeded)) {
+			t.Fatalf("class %s joined with a deadline error was retryable", class)
+		}
+	}
+	if !retryable(errors.Join(clientError(llm.ClassServer), context.DeadlineExceeded)) {
+		t.Fatal("a server-class error joined with a deadline error was not retryable")
+	}
+}
+
+func TestEveryDeclinedClientRetryIsLoggedAtInfo(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		maxAttempts int
+		failure     error
+		wantReason  string
+	}{
+		{"attempt budget used", 1, clientError(llm.ClassServer), `"reason":"attempt_budget_used"`},
+		{"class not retried", 2, clientError(llm.ClassOutput), `"reason":"class_not_retried"`},
+		{"Retry-After over the bound", 2, rateLimitWithRetryAfter(time.Minute), `"reason":"wait_over_bound"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf strings.Builder
+			runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: tc.maxAttempts, Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))})
+			runtime.sleep = (&sleepLog{}).sleep
+			_, _ = runtime.withRetry(context.Background(), func(context.Context) error { return tc.failure })
+			logged := buf.String()
+			if !strings.Contains(logged, `"msg":"context fabric model call retry decision"`) || !strings.Contains(logged, `"retrying":false`) || !strings.Contains(logged, tc.wantReason) {
+				t.Fatalf("Info log lacks the declined decision %s:\n%s", tc.wantReason, logged)
+			}
+		})
+	}
+	var buf strings.Builder
+	runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: 2, Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))})
+	_, _ = runtime.withRetry(context.Background(), func(context.Context) error { return errors.New("not a client error") })
+	if strings.Contains(buf.String(), "retry decision") {
+		t.Fatalf("an error that is not the shared client's logged a retry decision:\n%s", buf.String())
 	}
 }
 

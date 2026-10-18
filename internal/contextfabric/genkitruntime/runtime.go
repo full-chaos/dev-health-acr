@@ -2740,15 +2740,21 @@ func (r *Runtime) withRetryFor(ctx context.Context, fallbackFollows bool, fn fun
 			return outcomes, nil
 		}
 		last = err
+		class, isClient := llm.ClassOf(err)
 		// The attempt budget is used when the LAST allowed attempt fails,
 		// whatever its class: the runtime has nothing left to try.
 		if attempt == r.config.MaxAttempts {
+			if isClient {
+				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipAttemptBudget)
+			}
 			return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
 		}
 		if !retryable(err) {
+			if isClient {
+				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipClass)
+			}
 			return outcomes, err
 		}
-		class, isClient := llm.ClassOf(err)
 		if isClient {
 			if clientRetried {
 				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipCap)
@@ -2809,6 +2815,8 @@ func llmRetryWait(err error) (time.Duration, bool) {
 const (
 	retryAfterWait         = "wait_then_retry"
 	retrySkipCap           = "client_retry_used"
+	retrySkipAttemptBudget = "attempt_budget_used"
+	retrySkipClass         = "class_not_retried"
 	retrySkipWaitOverBound = "wait_over_bound"
 	retrySkipDeadline      = "deadline_too_short"
 )
@@ -3222,9 +3230,6 @@ func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
 	if class, ok := llm.ClassOf(err); ok {
 		switch class {
 		case llm.ClassRateLimit, llm.ClassServer, llm.ClassTimeout, llm.ClassTransport:
@@ -3232,6 +3237,9 @@ func retryable(err error) bool {
 		default:
 			return false
 		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	// Genkit (and well-behaved plugins) surface transport and provider
 	// failures as *modelStatusError with a gRPC-style status. Prefer that
