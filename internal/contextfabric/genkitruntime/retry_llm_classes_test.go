@@ -3,6 +3,8 @@ package genkitruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,5 +274,110 @@ func TestSleepContextStopsWhenTheContextEnds(t *testing.T) {
 	}
 	if err := sleepContext(context.Background(), time.Millisecond); err != nil {
 		t.Fatalf("sleepContext = %v, want nil after the wait", err)
+	}
+}
+
+func TestWithRetryTagsEveryDeclinedClientRetryAsExhausted(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		maxAttempts int
+		failures    []error
+		deadline    time.Duration
+		wantAttempt int
+	}{
+		{"client retry used at MaxAttempts 3", 3, []error{clientError(llm.ClassServer), clientError(llm.ClassServer), nil}, 0, 2},
+		{"Retry-After beyond the bound", 3, []error{rateLimitWithRetryAfter(30 * time.Second)}, 0, 1},
+		{"deadline too short for the retry", 3, []error{clientError(llm.ClassServer)}, 1200 * time.Millisecond, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: tc.maxAttempts})
+			runtime.sleep = (&sleepLog{}).sleep
+			ctx := context.Background()
+			if tc.deadline > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.deadline)
+				defer cancel()
+			}
+			call := 0
+			outcomes, err := runtime.withRetry(ctx, func(context.Context) error {
+				failure := tc.failures[call]
+				call++
+				return failure
+			})
+			if len(outcomes) != tc.wantAttempt || !errors.Is(err, contextfabric.ErrModelRetriesExhausted) {
+				t.Fatalf("attempts = %d err = %v, want %d attempts and ErrModelRetriesExhausted", len(outcomes), err, tc.wantAttempt)
+			}
+		})
+	}
+}
+
+func TestSynthesizeAnswerTagsASharedClientFailureThatUsedItsRetry(t *testing.T) {
+	t.Parallel()
+	client := &scriptedLLM{model: "gpt-5.6-luna", replies: []llmReply{{err: clientError(llm.ClassServer)}}}
+	runtime, _ := retryingLLMRuntime(t, client, 3)
+	_, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if !errors.Is(err, contextfabric.ErrModelRetriesExhausted) || len(client.requests) != 2 {
+		t.Fatalf("err = %v requests = %d, want ErrModelRetriesExhausted after 2 calls at MaxAttempts 3", err, len(client.requests))
+	}
+}
+
+func TestWithRetryReservesTheFallbackOnlyForACallThatHasOne(t *testing.T) {
+	t.Parallel()
+	for _, fallbackFollows := range []bool{false, true} {
+		runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: 2, Fallback: erroringFallbackRuntime{err: errors.New("fallback")}})
+		runtime.sleep = (&sleepLog{}).sleep
+		ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Millisecond)
+		calls := 0
+		_, _ = runtime.withRetryFor(ctx, fallbackFollows, func(context.Context) error {
+			calls++
+			return rateLimitWithRetryAfter(100 * time.Millisecond)
+		})
+		cancel()
+		want := 2
+		if fallbackFollows {
+			want = 1
+		}
+		if calls != want {
+			t.Fatalf("fallbackFollows=%v calls = %d, want %d", fallbackFollows, calls, want)
+		}
+	}
+}
+
+func TestPhraseStructureOffersRetriesWithAFallbackConfigured(t *testing.T) {
+	t.Parallel()
+	client := &scriptedLLM{model: "gpt-5.6-luna", replies: []llmReply{
+		{err: rateLimitWithRetryAfter(100 * time.Millisecond)},
+		{result: llm.Result{Text: jsonOf(t, phrasingOutput{})}},
+	}}
+	runtime, _ := retryingLLMRuntime(t, client, 2)
+	runtime.config.Fallback = erroringFallbackRuntime{err: errors.New("fallback")}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	_, receipt, _ := runtime.PhraseStructureOffers(ctx, storage.Principal{OrgID: "org_1"}, validPhrasingInput())
+	if len(client.requests) != 2 || receipt.Attempts != 2 {
+		t.Fatalf("requests = %d attempts = %d, want the phrase call retried although a fallback is configured", len(client.requests), receipt.Attempts)
+	}
+}
+
+func TestRetryDecisionIsLoggedAtInfo(t *testing.T) {
+	t.Parallel()
+	client := &scriptedLLM{model: "gpt-5.6-luna", replies: []llmReply{
+		{err: rateLimitWithRetryAfter(10 * time.Millisecond)},
+		{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}},
+	}}
+	runtime, _ := retryingLLMRuntime(t, client, 2)
+	var buf strings.Builder
+	runtime.config.Logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if _, _, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	logged := buf.String()
+	for _, want := range []string{`"msg":"context fabric model call retry decision"`, `"error_class":"rate_limit"`, `"wait_ms":10`, `"retrying":true`, `"reason":"wait_then_retry"`} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("Info log lacks %s:\n%s", want, logged)
+		}
 	}
 }

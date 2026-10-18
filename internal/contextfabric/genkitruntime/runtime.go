@@ -2254,7 +2254,7 @@ func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.P
 	var output phrasingOutput
 	var usage contextfabric.ModelUsage
 	var generationErr error
-	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
+	attemptOutcomes, generationErr = r.withRetryFor(ctx, false, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Phrase(callCtx, generationRequest{
 			Model: r.config.PhrasingModelRef, System: phrasingSystemPrompt, Prompt: string(encoded),
@@ -2676,6 +2676,13 @@ func drawLogFields(draws []synthesisDraw) []any {
 }
 
 func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {
+	return r.withRetryFor(ctx, r.config.Fallback != nil, fn)
+}
+
+// withRetryFor is withRetry for a call that is followed by a fallback leg
+// only when fallbackFollows: the deadline a retry needs covers that leg's
+// attempt budget only then.
+func (r *Runtime) withRetryFor(ctx context.Context, fallbackFollows bool, fn func(context.Context) error) ([]attemptOutcome, error) {
 	var last error
 	clientRetried := false
 	outcomes := make([]attemptOutcome, 0, r.config.MaxAttempts)
@@ -2744,26 +2751,27 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 		class, isClient := llm.ClassOf(err)
 		if isClient {
 			if clientRetried {
-				return outcomes, err
+				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipCap)
+				return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
 			}
 			clientRetried = true
 		}
 		if wait, ok := llmRetryWait(err); ok {
 			if wait > maxLLMRetryWait {
-				r.logRetryDecision(ctx, class, attempt, wait, false)
-				return outcomes, err
+				r.logRetryDecision(ctx, class, attempt, wait, false, retrySkipWaitOverBound)
+				return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
 			}
 			if deadline, ok := ctx.Deadline(); ok {
 				need := wait + r.config.Timeout
-				if r.config.Fallback != nil {
+				if fallbackFollows {
 					need += r.config.Timeout
 				}
 				if time.Until(deadline) < need {
-					r.logRetryDecision(ctx, class, attempt, wait, false)
-					return outcomes, err
+					r.logRetryDecision(ctx, class, attempt, wait, false, retrySkipDeadline)
+					return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
 				}
 			}
-			r.logRetryDecision(ctx, class, attempt, wait, true)
+			r.logRetryDecision(ctx, class, attempt, wait, true, retryAfterWait)
 			if sleepErr := r.sleep(ctx, wait); sleepErr != nil {
 				return outcomes, err
 			}
@@ -2798,9 +2806,16 @@ func llmRetryWait(err error) (time.Duration, bool) {
 	return baseLLMRetryWait, true
 }
 
-func (r *Runtime) logRetryDecision(ctx context.Context, class llm.ErrorClass, attempt int, wait time.Duration, retrying bool) {
-	r.config.Logger.DebugContext(ctx, "context fabric model call retry decision",
-		"error_class", string(class), "attempt", attempt, "wait_ms", wait.Milliseconds(), "retrying", retrying)
+const (
+	retryAfterWait         = "wait_then_retry"
+	retrySkipCap           = "client_retry_used"
+	retrySkipWaitOverBound = "wait_over_bound"
+	retrySkipDeadline      = "deadline_too_short"
+)
+
+func (r *Runtime) logRetryDecision(ctx context.Context, class llm.ErrorClass, attempt int, wait time.Duration, retrying bool, reason string) {
+	r.config.Logger.InfoContext(ctx, "context fabric model call retry decision",
+		"error_class", contextfabric.SanitizeLogAttr(string(class)), "attempt", attempt, "wait_ms", wait.Milliseconds(), "retrying", retrying, "reason", contextfabric.SanitizeLogAttr(reason))
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
