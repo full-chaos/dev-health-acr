@@ -2597,7 +2597,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		ReadinessGaps:      cloneSlice(draft.ReadinessGaps),
 		Paths:              cloneSlice(input.Graph.Paths),
 		Conflicts:          cloneSlice(draft.Conflicts),
-		Limitations:        cloneSlice(draft.Limitations),
+		Limitations:        slices.DeleteFunc(cloneSlice(draft.Limitations), contractsv1.IsContextFabricOutcomeEvictionLimitation),
 		EvidenceRefIDs:     cloneSlice(draft.EvidenceRefIDs),
 		ClaimedFacts:       claimedFacts,
 		Coverage:           MergeCoverage(principal.OrgID, input.Graph.Coverage, input.Facts.Coverage),

@@ -84,9 +84,9 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
 	},
-	"composeSynthesisResult#cloneSlice#0": {
+	"composeSynthesisResult#DeleteFunc#0": {
 		sameShapedTotal: 1,
-		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list, minus any eviction sentence it forged, entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
 	}, "clientSynthesisDraft#make#0": {
 		sameShapedTotal: 1,
 		reason:          "an EMPTY seed, not an addition: the draft of a turn the caller writes carries no limitation of its own, and it enters composeSynthesisResult like every other draft, so Investigate's bounded appenders add every disclosure after it",

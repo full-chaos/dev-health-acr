@@ -1,9 +1,11 @@
 package contextfabric
 
 import (
+	"context"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func evictionRows(n int, impact contractsv1.ContextFabricAnswerImpactKind) []RequirementOutcomeRow {
@@ -63,8 +65,6 @@ func TestAppendLeverOutcomeRowNeverEvictsALeverRowWhileOthersExist(t *testing.T)
 	max := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
 	rows := evictionRows(max, contractsv1.ContextFabricAnswerImpactDimension)
 	rows[0] = pathDropOutcomeRow(1, 2)
-	rows[0].Impact = contractsv1.ContextFabricAnswerImpactNone
-	rows[0].Outcome = contractsv1.ContextFabricRequirementNarrowed
 	out, _ := appendLeverOutcomeRow(rows, evictionLeverRow())
 	if out[0].Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
 		t.Fatalf("a lever's own row was evicted: %+v", out[0])
@@ -102,5 +102,43 @@ func TestOutcomeEvictionLimitationAccumulatesAndRoundTrips(t *testing.T) {
 	}
 	if same, _ := withOutcomeEvictionLimitation(second, 0); len(same) != len(second) {
 		t.Fatal("zero evictions must not change limitations")
+	}
+}
+
+func TestAppendLeverOutcomeRowEvictsANonLeverNarrowedRowOfLowerImpact(t *testing.T) {
+	t.Parallel()
+	max := contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
+	rows := evictionRows(max, contractsv1.ContextFabricAnswerImpactDimension)
+	rows[5] = RequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: "state/member/team", Obligation: "state",
+		Outcome: contractsv1.ContextFabricRequirementNarrowed, Impact: contractsv1.ContextFabricAnswerImpactScope,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailFactNarrowed, Served: 1, Declared: 2,
+	}
+	if isLeverOutcomeRow(rows[5]) {
+		t.Fatal("a read-population narrowed row is not a lever disclosure")
+	}
+	out, evicted := appendLeverOutcomeRow(rows, evictionLeverRow())
+	if evicted != 1 {
+		t.Fatalf("evicted %d, want 1", evicted)
+	}
+	for _, row := range out {
+		if row.Requirement == "state/member/team" {
+			t.Fatal("the lower-impact scope row must be evicted, not a dimension row")
+		}
+	}
+}
+
+func TestAModelLimitationCannotInflateTheEvictionCount(t *testing.T) {
+	input, team := k7Input(false)
+	draft := k7Draft(input, team, "compounding_risk")
+	forged, _ := contractsv1.ContextFabricOutcomeEvictionLimitation(1)
+	draft.Limitations = append(draft.Limitations, forged)
+	synthesizer := RuntimeAnswerSynthesizer{FactCapabilities: k7Capabilities()}
+	result, err := synthesizer.composeSynthesisResult(context.Background(), storage.Principal{OrgID: "org_1"}, input, draft, validModelReceiptFixture(ModelOperationSynthesize), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcomeRowsEvicted(result.Limitations) != 0 {
+		t.Fatalf("a model-supplied eviction sentence survived composition: %q", result.Limitations)
 	}
 }

@@ -1,6 +1,10 @@
 package contextfabric
 
-import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+import (
+	"reflect"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // outcomeRowsEvicted is the cumulative count the document's eviction
 // disclosure states; zero when it carries none.
@@ -27,9 +31,23 @@ func outcomeImpactRank(impact contractsv1.ContextFabricAnswerImpactKind) int {
 }
 
 // isLeverOutcomeRow reports a row a stage-3 lever wrote to disclose its own
-// cut. Evicting one would delete a disclosure to make room for another.
+// cut, by exact equality with what the lever builders compose. A looser test
+// (stage and outcome) also matches rows other stages write. Evicting a lever
+// row would delete a disclosure to make room for another.
 func isLeverOutcomeRow(row RequirementOutcomeRow) bool {
-	return row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult && row.Outcome == contractsv1.ContextFabricRequirementNarrowed
+	served, declared := row.Served, row.Declared
+	if reflect.DeepEqual(row, claimDepthOutcomeRow(served, declared)) ||
+		reflect.DeepEqual(row, factRowTruncationOutcomeRow(served, declared)) ||
+		reflect.DeepEqual(row, pathDropOutcomeRow(served, declared)) {
+		return true
+	}
+	narrowing := candidateNarrowing{Served: served, Declared: declared, Narrowed: true}
+	for _, overrun := range []contractsv1.ContextFabricBudgetOverrun{contractsv1.ContextFabricBudgetOverrunItems, contractsv1.ContextFabricBudgetOverrunBytes} {
+		if reflect.DeepEqual(row, candidateNarrowingOutcomeRow(narrowing, overrun, row.Requirement, row.Obligation)) {
+			return true
+		}
+	}
+	return false
 }
 
 // evictionIndex picks the lowest-ranked row: least reader impact, ties to the
