@@ -82,21 +82,25 @@
 //     (CHAOS-4774's limitation no longer applies to source rows).
 //   - The inventory's declared source_commit and credential_class_source are
 //     NOT verified by this gate: CHAOS-4765.
-//   - ★ THE BIGGEST ONE, and the one most likely to be misread: this gate does
-//     NOT reconcile a row's SECURITY CLAIM with the code. It checks that a row
-//     exists for every surface, that the row is well-formed and internally
-//     consistent, and that its anchors resolve to content matching what the row
-//     says. It does not check that a route this inventory calls "protected"
-//     really is, nor that a "public" one really is. A guarded route relabelled
-//     public, or left claiming primary_validator: null, passes today.
-//     CHAOS-4780. Guardrail G-1 ("an unregistered route fails CI") is enforced;
-//     "the inventory's security claims are true" is not.
+//   - ★ WHAT THE CLAIM RECONCILIATION DOES AND DOES NOT PROVE. Each row's
+//     classification and primary_validator are reconciled with the WRAPPER
+//     CHAIN found in the parsed registration (see "wrapper-chain
+//     reconciliation" below): a public row on a route whose chain contains a
+//     guard fails, a protected row on a route whose chain contains none fails
+//     unless its gaps carry an exact `wrapper-chain: <reason>` entry, a
+//     primary_validator of null on a guarded row fails, and a chain the walk
+//     cannot resolve fails closed. That is a LEXICAL claim: a guard call sits
+//     in the chain. It is not a proof that control flow reaches the guard,
+//     that the scope it names is the right one, that the credential classes a
+//     row lists are the ones the guard accepts, or that the primary_validator
+//     anchor is the guard that actually protects this route. CHAOS-4780,
+//     CHAOS-10101.
 //   - Two checks in scripts/ci/test-workflow-contract.sh assert a guard is
 //     PRESENT rather than that its property HOLDS: CHAOS-4781.
 //
 // Usage:
 //
-//	go run ci/checkendpointprofiles/main.go \
+//	go run ./ci/checkendpointprofiles \
 //	    -root PATH \
 //	    -inventory contracts/auth/v1/endpoint-profiles.acr.json \
 //	    -schema /path/to/endpoint-profile.schema.json \
@@ -111,6 +115,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"os/exec"
@@ -481,6 +486,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		return nil, err
 	}
 
+	chains := discoverChains(root, report.Routes)
 	rowsRaw, _ := inventory["rows"].([]any)
 
 	idsSeen := map[string]int{}
@@ -657,6 +663,9 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 				key := routeKey{file, rowMethod, rowRoute}
 				rowKeys[key] = true
 				surfaceOwners[key] = append(surfaceOwners[key], id)
+				if v, ok := chains[key]; ok {
+					reconcileChain(id, classification, row, v, &errs)
+				}
 			}
 		}
 	}
@@ -1296,4 +1305,710 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("OK: acr endpoint-profile inventory is consistent with discovery.")
+}
+
+// --- wrapper-chain reconciliation (route registration -> guard) -------------
+//
+// Each discovered registration is matched, by its evaluated mux pattern, to
+// its mux.Handle/mux.HandleFunc call in the parsed source. The handler
+// argument is walked through RESOLVED declarations only (methods of the
+// registering receiver, functions of the same package, http.HandlerFunc
+// conversions, nested call arguments), never by matching a wrapper's name.
+//
+// A GUARD is a call whose receiver type resolves (struct field type, import
+// path) to the trust-root type guardTypeName in guardPkgSuffix, whose method
+// returns http.Handler and rejects (its body reaches net/http's
+// StatusUnauthorized or StatusForbidden, directly or through same-receiver
+// calls). That one type is the only name this walk trusts.
+//
+// The walk is LEXICAL. It reports that a guard call sits in the chain; it does
+// not prove control flow reaches it, that the scope it names is adequate, or
+// that the call's result is the handler that is served. A callee the walk
+// cannot resolve on the handler path, a depth cut, or a route with no matching
+// registration is a GAP, never a pass.
+
+const (
+	guardTypeName   = "Authenticator"
+	guardPkgSuffix  = "/internal/auth"
+	wrapperChainTag = "wrapper-chain: "
+	maxChainDepth   = 16
+	maxScanDepth    = 16
+)
+
+type chainVerdict struct {
+	Guards []string
+	Chain  []string
+	Gaps   []string
+}
+
+func (v chainVerdict) guarded() bool { return len(v.Guards) > 0 }
+
+func (v chainVerdict) describe() string {
+	switch {
+	case v.guarded():
+		return "guard " + strings.Join(v.Guards, " + ") + " via " + strings.Join(v.Chain, " -> ")
+	case len(v.Gaps) > 0:
+		return "gap " + strings.Join(v.Gaps, "; ")
+	}
+	return "no guard found via " + strings.Join(v.Chain, " -> ")
+}
+
+type chainFunc struct {
+	decl *ast.FuncDecl
+	file *ast.File
+	pkg  *chainPkg
+}
+
+type chainPkg struct {
+	path    string // import path
+	fset    *token.FileSet
+	files   []*ast.File
+	funcs   map[string]chainFunc
+	methods map[string]chainFunc // "Type.Method"
+	consts  map[string]ast.Expr
+	structs map[string]*ast.StructType
+}
+
+func importPathOf(f *ast.File, alias string) string {
+	for _, imp := range f.Imports {
+		p := strings.Trim(imp.Path.Value, "\"")
+		name := p[strings.LastIndex(p, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		if name == alias {
+			return p
+		}
+	}
+	return ""
+}
+
+func moduleOf(root string) string {
+	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+func loadChainPkg(root, importPath string) (*chainPkg, error) {
+	dir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(importPath, moduleOf(root)+"/")))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	p := &chainPkg{path: importPath, fset: token.NewFileSet(), funcs: map[string]chainFunc{}, methods: map[string]chainFunc{}, consts: map[string]ast.Expr{}, structs: map[string]*ast.StructType{}}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(p.fset, filepath.Join(dir, e.Name()), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		p.files = append(p.files, f)
+		for _, d := range f.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				cf := chainFunc{d, f, p}
+				if d.Recv == nil {
+					p.funcs[d.Name.Name] = cf
+				} else if t := recvTypeName(d); t != "" {
+					p.methods[t+"."+d.Name.Name] = cf
+				}
+			case *ast.GenDecl:
+				for _, s := range d.Specs {
+					switch s := s.(type) {
+					case *ast.ValueSpec:
+						if d.Tok == token.CONST {
+							for i, n := range s.Names {
+								if i < len(s.Values) {
+									p.consts[n.Name] = s.Values[i]
+								}
+							}
+						}
+					case *ast.TypeSpec:
+						if st, ok := s.Type.(*ast.StructType); ok {
+							p.structs[s.Name.Name] = st
+						}
+					}
+				}
+			}
+		}
+	}
+	return p, nil
+}
+
+func recvTypeName(d *ast.FuncDecl) string {
+	if d.Recv == nil || len(d.Recv.List) != 1 {
+		return ""
+	}
+	t := d.Recv.List[0].Type
+	if s, ok := t.(*ast.StarExpr); ok {
+		t = s.X
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// evalPattern resolves a string expression made of literals, "+" and package
+// constants.
+func (p *chainPkg) evalPattern(e ast.Expr, depth int) (string, bool) {
+	if depth > 4 {
+		return "", false
+	}
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.STRING {
+			return strings.Trim(e.Value, "\"`"), true
+		}
+	case *ast.BinaryExpr:
+		if e.Op == token.ADD {
+			l, ok1 := p.evalPattern(e.X, depth+1)
+			r, ok2 := p.evalPattern(e.Y, depth+1)
+			return l + r, ok1 && ok2
+		}
+	case *ast.Ident:
+		if v, ok := p.consts[e.Name]; ok {
+			return p.evalPattern(v, depth+1)
+		}
+	case *ast.ParenExpr:
+		return p.evalPattern(e.X, depth+1)
+	}
+	return "", false
+}
+
+type typeRef struct{ pkg, name string }
+
+// chainCtx is one function activation: its receiver, parameter types and the
+// caller's argument text bound to each parameter name.
+type chainCtx struct {
+	fn     chainFunc
+	recv   string
+	params map[string]ast.Expr
+	env    map[string]string
+}
+
+func newChainCtx(fn chainFunc, env map[string]string) chainCtx {
+	c := chainCtx{fn: fn, params: map[string]ast.Expr{}, env: env}
+	if fn.decl.Recv != nil && len(fn.decl.Recv.List) == 1 && len(fn.decl.Recv.List[0].Names) == 1 {
+		c.recv = fn.decl.Recv.List[0].Names[0].Name
+	}
+	if fn.decl.Type.Params != nil {
+		for _, f := range fn.decl.Type.Params.List {
+			for _, n := range f.Names {
+				c.params[n.Name] = f.Type
+			}
+		}
+	}
+	return c
+}
+
+type chainWalker struct {
+	root    string
+	api     *chainPkg
+	pkgs    map[string]*chainPkg
+	pkgErrs map[string]error
+	v       chainVerdict
+	seen    map[*ast.FuncDecl]bool
+	active  map[*ast.FuncDecl]bool
+	cut     bool
+	rejects map[string]bool
+}
+
+func (w *chainWalker) pkgFor(path string) *chainPkg {
+	if path == w.api.path {
+		return w.api
+	}
+	if p, ok := w.pkgs[path]; ok {
+		return p
+	}
+	if _, bad := w.pkgErrs[path]; bad {
+		return nil
+	}
+	p, err := loadChainPkg(w.root, path)
+	if err != nil {
+		w.pkgErrs[path] = err
+		return nil
+	}
+	w.pkgs[path] = p
+	return p
+}
+
+func (w *chainWalker) text(fn chainFunc, e ast.Expr, env map[string]string) string {
+	if id, ok := e.(*ast.Ident); ok {
+		if s, ok := env[id.Name]; ok {
+			return s
+		}
+	}
+	var b bytes.Buffer
+	_ = printerFprint(&b, fn.pkg.fset, e)
+	return b.String()
+}
+
+// typeOf resolves the static type of a receiver expression, only for the
+// shapes this walk understands: the activation's receiver, a typed parameter,
+// a field of such a value, or a local assigned from a constructor call.
+func (w *chainWalker) typeOf(c chainCtx, e ast.Expr) (typeRef, bool) {
+	switch e := e.(type) {
+	case *ast.Ident:
+		if e.Name == c.recv {
+			return typeRef{c.fn.pkg.path, recvTypeName(c.fn.decl)}, true
+		}
+		if t, ok := c.params[e.Name]; ok {
+			return w.typeFromExpr(c.fn, t)
+		}
+	case *ast.SelectorExpr:
+		base, ok := w.typeOf(c, e.X)
+		if !ok {
+			return typeRef{}, false
+		}
+		pkg := w.pkgFor(base.pkg)
+		if pkg == nil {
+			return typeRef{}, false
+		}
+		st := pkg.structs[base.name]
+		if st == nil {
+			return typeRef{}, false
+		}
+		for _, f := range st.Fields.List {
+			for _, n := range f.Names {
+				if n.Name == e.Sel.Name {
+					owner := chainFunc{file: w.fileDeclaring(pkg, st), pkg: pkg}
+					return w.typeFromExpr(owner, f.Type)
+				}
+			}
+		}
+	}
+	return typeRef{}, false
+}
+
+func (w *chainWalker) fileDeclaring(p *chainPkg, st *ast.StructType) *ast.File {
+	for _, f := range p.files {
+		if f.FileStart <= st.Pos() && st.Pos() <= f.FileEnd {
+			return f
+		}
+	}
+	return nil
+}
+
+func (w *chainWalker) typeFromExpr(fn chainFunc, t ast.Expr) (typeRef, bool) {
+	if s, ok := t.(*ast.StarExpr); ok {
+		t = s.X
+	}
+	switch t := t.(type) {
+	case *ast.Ident:
+		return typeRef{fn.pkg.path, t.Name}, true
+	case *ast.SelectorExpr:
+		if id, ok := t.X.(*ast.Ident); ok && fn.file != nil {
+			if p := importPathOf(fn.file, id.Name); p != "" {
+				return typeRef{p, t.Sel.Name}, true
+			}
+		}
+	}
+	return typeRef{}, false
+}
+
+func (w *chainWalker) isNetHTTP(fn chainFunc, e ast.Expr, name string) bool {
+	s, ok := e.(*ast.SelectorExpr)
+	if !ok || s.Sel.Name != name {
+		return false
+	}
+	id, ok := s.X.(*ast.Ident)
+	return ok && importPathOf(fn.file, id.Name) == "net/http"
+}
+
+func (w *chainWalker) returnsHandler(fn chainFunc) bool {
+	r := fn.decl.Type.Results
+	return r != nil && len(r.List) == 1 && len(r.List[0].Names) <= 1 && w.isNetHTTP(fn, r.List[0].Type, "Handler")
+}
+
+// rejecting reports whether a guard-type method body reaches a 401/403 status
+// constant, directly or through same-receiver calls (3 deep).
+func (w *chainWalker) rejecting(m chainFunc, depth int) bool {
+	key := fmt.Sprintf("%s.%s/%d", recvTypeName(m.decl), m.decl.Name.Name, depth)
+	if v, ok := w.rejects[key]; ok {
+		return v
+	}
+	found := false
+	recv := ""
+	if m.decl.Recv != nil && len(m.decl.Recv.List[0].Names) == 1 {
+		recv = m.decl.Recv.List[0].Names[0].Name
+	}
+	ast.Inspect(m.decl.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			if w.isNetHTTP(m, n, "StatusUnauthorized") || w.isNetHTTP(m, n, "StatusForbidden") {
+				found = true
+			}
+		case *ast.CallExpr:
+			if s, ok := n.Fun.(*ast.SelectorExpr); ok && depth < 3 {
+				if id, ok := s.X.(*ast.Ident); ok && id.Name == recv {
+					if callee, ok := m.pkg.methods[recvTypeName(m.decl)+"."+s.Sel.Name]; ok && w.rejecting(callee, depth+1) {
+						found = true
+					}
+				}
+			}
+		}
+		return !found
+	})
+	w.rejects[key] = found
+	return found
+}
+
+// guardCall reports whether call is a guard-primitive call and returns its
+// display form (arguments with the caller's bindings substituted).
+func (w *chainWalker) guardCall(c chainCtx, call *ast.CallExpr) (string, bool) {
+	s, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	t, ok := w.typeOf(c, s.X)
+	if !ok || t.name != guardTypeName || !strings.HasSuffix(t.pkg, guardPkgSuffix) {
+		return "", false
+	}
+	pkg := w.pkgFor(t.pkg)
+	if pkg == nil {
+		return "", false
+	}
+	m, ok := pkg.methods[t.name+"."+s.Sel.Name]
+	if !ok || !w.returnsHandler(m) || !w.rejecting(m, 0) {
+		return "", false
+	}
+	var params []string
+	for _, f := range m.decl.Type.Params.List {
+		for _, n := range f.Names {
+			params = append(params, n.Name)
+		}
+	}
+	var parts []string
+	for i, a := range call.Args {
+		if i == len(call.Args)-1 {
+			break // the wrapped handler
+		}
+		name := fmt.Sprintf("arg%d", i)
+		if i < len(params) {
+			name = params[i]
+		}
+		parts = append(parts, name+"="+w.text(c.fn, a, c.env))
+	}
+	return t.name + "." + s.Sel.Name + "(" + strings.Join(parts, ", ") + ")", true
+}
+
+func (w *chainWalker) addGuard(g string) {
+	for _, have := range w.v.Guards {
+		if have == g {
+			return
+		}
+	}
+	w.v.Guards = append(w.v.Guards, g)
+}
+
+func (w *chainWalker) gap(format string, args ...any) {
+	w.v.Gaps = append(w.v.Gaps, fmt.Sprintf(format, args...))
+}
+
+// resolveCallee finds the declaration a call or reference names, for methods
+// of the registering receiver and functions of the same package.
+func (w *chainWalker) resolveCallee(c chainCtx, fun ast.Expr) (chainFunc, bool) {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		cf, ok := c.fn.pkg.funcs[f.Name]
+		return cf, ok
+	case *ast.SelectorExpr:
+		if t, ok := w.typeOf(c, f.X); ok {
+			if p := w.pkgFor(t.pkg); p != nil {
+				cf, ok := p.methods[t.name+"."+f.Sel.Name]
+				return cf, ok
+			}
+		}
+	}
+	return chainFunc{}, false
+}
+
+func bindArgs(c chainCtx, w *chainWalker, callee chainFunc, call *ast.CallExpr) map[string]string {
+	env := map[string]string{}
+	i := 0
+	if callee.decl.Type.Params != nil {
+		for _, f := range callee.decl.Type.Params.List {
+			for _, n := range f.Names {
+				if i < len(call.Args) {
+					env[n.Name] = w.text(c.fn, call.Args[i], c.env)
+				}
+				i++
+			}
+		}
+	}
+	return env
+}
+
+// handlerExpr walks an expression on the handler path. strict marks a position
+// that must be a handler (a registration's handler argument, a wrapper's
+// return value): an unresolvable callee there is a gap.
+func (w *chainWalker) handlerExpr(c chainCtx, e ast.Expr, strict bool, depth int) {
+	if depth > maxChainDepth {
+		w.gap("wrapper chain deeper than %d", maxChainDepth)
+		return
+	}
+	switch e := e.(type) {
+	case *ast.ParenExpr:
+		w.handlerExpr(c, e.X, strict, depth)
+	case *ast.FuncLit:
+		w.scan(c, e.Body, depth)
+	case *ast.CallExpr:
+		if g, ok := w.guardCall(c, e); ok {
+			w.addGuard(g)
+			for _, a := range e.Args {
+				w.handlerExpr(c, a, false, depth+1)
+			}
+			return
+		}
+		if w.isNetHTTP(c.fn, e.Fun, "HandlerFunc") && len(e.Args) == 1 {
+			w.handlerExpr(c, e.Args[0], true, depth+1)
+			return
+		}
+		callee, ok := w.resolveCallee(c, e.Fun)
+		if !ok {
+			if strict || w.looksLikeHandlerArg(c, e) {
+				w.gap("unresolved callee %s", w.text(c.fn, e.Fun, nil))
+			}
+			return
+		}
+		w.v.Chain = append(w.v.Chain, callee.decl.Name.Name)
+		for _, a := range e.Args {
+			w.handlerExpr(c, a, false, depth+1)
+		}
+		w.calleeBody(newChainCtx(callee, bindArgs(c, w, callee, e)), depth+1)
+	case *ast.SelectorExpr, *ast.Ident:
+		if id, ok := e.(*ast.Ident); ok {
+			if _, isParam := c.params[id.Name]; isParam {
+				return // a wrapped handler: the caller walked this argument
+			}
+		}
+		callee, ok := w.resolveCallee(c, e)
+		if !ok {
+			if strict {
+				w.gap("unresolved handler %s", w.text(c.fn, e, nil))
+			}
+			return
+		}
+		w.v.Chain = append(w.v.Chain, callee.decl.Name.Name)
+		w.scan(newChainCtx(callee, nil), callee.decl.Body, depth+1)
+	default:
+		if strict {
+			w.gap("unsupported handler expression %T", e)
+		}
+	}
+}
+
+// looksLikeHandlerArg: an unresolved call used as an ARGUMENT of a chain call
+// is a gap only when it is an obvious handler constructor, i.e. it takes a
+// handler-typed argument itself or is a net/http conversion. Anything else
+// (constants, request classes) is data, not chain.
+func (w *chainWalker) looksLikeHandlerArg(c chainCtx, call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		if inner, ok := a.(*ast.CallExpr); ok {
+			if _, ok := w.resolveCallee(c, inner.Fun); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// calleeBody walks a wrapper or builder body. A function that returns
+// http.Handler is walked on its handler path (return values and assignments);
+// any other function is scanned lexically for guard calls.
+func (w *chainWalker) calleeBody(c chainCtx, depth int) {
+	if w.active[c.fn.decl] {
+		return // a cycle adds no guard the first visit has not found
+	}
+	w.active[c.fn.decl] = true
+	defer delete(w.active, c.fn.decl)
+	if !w.returnsHandler(c.fn) {
+		w.scan(c, c.fn.decl.Body, depth)
+		return
+	}
+	var visit func(n ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			w.scan(c, n.Body, depth)
+			return false
+		case *ast.ReturnStmt:
+			for _, r := range n.Results {
+				w.handlerExpr(c, r, true, depth+1)
+			}
+			return false
+		case *ast.AssignStmt:
+			for _, r := range n.Rhs {
+				if call, ok := r.(*ast.CallExpr); ok {
+					w.handlerExpr(c, call, false, depth+1)
+				} else if fl, ok := r.(*ast.FuncLit); ok {
+					w.scan(c, fl.Body, depth)
+				}
+			}
+			return false
+		}
+		return true
+	}
+	ast.Inspect(c.fn.decl.Body, visit)
+}
+
+// scan looks lexically for guard calls in a body and follows resolved calls.
+func (w *chainWalker) scan(c chainCtx, body ast.Node, depth int) {
+	if body == nil {
+		return
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if g, ok := w.guardCall(c, call); ok {
+			w.addGuard(g)
+			return true
+		}
+		if callee, ok := w.resolveCallee(c, call.Fun); ok && callee.decl.Body != nil {
+			if w.seen[callee.decl] {
+				return true
+			}
+			if depth+1 > maxScanDepth {
+				w.cut = true
+				return true
+			}
+			w.seen[callee.decl] = true
+			w.scan(newChainCtx(callee, bindArgs(c, w, callee, call)), callee.decl.Body, depth+1)
+		}
+		return true
+	})
+}
+
+// discoverChains returns the wrapper-chain verdict for each discovered route,
+// keyed like the inventory. A route that cannot be matched to a parsed
+// registration gets a gap verdict. A tree whose guard type cannot be resolved
+// gives every route a gap verdict.
+func discoverChains(root string, routes []discoveredRoute) map[routeKey]chainVerdict {
+	out := map[routeKey]chainVerdict{}
+	gapAll := func(format string, args ...any) map[routeKey]chainVerdict {
+		for _, r := range routes {
+			out[routeKey{r.File, r.Method, r.Path}] = chainVerdict{Gaps: []string{fmt.Sprintf(format, args...)}}
+		}
+		return out
+	}
+	module := moduleOf(root)
+	apiPkg, err := loadChainPkg(root, module+"/internal/api")
+	if err != nil {
+		return gapAll("cannot parse internal/api: %v", err)
+	}
+	w0 := &chainWalker{root: root, api: apiPkg, pkgs: map[string]*chainPkg{}, pkgErrs: map[string]error{}, rejects: map[string]bool{}}
+	if p := w0.pkgFor(module + guardPkgSuffix); p == nil {
+		return gapAll("cannot parse the guard package %s%s: %v", module, guardPkgSuffix, w0.pkgErrs[module+guardPkgSuffix])
+	}
+
+	type registration struct {
+		call *ast.CallExpr
+		ctx  chainCtx
+	}
+	regs := map[string][]registration{}
+	var decls []chainFunc
+	for _, cf := range apiPkg.methods {
+		decls = append(decls, cf)
+	}
+	for _, cf := range apiPkg.funcs {
+		decls = append(decls, cf)
+	}
+	for _, cf := range decls {
+		if cf.decl.Body == nil {
+			continue
+		}
+		c := newChainCtx(cf, nil)
+		ast.Inspect(cf.decl.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 2 {
+				return true
+			}
+			s, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || (s.Sel.Name != "Handle" && s.Sel.Name != "HandleFunc") {
+				return true
+			}
+			if id, ok := s.X.(*ast.Ident); !ok || id.Name != "mux" {
+				return true
+			}
+			if pat, ok := apiPkg.evalPattern(call.Args[0], 0); ok {
+				regs[pat] = append(regs[pat], registration{call, c})
+			}
+			return true
+		})
+	}
+	for _, r := range routes {
+		key := routeKey{r.File, r.Method, r.Path}
+		pat := r.Method + " " + r.Path
+		if r.Method == "ANY" {
+			pat = r.Path
+		}
+		found := regs[pat]
+		if len(found) != 1 {
+			out[key] = chainVerdict{Gaps: []string{fmt.Sprintf("%d parsed registrations match %q", len(found), pat)}}
+			continue
+		}
+		w := &chainWalker{root: root, api: apiPkg, pkgs: w0.pkgs, pkgErrs: w0.pkgErrs, seen: map[*ast.FuncDecl]bool{}, active: map[*ast.FuncDecl]bool{}, rejects: w0.rejects}
+		w.handlerExpr(found[0].ctx, found[0].call.Args[1], true, 0)
+		if w.cut && !w.v.guarded() {
+			w.gap("scan depth cut at %d", maxScanDepth)
+		}
+		out[key] = w.v
+	}
+	return out
+}
+
+// chainHatch returns the reason of a `wrapper-chain: <reason>` gaps entry.
+func chainHatch(row map[string]any) (string, bool) {
+	for _, g := range asArray(row["gaps"]) {
+		if s, ok := asString(g); ok {
+			if reason, ok := strings.CutPrefix(s, wrapperChainTag); ok && strings.TrimSpace(reason) != "" {
+				return strings.TrimSpace(reason), true
+			}
+		}
+	}
+	return "", false
+}
+
+// reconcileChain compares a row's claim with the wrapper-chain verdict.
+func reconcileChain(id, classification string, row map[string]any, v chainVerdict, errs *[]string) {
+	reason, hatch := chainHatch(row)
+	switch {
+	case v.guarded():
+		if classification == "public" {
+			*errs = append(*errs, fmt.Sprintf("CLASSIFICATION CONTRADICTS WRAPPER CHAIN: row %q is public but discovery found %s", id, v.describe()))
+		}
+		if row["primary_validator"] == nil {
+			*errs = append(*errs, fmt.Sprintf("NULL PRIMARY VALIDATOR ON GUARDED ROW: row %q has primary_validator=null but discovery found %s", id, v.describe()))
+		}
+	case len(v.Gaps) > 0:
+		if classification == "public" {
+			*errs = append(*errs, fmt.Sprintf("UNRESOLVED WRAPPER CHAIN: row %q is public and discovery could not rule out a guard: %s (a public row has no gaps escape; resolve the chain)", id, v.describe()))
+		} else if !hatch {
+			*errs = append(*errs, fmt.Sprintf("UNRESOLVED WRAPPER CHAIN: row %q is protected and discovery could not resolve its chain: %s (disclose with a gaps entry `%s<reason>` or resolve it)", id, v.describe(), wrapperChainTag))
+		} else {
+			fmt.Fprintf(os.Stderr, "WRAPPER-CHAIN GAP DISCLOSED: row %q: %s (%s)\n", id, v.describe(), reason)
+		}
+	case classification == "protected":
+		if !hatch {
+			*errs = append(*errs, fmt.Sprintf("CLASSIFICATION CONTRADICTS WRAPPER CHAIN: row %q is protected but discovery found %s (disclose with a gaps entry `%s<reason>` if the protection is outside this chain)", id, v.describe(), wrapperChainTag))
+		} else {
+			fmt.Fprintf(os.Stderr, "WRAPPER-CHAIN GAP DISCLOSED: row %q: %s (%s)\n", id, v.describe(), reason)
+		}
+	}
+}
+
+func printerFprint(b *bytes.Buffer, fset *token.FileSet, e ast.Expr) error {
+	return printer.Fprint(b, fset, e)
 }

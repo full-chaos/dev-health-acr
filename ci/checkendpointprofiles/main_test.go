@@ -433,8 +433,54 @@ func writeJSON(t *testing.T, path string, v any) {
 	writeFile(t, path, string(raw)+"\n")
 }
 
+const fixtureAuthGo = `package auth
+
+import "net/http"
+
+const ScopeContextRead = "context:read"
+
+type Authenticator struct{}
+
+func (a *Authenticator) Middleware(next http.Handler) http.Handler {
+	return a.MiddlewareFor(false, next)
+}
+
+func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *Authenticator) RequireScope(required string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if required == "" {
+			http.Error(w, "", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *Authenticator) Passthrough(next http.Handler) http.Handler { return next }
+
+func (a *Authenticator) Describe() string { return "not a handler wrapper" }
+
+func (a *Authenticator) Status() int { return http.StatusUnauthorized }
+`
+
+func seedFixtureGuardPackage(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/fx\n\ngo 1.22\n")
+	writeFile(t, filepath.Join(root, "internal", "auth", "middleware.go"), fixtureAuthGo)
+}
+
 func seedFixtureAppGo(t *testing.T, root string) {
 	t.Helper()
+	seedFixtureGuardPackage(t, root)
 	writeFile(t, filepath.Join(root, fixtureAppFile),
 		"package api\n"+
 			"\n"+
@@ -1069,7 +1115,7 @@ func TestGateReadsIssuedCredentialDirectionAndExposureReachabilityLive(t *testin
 			},
 		},
 		"exposure": map[string]any{"reachability": "edge_and_direct", "source": "fixture"},
-		"gaps":     []any{},
+		"gaps":     []any{"wrapper-chain: fixture handler has no guard, protection claimed outside this chain"},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
 	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
@@ -1748,7 +1794,7 @@ func anchorKindsRow() map[string]any {
 				"note": "`func Handler(` `http.NewServeMux(` -- Handler builds the mux",
 			},
 		}},
-		"gaps": []any{},
+		"gaps": []any{"wrapper-chain: fixture handler has no guard, protection claimed outside this chain"},
 	})
 }
 
@@ -1890,7 +1936,7 @@ func TestGateAcceptsTwoIssuedEntriesMintedByOneFunctionAndChecksEachMintCall(t *
 			"public_rationale":            nil,
 			"accepted_credential_classes": []any{"acr_client_credential"},
 			"issued_credential":           []any{entry(13, "signAccess("), entry(20, "signRefresh(")},
-			"gaps":                        []any{},
+			"gaps":                        []any{"wrapper-chain: fixture handler has no guard, protection claimed outside this chain"},
 		})
 		f := minimalValidFixture(t, []map[string]any{row})
 		writeFile(t, filepath.Join(f.root, fixtureAppFile), source)
@@ -2287,4 +2333,227 @@ func TestRealTreeRejectsAMintCallMovedIntoAnUncalledFuncLiteral(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustContain(t, errs, "ANCHOR CONTENT MISMATCH", "nested func literal", "Poll")
+}
+
+// --- wrapper-chain reconciliation ------------------------------------------
+
+const capabilitiesPath = "/api/v1/agent-context/capabilities"
+
+const fixtureGuardedBody = "\thandler := next\n" +
+	"\thandler = a.authenticator.RequireScope(scope, handler)\n" +
+	"\treturn a.authenticator.MiddlewareFor(true, handler)\n"
+
+// writeChainApp writes an internal/api package shaped like acr's: the
+// capabilities route goes through a protectedRuntimeHandler wrapper, healthz
+// is registered bare. wrapperBody replaces the wrapper's body; extra adds
+// registrations and declarations.
+func writeChainApp(t *testing.T, root, wrapperBody, extraRoutes, extraDecls string) {
+	t.Helper()
+	seedFixtureGuardPackage(t, root)
+	writeFile(t, filepath.Join(root, fixtureAppFile),
+		"package api\n\n"+
+			"import (\n\t\"net/http\"\n\n\t\"example.test/fx/internal/auth\"\n)\n\n"+
+			"type App struct{ authenticator *auth.Authenticator }\n\n"+
+			"func (a *App) Handler() http.Handler {\n"+
+			"\tmux := http.NewServeMux()\n"+
+			"\tmux.HandleFunc(\"GET /healthz\", healthzHandler)\n"+
+			"\tmux.Handle(\"GET "+capabilitiesPath+"\", a.protectedRuntimeHandler(\"capabilities\", auth.ScopeContextRead, http.HandlerFunc(healthzHandler)))\n"+
+			extraRoutes+
+			"\treturn mux\n}\n\n"+
+			"func (a *App) protectedRuntimeHandler(class string, scope string, next http.Handler) http.Handler {\n"+
+			wrapperBody+"}\n\n"+
+			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n"+
+			extraDecls)
+}
+
+func healthzChainRow() map[string]any { return minimalValidRow(nil) }
+
+func capabilitiesRow(overrides map[string]any) map[string]any {
+	row := map[string]any{
+		"id":                          "GET " + capabilitiesPath + " [dev-health-acr-api]",
+		"route":                       capabilitiesPath,
+		"classification":              "protected",
+		"public_rationale":            nil,
+		"accepted_credential_classes": []any{"acr_client_credential"},
+		"primary_validator":           map[string]any{"description": "wrapper", "anchor": nil},
+		"gaps":                        []any{"primary_validator anchor is not placed in this fixture"},
+	}
+	for k, v := range overrides {
+		row[k] = v
+	}
+	return minimalValidRow(row)
+}
+
+func chainFixture(t *testing.T, wrapperBody, extraRoutes, extraDecls string, rows ...map[string]any) fixture {
+	t.Helper()
+	f := minimalValidFixture(t, rows)
+	writeChainApp(t, f.root, wrapperBody, extraRoutes, extraDecls)
+	return f
+}
+
+func TestWrapperChainAcceptsRowsThatMatchTheChain(t *testing.T) {
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(nil))
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestWrapperChainRejectsAGuardedRouteRelabelledPublic(t *testing.T) {
+	// First construction: a genuinely guarded route relabelled public with a rationale.
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(map[string]any{
+		"classification":              "public",
+		"public_rationale":            "relabelled",
+		"accepted_credential_classes": []any{},
+		"primary_validator":           nil,
+	}))
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is public", "Authenticator.RequireScope(required=auth.ScopeContextRead)")
+}
+
+func TestWrapperChainRejectsANullPrimaryValidatorOnAGuardedRow(t *testing.T) {
+	// Second construction: protected, primary_validator null, gaps [].
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(map[string]any{
+		"primary_validator": nil,
+		"gaps":              []any{},
+	}))
+	mustContain(t, f.check(t), "NULL PRIMARY VALIDATOR ON GUARDED ROW", "Authenticator.MiddlewareFor(allowWebAssertions=true)")
+}
+
+func TestWrapperChainRejectsAProtectedRowWhoseWrapperNoLongerGuards(t *testing.T) {
+	f := chainFixture(t, "\treturn next\n", "", "", healthzChainRow(), capabilitiesRow(nil))
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is protected", "no guard found")
+}
+
+func TestWrapperChainHatchIsAnExactTaggedEntryWithAReason(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gaps []any
+		ok   bool
+	}{
+		{"exact tag with reason", []any{"wrapper-chain: auth lives in the edge proxy"}, true},
+		{"tag without reason", []any{"wrapper-chain: "}, false},
+		{"substring only", []any{"note: wrapper-chain: auth lives in the edge proxy"}, false},
+		{"loose wording", []any{"the wrapper chain is not checked"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := chainFixture(t, "\treturn next\n", "", "", healthzChainRow(), capabilitiesRow(map[string]any{
+				"primary_validator": map[string]any{"description": "wrapper", "anchor": nil},
+				"gaps":              append([]any{"primary_validator anchor is not placed in this fixture"}, tc.gaps...),
+			}))
+			errs := f.check(t)
+			if tc.ok && len(errs) != 0 {
+				t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+			}
+			if !tc.ok {
+				mustContain(t, errs, "CLASSIFICATION CONTRADICTS WRAPPER CHAIN")
+			}
+		})
+	}
+}
+
+func TestWrapperChainPublicRowNeverGetsTheHatch(t *testing.T) {
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(map[string]any{
+		"classification":              "public",
+		"public_rationale":            "relabelled",
+		"accepted_credential_classes": []any{},
+		"primary_validator":           nil,
+		"gaps":                        []any{"wrapper-chain: claimed public on purpose"},
+	}))
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is public")
+}
+
+func TestWrapperChainFollowsGuardsThroughNestedWrappers(t *testing.T) {
+	extraRoutes := "\tmux.Handle(\"POST /nested\", a.logLine(a.protectedRuntimeHandler(\"c\", auth.ScopeContextRead, http.HandlerFunc(healthzHandler))))\n" +
+		"\tmux.Handle(\"POST /nested-open\", a.logLine(http.HandlerFunc(healthzHandler)))\n"
+	extraDecls := "func (a *App) logLine(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { next.ServeHTTP(w, r) })\n}\n"
+	nested := capabilitiesRow(map[string]any{"id": "POST /nested [dev-health-acr-api]", "method": "POST", "route": "/nested"})
+	open := minimalValidRow(map[string]any{"id": "POST /nested-open [dev-health-acr-api]", "method": "POST", "route": "/nested-open"})
+	f := chainFixture(t, fixtureGuardedBody, extraRoutes, extraDecls, healthzChainRow(), capabilitiesRow(nil), nested, open)
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+	nestedAsPublic := minimalValidRow(map[string]any{"id": "POST /nested [dev-health-acr-api]", "method": "POST", "route": "/nested"})
+	f = chainFixture(t, fixtureGuardedBody, extraRoutes, extraDecls, healthzChainRow(), capabilitiesRow(nil), nestedAsPublic, open)
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "POST /nested [")
+}
+
+func TestWrapperChainDoesNotTreatANonHandlerAuthenticatorMethodAsAGuard(t *testing.T) {
+	body := "\t_ = a.authenticator.Describe()\n\t_ = a.authenticator.Status()\n\treturn next\n"
+	f := chainFixture(t, body, "", "", healthzChainRow(), capabilitiesRow(map[string]any{"classification": "public", "public_rationale": "x", "accepted_credential_classes": []any{}, "primary_validator": nil, "gaps": []any{}}))
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestWrapperChainUnresolvedWrapperIsAGapNotAPass(t *testing.T) {
+	extraRoutes := "\tmux.Handle(\"POST /opaque\", foreign.Wrap(http.HandlerFunc(healthzHandler)))\n"
+	extraDecls := ""
+	publicRow := minimalValidRow(map[string]any{"id": "POST /opaque [dev-health-acr-api]", "method": "POST", "route": "/opaque"})
+	f := chainFixture(t, fixtureGuardedBody, extraRoutes, extraDecls, healthzChainRow(), capabilitiesRow(nil), publicRow)
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST /opaque [", "unresolved callee foreign.Wrap")
+
+	protectedRow := capabilitiesRow(map[string]any{"id": "POST /opaque [dev-health-acr-api]", "method": "POST", "route": "/opaque"})
+	f = chainFixture(t, fixtureGuardedBody, extraRoutes, extraDecls, healthzChainRow(), capabilitiesRow(nil), protectedRow)
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "wrapper-chain: ")
+
+	disclosed := capabilitiesRow(map[string]any{
+		"id": "POST /opaque [dev-health-acr-api]", "method": "POST", "route": "/opaque",
+		"gaps": []any{"primary_validator anchor is not placed in this fixture", "wrapper-chain: foreign wrapper, reviewed by hand"},
+	})
+	f = chainFixture(t, fixtureGuardedBody, extraRoutes, extraDecls, healthzChainRow(), capabilitiesRow(nil), disclosed)
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestWrapperChainMissingGuardPackageFailsClosed(t *testing.T) {
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(nil))
+	if err := os.RemoveAll(filepath.Join(f.root, "internal", "auth")); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "cannot parse the guard package")
+}
+
+func TestWrapperChainDepthCutIsAGap(t *testing.T) {
+	var decls strings.Builder
+	decls.WriteString("func (a *App) hop0(next http.Handler) http.Handler { return a.hop1(next) }\n")
+	for i := 1; i <= maxChainDepth+2; i++ {
+		decls.WriteString("func (a *App) hop" + strconv.Itoa(i) + "(next http.Handler) http.Handler { return a.hop" + strconv.Itoa(i+1) + "(next) }\n")
+	}
+	decls.WriteString("func (a *App) hop" + strconv.Itoa(maxChainDepth+3) + "(next http.Handler) http.Handler { return a.authenticator.Middleware(next) }\n")
+	extraRoutes := "\tmux.Handle(\"POST /deep\", a.hop0(http.HandlerFunc(healthzHandler)))\n"
+	row := minimalValidRow(map[string]any{"id": "POST /deep [dev-health-acr-api]", "method": "POST", "route": "/deep"})
+	f := chainFixture(t, fixtureGuardedBody, extraRoutes, decls.String(), healthzChainRow(), capabilitiesRow(nil), row)
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "wrapper chain deeper than")
+}
+
+func TestRealTreeWrapperChainsResolveWithoutGaps(t *testing.T) {
+	root := repoRoot(t)
+	report, err := runDiscovery(root, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chains := discoverChains(root, report.Routes)
+	if len(chains) == 0 || len(chains) != len(report.Routes) {
+		t.Fatalf("expected a verdict for each of %d routes, got %d", len(report.Routes), len(chains))
+	}
+	for key, v := range chains {
+		if len(v.Gaps) > 0 {
+			t.Errorf("%s %s: unresolved chain: %v", key.Method, key.Path, v.Gaps)
+		}
+	}
+	v := chains[routeKey{fixtureAppFile, "GET", capabilitiesPath}]
+	d := v.describe()
+	for _, want := range []string{"Authenticator.MiddlewareFor(allowWebAssertions=true)", "Authenticator.RequireScope(required=auth.ScopeContextRead)"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("capabilities chain %q lacks %q", d, want)
+		}
+	}
+	if chains[routeKey{fixtureAppFile, "GET", "/healthz"}].guarded() {
+		t.Error("/healthz must not be guarded")
+	}
+}
+
+func TestWrapperChainDoesNotTreatANonRejectingHandlerMethodAsAGuard(t *testing.T) {
+	f := chainFixture(t, "\treturn a.authenticator.Passthrough(next)\n", "", "", healthzChainRow(), capabilitiesRow(nil))
+	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is protected", "no guard found")
 }
