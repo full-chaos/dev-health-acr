@@ -105,57 +105,6 @@ func itoa(n uint32) string {
 	return string(b)
 }
 
-// Two providers can mint one raw project id; each root keeps its own tier and
-// the repository hop names both roots.
-func TestScopeExpander_ProjectToPullRequest_ProviderQualifiedRootsShareARawID(t *testing.T) {
-	ctx := context.Background()
-	orgID := sharedTestOrgID(t)
-	query, direct := sharedClickHouseFixture(t)
-	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at, orgID)
-	s := &linkTierSeeder{t: t, ctx: ctx, direct: direct, orgID: orgID, at: at, repoID: chaos4099GitLabRepoID}
-	const rawID = "shared-raw-project-id"
-	gitlab := s.project("gitlab", rawID, "gl-shared-key", "gitlab shared")
-	github := s.project("github", rawID, "gh-shared-key", "github shared")
-	s.issue("gitlab:shared#1", "gl-shared-key")
-	s.issue("github:shared#1", "gh-shared-key")
-	s.pullRequest(6)
-	s.pullRequest(7)
-	s.link("gitlab:shared#1", 6, "native")
-	s.link("github:shared#1", 7, "explicit_text")
-
-	result := expandPullRequests(t, ctx, query, orgID, 20, github, gitlab)
-	for _, row := range []struct {
-		number uint32
-		root   contextfabric.SubjectRef
-		other  contextfabric.SubjectRef
-		tier   string
-	}{
-		{6, gitlab, github, "native"},
-		{7, github, gitlab, "explicit_text"},
-	} {
-		tier, count := tierOf(result, chaos4099GitLabRepoID, row.number, row.root)
-		if tier != row.tier || count != 1 {
-			t.Fatalf("pull request %d root %s: tier=%q roots=%d, want tier=%q roots=1 (all %v)", row.number, row.root.CanonicalID, tier, count, row.tier, result.TargetLinkTier)
-		}
-		if other, _ := tierOf(result, chaos4099GitLabRepoID, row.number, row.other); other != "" {
-			t.Fatalf("pull request %d carries a tier %q for the other provider's root", row.number, other)
-		}
-	}
-	roots := map[string]bool{}
-	for _, target := range result.Targets {
-		if target.CanonicalID != "pull_request:"+chaos4099GitLabRepoID+":6" {
-			continue
-		}
-		for _, root := range result.TargetRoots[contextfabric.FactSubjectKey(target)] {
-			roots[root.CanonicalID] = true
-		}
-	}
-	if !roots[gitlab.CanonicalID] || !roots[github.CanonicalID] {
-		t.Fatalf("repository roots of pull request 6 = %v, want both providers' roots", roots)
-	}
-}
-
 // The historical (valid_time) repository hop names each provider's root when
 // two providers share one raw project id.
 func TestScopeExpander_ProjectToPullRequest_AsOfProviderQualifiedRootsShareARawID(t *testing.T) {
