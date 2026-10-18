@@ -15,6 +15,16 @@ import (
 
 func runWorkItemGapDispatch(t *testing.T, census WorkItemMembershipCensus, withMember bool) (InvestigationResult, *recordingTelemetry, *staticResultStore) {
 	t.Helper()
+	return runWorkItemGapDispatchWith(t, census, withMember, nil)
+}
+
+func runWorkItemGapDispatchWith(t *testing.T, census WorkItemMembershipCensus, withMember bool, synthesizer AnswerSynthesizer) (InvestigationResult, *recordingTelemetry, *staticResultStore) {
+	t.Helper()
+	if synthesizer == nil {
+		synthesizer = synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{Status: InvestigationNoMatch, DirectJudgment: "Nothing found.", CurrentState: "Nothing found.", DeterministicAnswer: "Nothing found.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
+		})
+	}
 	frame := ValidateFrame(prospectiveTupleFrame(GoalAssessState, GoalCountOrAggregate), nil, "").Frame
 	payload := workItemTuplePayloadFixture(t)
 	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
@@ -38,9 +48,7 @@ func runWorkItemGapDispatch(t *testing.T, census WorkItemMembershipCensus, withM
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
 		}),
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
-			return InvestigationResult{Status: InvestigationNoMatch, DirectJudgment: "Nothing found.", CurrentState: "Nothing found.", DeterministicAnswer: "Nothing found.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
-		}),
+		Synthesizer: synthesizer,
 		Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_gap_001" }})
 	if err != nil {
