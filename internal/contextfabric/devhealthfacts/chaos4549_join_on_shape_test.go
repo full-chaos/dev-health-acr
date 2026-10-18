@@ -247,6 +247,11 @@ func sweepScopeExpander(ctx context.Context, orgID string) []capturedQuery {
 		{match: "GROUP BY concat(p.provider, ':', p.id), toString(l.pr_repo_id), l.pr_number", rows: [][]any{
 			{"github:proj-4549-scope", scopeRepoID, uint32(1), "native"},
 		}},
+		// pullRequestsForRepositories: repo id, pull request number. The
+		// link tier read is bounded to these target pull requests.
+		{match: "FROM git_pull_requests AS p FINAL", rows: [][]any{
+			{scopeRepoID, uint32(1)},
+		}},
 		// projectRepositories' first hop (chaos4099_scope_expander.go).
 		// Column order: toString(l.pr_repo_id), ifNull(r.repo, ''),
 		// min(provider-qualified key), argMax(l.provenance, l.link_rank), the origin id list.
