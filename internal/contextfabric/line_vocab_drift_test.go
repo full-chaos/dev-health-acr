@@ -73,6 +73,10 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		"InterpretedTimeBoundOutcome":       InterpretedTimeBoundOutcomeLogVocabulary(),
 		"PriorConsultedOutcome":             PriorConsultedOutcomeVocabulary(),
 		"PriorDegradationState":             append(append(PriorDegradationPointerDanglingVocabulary(), PriorDegradationInfoVocabulary()...), ""),
+		"CoverageDisclosureOutcome":         CoverageDisclosureOutcomeVocabulary(),
+		"CoverageDisclosureViolation":       CoverageDisclosureViolationVocabulary(),
+		"PeriodDeltaFailureReason":          PeriodDeltaFailureReasonVocabulary(),
+		"PeriodDeltaTransition":             PeriodDeltaTransitionLogVocabulary(),
 		// The contract enums the lines declare by hand-listed members.
 		"contracts:ContextFabricWindowProvenance":      WindowProvenanceLogVocabulary(),
 		"contracts:ContextFabricInvestigationStatus":   InvestigationStatusLogVocabulary(),
