@@ -279,6 +279,79 @@ number of distinct sites the rows declare for it (rows citing one shared
 definition line are one site; a `func` declaration is always one site). More is
 `AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
 
+## Wrapper-chain reconciliation
+
+`ci/checkendpointprofiles` parses `internal/api` and, for every discovered
+route, finds the `mux.Handle`/`mux.HandleFunc` call by its evaluated pattern and
+walks the handler argument through resolved declarations: methods of the
+registering receiver, functions of the same package, `http.HandlerFunc(x)`,
+and nested call arguments. Parameters are bound to the caller's arguments, so a
+guard prints with its scope, for example
+`Authenticator.RequireScope(required=auth.ScopeContextRead)`. Wrappers are never
+recognised by name.
+
+A **guard** is a call on a value whose type resolves (struct field type and
+import path) to `Authenticator` in `internal/auth`, to a method that returns
+`http.Handler` and rejects: its body reaches `net/http`'s `StatusUnauthorized`
+or `StatusForbidden`, directly or through same-receiver calls. That type is the
+one trust root the walk names.
+
+Rules, per row (rows are matched by the same (file, method, route) key as the
+surface checks):
+
+| Discovery finds | Row says | Result |
+|---|---|---|
+| a guard in the chain | `public` | `CLASSIFICATION CONTRADICTS WRAPPER CHAIN`; no hatch |
+| a guard in the chain | `primary_validator: null` | `NULL PRIMARY VALIDATOR ON GUARDED ROW` |
+| no guard, chain fully resolved | `protected` | `CLASSIFICATION CONTRADICTS WRAPPER CHAIN` unless the hatch below is present |
+| a gap (see below), guard or not | `public` and nothing found | `UNRESOLVED WRAPPER CHAIN`; no hatch |
+| a gap (see below), guard or not | `protected` | `UNRESOLVED WRAPPER CHAIN` unless the hatch below is present |
+
+The hatch is an exact entry in the row's `gaps`: `wrapper-chain: <reason>`,
+prefix exact and reason non-empty. A loose mention of "wrapper chain", a
+substring inside another entry, or a tag with no reason is not accepted. The
+gate prints each disclosed reason. A public row never gets the hatch.
+
+A **gap** is any of: a callee on the handler path that the walk cannot resolve
+(another package, a function value, an unsupported expression); a call through
+an interface type whose method returns `http.Handler`; a chain deeper than the
+depth bound; a scan cut by its depth bound; a route with no matching parsed
+registration; a missing `go.mod` or a guard package that cannot be parsed. A
+found guard does not settle a gap: the guard says nothing about the path the
+walk did not read, so a protected row with any gap needs the hatch. The guard
+type is trusted only at the exact module-relative `internal/auth` import path.
+**The structural rule: typed cases are the allow-list.** In a handler body the
+walk follows only what it can type with certainty: the registering receiver,
+struct fields, parameters, locals whose every assignment (`:=`, `=`, `var`) has
+the same resolvable type, type aliases and embedded structs. Anything else in
+a handler position is a gap. Concretely, a call is a gap when it invokes a
+method whose name belongs to a handler wrapper declared in this module (derived
+from the parsed declarations: methods of the api and guard packages that return
+`http.Handler`, plus `ServeHTTP`) on a receiver whose type is not established,
+including a local assigned values of differing or unresolvable types; when it
+invokes `ServeHTTP` on anything but a `net/http` handler or a module type with a
+readable `ServeHTTP`; when it calls an untyped function value, or a function
+parameter that takes or returns a handler, response writer or request, and is
+handed such a value; when it passes a handler to a package outside the module;
+or when it goes through an interface whose method returns `http.Handler`. Handler
+values are followed as values: an argument at a handler-typed parameter of a
+followed callee is a handler position (an unresolved callee there is a gap), a
+local handler is the union of its assignments and `var` initialisers, a
+composite literal of a module type is followed into its `ServeHTTP`, and
+`net/http` types are matched through aliases (`type H = http.Handler`). Calls
+that are not handler wrappers (store reads, logging, encoding) are data and are
+not gaps. Boundary: a guard reached only by a function value that closes over
+the writer and request elsewhere and is then called with no `net/http` value is
+outside what a lexical walk can see.
+
+The reconciliation is **lexical**. It states that a guard call sits in the
+route's wrapper chain. It does not prove control flow reaches the call, that
+the named scope is the right one, that the credential classes a row lists are
+the ones the guard accepts, or that the row's `primary_validator` anchor is the
+guard protecting this route. Proofs for the rules are the seeded fixtures in
+`ci/checkendpointprofiles/main_test.go` (`TestWrapperChain*`), including the two
+CHAOS-4780 constructions on `GET /api/v1/agent-context/capabilities`.
+
 What this does not prove (CHAOS-4780, reachability is out of scope for this
 gate):
 
@@ -290,7 +363,10 @@ gate):
   `GET /api/v1/agent-context/evidence/{evidence_ref_id}`,
   `POST /api/v1/context-fabric/investigations`,
   `GET /api/v1/context-fabric/investigations/{result_id}`): removing the call to either from
-  the code that dispatches through it leaves the declaration, and the gate green.
+  the code that dispatches through it leaves the declaration. The wrapper-chain
+  reconciliation above checks only that an `Authenticator` guard call sits in the
+  route's lexical chain. It does not bind the route to `protectedRuntimeHandler`
+  or `authenticateWebAssertion`, and does not prove that either is reached.
 - A route's own-call marker (`a.protectedRuntimeHandler(...)` in its handler
   builder) is located in the file, not bound to the route's handler builder: the
   route fails if that call is removed or renamed, but moving the call to another

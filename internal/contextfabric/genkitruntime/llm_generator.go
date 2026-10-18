@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/xeipuuv/gojsonschema"
@@ -58,7 +57,7 @@ type outputSchema struct {
 }
 
 func newOutputSchema(value any) (outputSchema, error) {
-	wire := core.InferSchemaMap(value)
+	wire := inferSchemaMap(value)
 	raw, err := json.Marshal(wire)
 	if err != nil {
 		return outputSchema{}, fmt.Errorf("encode output schema: %w", err)

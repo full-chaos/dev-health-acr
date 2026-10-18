@@ -358,7 +358,7 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 	}
 }
 
-// TestClickHouseSourceVersionIsV17ForTheEpicParentRebuild pins the constant,
+// TestClickHouseSourceVersionIsV18ForTheRelationshipIdentityRebuild pins the constant,
 // with the reason, so a later bump is a deliberate act rather than a side
 // effect.
 //
@@ -405,9 +405,14 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // their already-projected edges again; the rebuild re-asserts every native
 // link, which retracts them.
 //
-// v17 (epic_id as the parent where parent_id is empty) is the latest: rows of
+// v17 (epic_id as the parent where parent_id is empty) is the next: rows of
 // GitLab epics and Jira Epic Links synced before the roll are behind every
 // checkpoint; the rebuild reads them and projects their PART_OF edges.
+//
+// v18 (one dependency relationship id per type, whatever its case or padding)
+// is the latest: the id derives from the trimmed lower-case type, so an edge
+// projected from a spelling that is not already trimmed lower case, and every
+// edge of a BLOCKED_BY alias, carries the old id; the rebuild re-projects them.
 //
 // REPLAY DEPENDENCY: ProjectionWorker.RunOnce reloads the checkpoint every
 // tick and a failed build returns before the checkpoint save, so a held
@@ -419,11 +424,11 @@ func TestLegalVocabularyRowsKeepTheirPreExistingRelationshipIdentity(t *testing.
 // all -- they wedged), so the existing graph stays valid and batch 62
 // replays with no operator action. Bumping this constant would throw that
 // away and force a full rebuild of every organization.
-func TestClickHouseSourceVersionIsV17ForTheEpicParentRebuild(t *testing.T) {
+func TestClickHouseSourceVersionIsV18ForTheRelationshipIdentityRebuild(t *testing.T) {
 	t.Parallel()
-	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v17" {
+	if devhealthsource.ClickHouseSourceVersion != "devhealthsource.clickhouse.v18" {
 		t.Fatalf("ClickHouseSourceVersion = %q, want %q -- see this test's doc comment: bumping it forces a rebuild instead of replaying the held checkpoint",
-			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v17")
+			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v18")
 	}
 }
 
@@ -1158,5 +1163,65 @@ func TestPeekOverAllQuarantinedTailHasNoSideEffects(t *testing.T) {
 	}
 	if _, ok, _ := source.ConsumedWithoutPublishing(context.Background(), checkpoint); !ok {
 		t.Fatal("real call must still record consumed progress")
+	}
+}
+
+// TestDependencyTypeSpellingVariantsOfOnePairProjectOneEdge drives the real
+// producer with the case and padding variants of one relation and asserts
+// they land on one relationship id, which is the id the lower-case spelling
+// has always had.
+func TestDependencyTypeSpellingVariantsOfOnePairProjectOneEdge(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, spellings := range [][]string{
+		{"blocks", "BLOCKS"},
+		{"relates_to", "RELATES_TO", " Relates_To "},
+		{"duplicates", "Duplicates"},
+	} {
+		t.Run(spellings[0], func(t *testing.T) {
+			var rows [][]any
+			for i, spelling := range spellings {
+				rows = append(rows, dependencyRow("WIDGET-101", "WIDGET-099", spelling, at.Add(time.Duration(i)*time.Second), created))
+			}
+			batch, available, err, _ := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+			if err != nil || !available {
+				t.Fatalf("variants were not projected: err=%v available=%v", err, available)
+			}
+			if len(batch.Relationships) != 1 {
+				ids := make([]string, 0, len(batch.Relationships))
+				for _, r := range batch.Relationships {
+					ids = append(ids, r.RelationshipID)
+				}
+				t.Fatalf("relationships = %d (%v), want the spellings %v to be one edge", len(batch.Relationships), ids, spellings)
+			}
+			want := workItemDependencyRelationshipID(t, "repo-1", "WIDGET-101", "repo-1", "WIDGET-099", spellings[0])
+			if batch.Relationships[0].RelationshipID != want {
+				t.Fatalf("relationship id = %q, want %q (the lower-case spelling's id)", batch.Relationships[0].RelationshipID, want)
+			}
+		})
+	}
+}
+
+// TestBlockedByAliasConvergesWithLowerCaseBlocksRow pins the convergence the
+// alias table promises against the spelling the ops normalizer writes: a
+// lower-case forward row and the inverted alias are one edge.
+func TestBlockedByAliasConvergesWithLowerCaseBlocksRow(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := [][]any{
+		dependencyRow("WI-B", "WI-A", "blocks", at, created),
+		dependencyRow("WI-A", "WI-B", "blocked_by", at.Add(time.Second), created),
+	}
+	batch, available, err, _ := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+	if err != nil || !available {
+		t.Fatalf("not projected: err=%v available=%v", err, available)
+	}
+	if len(batch.Relationships) != 1 {
+		t.Fatalf("relationships = %d, want 1: the alias and the forward row state one fact", len(batch.Relationships))
+	}
+	if want := workItemDependencyRelationshipID(t, "repo-1", "WI-B", "repo-1", "WI-A", "blocks"); batch.Relationships[0].RelationshipID != want {
+		t.Fatalf("relationship id = %q, want %q", batch.Relationships[0].RelationshipID, want)
 	}
 }

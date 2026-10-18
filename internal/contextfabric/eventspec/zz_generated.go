@@ -32,6 +32,7 @@ var ByID = map[string]Event{
 	"contextfabric.client_synthesis_decision":          ClientSynthesisDecision,
 	"contextfabric.cohort_driver_narration":            CohortDriverNarration,
 	"contextfabric.cohort_kind_fulltext":               CohortKindFulltext,
+	"contextfabric.cohort_narrowing_disclosure":        CohortNarrowingDisclosure,
 	"contextfabric.cohort_ranked":                      CohortRanked,
 	"contextfabric.cohort_structure_gate":              CohortStructureGate,
 	"contextfabric.commit_affirmation_retraction":      CommitAffirmationRetraction,
@@ -65,6 +66,7 @@ var ByID = map[string]Event{
 	"contextfabric.frame_validation":                   FrameValidation,
 	"contextfabric.gated_offer_resolution":             GatedOfferResolution,
 	"contextfabric.graphql_query":                      GraphQLQuery,
+	"contextfabric.grouped_cohort_completeness":        GroupedCohortCompleteness,
 	"contextfabric.interpretation_ensemble_gap":        InterpretationEnsembleGap,
 	"contextfabric.interpretation_ensemble_resolved":   InterpretationEnsembleResolved,
 	"contextfabric.interpreted_time_bound":             InterpretedTimeBound,
@@ -76,6 +78,7 @@ var ByID = map[string]Event{
 	"contextfabric.period_delta_composition":           PeriodDeltaComposition,
 	"contextfabric.plan_carry":                         PlanCarry,
 	"contextfabric.plan_carry_outcome":                 PlanCarryOutcome,
+	"contextfabric.plan_narrowing":                     PlanNarrowing,
 	"contextfabric.prior_consulted":                    PriorConsulted,
 	"contextfabric.prior_degradation":                  PriorDegradation,
 	"contextfabric.prior_degradation_pointer_dangling": PriorDegradationPointerDangling,
@@ -1179,6 +1182,65 @@ func (f CohortKindFulltextFields) SlogArgs() []any {
 		"duplicates_with_general", f.DuplicatesWithGeneral,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// CohortNarrowingDisclosureFields is contextfabric.cohort_narrowing_disclosure's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CohortNarrowingDisclosure.Fields declares in spec.go.
+type CohortNarrowingDisclosureFields struct {
+	OrgID      string
+	Family     string
+	MemberKind string
+	Outcome    string
+	Declared   int
+	Served     int
+	Steps      int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CohortNarrowingDisclosureFields uniformly, set ONLY by NewCohortNarrowingDisclosureFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCohortNarrowingDisclosureFields is the generated constructor for CohortNarrowingDisclosureFields -- every
+// field CohortNarrowingDisclosure.Fields declares is a required parameter.
+func NewCohortNarrowingDisclosureFields(orgID string, family string, memberKind string, outcome string, declared int, served int, steps int) CohortNarrowingDisclosureFields {
+	return CohortNarrowingDisclosureFields{
+		OrgID:       orgID,
+		Family:      family,
+		MemberKind:  memberKind,
+		Outcome:     outcome,
+		Declared:    declared,
+		Served:      served,
+		Steps:       steps,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCohortNarrowingDisclosureFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CohortNarrowingDisclosureFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CohortNarrowingDisclosure's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CohortNarrowingDisclosureFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"declared", f.Declared,
+		"served", f.Served,
+		"steps", f.Steps,
 	}
 }
 
@@ -4153,6 +4215,68 @@ func (f GraphQLQueryFields) SlogArgs() []any {
 	}
 }
 
+// GroupedCohortCompletenessFields is contextfabric.grouped_cohort_completeness's generated typed construction interface
+// (CHAOS-5516): one Go field per Field GroupedCohortCompleteness.Fields declares in spec.go.
+type GroupedCohortCompletenessFields struct {
+	OrgID                  string
+	Family                 string
+	PreGroupingComplete    bool
+	PreGroupingTruncated   bool
+	GroupCount             int
+	GroupsMarkedIncomplete int
+	Complete               bool
+	Truncated              bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every GroupedCohortCompletenessFields uniformly, set ONLY by NewGroupedCohortCompletenessFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewGroupedCohortCompletenessFields is the generated constructor for GroupedCohortCompletenessFields -- every
+// field GroupedCohortCompleteness.Fields declares is a required parameter.
+func NewGroupedCohortCompletenessFields(orgID string, family string, preGroupingComplete bool, preGroupingTruncated bool, groupCount int, groupsMarkedIncomplete int, complete bool, truncated bool) GroupedCohortCompletenessFields {
+	return GroupedCohortCompletenessFields{
+		OrgID:                  orgID,
+		Family:                 family,
+		PreGroupingComplete:    preGroupingComplete,
+		PreGroupingTruncated:   preGroupingTruncated,
+		GroupCount:             groupCount,
+		GroupsMarkedIncomplete: groupsMarkedIncomplete,
+		Complete:               complete,
+		Truncated:              truncated,
+		constructed:            true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewGroupedCohortCompletenessFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f GroupedCohortCompletenessFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns GroupedCohortCompleteness's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f GroupedCohortCompletenessFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"pre_grouping_complete", f.PreGroupingComplete,
+		"pre_grouping_truncated", f.PreGroupingTruncated,
+		"group_count", f.GroupCount,
+		"groups_marked_incomplete", f.GroupsMarkedIncomplete,
+		"complete", f.Complete,
+		"truncated", f.Truncated,
+	}
+}
+
 // InterpretationEnsembleGapFields is contextfabric.interpretation_ensemble_gap's generated typed construction interface
 // (CHAOS-5516): one Go field per Field InterpretationEnsembleGap.Fields declares in spec.go.
 type InterpretationEnsembleGapFields struct {
@@ -4852,6 +4976,173 @@ func (f PlanCarryOutcomeFields) SlogArgs() []any {
 		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// PlanNarrowingFields is contextfabric.plan_narrowing's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanNarrowing.Fields declares in spec.go.
+type PlanNarrowingFields struct {
+	OrgID                    string
+	Family                   string
+	FamilyVersion            string
+	Stage                    string
+	Basis                    string
+	BasisObserved            bool
+	Before                   int
+	After                    int
+	Groups                   bool
+	Overrun                  string
+	MeasuredItems            int
+	PredictedItems           int
+	AttributionGlobal        int
+	AttributionMember        int
+	AttributionGroup         int
+	AttributionMultiGroup    int
+	MeasuredBytes            int
+	MaxItems                 int
+	MaxSerializedBytes       int
+	RetryAttempted           bool
+	RetryFit                 bool
+	RetryFailed              bool
+	RefusalPlanned           bool
+	FactsOnlyAttempted       bool
+	FactsOnlyServed          bool
+	FactsOnlyDeclined        string
+	DeadlineReserved         bool
+	RetryDeclined            string
+	NarrowerContinuationAxis string
+	OutcomeReductionApplied  bool
+	OutcomeReductionInnerFit bool
+	OutcomeItemsServed       int
+	OutcomeItemsDeclared     int
+	OutcomeCompletenessState string
+	OutcomeReductionDeclined string
+	LedgerStatus             string
+	QuotaAvailability        string
+	QuotaGroupAllowance      int
+	QuotaGroupsGranted       int
+	QuotaGroupsMeasured      int
+	QuotaGroupsOverAllowance int
+	EvidencePinnedMembers    int
+	CeilingFit               string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanNarrowingFields uniformly, set ONLY by NewPlanNarrowingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanNarrowingFields is the generated constructor for PlanNarrowingFields -- every
+// field PlanNarrowing.Fields declares is a required parameter.
+func NewPlanNarrowingFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string) PlanNarrowingFields {
+	return PlanNarrowingFields{
+		OrgID:                    orgID,
+		Family:                   family,
+		FamilyVersion:            familyVersion,
+		Stage:                    stage,
+		Basis:                    basis,
+		BasisObserved:            basisObserved,
+		Before:                   before,
+		After:                    after,
+		Groups:                   groups,
+		Overrun:                  overrun,
+		MeasuredItems:            measuredItems,
+		PredictedItems:           predictedItems,
+		AttributionGlobal:        attributionGlobal,
+		AttributionMember:        attributionMember,
+		AttributionGroup:         attributionGroup,
+		AttributionMultiGroup:    attributionMultiGroup,
+		MeasuredBytes:            measuredBytes,
+		MaxItems:                 maxItems,
+		MaxSerializedBytes:       maxSerializedBytes,
+		RetryAttempted:           retryAttempted,
+		RetryFit:                 retryFit,
+		RetryFailed:              retryFailed,
+		RefusalPlanned:           refusalPlanned,
+		FactsOnlyAttempted:       factsOnlyAttempted,
+		FactsOnlyServed:          factsOnlyServed,
+		FactsOnlyDeclined:        factsOnlyDeclined,
+		DeadlineReserved:         deadlineReserved,
+		RetryDeclined:            retryDeclined,
+		NarrowerContinuationAxis: narrowerContinuationAxis,
+		OutcomeReductionApplied:  outcomeReductionApplied,
+		OutcomeReductionInnerFit: outcomeReductionInnerFit,
+		OutcomeItemsServed:       outcomeItemsServed,
+		OutcomeItemsDeclared:     outcomeItemsDeclared,
+		OutcomeCompletenessState: outcomeCompletenessState,
+		OutcomeReductionDeclined: outcomeReductionDeclined,
+		LedgerStatus:             ledgerStatus,
+		QuotaAvailability:        quotaAvailability,
+		QuotaGroupAllowance:      quotaGroupAllowance,
+		QuotaGroupsGranted:       quotaGroupsGranted,
+		QuotaGroupsMeasured:      quotaGroupsMeasured,
+		QuotaGroupsOverAllowance: quotaGroupsOverAllowance,
+		EvidencePinnedMembers:    evidencePinnedMembers,
+		CeilingFit:               ceilingFit,
+		constructed:              true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanNarrowingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanNarrowingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanNarrowing's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanNarrowingFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"family_version", contextfabric.SanitizeLogAttr(f.FamilyVersion),
+		"stage", contextfabric.SanitizeLogAttr(f.Stage),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"basis_observed", f.BasisObserved,
+		"before", f.Before,
+		"after", f.After,
+		"groups", f.Groups,
+		"overrun", contextfabric.SanitizeLogAttr(f.Overrun),
+		"measured_items", f.MeasuredItems,
+		"predicted_items", f.PredictedItems,
+		"attribution_global", f.AttributionGlobal,
+		"attribution_member", f.AttributionMember,
+		"attribution_group", f.AttributionGroup,
+		"attribution_multi_group", f.AttributionMultiGroup,
+		"measured_bytes", f.MeasuredBytes,
+		"max_items", f.MaxItems,
+		"max_serialized_bytes", f.MaxSerializedBytes,
+		"retry_attempted", f.RetryAttempted,
+		"retry_fit", f.RetryFit,
+		"retry_failed", f.RetryFailed,
+		"refusal_planned", f.RefusalPlanned,
+		"facts_only_attempted", f.FactsOnlyAttempted,
+		"facts_only_served", f.FactsOnlyServed,
+		"facts_only_declined", contextfabric.SanitizeLogAttr(f.FactsOnlyDeclined),
+		"deadline_reserved", f.DeadlineReserved,
+		"retry_declined", contextfabric.SanitizeLogAttr(f.RetryDeclined),
+		"narrower_continuation_axis", contextfabric.SanitizeLogAttr(f.NarrowerContinuationAxis),
+		"outcome_reduction_applied", f.OutcomeReductionApplied,
+		"outcome_reduction_inner_fit", f.OutcomeReductionInnerFit,
+		"outcome_items_served", f.OutcomeItemsServed,
+		"outcome_items_declared", f.OutcomeItemsDeclared,
+		"outcome_completeness_state", contextfabric.SanitizeLogAttr(f.OutcomeCompletenessState),
+		"outcome_reduction_declined", contextfabric.SanitizeLogAttr(f.OutcomeReductionDeclined),
+		"ledger_status", contextfabric.SanitizeLogAttr(f.LedgerStatus),
+		"quota_availability", contextfabric.SanitizeLogAttr(f.QuotaAvailability),
+		"quota_group_allowance", f.QuotaGroupAllowance,
+		"quota_groups_granted", f.QuotaGroupsGranted,
+		"quota_groups_measured", f.QuotaGroupsMeasured,
+		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
+		"evidence_pinned_members", f.EvidencePinnedMembers,
+		"ceiling_fit", contextfabric.SanitizeLogAttr(f.CeilingFit),
 	}
 }
 
@@ -6928,7 +7219,6 @@ type SynthesisRetrySelectionFields struct {
 	QuotaGroupsOverAllowance int
 	EvidencePinnedMembers    int
 	CeilingFit               string
-	RequestID                string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every SynthesisRetrySelectionFields uniformly, set ONLY by NewSynthesisRetrySelectionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6942,7 +7232,7 @@ type SynthesisRetrySelectionFields struct {
 
 // NewSynthesisRetrySelectionFields is the generated constructor for SynthesisRetrySelectionFields -- every
 // field SynthesisRetrySelection.Fields declares is a required parameter.
-func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string, requestID string) SynthesisRetrySelectionFields {
+func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string) SynthesisRetrySelectionFields {
 	return SynthesisRetrySelectionFields{
 		OrgID:                    orgID,
 		Family:                   family,
@@ -6987,7 +7277,6 @@ func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion
 		QuotaGroupsOverAllowance: quotaGroupsOverAllowance,
 		EvidencePinnedMembers:    evidencePinnedMembers,
 		CeilingFit:               ceilingFit,
-		RequestID:                requestID,
 		constructed:              true,
 	}
 }
@@ -7048,7 +7337,6 @@ func (f SynthesisRetrySelectionFields) SlogArgs() []any {
 		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
 		"evidence_pinned_members", f.EvidencePinnedMembers,
 		"ceiling_fit", contextfabric.SanitizeLogAttr(f.CeilingFit),
-		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
