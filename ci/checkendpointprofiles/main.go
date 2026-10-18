@@ -1368,6 +1368,7 @@ type chainPkg struct {
 	consts  map[string]ast.Expr
 	structs map[string]*ast.StructType
 	ifaces  map[string]*ast.InterfaceType
+	aliases map[string]ast.Expr // type A = T
 }
 
 func importPathOf(f *ast.File, alias string) string {
@@ -1403,7 +1404,7 @@ func loadChainPkg(root, importPath string) (*chainPkg, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &chainPkg{path: importPath, fset: token.NewFileSet(), funcs: map[string]chainFunc{}, methods: map[string]chainFunc{}, consts: map[string]ast.Expr{}, structs: map[string]*ast.StructType{}, ifaces: map[string]*ast.InterfaceType{}}
+	p := &chainPkg{path: importPath, fset: token.NewFileSet(), funcs: map[string]chainFunc{}, methods: map[string]chainFunc{}, consts: map[string]ast.Expr{}, structs: map[string]*ast.StructType{}, ifaces: map[string]*ast.InterfaceType{}, aliases: map[string]ast.Expr{}}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
@@ -1439,6 +1440,9 @@ func loadChainPkg(root, importPath string) (*chainPkg, error) {
 						}
 						if it, ok := s.Type.(*ast.InterfaceType); ok {
 							p.ifaces[s.Name.Name] = it
+						}
+						if s.Assign.IsValid() {
+							p.aliases[s.Name.Name] = s.Type
 						}
 					}
 				}
@@ -1498,35 +1502,42 @@ type chainCtx struct {
 	recv   string
 	params map[string]ast.Expr
 	env    map[string]string
-	locals map[string]ast.Expr // name := expr in the body; a name assigned twice is dropped
+	depth  *int
+	locals map[string][]ast.Expr // every expression assigned to a name in the body (:=, =, var)
 }
 
 func newChainCtx(fn chainFunc, env map[string]string) chainCtx {
-	c := chainCtx{fn: fn, params: map[string]ast.Expr{}, env: env, locals: map[string]ast.Expr{}}
-	dropped := map[string]bool{}
+	c := chainCtx{fn: fn, params: map[string]ast.Expr{}, env: env, locals: map[string][]ast.Expr{}, depth: new(int)}
 	if fn.decl.Body != nil {
 		ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
-			if lit, ok := n.(*ast.FuncLit); ok && lit.Type.Params != nil {
-				for _, f := range lit.Type.Params.List {
-					for _, nm := range f.Names {
-						if _, have := c.params[nm.Name]; !have {
-							c.params[nm.Name] = f.Type
+			switch n := n.(type) {
+			case *ast.FuncLit:
+				if n.Type.Params != nil {
+					for _, f := range n.Type.Params.List {
+						for _, nm := range f.Names {
+							if _, have := c.params[nm.Name]; !have {
+								c.params[nm.Name] = f.Type
+							}
 						}
 					}
 				}
-			}
-			as, ok := n.(*ast.AssignStmt)
-			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != len(as.Rhs) {
-				return true
-			}
-			for i, l := range as.Lhs {
-				if id, ok := l.(*ast.Ident); ok {
-					if _, seen := c.locals[id.Name]; seen || dropped[id.Name] {
-						delete(c.locals, id.Name)
-						dropped[id.Name] = true
-						continue
+			case *ast.AssignStmt:
+				if (n.Tok == token.DEFINE || n.Tok == token.ASSIGN) && len(n.Lhs) == len(n.Rhs) {
+					for i, l := range n.Lhs {
+						if id, ok := l.(*ast.Ident); ok {
+							c.locals[id.Name] = append(c.locals[id.Name], n.Rhs[i])
+						}
 					}
-					c.locals[id.Name] = as.Rhs[i]
+				}
+			case *ast.ValueSpec:
+				for i, nm := range n.Names {
+					if i < len(n.Values) {
+						c.locals[nm.Name] = append(c.locals[nm.Name], n.Values[i])
+					} else if n.Type != nil {
+						if _, have := c.params[nm.Name]; !have {
+							c.params[nm.Name] = n.Type
+						}
+					}
 				}
 			}
 			return true
@@ -1599,10 +1610,21 @@ func (w *chainWalker) typeOf(c chainCtx, e ast.Expr) (typeRef, bool) {
 		if t, ok := c.params[e.Name]; ok {
 			return w.typeFromExpr(c.fn, t)
 		}
-		if rhs, ok := c.locals[e.Name]; ok {
-			if id, isIdent := rhs.(*ast.Ident); !isIdent || id.Name != e.Name {
-				return w.typeOf(c, rhs)
+		if rhss, ok := c.locals[e.Name]; ok && len(rhss) > 0 && *c.depth < 6 {
+			*c.depth++
+			defer func() { *c.depth-- }()
+			var first typeRef
+			for i, rhs := range rhss {
+				if id, isIdent := rhs.(*ast.Ident); isIdent && id.Name == e.Name {
+					return typeRef{}, false
+				}
+				t, ok := w.typeOf(c, rhs)
+				if !ok || (i > 0 && t != first) {
+					return typeRef{}, false
+				}
+				first = t
 			}
+			return first, true
 		}
 	case *ast.ParenExpr:
 		return w.typeOf(c, e.X)
@@ -1648,11 +1670,18 @@ func (w *chainWalker) fileDeclaring(p *chainPkg, st *ast.StructType) *ast.File {
 }
 
 func (w *chainWalker) typeFromExpr(fn chainFunc, t ast.Expr) (typeRef, bool) {
+	return w.typeFromExprD(fn, t, 0)
+}
+
+func (w *chainWalker) typeFromExprD(fn chainFunc, t ast.Expr, depth int) (typeRef, bool) {
 	if s, ok := t.(*ast.StarExpr); ok {
 		t = s.X
 	}
 	switch t := t.(type) {
 	case *ast.Ident:
+		if target, ok := fn.pkg.aliases[t.Name]; ok && depth < 4 {
+			return w.typeFromExprD(fn, target, depth+1)
+		}
 		return typeRef{fn.pkg.path, t.Name}, true
 	case *ast.SelectorExpr:
 		if id, ok := t.X.(*ast.Ident); ok && fn.file != nil {
@@ -1711,6 +1740,29 @@ func (w *chainWalker) rejecting(m chainFunc, depth int) bool {
 	return found
 }
 
+// promotedGuard resolves a struct that embeds the guard type (directly or via
+// an alias) to the guard type, since its methods are promoted.
+func (w *chainWalker) promotedGuard(t typeRef) typeRef {
+	p := w.pkgFor(t.pkg)
+	if p == nil {
+		return t
+	}
+	st := p.structs[t.name]
+	if st == nil {
+		return t
+	}
+	owner := chainFunc{file: w.fileOf(p, st), pkg: p}
+	for _, f := range st.Fields.List {
+		if len(f.Names) != 0 {
+			continue
+		}
+		if et, ok := w.typeFromExpr(owner, f.Type); ok && et.name == guardTypeName && et.pkg == moduleOf(w.root)+guardPkgSuffix {
+			return et
+		}
+	}
+	return t
+}
+
 // guardCall reports whether call is a guard-primitive call and returns its
 // display form (arguments with the caller's bindings substituted).
 func (w *chainWalker) guardCall(c chainCtx, call *ast.CallExpr) (string, bool) {
@@ -1719,6 +1771,9 @@ func (w *chainWalker) guardCall(c chainCtx, call *ast.CallExpr) (string, bool) {
 		return "", false
 	}
 	t, ok := w.typeOf(c, s.X)
+	if ok {
+		t = w.promotedGuard(t)
+	}
 	if !ok || t.name != guardTypeName || t.pkg != moduleOf(w.root)+guardPkgSuffix {
 		return "", false
 	}
@@ -1861,14 +1916,14 @@ func (w *chainWalker) handlerExpr(c chainCtx, e ast.Expr, strict bool, depth int
 // a net/http HandlerFunc conversion, a func literal, or a call or reference
 // the walk resolves. Anything else (constants, request classes) is data.
 func (w *chainWalker) looksLikeHandlerArg(c chainCtx, call *ast.CallExpr) bool {
+	if w.passesHTTPValue(c, call) {
+		return true
+	}
 	for _, a := range call.Args {
 		switch a := a.(type) {
-		case *ast.FuncLit:
+		case *ast.FuncLit, *ast.IndexExpr:
 			return true
 		case *ast.CallExpr:
-			if w.isNetHTTP(c.fn, a.Fun, "HandlerFunc") {
-				return true
-			}
 			if _, ok := w.resolveCallee(c, a.Fun); ok {
 				return true
 			}
@@ -1968,9 +2023,11 @@ func (w *chainWalker) untypedHandlerCall(c chainCtx, call *ast.CallExpr) (string
 		if _, isFunc := c.fn.pkg.funcs[f.Name]; isFunc {
 			return "", false
 		}
-		if rhs, ok := c.locals[f.Name]; ok {
-			if _, lit := rhs.(*ast.FuncLit); !lit && w.passesHTTPValue(c, call) {
-				return "call of a local function value " + f.Name, true
+		if rhss, ok := c.locals[f.Name]; ok {
+			for _, rhs := range rhss {
+				if _, lit := rhs.(*ast.FuncLit); !lit && w.passesHTTPValue(c, call) {
+					return "call of a local function value " + f.Name, true
+				}
 			}
 			return "", false
 		}
@@ -1990,8 +2047,15 @@ func (w *chainWalker) untypedHandlerCall(c chainCtx, call *ast.CallExpr) (string
 				}
 			}
 		}
-		if _, ok := w.typeOf(c, f.X); !ok {
+		t, ok := w.typeOf(c, f.X)
+		if !ok {
 			return "ServeHTTP on a value of unknown type " + w.text(c.fn, f.X, nil), true
+		}
+		if t.pkg == "net/http" {
+			return "", false
+		}
+		if p := w.pkgFor(t.pkg); p == nil || p.methods[t.name+".ServeHTTP"].decl == nil {
+			return "ServeHTTP on " + t.name + ", which has no ServeHTTP declaration the walk can read", true
 		}
 	}
 	return "", false
@@ -2029,8 +2093,14 @@ func (w *chainWalker) funcTypeMentionsHandler(fn chainFunc, ft *ast.FuncType) bo
 			continue
 		}
 		for _, f := range fl.List {
-			if w.isNetHTTP(fn, f.Type, "Handler") {
-				return true
+			t := f.Type
+			if st, ok := t.(*ast.StarExpr); ok {
+				t = st.X
+			}
+			for _, n := range []string{"Handler", "HandlerFunc", "ResponseWriter", "Request"} {
+				if w.isNetHTTP(fn, t, n) {
+					return true
+				}
 			}
 		}
 	}

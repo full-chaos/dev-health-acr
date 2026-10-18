@@ -2687,3 +2687,70 @@ func TestWrapperChainAnUntypedFunctionValueThatTakesNoHTTPValueIsNotAGap(t *test
 		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
 	}
 }
+
+func TestWrapperChainValueShapesNeverHideAGuardOrAGap(t *testing.T) {
+	const decls = `
+type dispatcher interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}
+
+type authAlias = auth.Authenticator
+
+type embedder struct{ *auth.Authenticator }
+
+var table = []func(http.ResponseWriter, *http.Request){}
+
+func (a *App) viaDispatcher(d dispatcher) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { d.ServeHTTP(w, r) })
+}
+
+func (a *App) viaVarFunc() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var dispatch func(http.ResponseWriter, *http.Request)
+		dispatch = healthzHandler
+		dispatch(w, r)
+	})
+}
+
+func (a *App) viaVarAlias() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var g = a.authenticator
+		g.RequireScope("x", nil)
+	})
+}
+
+func (a *App) logLine(next http.Handler) http.Handler { return next }
+
+func (a *App) outer(next http.Handler) http.Handler { return a.logLine(foreign.Wrap(next)) }
+
+func (a *App) callWith(cb func(http.ResponseWriter, *http.Request)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { cb(w, r) })
+}
+
+func (a *App) viaAlias(g *authAlias, next http.Handler) http.Handler { return g.Middleware(next) }
+
+func (a *App) viaEmbed(e *embedder, next http.Handler) http.Handler { return e.Middleware(next) }
+`
+	for _, tc := range []struct {
+		name, route, handler, want, kind string
+	}{
+		{"interface ServeHTTP", "/ifs", `a.viaDispatcher(nil)`, "ServeHTTP on dispatcher", "gap"},
+		{"var-declared function value", "/vfn", `a.viaVarFunc()`, "call of a local function value dispatch", "gap"},
+		{"var-bound guard alias", "/val", `a.viaVarAlias()`, "Authenticator.RequireScope", "guard"},
+		{"opaque wrapper nested in a wrapper argument", "/opq", `a.outer(http.HandlerFunc(healthzHandler))`, "unresolved callee foreign.Wrap", "gap"},
+		{"indexed callback through a wrapper", "/idx", `a.callWith(table[0])`, "call of a handler-typed function parameter cb", "gap"},
+		{"type alias of the guard", "/als", `a.viaAlias(a.authenticator, http.HandlerFunc(healthzHandler))`, "Authenticator.Middleware", "guard"},
+		{"embedded guard", "/emb", `a.viaEmbed(nil, http.HandlerFunc(healthzHandler))`, "Authenticator.Middleware", "guard"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := "\tmux.Handle(\"POST " + tc.route + "\", " + tc.handler + ")\n"
+			pub := extraRow("POST "+tc.route, "POST", tc.route, nil)
+			f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), pub)
+			if tc.kind == "gap" {
+				mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+			} else {
+				mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+			}
+		})
+	}
+}

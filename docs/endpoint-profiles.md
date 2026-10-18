@@ -320,8 +320,11 @@ registration; a missing `go.mod` or a guard package that cannot be parsed. A
 found guard does not settle a gap: the guard says nothing about the path the
 walk did not read, so a protected row with any gap needs the hatch. The guard
 type is trusted only at the exact module-relative `internal/auth` import path.
-Local variables are followed only when assigned from a typed expression in the
-same function (`g := a.authenticator`). A value the walk cannot type in a
+Local variables (`:=`, `=`, `var`) are followed only when every expression
+assigned to the name has the same resolvable type; a name assigned values of
+differing or unresolvable types is untyped, and a guard called through it is
+not seen. Type aliases of the guard type, and structs that embed it, are
+resolved. A value the walk cannot type in a
 handler or wrapper position is a gap too: `ServeHTTP` on a receiver of unknown
 type, a call of a function value (index element, call result, local variable)
 or of a handler-typed function parameter, when the call hands a `net/http`
@@ -349,9 +352,9 @@ gate):
   `POST /api/v1/context-fabric/investigations`,
   `GET /api/v1/context-fabric/investigations/{result_id}`): removing the call to either from
   the code that dispatches through it leaves the declaration. The wrapper-chain
-  reconciliation above fails a protected row whose route's lexical chain no
-  longer contains a guard call, so the shared-definition anchor is no longer the
-  only evidence. It still does not prove control flow reaches the guard.
+  reconciliation above checks only that an `Authenticator` guard call sits in the
+  route's lexical chain. It does not bind the route to `protectedRuntimeHandler`
+  or `authenticateWebAssertion`, and does not prove that either is reached.
 - A route's own-call marker (`a.protectedRuntimeHandler(...)` in its handler
   builder) is located in the file, not bound to the route's handler builder: the
   route fails if that call is removed or renamed, but moving the call to another
