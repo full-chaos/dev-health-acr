@@ -12,6 +12,12 @@
 //	mergetestreports failures   -dir D -expect N [-summary FILE] [-report FILE]
 //	mergetestreports crosscheck -dir D -expect N -junit ... -cover ... -cobertura ... -failures FILE
 //
+// Every command also takes -absent '[{"shard":N},...]': the unit legs the plan
+// job excluded from the matrix on a pull request (the same JSON the matrix's
+// `exclude:` reads). The merge then requires exactly the shards 1..N minus
+// those, and refuses an artifact from an absent shard as firmly as a missing
+// one from a present shard. An empty value or [] means every shard.
+//
 // `coverage` concatenates the profiles under ONE `mode:` header, merging any
 // block that appears in more than one shard (max for `set`, sum for `count`
 // and `atomic`, the same rule gocovmerge applies). Conversion to Cobertura is
@@ -92,14 +98,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	cmd, rest := args[0], args[1:]
 	var (
-		dir, out, summary, report string
-		expect                    int
-		cc                        crosscheckInputs
+		dir, out, summary, report, absent string
+		expect                            int
+		cc                                crosscheckInputs
 	)
 	fs := flag.NewFlagSet("mergetestreports "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&dir, "dir", "", "directory holding one "+shardArtifactPrefix+"<i> subdirectory per shard")
 	fs.IntVar(&expect, "expect", 0, "number of shards the unit matrix has; the merge refuses any other count")
+	fs.StringVar(&absent, "absent", "", `JSON list of {"shard":N} matrix legs the plan job excluded; empty or [] means none`)
 	switch cmd {
 	case "coverage", "junit":
 		fs.StringVar(&out, "out", "", "merged report to write")
@@ -124,17 +131,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "mergetestreports %s: -dir and -expect (>=1) are required, and so is every output flag the command reads (-out; or -junit -cover -cobertura -failures)\n", cmd)
 		return 2
 	}
+	set, err := newShardSet(expect, absent)
+	if err != nil {
+		fmt.Fprintf(stderr, "mergetestreports %s: %v\n", cmd, err)
+		return 2
+	}
 
-	var err error
 	switch cmd {
 	case "coverage":
-		err = runCoverage(dir, expect, out, stdout)
+		err = runCoverage(dir, set, out, stdout)
 	case "junit":
-		err = runJUnit(dir, expect, out, stdout)
+		err = runJUnit(dir, set, out, stdout)
 	case "failures":
-		err = runFailures(dir, expect, summary, report, stdout)
+		err = runFailures(dir, set, summary, report, stdout)
 	case "crosscheck":
-		cc.dir, cc.expect = dir, expect
+		cc.dir, cc.set = dir, set
 		err = runCrosscheck(cc, stdout)
 	}
 	if err != nil {
@@ -144,13 +155,71 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// shardSet is the set of unit shards a merge reads: 1..expect minus the legs
+// the plan job excluded from the matrix.
+type shardSet struct {
+	expect int
+	absent map[int]bool
+}
+
+// newShardSet parses -absent. It fails closed: a value that is not a JSON list
+// of {"shard":N} objects, an index outside 1..expect, an index named twice, or
+// a list that leaves no shard present is an error, never a guess.
+func newShardSet(expect int, absentJSON string) (shardSet, error) {
+	set := shardSet{expect: expect, absent: map[int]bool{}}
+	if strings.TrimSpace(absentJSON) == "" {
+		return set, nil
+	}
+	var legs []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(absentJSON), &legs); err != nil {
+		return set, fmt.Errorf(`-absent %q is not a JSON list of {"shard":N} objects: %w`, absentJSON, err)
+	}
+	for _, leg := range legs {
+		raw, ok := leg["shard"]
+		var n int
+		if !ok || len(leg) != 1 || json.Unmarshal(raw, &n) != nil {
+			return set, fmt.Errorf(`-absent %q: every entry must be exactly {"shard":N}`, absentJSON)
+		}
+		if n < 1 || n > expect {
+			return set, fmt.Errorf("-absent names shard %d, outside the unit matrix 1..%d", n, expect)
+		}
+		if set.absent[n] {
+			return set, fmt.Errorf("-absent names shard %d twice", n)
+		}
+		set.absent[n] = true
+	}
+	if len(set.absent) == expect {
+		return set, fmt.Errorf("-absent names every shard 1..%d: there is nothing to merge, so the merge steps must not run", expect)
+	}
+	return set, nil
+}
+
+// present lists, in order, the shard indices the merge reads.
+func (s shardSet) present() []int {
+	out := make([]int, 0, s.expect)
+	for i := 1; i <= s.expect; i++ {
+		if !s.absent[i] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // shardFiles returns, in shard order, the path of file `name` inside each of
 // the expect shard directories. It fails unless the directory holds exactly the
 // shards 1..expect and every one of them has a non-empty `name`.
 func shardFiles(dir string, expect int, name string) ([]string, error) {
+	paths, _, err := shardFilesIn(dir, shardSet{expect: expect}, name)
+	return paths, err
+}
+
+// shardFilesIn is shardFiles over a shardSet: it also returns the shard index
+// of each path, and refuses a directory for a shard the set marks absent.
+func shardFilesIn(dir string, set shardSet, name string) ([]string, []int, error) {
+	expect := set.expect
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read shard directory: %w", err)
+		return nil, nil, fmt.Errorf("read shard directory: %w", err)
 	}
 	seen := map[int]bool{}
 	for _, e := range entries {
@@ -162,29 +231,34 @@ func shardFiles(dir string, expect int, name string) ([]string, error) {
 		// strconv.Itoa(idx) != suffix rejects 01 (and +1): two artifacts must
 		// never map to one shard index, or one of them is silently ignored.
 		if convErr != nil || idx < 1 || idx > expect || strconv.Itoa(idx) != suffix {
-			return nil, fmt.Errorf("unexpected shard directory %q in %s: the unit matrix has %d shard(s), so only %s1..%s%d may exist, spelt as a plain decimal "+
+			return nil, nil, fmt.Errorf("unexpected shard directory %q in %s: the unit matrix has %d shard(s), so only %s1..%s%d may exist, spelt as a plain decimal "+
 				"(the matrix grew or shrank without the reports job's -expect following it, or two artifacts name one shard)",
 				e.Name(), dir, expect, shardArtifactPrefix, shardArtifactPrefix, expect)
 		}
+		if set.absent[idx] {
+			return nil, nil, fmt.Errorf("shard directory %q in %s belongs to a shard the plan job excluded (-absent): an excluded leg uploaded reports, so the plan and the matrix disagree",
+				e.Name(), dir)
+		}
 		seen[idx] = true
 	}
-	paths := make([]string, 0, expect)
-	for i := 1; i <= expect; i++ {
+	present := set.present()
+	paths := make([]string, 0, len(present))
+	for _, i := range present {
 		if !seen[i] {
-			return nil, fmt.Errorf("shard %d of %d is missing: no %s%d directory in %s -- its unit job did not upload, so any merge would silently omit that shard's share of the suite",
+			return nil, nil, fmt.Errorf("shard %d of %d is missing: no %s%d directory in %s -- its unit job did not upload, so any merge would silently omit that shard's share of the suite",
 				i, expect, shardArtifactPrefix, i, dir)
 		}
 		p := filepath.Join(dir, shardArtifactPrefix+strconv.Itoa(i), name)
 		info, statErr := os.Stat(p)
 		if statErr != nil {
-			return nil, fmt.Errorf("shard %d of %d has no %s: %w", i, expect, name, statErr)
+			return nil, nil, fmt.Errorf("shard %d of %d has no %s: %w", i, expect, name, statErr)
 		}
 		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return nil, fmt.Errorf("shard %d of %d: %s is empty or not a regular file", i, expect, p)
+			return nil, nil, fmt.Errorf("shard %d of %d: %s is empty or not a regular file", i, expect, p)
 		}
 		paths = append(paths, p)
 	}
-	return paths, nil
+	return paths, present, nil
 }
 
 func readAll(paths []string) ([][]byte, error) {
@@ -224,8 +298,8 @@ type coverageStats struct {
 	mode                        string
 }
 
-func runCoverage(dir string, expect int, out string, stdout io.Writer) error {
-	paths, err := shardFiles(dir, expect, "cover.out")
+func runCoverage(dir string, set shardSet, out string, stdout io.Writer) error {
+	paths, _, err := shardFilesIn(dir, set, "cover.out")
 	if err != nil {
 		return err
 	}
@@ -365,8 +439,8 @@ type junitStats struct {
 	time                             float64
 }
 
-func runJUnit(dir string, expect int, out string, stdout io.Writer) error {
-	paths, err := shardFiles(dir, expect, "junit.xml")
+func runJUnit(dir string, set shardSet, out string, stdout io.Writer) error {
+	paths, _, err := shardFilesIn(dir, set, "junit.xml")
 	if err != nil {
 		return err
 	}
@@ -717,8 +791,8 @@ type shardEvents struct {
 	Failed int `json:"failed"`
 }
 
-func runFailures(dir string, expect int, summary, report string, stdout io.Writer) error {
-	paths, err := shardFiles(dir, expect, "go-test.json")
+func runFailures(dir string, set shardSet, summary, report string, stdout io.Writer) error {
+	paths, idx, err := shardFilesIn(dir, set, "go-test.json")
 	if err != nil {
 		return err
 	}
@@ -726,7 +800,7 @@ func runFailures(dir string, expect int, summary, report string, stdout io.Write
 	if err != nil {
 		return err
 	}
-	rep, err := collectFailures(raws)
+	rep, err := collectFailuresOf(raws, idx)
 	if err != nil {
 		return err
 	}
@@ -772,10 +846,20 @@ func runFailures(dir string, expect int, summary, report string, stdout io.Write
 // testActions is an error, not a note -- the one line that would have said which
 // test failed could be exactly the one that is mangled or new.
 func collectFailures(streams [][]byte) (failureReport, error) {
+	idx := make([]int, len(streams))
+	for i := range idx {
+		idx[i] = i + 1
+	}
+	return collectFailuresOf(streams, idx)
+}
+
+// collectFailuresOf is collectFailures with each stream's real shard index, so
+// a listing over a matrix with excluded legs names the shard that failed.
+func collectFailuresOf(streams [][]byte, idx []int) (failureReport, error) {
 	rep := failureReport{}
 	byKey := map[failKey]*failureEntry{}
 	for i, raw := range streams {
-		shard := i + 1
+		shard := idx[i]
 		se := shardEvents{Shard: shard}
 		seen := map[failKey]bool{}
 		r := bufio.NewReaderSize(bytes.NewReader(raw), 1<<20)
@@ -850,7 +934,7 @@ func joinInts(v []int) string {
 // crosscheckInputs names the merged outputs the reports job produced.
 type crosscheckInputs struct {
 	dir                               string
-	expect                            int
+	set                               shardSet
 	junit, cover, cobertura, failures string
 }
 
@@ -1213,7 +1297,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	// JUnit: element counts, counted independently of the merge, must be the
 	// same in the merged file as across the shards, and the merged root must
 	// state the shards' totals.
-	jPaths, err := shardFiles(in.dir, in.expect, "junit.xml")
+	jPaths, jIdx, err := shardFilesIn(in.dir, in.set, "junit.xml")
 	if err != nil {
 		return err
 	}
@@ -1227,7 +1311,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 		s, sErr := countElements(raw, "testsuite")
 		doc, pErr := parseJUnit(raw)
 		if err := errors.Join(cErr, sErr, pErr); err != nil {
-			return fmt.Errorf("shard %d junit.xml: %w", i+1, err)
+			return fmt.Errorf("shard %d junit.xml: %w", jIdx[i], err)
 		}
 		wantCases += c
 		wantSuites += s
@@ -1245,10 +1329,10 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 		return fmt.Errorf("merged junit %s: %w", in.junit, err)
 	}
 	if gotCases != wantCases {
-		bad("merged junit has %d testcase(s), the %d shards have %d", gotCases, in.expect, wantCases)
+		bad("merged junit has %d testcase(s), the %d shards have %d", gotCases, len(jPaths), wantCases)
 	}
 	if gotSuites != wantSuites {
-		bad("merged junit has %d suite(s), the %d shards have %d", gotSuites, in.expect, wantSuites)
+		bad("merged junit has %d suite(s), the %d shards have %d", gotSuites, len(jPaths), wantSuites)
 	}
 	if mDoc.rootCounts["tests"] != wantTests {
 		bad("merged junit root says tests=%d but the shards state %d", mDoc.rootCounts["tests"], wantTests)
@@ -1258,7 +1342,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	}
 
 	// Failures: raw go-test.json of every shard == merged JUnit == the listing.
-	tPaths, err := shardFiles(in.dir, in.expect, "go-test.json")
+	tPaths, tIdx, err := shardFilesIn(in.dir, in.set, "go-test.json")
 	if err != nil {
 		return err
 	}
@@ -1268,7 +1352,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	}
 	var rawPairs [][2]string
 	for i, raw := range tRaws {
-		p, rErr := rawFailedPairs(raw, i+1)
+		p, rErr := rawFailedPairs(raw, tIdx[i])
 		if rErr != nil {
 			return rErr
 		}
@@ -1299,8 +1383,13 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	if a, b := diffSets(fromRaw, fromJUnit); len(a)+len(b) > 0 {
 		bad("the merged JUnit differs from the raw go-test.json of the shards: failed only in go-test.json %v, only in the JUnit %v", head(a), head(b))
 	}
-	if rep.Shards != in.expect || len(rep.PerShard) != in.expect {
-		bad("the failure listing read %d shard(s) (%d entries), want %d", rep.Shards, len(rep.PerShard), in.expect)
+	if rep.Shards != len(tPaths) || len(rep.PerShard) != len(tPaths) {
+		bad("the failure listing read %d shard(s) (%d entries), want %d", rep.Shards, len(rep.PerShard), len(tPaths))
+	}
+	for i, s := range rep.PerShard {
+		if i < len(tIdx) && s.Shard != tIdx[i] {
+			bad("the failure listing's entry %d is shard %d, want shard %d", i+1, s.Shard, tIdx[i])
+		}
 	}
 	for _, s := range rep.PerShard {
 		if s.Events < 1 {
@@ -1310,7 +1399,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 
 	// Coverage: the merged profile must be exactly what merging the shards now
 	// gives, and the Cobertura built from it must state some covered code.
-	cPaths, err := shardFiles(in.dir, in.expect, "cover.out")
+	cPaths, _, err := shardFilesIn(in.dir, in.set, "cover.out")
 	if err != nil {
 		return err
 	}
@@ -1327,7 +1416,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 		return fmt.Errorf("merged coverage profile %s was not produced: %w", in.cover, err)
 	}
 	if !bytes.Equal(mergedC, fresh) {
-		bad("merged coverage profile %s is not the merge of the %d shards' profiles", in.cover, in.expect)
+		bad("merged coverage profile %s is not the merge of the %d shards' profiles", in.cover, len(cPaths))
 	}
 	cob, err := os.ReadFile(in.cobertura)
 	if err != nil {
@@ -1348,7 +1437,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 		return fmt.Errorf("the merged reports do not match the shards:\n  - %s", strings.Join(problems, "\n  - "))
 	}
 	fmt.Fprintf(stdout, "crosscheck OK: %d shards, %d testcases in %d suites, %d failure element(s), %d failed test(s)/package(s) agreed by go-test.json, JUnit and the listing, coverage %d/%d lines (its own <line> elements and the merged profile agree), failure listing read %d shards\n",
-		in.expect, wantCases, wantSuites, wantFailElems, len(fromRaw), cDoc.covered, cDoc.valid, rep.Shards)
+		len(jPaths), wantCases, wantSuites, wantFailElems, len(fromRaw), cDoc.covered, cDoc.valid, rep.Shards)
 	return nil
 }
 

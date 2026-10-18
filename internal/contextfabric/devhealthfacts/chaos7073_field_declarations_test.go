@@ -248,6 +248,14 @@ func t4Cases() []t4Case {
 		})},
 	}})
 
+	add(t4Case{name: "readiness/project_past_scan_budget", kind: contextfabric.FactReadiness,
+		subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1"), projectSubject("linear", "proj-late")}, tables: []fakeTable{
+			{match: projectPopulationMarker, rows: [][]any{{"linear:proj-1", int64(1), int64(1)}, {"linear:proj-late", int64(2), int64(2)}}},
+			{match: readinessOriginalQueryMatch, rows: [][]any{
+				readinessProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", "linear", 18, 2, 20, 0.9),
+			}},
+		}})
+
 	// ---- workload
 	add(t4Case{name: "workload/team", kind: contextfabric.FactWorkload, subjects: team, tables: []fakeTable{
 		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "scope-a")}},

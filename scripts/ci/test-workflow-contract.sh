@@ -110,7 +110,12 @@ check_verify_if_always() {
   # spin up on a run that was cancelled/superseded (#414's
   # cancel-in-progress) -- `always()` does not distinguish those two
   # cases, `!cancelled()` does.
-  job_block "$file" verify | grep -Eq "^ {4}if: '!cancelled\(\)'" || {
+  # Captured first, never piped into grep -q: grep -q exits on its first match,
+  # and a writer still flushing then dies of SIGPIPE, which pipefail reports as
+  # a missing condition (seen on hosted runners once this block grew).
+  local block
+  block="$(job_block "$file" verify)"
+  grep -Eq "^ {4}if: '!cancelled\(\)'" <<<"$block" || {
     printf 'verify job is missing "if: '"'"'!cancelled()'"'"'"\n' >&2
     return 1
   }
@@ -762,6 +767,7 @@ check_reports_steps() {
   n="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
   tool='go run ./ci/mergetestreports'
   cancelled="\${{ !cancelled() && needs.unit.result != 'skipped' }}"
+  absent="-absent '\${{ needs.plan.outputs.unit_skip }}'"
 
   # Job level: only these keys, and this exact condition.
   keys="$(grep -oE '^ {4}[a-z-]+:' <<<"$block" | tr -d ' :' || true)"
@@ -797,15 +803,15 @@ check_reports_steps() {
   fi
 
   assert_step "$block" 'Merge JUnit reports' "$cancelled" \
-    "$tool junit -dir .tmp/unit-shards -expect $n -out .tmp/coverage/junit.xml" || status=1
+    "$tool junit -dir .tmp/unit-shards -expect $n -out .tmp/coverage/junit.xml $absent" || status=1
   assert_step "$block" 'Merge coverage profiles and convert to Cobertura once' "$cancelled" \
     "set -euo pipefail
-$tool coverage -dir .tmp/unit-shards -expect $n -out .tmp/coverage/cover.out
+$tool coverage -dir .tmp/unit-shards -expect $n -out .tmp/coverage/cover.out $absent
 make coverage-cobertura" || status=1
   assert_step "$block" "List every shard's failed tests" "$cancelled" \
-    "$tool failures -dir .tmp/unit-shards -expect $n -summary \"\$GITHUB_STEP_SUMMARY\" -report .tmp/coverage/failures.json" || status=1
+    "$tool failures -dir .tmp/unit-shards -expect $n -summary \"\$GITHUB_STEP_SUMMARY\" -report .tmp/coverage/failures.json $absent" || status=1
   assert_step "$block" 'Verify the merged reports against the shards' "$cancelled" \
-    "$tool crosscheck -dir .tmp/unit-shards -expect $n -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json" || status=1
+    "$tool crosscheck -dir .tmp/unit-shards -expect $n -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json $absent" || status=1
   return "$status"
 }
 
@@ -819,7 +825,8 @@ check_heavy_jobs_gated() {
   while IFS= read -r job; do
     case "$light_jobs" in *" $job "*) continue ;; esac
     block="$(job_block "$file" "$job")"
-    if ! grep -qxF "    if: needs.plan.outputs.heavy == 'true'" <<<"$block" \
+    if { ! grep -qxF "    if: needs.plan.outputs.heavy == 'true'" <<<"$block" \
+         && ! grep -qxF "    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), '$job')" <<<"$block"; } \
        || ! list_needs <<<"$block" | grep -qx plan; then
       printf 'heavy job "%s" is not gated on needs.plan.outputs.heavy\n' "$job" >&2
       status=1
@@ -844,6 +851,74 @@ check_verify_reads_plan() {
     printf 'verify skip allowance is not bound to heavy=false\n' >&2; return 1; }
 }
 
+# The reached-shard skips (scripts/ci/reached-shards.sh, run by the plan job).
+# Every link is a bare string no compiler reads, and each way of breaking one
+# leaves a run green while a shard silently runs nowhere -- or runs on main
+# while reading as skipped:
+#   - the plan step not running the selector, or its outputs not wired out.
+#   - the unit/race matrix not excluding exactly the plan's legs, or a job
+#     whose every leg is skipped not turned off by skip_jobs.
+#   - an isolated race job gated on another job's key (or on none).
+#   - verify not reading reach_mode, not binding the allowance to a
+#     pull_request event, or not refusing a named job that ran anyway.
+# The lane check's behaviour is proven by scripts/ci/test-reached-shards.sh,
+# which runs its text from this file; this check keeps the wiring in place.
+check_reach_gating() {
+  local file="$1" block status=0 job key line
+  block="$(job_block "$file" plan)"
+  for key in reach_mode reach_reason skip_jobs unit_skip race_skip; do
+    grep -qxF "      $key: \${{ steps.reach.outputs.$key }}" <<<"$block" || {
+      printf 'plan does not output %s from the reach step\n' "$key" >&2; status=1; }
+  done
+  grep -qxF '        id: reach' <<<"$block" || { printf 'plan has no step with id: reach\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '        run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"' <<<"$block" || {
+    printf 'plan does not run scripts/ci/reached-shards.sh into GITHUB_OUTPUT\n' >&2; status=1; }
+  # shellcheck disable=SC2016 # the literal GitHub expression text
+  grep -qxF '          EVENT: ${{ github.event_name }}' <<<"$block" || {
+    printf 'plan does not hand the selector the run event\n' >&2; status=1; }
+  grep -qF 'fetch-depth: 2' <<<"$block" || {
+    printf 'plan checkout lacks fetch-depth: 2, so the merge commit has no base parent to diff against\n' >&2; status=1; }
+
+  for job in unit race; do
+    block="$(job_block "$file" "$job")"
+    grep -qxF "        exclude: \${{ fromJSON(needs.plan.outputs.${job}_skip) }}" <<<"$block" || {
+      printf '%s matrix does not exclude the plan job'"'"'s %s_skip legs\n' "$job" "$job" >&2; status=1; }
+    list_needs <<<"$block" | grep -qx plan || { printf '%s does not need plan\n' "$job" >&2; status=1; }
+  done
+  grep -qxF "    if: \${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}" <<<"$(job_block "$file" unit)" || {
+    printf 'unit is not turned off when the plan skips every leg\n' >&2; status=1; }
+  grep -qxF "    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race')" <<<"$(job_block "$file" race)" || {
+    printf 'race is not turned off when the plan skips every leg\n' >&2; status=1; }
+
+  while IFS= read -r job; do
+    block="$(job_block "$file" "$job")"
+    grep -qE 'test-shard\.sh[[:space:]]+isolated' <<<"$block" || continue
+    line="    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), '$job')"
+    grep -qxF "$line" <<<"$block" || {
+      printf 'isolated race job "%s" is not gated on its own key in skip_jobs\n' "$job" >&2; status=1; }
+  done < <(list_jobs "$file")
+
+  block="$(job_block "$file" verify)"
+  grep -qF '.plan.outputs.reach_mode // "missing"' <<<"$block" || {
+    printf 'verify does not read plan.outputs.reach_mode\n' >&2; status=1; }
+  # shellcheck disable=SC2016 # the literal GitHub expression text
+  grep -qxF '          EVENT: ${{ github.event_name }}' <<<"$block" || {
+    printf 'verify lane check does not read the run event\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qF 'if [ "$reach" = reached ] && [ "$EVENT" != pull_request ]; then' <<<"$block" || {
+    printf 'verify does not refuse reach_mode=reached outside a pull_request\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qF 'if [ "$declared" = yes ] && [ "$result" != skipped ]; then' <<<"$block" || {
+    printf 'verify does not refuse a job the plan skipped that ran anyway\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qF 'if [ "$declared" = yes ] && [ "$result" = skipped ]; then' <<<"$block" || {
+    printf 'verify has no reached-shard skip allowance\n' >&2; status=1; }
+  grep -qF 'is skipped whole, but %s_skip excludes legs' <<<"$block" || {
+    printf 'verify does not require a whole-matrix skip to exclude every leg\n' >&2; status=1; }
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -865,6 +940,7 @@ run_all_checks() {
   check_testcontainers_needs_mirror_preflight "$file"
   check_heavy_jobs_gated "$file"
   check_verify_reads_plan "$file"
+  check_reach_gating "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -1126,7 +1202,7 @@ cmp -s "$workflow" "$reports_crosscheck_true" && { printf 'NEGATIVE CONTROL SETU
 assert_check_fails 'replaced the crosscheck command with true plus a comment holding the old command' check_reports_steps "$reports_crosscheck_true"
 
 reports_crosscheck_or_true="$tmpdir/reports-crosscheck-or-true.yml"
-sed 's|^\( *run: go run ./ci/mergetestreports crosscheck .*failures.json\)$|\1 \|\| true|' "$workflow" > "$reports_crosscheck_or_true"
+sed 's|^\( *run: go run ./ci/mergetestreports crosscheck .*failures.json.*\)$|\1 \|\| true|' "$workflow" > "$reports_crosscheck_or_true"
 cmp -s "$workflow" "$reports_crosscheck_or_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_or_true did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'appended || true to the crosscheck command' check_reports_steps "$reports_crosscheck_or_true"
 
@@ -1392,6 +1468,44 @@ awk '
 ' "$workflow" > "$dedicated_job_missing_needs"
 assert_check_fails 'dropped race-devhealthfacts'"'"'s needs: mirror-preflight while keeping its TESTCONTAINERS env' \
   check_testcontainers_needs_mirror_preflight "$dedicated_job_missing_needs"
+
+# (x) the reached-shard wiring: each link removed or crossed must fail.
+mutate_reach() { # NAME OLD NEW -> path of a copy with the first OLD replaced
+  local out="$tmpdir/reach-$1.yml"
+  awk -v old="$2" -v new="$3" '!done && index($0, old) { $0 = substr($0, 1, index($0, old) - 1) new substr($0, index($0, old) + length(old)); done=1 } { print }' "$workflow" >"$out"
+  cmp -s "$workflow" "$out" && { printf 'NEGATIVE CONTROL SETUP FAILED: reach mutation %s did not change the workflow\n' "$1" >&2; exit 1; }
+  printf '%s' "$out"
+}
+# shellcheck disable=SC2016
+assert_check_fails 'plan stopped running the selector' check_reach_gating \
+  "$(mutate_reach no-selector 'run: scripts/ci/reached-shards.sh --event "$EVENT"' 'run: true --event "$EVENT"')"
+# shellcheck disable=SC2016 # the literal GitHub expression text
+assert_check_fails 'plan stopped exporting unit_skip' check_reach_gating \
+  "$(mutate_reach no-output 'unit_skip: ${{ steps.reach.outputs.unit_skip }}' 'unit_skip: "[]"')"
+assert_check_fails 'plan checkout lost fetch-depth 2' check_reach_gating \
+  "$(mutate_reach shallow 'fetch-depth: 2' 'fetch-depth: 1')"
+# shellcheck disable=SC2016 # the literal GitHub expression text
+assert_check_fails 'unit matrix excludes the race legs' check_reach_gating \
+  "$(mutate_reach unit-crossed 'exclude: ${{ fromJSON(needs.plan.outputs.unit_skip) }}' 'exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}')"
+# shellcheck disable=SC2016 # the literal GitHub expression text
+assert_check_fails 'race matrix lost its exclude' check_reach_gating \
+  "$(mutate_reach race-no-exclude 'exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}' 'exclude: []')"
+assert_check_fails 'unit no longer turned off by skip_jobs' check_reach_gating \
+  "$(mutate_reach unit-no-if "if: \${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}" "if: \${{ true }}")"
+assert_check_fails 'race-devhealthfacts-heavy gated on race-devhealthfacts'"'"'s key' check_reach_gating \
+  "$(mutate_reach crossed-key "skip_jobs), 'race-devhealthfacts-heavy')" "skip_jobs), 'race-devhealthfacts')")"
+assert_check_fails 'race-factoracle gated on another key fails the heavy gate too' check_heavy_jobs_gated \
+  "$(mutate_reach crossed-heavy "skip_jobs), 'race-factoracle')" "skip_jobs), 'race-factoracle-heavy')")"
+assert_check_fails 'verify stopped reading reach_mode' check_reach_gating \
+  "$(mutate_reach verify-no-reach '.plan.outputs.reach_mode // "missing"' '.plan.outputs.other // "missing"')"
+# shellcheck disable=SC2016
+assert_check_fails 'verify accepts reach_mode=reached on any event' check_reach_gating \
+  "$(mutate_reach verify-any-event 'if [ "$reach" = reached ] && [ "$EVENT" != pull_request ]; then' 'if false; then')"
+assert_check_fails 'verify stopped checking whole-matrix skips against their legs' check_reach_gating \
+  "$(mutate_reach verify-whole 'is skipped whole, but %s_skip excludes legs' 'is skipped whole')"
+# shellcheck disable=SC2016
+assert_check_fails 'verify accepts a skipped job that ran anyway' check_reach_gating \
+  "$(mutate_reach verify-ran 'if [ "$declared" = yes ] && [ "$result" != skipped ]; then' 'if false; then')"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 

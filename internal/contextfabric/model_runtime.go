@@ -508,6 +508,10 @@ type SynthesisDraft struct {
 	// scoresWithheld are the claims of a declared score the draft carried without its drivers table; vetSynthesisDraft
 	// removes them (decision K7). Bookkeeping for the disclosure.
 	scoresWithheld []withheldScore
+	// ungroundedDropped counts the claims, drivers and findings DropUngroundedSynthesisItems left out; composeSynthesisResult
+	// discloses it.
+	ungroundedDropped int
+	ungroundedReasons map[SynthesisRejectionReason]int
 	// CoverageDisclosures (CHAOS-4690 Commit F, design §4.1) is the
 	// LENIENTLY-decoded model-authored coverage_disclosures subdocument --
 	// the ONE new model-authorable surface this commit adds. It is nil
@@ -552,59 +556,12 @@ type CoverageDisclosure struct {
 	Text     string `json:"text"`
 }
 
-func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
-	switch d.Status {
-	case InvestigationComplete, InvestigationPartial, InvestigationDegraded, InvestigationClarificationRequired, InvestigationNoMatch:
-	default:
-		return rejectSynthesis(RejectionReasonStatusInvalid, "synthesis draft status is invalid")
-	}
-	if (d.Status == InvestigationComplete || d.Status == InvestigationPartial) && strings.TrimSpace(d.DirectJudgment) == "" {
-		return rejectSynthesis(RejectionReasonDirectJudgmentMissing, "answer-capable synthesis requires a direct judgment")
-	}
-	if strings.TrimSpace(d.DeterministicAnswer) == "" {
-		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
-	}
-	allowedSubjects := synthesisSubjects(input)
-	// allowedSubjects is what the model may cite; payloadSubjects is
-	// everything it was SHOWN; uncitableShown is the part of the latter that
-	// is deliberately not the former. The three subject-scope rejections
-	// below classify the rejecting subject against all three -- telemetry
-	// only, no effect on the decision. See SynthesisSubjectScopeBasis.
-	// Computed LAZILY: the census marshals the payload, and an answer that
-	// validates cleanly must not pay for diagnosis it never needs. Only a
-	// subject-scope rejection reaches scopeBasis, and rejections are the
-	// minority path.
-	var payloadSubjects map[string]struct{}
-	var uncitableShown map[string]struct{}
-	censusOK, censusDone := false, false
-	scopeBasis := func(subject SubjectRef) SynthesisSubjectScopeBasis {
-		if !censusDone {
-			payloadSubjects, censusOK = synthesisPayloadSubjects(input)
-			uncitableShown = synthesisUncitableShownSubjects(input)
-			censusDone = true
-		}
-		if !censusOK {
-			// No census, no claim -- but SAY so. An empty set would classify
-			// every rejected subject as "absent", blaming the model on the
-			// strength of a measurement that did not happen; an omitted field
-			// would hide the broken instrument behind a shape that also means
-			// "not a subject-scope rejection".
-			return synthesisSubjectScopeBasisUnavailable()
-		}
-		return synthesisSubjectScopeBasis(subject, payloadSubjects, uncitableShown)
-	}
-	// canonicalLabels binds every subject the model can legally reference
-	// to the ONE label the investigation input actually carries for that
-	// canonical ID (graph resolution, cohort, paths, and canonical facts
-	// are the sources of truth). A model-supplied SubjectRef whose
-	// CanonicalID is in-bounds but whose Label diverges from that is a
-	// forged/rewritten label -- e.g. presenting a project under a
-	// different name than the one the graph actually resolved -- and must
-	// be rejected the same as an out-of-bounds subject (CHAOS-3755
-	// adversarial review finding H3).
-	canonicalLabels := canonicalSubjectLabels(input)
-	allowedPaths := make(map[string]struct{}, len(input.Graph.Paths))
-	allowedEvidence := make(map[string]struct{})
+// synthesisAllowedPathsAndEvidence is the path and evidence-ref closure a
+// synthesis draft may cite, shared by ValidateAgainst and the ungrounded-item
+// drop so the two cannot disagree on what is citable.
+func synthesisAllowedPathsAndEvidence(input SynthesisInput) (allowedPaths, allowedEvidence map[string]struct{}) {
+	allowedPaths = make(map[string]struct{}, len(input.Graph.Paths))
+	allowedEvidence = make(map[string]struct{})
 	for _, path := range input.Graph.Paths {
 		allowedPaths[path.PathID] = struct{}{}
 		for _, evidenceRefID := range path.EvidenceRefIDs {
@@ -661,6 +618,61 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			allowedEvidence[evidenceRefID] = struct{}{}
 		}
 	}
+	return allowedPaths, allowedEvidence
+}
+
+func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
+	switch d.Status {
+	case InvestigationComplete, InvestigationPartial, InvestigationDegraded, InvestigationClarificationRequired, InvestigationNoMatch:
+	default:
+		return rejectSynthesis(RejectionReasonStatusInvalid, "synthesis draft status is invalid")
+	}
+	if (d.Status == InvestigationComplete || d.Status == InvestigationPartial) && strings.TrimSpace(d.DirectJudgment) == "" {
+		return rejectSynthesis(RejectionReasonDirectJudgmentMissing, "answer-capable synthesis requires a direct judgment")
+	}
+	if strings.TrimSpace(d.DeterministicAnswer) == "" {
+		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
+	}
+	allowedSubjects := synthesisSubjects(input)
+	// allowedSubjects is what the model may cite; payloadSubjects is
+	// everything it was SHOWN; uncitableShown is the part of the latter that
+	// is deliberately not the former. The three subject-scope rejections
+	// below classify the rejecting subject against all three -- telemetry
+	// only, no effect on the decision. See SynthesisSubjectScopeBasis.
+	// Computed LAZILY: the census marshals the payload, and an answer that
+	// validates cleanly must not pay for diagnosis it never needs. Only a
+	// subject-scope rejection reaches scopeBasis, and rejections are the
+	// minority path.
+	var payloadSubjects map[string]struct{}
+	var uncitableShown map[string]struct{}
+	censusOK, censusDone := false, false
+	scopeBasis := func(subject SubjectRef) SynthesisSubjectScopeBasis {
+		if !censusDone {
+			payloadSubjects, censusOK = synthesisPayloadSubjects(input)
+			uncitableShown = synthesisUncitableShownSubjects(input)
+			censusDone = true
+		}
+		if !censusOK {
+			// No census, no claim -- but SAY so. An empty set would classify
+			// every rejected subject as "absent", blaming the model on the
+			// strength of a measurement that did not happen; an omitted field
+			// would hide the broken instrument behind a shape that also means
+			// "not a subject-scope rejection".
+			return synthesisSubjectScopeBasisUnavailable()
+		}
+		return synthesisSubjectScopeBasis(subject, payloadSubjects, uncitableShown)
+	}
+	// canonicalLabels binds every subject the model can legally reference
+	// to the ONE label the investigation input actually carries for that
+	// canonical ID (graph resolution, cohort, paths, and canonical facts
+	// are the sources of truth). A model-supplied SubjectRef whose
+	// CanonicalID is in-bounds but whose Label diverges from that is a
+	// forged/rewritten label -- e.g. presenting a project under a
+	// different name than the one the graph actually resolved -- and must
+	// be rejected the same as an out-of-bounds subject (CHAOS-3755
+	// adversarial review finding H3).
+	canonicalLabels := canonicalSubjectLabels(input)
+	allowedPaths, allowedEvidence := synthesisAllowedPathsAndEvidence(input)
 	for _, evidenceRefID := range d.EvidenceRefIDs {
 		if _, ok := allowedEvidence[evidenceRefID]; !ok {
 			return rejectSynthesis(RejectionReasonEvidenceUnknown, "synthesis references unknown evidence %q", evidenceRefID)
@@ -2541,6 +2553,7 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 		r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
 	}
 	draft = r.withholdBareScoreClaims(ctx, principal, input, draft)
+	draft = DropUngroundedSynthesisItems(input, draft)
 	if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 		return draft, ClassifySynthesisRejection(draft, input, validateErr)
 	}
@@ -2555,6 +2568,10 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 // composeSynthesisResult composes the served result from a validated draft,
 // or, with modelFailed, from the draft a failed call is served with.
 func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, bound *synthesisInputBound, failure *SynthesisFailure) (InvestigationResult, error) {
+	// The prose below is composed from the draft's status, so the status is lowered first for an answer that left items out.
+	if draft.ungroundedDropped > 0 && draft.Status == InvestigationComplete {
+		draft.Status = InvestigationPartial
+	}
 	// CHAOS-4355: attachCanonicalRows is the ONLY place a ClaimedFact.Rows
 	// is ever set. ValidateAgainst has just rejected any draft claim that
 	// carried a non-empty Rows of its own, so every claim reaching this
@@ -2654,6 +2671,15 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		// of the facts. A status already weaker than partial says more.
 		if result.Status == InvestigationComplete {
 			result.Status = InvestigationPartial
+		}
+	}
+	if draft.ungroundedDropped > 0 {
+		var displaced int
+		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricUngroundedItemsDroppedLimitation})
+		result.LimitationsDisplaced += displaced
+		result.Coverage.Partial = true
+		if recorder, ok := r.Telemetry.(ungroundedItemDropRecorder); ok {
+			recorder.RecordUngroundedItemsDropped(ctx, principal, draft.ungroundedReasons)
 		}
 	}
 	if failure != nil {

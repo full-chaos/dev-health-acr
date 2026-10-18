@@ -394,11 +394,11 @@ func Certify(log *Log, a Assertion) (Result, error) {
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
 		if a.Event.Multiplicity == eventspec.MultiplicityZeroOrManyPerRequest {
-			if a.Event.MaxLinesPerScope <= 0 && a.Event.DataDependentBound == "" {
-				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares neither MaxLinesPerScope nor DataDependentBound", a.Event.ID)
+			if a.Event.MaxLinesPerScope <= 0 && a.Event.UnboundedReason == "" {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares neither MaxLinesPerScope nor UnboundedReason", a.Event.ID)
 			}
-			if a.Event.MaxLinesPerScope > 0 && a.Event.DataDependentBound != "" {
-				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares both MaxLinesPerScope and DataDependentBound", a.Event.ID)
+			if a.Event.MaxLinesPerScope > 0 && a.Event.UnboundedReason != "" {
+				return Result{}, fmt.Errorf("certify: %s: zero_or_many_per_request declares both MaxLinesPerScope and UnboundedReason", a.Event.ID)
 			}
 			family := 0
 			for _, line := range log.linesWithMsg(a.Event.Msg) {
