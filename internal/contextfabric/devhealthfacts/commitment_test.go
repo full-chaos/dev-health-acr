@@ -45,6 +45,7 @@ func commitmentItemRow(provider, id string, c commitmentCounts) []any {
 
 func commitmentClient(projects, items [][]any) *fakeClient {
 	return &fakeClient{tables: []fakeTable{
+		{match: commitmentDueDatesMatch},
 		{match: commitmentProjectsMatch, rows: projects},
 		{match: commitmentItemsMatch, rows: items},
 	}}
@@ -281,6 +282,7 @@ func TestCommitmentStatementsCountOnlyOpenItemsPastDueOverTheProjectIssues(t *te
 	var projects, items *capturedQuery
 	for i := range client.queries {
 		switch {
+		case strings.Contains(client.queries[i].statement, commitmentDueDatesMatch):
 		case strings.Contains(client.queries[i].statement, commitmentItemsMatch):
 			items = &client.queries[i]
 		case strings.Contains(client.queries[i].statement, commitmentProjectsMatch):
