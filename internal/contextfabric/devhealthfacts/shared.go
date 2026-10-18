@@ -1257,7 +1257,13 @@ import (
 // the unit counts once, in the window that holds its to_ts, so adjacent
 // windows add up. An answer saved under v243 counted a unit that spans a
 // window boundary in every window it overlapped.
-const QueryVersion = "devhealthfacts.clickhouse.v244"
+//
+// v246 -> v247: a project past the shared row budget of a flow, readiness or
+// landscape project read is served (its team count from the uncapped
+// aggregate, its omitted rows named), and an investment project the row cap
+// cut off is named cut, not as having no mix. An answer saved before omitted
+// such a project or called it empty.
+const QueryVersion = "devhealthfacts.clickhouse.v247"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

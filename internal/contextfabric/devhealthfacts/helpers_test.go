@@ -48,6 +48,8 @@ const pullRequestFallbackDecisionMarker = "argMaxIf(lk.provenance, lk.link_rank"
 // linkedNativeCoverMarker is in the native cover statement of fallback links and no other.
 const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id IN {ids:Array(String)}"
 
+const projectPopulationMarker = "-- project population"
+
 type fakeClient struct {
 	tables  []fakeTable
 	queries []capturedQuery
@@ -55,6 +57,16 @@ type fakeClient struct {
 
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	c.queries = append(c.queries, capturedQuery{statement: statement, bindings: bindings})
+	// A project population aggregate is answered only by a table that names
+	// its marker; every other table's match also occurs inside its text.
+	if strings.Contains(statement, projectPopulationMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, projectPopulationMarker) {
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
 	// A repository identity read also asks who owns the repositories. A test
 	// that did not seed ownership gets "no owners", never a repos table row.
 	if strings.Contains(statement, "owners_total") && !c.seedsOwnership() {
