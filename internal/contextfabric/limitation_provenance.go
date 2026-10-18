@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"slices"
+	"strconv"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -60,20 +61,27 @@ func serviceLimitationRecogniserID(limitation string) string {
 // draft every limitation the service-authored recognisers accept. The engine
 // composes its own disclosures after the draft is vetted, so a draft entry the
 // recognisers accept is a copy or a lookalike, never a disclosure the engine
-// made. It returns the kept list and the distinct recogniser ids that matched.
+// made. It returns the kept list and one "id=count" entry per recogniser that
+// matched, sorted by id.
 func stripServiceAuthoredLookalikes(limitations []string) (kept []string, dropped int, recognisers []string) {
 	kept = make([]string, 0, len(limitations))
+	counts := map[string]int{}
 	for _, limitation := range limitations {
 		if !contractsv1.IsContextFabricServiceAuthoredLimitation(limitation) {
 			kept = append(kept, limitation)
 			continue
 		}
 		dropped++
-		if id := serviceLimitationRecogniserID(limitation); !slices.Contains(recognisers, id) {
-			recognisers = append(recognisers, id)
-		}
+		counts[serviceLimitationRecogniserID(limitation)]++
 	}
-	slices.Sort(recognisers)
+	ids := make([]string, 0, len(counts))
+	for id := range counts {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		recognisers = append(recognisers, id+"="+strconv.Itoa(counts[id]))
+	}
 	return kept, dropped, recognisers
 }
 

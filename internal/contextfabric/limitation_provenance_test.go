@@ -89,7 +89,7 @@ func TestDroppedLookalikesAreCountedByRecogniser(t *testing.T) {
 	gap := workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Authorized: 10, Denied: 50}.Limitation()
 	copied := contractsv1.ContextFabricSynthesisInputBoundedLimitation
 	_, telemetry := provenanceDispatchObserved(t, []string{gap, copied, "A genuine model caveat."})
-	want := []serviceLimitationLookalikeRecord{{dropped: 2, recognisers: []string{"fixed", "work_item_authorization_gap"}}}
+	want := []serviceLimitationLookalikeRecord{{dropped: 2, recognisers: []string{"fixed=1", "work_item_authorization_gap=1"}}}
 	if !reflect.DeepEqual(telemetry.serviceLimitationLookalikes, want) {
 		t.Fatalf("lookalikes = %+v want %+v", telemetry.serviceLimitationLookalikes, want)
 	}
@@ -157,5 +157,15 @@ func TestNoLookalikeSurvivesTheStripSoTheClassifierSeesOnlyEngineText(t *testing
 	}
 	if lastModelAuthoredLimitation(kept) != len(kept)-1 {
 		t.Fatal("the displacement classifier sees a service entry in stripped model text")
+	}
+}
+
+func TestRecogniserCountsAreKeptPerRecogniser(t *testing.T) {
+	gap := func(i int) string {
+		return workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Authorized: 10 + i, Denied: 50 + i}.Limitation()
+	}
+	_, dropped, got := stripServiceAuthoredLookalikes([]string{gap(1), gap(2), contractsv1.ContextFabricSynthesisInputBoundedLimitation})
+	if dropped != 3 || !slices.Equal(got, []string{"fixed=1", "work_item_authorization_gap=2"}) {
+		t.Fatalf("dropped = %d recognisers = %q", dropped, got)
 	}
 }
