@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,9 +63,20 @@ var commitmentOpenStatusSQL = func() string {
 	return "(" + strings.Join(open, ", ") + ")"
 }()
 
-func commitmentItemRowsSQL(authorized string) string {
-	return `SELECT * FROM (
-WITH project_rows AS (
+var commitmentOpenStatuses = func() map[string]bool {
+	open := map[string]bool{}
+	for _, status := range contextfabric.WorkItemStatusVocabulary() {
+		switch status {
+		case "done", workItemCancelledStatus, "unknown":
+			continue
+		}
+		open[status] = true
+	}
+	return open
+}()
+
+func commitmentProjectItemsCTE(authorized string) string {
+	return `WITH project_rows AS (
   SELECT k.project_key AS project_key, w.provider AS provider, w.work_item_id AS work_item_id,
     argMax(tuple(lower(w.status), w.due_at, w.sprint_id), w.last_synced) AS latest
   FROM work_items AS w FINAL
@@ -77,7 +89,30 @@ project_items AS (
   FROM project_rows
   WHERE work_item_id IN ` + authorized + `
 )
-SELECT a.project_key, a.items_all,
+`
+}
+
+const (
+	commitmentDueDatesCap       = 25
+	commitmentDueDatesTable     = "issue_due_dates"
+	commitmentDueDatesTruncated = "issue_due_dates_truncated"
+)
+
+func commitmentDueDateRowsSQL(authorized string) string {
+	return `SELECT * FROM (
+` + commitmentProjectItemsCTE(authorized) + `SELECT project_key, work_item_id, status, toInt64(toUnixTimestamp64Milli(assumeNotNull(due_at))) AS due_ms
+FROM project_items
+WHERE due_at IS NOT NULL
+ORDER BY project_key,
+  (status IN ` + commitmentOpenStatusSQL + ` AND due_at < {` + commitmentAsOfParam + `:DateTime64(3, 'UTC')}) DESC,
+  due_at ASC, work_item_id ASC
+LIMIT ` + strconv.Itoa(commitmentDueDatesCap+1) + ` BY project_key
+) AS commitment_due_dates`
+}
+
+func commitmentItemRowsSQL(authorized string) string {
+	return `SELECT * FROM (
+` + commitmentProjectItemsCTE(authorized) + `SELECT a.project_key, a.items_all,
   toInt64(ifNull(i.items_total, 0)), toInt64(ifNull(i.items_open, 0)), toInt64(ifNull(i.items_closed, 0)), toInt64(ifNull(i.items_unknown_status, 0)),
   toInt64(ifNull(i.items_with_due_at, 0)), toInt64(ifNull(i.items_past_due_open, 0)),
   toInt64(ifNull(s.sprint_count, 0)), toInt64(ifNull(s.next_count, 0)), toInt64(ifNull(s.next_end_ms, 0)), toInt64(ifNull(s.latest_end_ms, 0)),
@@ -140,6 +175,12 @@ type commitmentItemRow struct {
 	nextEndMs, latestEndMs                                          int64
 }
 
+type commitmentDueDate struct {
+	workItemID, status string
+	dueMs              int64
+	pastDue            bool
+}
+
 type CommitmentProvider struct{ facts clickhouseFacts }
 
 func newCommitmentProvider(client contextpacket.ClickHouseQueryClient) *CommitmentProvider {
@@ -178,6 +219,10 @@ func (p *CommitmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query project commitment items", err)
 	}
+	dueDates, err := p.readDueDateRows(ctx, principal, orgID, query.RequestedRepositoryScope, ids, asOf)
+	if err != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query project commitment due dates", err)
+	}
 	sort.Strings(ids)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	for _, key := range ids {
@@ -186,15 +231,17 @@ func (p *CommitmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			continue
 		}
 		var counts *commitmentItemRow
+		var dated []commitmentDueDate
 		if project.itemsReachable {
 			row := items[key]
 			counts = &row
+			dated = dueDates[key]
 		}
 		_, id := splitProjectKey(key)
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind:           contextfabric.FactCommitment,
 			Subject:        bySubject[key],
-			Fields:         p.commitmentFields(project, counts, asOf),
+			Fields:         p.commitmentFields(project, counts, dated, asOf),
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, project.provider+":"+id)},
 		})
 	}
@@ -241,7 +288,67 @@ func (p *CommitmentProvider) readItemRows(ctx context.Context, principal storage
 	return rows, err
 }
 
-func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, items *commitmentItemRow, asOf time.Time) map[string]contextfabric.FactValue {
+func (p *CommitmentProvider) readDueDateRows(ctx context.Context, principal storage.Principal, orgID string, requestedScope, ids []string, asOf time.Time) (map[string][]commitmentDueDate, error) {
+	authorized, bindings := commitmentAuthorizedItemIDsSQL(principal, requestedScope)
+	settings, err := workItemReaderSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bindings = append(bindings, readers.Binding{Name: commitmentAsOfParam, Value: asOf})
+	rows := map[string][]commitmentDueDate{}
+	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectCommitmentDueDates", readers.WithSettings(commitmentDueDateRowsSQL(authorized), settings), orgID, ids, func(row readers.RowScanner) error {
+		var key string
+		var r commitmentDueDate
+		if err := row.Scan(&key, &r.workItemID, &r.status, &r.dueMs); err != nil {
+			return err
+		}
+		r.pastDue = commitmentOpenStatuses[r.status] && r.dueMs < asOf.UnixMilli()
+		rows[key] = append(rows[key], r)
+		return nil
+	}, bindings...)
+	return rows, err
+}
+
+// commitmentDueDatesFact orders past due open issues first, then by due date,
+// and keeps the first commitmentDueDatesCap. The statement reads one row more
+// than the cap, so a longer list is named truncated and never cut silently.
+func commitmentDueDatesFact(dueDates []commitmentDueDate) (table contextfabric.FactValue, truncated, ok bool) {
+	if len(dueDates) == 0 {
+		return contextfabric.FactValue{}, false, false
+	}
+	sorted := append([]commitmentDueDate(nil), dueDates...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		a, b := sorted[i], sorted[j]
+		switch {
+		case a.pastDue != b.pastDue:
+			return a.pastDue
+		case a.dueMs != b.dueMs:
+			return a.dueMs < b.dueMs
+		default:
+			return a.workItemID < b.workItemID
+		}
+	})
+	if len(sorted) > commitmentDueDatesCap {
+		sorted, truncated = sorted[:commitmentDueDatesCap], true
+	}
+	rows := make([]contextfabric.FactValueRow, 0, len(sorted))
+	for _, d := range sorted {
+		rows = append(rows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+			"work_item_id": contextfabric.StringFactValue(d.workItemID),
+			"due_at":       contextfabric.StringFactValue(time.UnixMilli(d.dueMs).UTC().Format(time.RFC3339)),
+			"status":       contextfabric.StringFactValue(d.status),
+			"past_due":     contextfabric.BooleanFactValue(d.pastDue),
+		}})
+	}
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:        contextfabric.FactTableBreakdown,
+		Key:          []string{"work_item_id"},
+		Observations: []string{"due_at", "status", "past_due"},
+		Rows:         rows,
+	}), truncated, true
+}
+
+func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, items *commitmentItemRow, dueDates []commitmentDueDate, asOf time.Time) map[string]contextfabric.FactValue {
 	fields := map[string]contextfabric.FactValue{
 		"as_of_day":     contextfabric.StringFactValue(asOf.Format(time.DateOnly)),
 		"project_state": stringOrNull(project.state),
@@ -286,6 +393,10 @@ func (p *CommitmentProvider) commitmentFields(project commitmentProjectRow, item
 	fields["sprint_refs_unresolved"] = contextfabric.IntegerFactValue(items.sprintRefsUnresolved)
 	if items.sprintRefsUnresolved > 0 {
 		fields["sprint_refs_unresolved_reason"] = contextfabric.StringFactValue(commitmentSprintUnresolvedReason)
+	}
+	if table, truncated, ok := commitmentDueDatesFact(dueDates); ok {
+		fields[commitmentDueDatesTable] = table
+		fields[commitmentDueDatesTruncated] = contextfabric.BooleanFactValue(truncated)
 	}
 	unreadable := max(items.all-items.total, 0)
 	fields["items_unreadable_count"] = contextfabric.IntegerFactValue(unreadable)

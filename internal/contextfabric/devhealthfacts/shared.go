@@ -1257,7 +1257,15 @@ import (
 // the unit counts once, in the window that holds its to_ts, so adjacent
 // windows add up. An answer saved under v243 counted a unit that spans a
 // window boundary in every window it overlapped.
-const QueryVersion = "devhealthfacts.clickhouse.v244"
+//
+// v244 -> v245: a candidate receipt redeemed this turn resolves the subject it
+// names. An answer saved under v244 for such a request holds the no-match
+// that left the offered pool unresolved and must not be reused.
+//
+// v245 -> v246: a project's commitment fact serves a bounded table of its
+// dated issues (id, due date, status, past due) beside the counts, with a
+// truncated flag at 25 rows. An answer saved under v245 has no such table.
+const QueryVersion = "devhealthfacts.clickhouse.v246"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

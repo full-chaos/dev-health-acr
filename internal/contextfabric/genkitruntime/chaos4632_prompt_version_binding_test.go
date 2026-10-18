@@ -88,7 +88,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v23 -> v24: the reachability sentences: continuous_integration and deployments are reached through a team's or project's repositories, incidents through those repositories' deployments, and operational_deficiencies through a project's owning teams.
 			// v24 -> v25: a pull_request member's status value is one of a closed set, with the review phrases mapped onto it, and two worked examples.
 			// v31 -> v32: "system", "service" and "codebase" say repository.
-			digest: "b27f8ce8a6e78969a5296530d2ee04791473d726a1a31265aabe812de5e772bb",
+			// v32 -> v33: the commitment glossary line says the fact lists up to 25 dated issues.
+			digest: "7b73df8be5a9280f0fe64bbe15cdb1ac3e11970675e5787e9e2fc24d4b943947",
 		},
 		{
 			name:    "synthesis system prompt",

@@ -87,6 +87,8 @@ grep -Fq "GRANT INSERT ON \${db}.acr_e2e_readonly_probe TO acr_reader;" "$script
 grep -Fq "INSERT INTO acr_\${PROJECT//-/}_e2e.acr_e2e_readonly_probe" "$script"
 grep -Fq 'redact_log()' "$script"
 grep -Fq 'acr-migrate acr-api' "$script"
+grep -Fq 'run_oneshot()' "$script"
+if grep -Eq 'compose wait ' "$script"; then exit 1; fi
 grep -Fq 'ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn' "$root/deploy/compose/acr.compose.yml"
 grep -Fq 'ACR_REQUIRE_BACKING_STORES: "true"' "$script"
 if grep -Eq 'ACR_(POSTGRES_DSN|CLICKHOUSE_DSN|EVIDENCE_ID_ACTIVE_KID|EVIDENCE_ID_KEYS):' "$script"; then exit 1; fi
