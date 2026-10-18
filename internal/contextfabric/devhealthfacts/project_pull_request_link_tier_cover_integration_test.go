@@ -2,11 +2,13 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -161,6 +163,11 @@ func TestScopeExpander_ProjectToPullRequest_AsOfProviderQualifiedRootsShareARawI
 	orgID := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
+	for _, statement := range devhealthschema.DDL("project_membership_transitions") {
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("create project_membership_transitions: %v", err)
+		}
+	}
 	seedChaos4099Fixture(t, ctx, direct, at.Add(-48*time.Hour), orgID)
 	s := &linkTierSeeder{t: t, ctx: ctx, direct: direct, orgID: orgID, at: at.Add(-48 * time.Hour), repoID: chaos4099GitLabRepoID}
 	const rawID = "shared-raw-project-id"
