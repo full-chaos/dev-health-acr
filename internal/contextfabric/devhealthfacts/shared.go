@@ -1273,7 +1273,12 @@ import (
 // such a project or called it empty. The project population reads of flow,
 // readiness, landscape, health, workload and the investment mix read up to 250
 // projects, where they read 200.
-const QueryVersion = "devhealthfacts.clickhouse.v247"
+//
+// v247 -> v248: a graphql_query answer with one root field and one list over
+// max_bytes is served as the largest whole-row page, declared_partial with
+// page_cut, where it was refused response_budget. An answer saved under v247
+// holds that refusal.
+const QueryVersion = "devhealthfacts.clickhouse.v248"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

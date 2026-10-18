@@ -738,3 +738,15 @@ func TestQueryVersionMovedPastTheProjectPopulationRead(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v247 or later -- an answer saved when a project past the shared scan budget was omitted must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheGraphQLQueryPageCut(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 248 {
+		t.Fatalf("QueryVersion = %q, want v248 or later -- an answer saved when an over-budget graphql_query list was refused must not be reused", devhealthfacts.QueryVersion)
+	}
+}
