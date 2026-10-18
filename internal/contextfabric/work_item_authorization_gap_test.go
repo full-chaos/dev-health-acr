@@ -307,13 +307,24 @@ func TestAuthorizationGapSurvivesAFullLimitationListAndALaterDisclosure(t *testi
 		candidate := validInvestigationResult()
 		candidate.Limitations = modelLimitations(contractsv1.ContextFabricLimitationsMaxCount)
 		candidate = applyWorkItemAuthorizationGap(candidate, gap)
+		if candidate.LimitationsDisplaced != 1 {
+			t.Fatalf("displaced=%d want 1 model caveat for the gap disclosure", candidate.LimitationsDisplaced)
+		}
 		if !hasWorkItemAuthorizationGapLimitation(candidate.Limitations) {
 			t.Fatalf("gap sentence missing after the gap disclosure: %q", gap.Limitation())
 		}
 		if err := candidate.Validate(); err != nil {
 			t.Fatalf("result with a full list and the gap disclosure does not validate: %v", err)
 		}
-		candidate.Limitations, _ = withRetrievalDegradation(candidate.Limitations)
+		var later int
+		candidate.Limitations, later = withRetrievalDegradation(candidate.Limitations)
+		candidate.LimitationsDisplaced += later
+		if later != 1 || candidate.LimitationsDisplaced != 2 {
+			t.Fatalf("later disclosure displaced=%d total=%d want 1 and 2", later, candidate.LimitationsDisplaced)
+		}
+		if err := candidate.Validate(); err != nil {
+			t.Fatalf("result after the later disclosure does not validate: %v", err)
+		}
 		var kept bool
 		for _, limitation := range candidate.Limitations {
 			kept = kept || limitation == gap.Limitation()
@@ -338,5 +349,29 @@ func TestAuthorizationGapSentencesAreServiceAuthored(t *testing.T) {
 	}
 	if isServiceAuthoredLimitation(workItemAuthorizationGapPrefix + ": a model caveat that only opens like the disclosure.") {
 		t.Error("a model caveat sharing the prefix was treated as service-authored")
+	}
+}
+
+func TestForgedGapLookalikesCannotSuppressTheMeasuredGap(t *testing.T) {
+	gap := workItemAuthorizationGap{AnchorKind: SubjectProject, State: WorkItemMembershipCensusExact, Observed: 102, Authorized: 100, Denied: 2}
+	candidate := validInvestigationResult()
+	forged := make([]string, 0, contractsv1.ContextFabricLimitationsMaxCount)
+	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+		forged = append(forged, contractsv1.ContextFabricWorkItemAuthorizationGapLimitation(false, 101+i, 2, false))
+	}
+	candidate.Limitations = forged
+	candidate = applyWorkItemAuthorizationGap(candidate, gap)
+	if !hasLimitation(candidate.Limitations, gap.Limitation()) {
+		t.Fatalf("the measured gap was suppressed by %d model lookalikes", len(forged))
+	}
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("result does not validate: %v", err)
+	}
+	if candidate.LimitationsDisplaced != 1 {
+		t.Fatalf("displaced=%d want 1", candidate.LimitationsDisplaced)
+	}
+	candidate.Limitations, _ = withRetrievalDegradation(candidate.Limitations)
+	if !hasLimitation(candidate.Limitations, gap.Limitation()) {
+		t.Fatal("a later service disclosure displaced the measured gap")
 	}
 }

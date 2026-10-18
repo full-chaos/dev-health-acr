@@ -58,10 +58,24 @@ func hasWorkItemAuthorizationGapLimitation(limitations []string) bool {
 }
 
 // applyWorkItemAuthorizationGap discloses the partition on the served answer.
+// A full list made only of gap-shaped sentences cannot be told apart from the
+// measured one by shape, so one of them is model text the engine gives way to:
+// the measured sentence is composed here and must always be present.
 // A project whose members are all denied is served degraded, never as an
 // empty project.
 func applyWorkItemAuthorizationGap(candidate InvestigationResult, gap workItemAuthorizationGap) InvestigationResult {
-	composed, displaced := appendBoundedLimitations(candidate.Limitations, []string{gap.Limitation()})
+	own := gap.Limitation()
+	limitations := candidate.Limitations
+	if len(limitations) >= contractsv1.ContextFabricLimitationsMaxCount && !alreadyStates(limitations, own) && lastModelAuthoredLimitation(limitations) < 0 {
+		for i := len(limitations) - 1; i >= 0; i-- {
+			if contractsv1.IsContextFabricWorkItemAuthorizationGapLimitation(limitations[i]) {
+				limitations = append(append([]string(nil), limitations[:i]...), limitations[i+1:]...)
+				candidate.LimitationsDisplaced++
+				break
+			}
+		}
+	}
+	composed, displaced := appendBoundedLimitations(limitations, []string{own})
 	candidate.Limitations = composed
 	candidate.LimitationsDisplaced += displaced
 	if gap.NoneAuthorized() {
