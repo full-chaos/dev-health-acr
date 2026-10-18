@@ -149,3 +149,14 @@ func SynthesizeWithTelemetryForTest(ctx context.Context, sink EngineTelemetry, v
 	_, err := synthesizer.Synthesize(ctx, storage.Principal{OrgID: "org_1"}, input)
 	return err
 }
+
+// DualTableCountsForTest runs the row attachment the synthesizer runs over a
+// claim on a fact that carries a legacy table and a time series table, and
+// returns the dual table claims and secondary bytes it reports.
+func DualTableCountsForTest() (claims, bytes int) {
+	subject := SubjectRef{Kind: SubjectProject, CanonicalID: "project:1", Label: "p"}
+	fact := dualTableProjectWorkloadFact(subject)
+	claim := ClaimedFact{ClaimID: "claim_backlog", Kind: FactWorkload, Subject: subject, Field: "backlog_size", Value: ScalarValue{}}
+	attachCanonicalRowsWithDualTableTelemetry([]ClaimedFact{claim}, []CanonicalFact{fact}, &claims, &bytes)
+	return claims, bytes
+}

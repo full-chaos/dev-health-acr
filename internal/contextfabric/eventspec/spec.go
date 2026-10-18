@@ -2304,10 +2304,10 @@ var ModelRowsStripped = Event{
 	Msg:                      "context fabric model-authored claimed fact rows stripped before validation",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	MaxLinesPerScope:         2,
+	MaxLinesPerScope:         8,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
-	BoundedAggregation:       "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+	BoundedAggregation:       "one line per model draw that authored table content, plus the synthesizer's defensive re-check: at most three draws (the resynthesis ceiling) and one re-check per synthesis call, and a request makes at most two synthesis calls (the first and one retry).",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "cf_model_rows_stripped", Type: FieldInt, Presence: PresenceRequired},

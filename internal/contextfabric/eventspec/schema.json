@@ -6336,8 +6336,8 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
-    "max_lines_per_scope": 2,
+    "bounded_aggregation": "one line per model draw that authored table content, plus the synthesizer's defensive re-check: at most three draws (the resynthesis ceiling) and one re-check per synthesis call, and a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 8,
     "fields": [
       {
         "key": "org_id",

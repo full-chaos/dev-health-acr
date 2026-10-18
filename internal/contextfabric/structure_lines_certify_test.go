@@ -514,10 +514,9 @@ func TestSynthesisCountLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
 	}
 
 	collision := run("collision")
-	line := certifyRequestLine(t, collision, eventspec.DriverIdentityCollisions, map[string]any{"cf_driver_identity_collisions": 1})
-	if line["cf_driver_identity_reidentified"].(float64)+line["cf_driver_identity_restated"].(float64) != 1 {
-		t.Errorf("collision parts do not add to the total: %v", line)
-	}
+	certifyRequestLine(t, collision, eventspec.DriverIdentityCollisions, map[string]any{
+		"cf_driver_identity_collisions": 1, "cf_driver_identity_reidentified": 1, "cf_driver_identity_restated": 0,
+	})
 
 	stripped := run("stripped")
 	certifyRequestLine(t, stripped, eventspec.ModelRowsStripped, map[string]any{"org_id": "org_1", "cf_model_rows_stripped": 1})
@@ -527,6 +526,13 @@ func TestSynthesisCountLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
 
 	var buf bytes.Buffer
 	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	producedClaims, producedBytes := contextfabric.DualTableCountsForTest()
+	if producedClaims != 1 || producedBytes == 0 {
+		t.Fatalf("the row attachment over a dual table fact reported %d claims and %d bytes, want 1 claim and a nonzero cost", producedClaims, producedBytes)
+	}
+	sink.RecordDualTableFacts(ctx, principalOrg1, producedClaims, producedBytes)
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": producedClaims, "secondary_rows_bytes": producedBytes})
+	buf.Reset()
 	sink.RecordDualTableFacts(ctx, principalOrg1, 3, 1024)
 	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 3, "secondary_rows_bytes": 1024})
 	buf.Reset()
