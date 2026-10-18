@@ -325,7 +325,7 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	maxBytes, err := assembly.inputBoundWithin(budget)
 	measure.MaxBytes = maxBytes
 	if err != nil {
-		return InvestigationResult{}, nil, measure, clientSynthesisBudgetRefusal(err, 0, budget)
+		return InvestigationResult{}, nil, measure, r.clientSynthesisEnvelopeRefusal(ctx, principal, input, err, budget)
 	}
 	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes, assembly.widenedInputBound(budget, maxBytes))
 	if maxBytes < assembly.MaxBytes && err != nil {
@@ -365,6 +365,25 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, err
 	}
 	return result, bundle, measure, nil
+}
+
+// clientSynthesisEnvelopeRefusal is the refusal for a budget whose half share
+// cannot hold the envelope: it measures the smallest input the facts reduce to
+// beside the envelope, so the measured size is the one the turn needs.
+func (r RuntimeAnswerSynthesizer) clientSynthesisEnvelopeRefusal(ctx context.Context, principal storage.Principal, input SynthesisInput, shareErr error, budget int) error {
+	envelope, envelopeErr := r.ClientSynthesis.envelopeBytes()
+	if envelopeErr != nil {
+		return envelopeErr
+	}
+	_, _, _, minimumErr := r.encodeWithinInputBound(ctx, principal, input, r.ClientSynthesis.Encode, 1, 0)
+	var overflow *ModelInputOverflow
+	if errors.As(minimumErr, &overflow) {
+		return clientSynthesisBudgetRefusal(minimumErr, envelope, budget)
+	}
+	if minimumErr != nil {
+		return minimumErr
+	}
+	return clientSynthesisBudgetRefusal(shareErr, envelope, budget)
 }
 
 func stampClientInterpretationVersion(ctx context.Context, versions *VersionSet) {

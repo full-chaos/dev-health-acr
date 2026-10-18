@@ -24,6 +24,11 @@ type budgetTurn struct {
 
 func runBudgetTurn(t *testing.T, teams, noteBytes, budget int) budgetTurn {
 	t.Helper()
+	return runBudgetTurnWithRules(t, teams, noteBytes, budget, []string{"rule"})
+}
+
+func runBudgetTurnWithRules(t *testing.T, teams, noteBytes, budget int, rules []string) budgetTurn {
+	t.Helper()
 	members := make([]CohortMember, 0, teams)
 	facts := make([]CanonicalFact, 0, teams)
 	for i := range teams {
@@ -63,7 +68,7 @@ func runBudgetTurn(t *testing.T, teams, noteBytes, budget int) budgetTurn {
 			Options: RuntimeAnswerSynthesizerOptions{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
 			ClientSynthesis: &ClientSynthesisAssembly{
 				PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")),
-				Rules: []string{"rule"}, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode,
+				Rules: rules, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode,
 			},
 		},
 		Results: &resultStoreStub{}, Telemetry: &recordingTelemetry{},
@@ -179,5 +184,29 @@ func TestClientSynthesisBudgetRefusalStatesTheCallerLimit(t *testing.T) {
 	}
 	if !strings.Contains(turn.err.Error(), fmt.Sprintf("%d-byte budget", budget)) {
 		t.Fatalf("refusal text = %q, want it to name the %d-byte budget", turn.err.Error(), budget)
+	}
+}
+
+// A budget whose half share cannot hold the envelope is refused with the size
+// the turn needs: the envelope, the smallest input and the answer floor.
+func TestClientSynthesisEnvelopeRefusalMeasuresTheSmallestInput(t *testing.T) {
+	t.Parallel()
+	const budget = 8192
+	rules := []string{strings.Repeat("r", 5300)}
+	turn := runBudgetTurnWithRules(t, 1, 2000, budget, rules)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal", turn.err)
+	}
+	assembly := &ClientSynthesisAssembly{PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")), Rules: rules, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode}
+	envelope, err := assembly.envelopeBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientSynthesisBodyShare(budget) >= envelope {
+		t.Fatalf("envelope %d fits the %d share, the early refusal is not reached", envelope, clientSynthesisBodyShare(budget))
+	}
+	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes < int64(envelope+2000+ClientSynthesisAnswerFloorBytes) {
+		t.Fatalf("refusal measured %d against %d, want the caller's %d and at least envelope %d + input 2000 + floor %d", refusal.MeasuredBytes, refusal.MaxSerializedBytes, budget, envelope, ClientSynthesisAnswerFloorBytes)
 	}
 }
