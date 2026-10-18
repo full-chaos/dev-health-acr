@@ -116,7 +116,7 @@ func factsOnlyErrorClass(err error) string {
 // degraded composer over the pass-one input, calls no model, and serves it
 // only when it fits the budget. The returned FactsOnlyDeclined is empty when it
 // served; any other value is why it did not, and the refusal stands.
-func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, budget ResponseBudget, grouped bool, declined RetryDeclinedReason, members int) (InvestigationResult, assemblyTelemetry, FactsOnlyDeclined) {
+func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal, plan *AnswerPlan, params synthesisAssemblyParams, budget ResponseBudget, grouped bool, declined RetryDeclinedReason, members int, retryRan bool) (InvestigationResult, assemblyTelemetry, FactsOnlyDeclined) {
 	allocation := AllocateItems(*plan, groupCountOf(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort))
 	factsParams := params.forRetry(params.Graph, params.Facts, allocation)
 	factsParams.Plan = *plan
@@ -152,7 +152,7 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 	event.PredictedItems = PredictedItemsForPlan(*plan, members)
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RetryDeclined = declined
-	event.RetryAttempted = declined == RetryDeclinedNotApplicable
+	event.RetryAttempted = retryRan || declined == RetryDeclinedNotApplicable
 	event.FactsOnlyAttempted, event.FactsOnlyServed = true, true
 	event.OutcomeCompletenessState = composed.Completeness.State
 	e.recordPlanNarrowing(ctx, principal, event)

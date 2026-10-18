@@ -1728,6 +1728,7 @@ func synthesizeValidateDraw(ctx context.Context, r *Runtime, principal storage.P
 	if stripped > 0 && r.config.Telemetry != nil {
 		r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
 	}
+	draft = contextfabric.DropUngroundedSynthesisItems(input, draft)
 	return draft, draft.ValidateAgainst(input)
 }
 

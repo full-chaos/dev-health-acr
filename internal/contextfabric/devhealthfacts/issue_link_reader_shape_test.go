@@ -33,7 +33,7 @@ func TestIssueLinkReaders_EveryLinkReadAdmitsOnlyExistingPullRequestsOfIssues(t 
 	// disappears or a new one that arrives must change this number on purpose.
 	// The blocker rollup's own read (blockerEdgeRowsSQL) is pinned by
 	// blocker_rollup_entity_tree_integration_test.go.
-	const wantLinkReads = 21
+	const wantLinkReads = 22
 	if reading != wantLinkReads {
 		t.Fatalf("%d statements read work_graph_issue_pr, want %d: the sweep no longer reaches every link reader, or a reader was added", reading, wantLinkReads)
 	}
