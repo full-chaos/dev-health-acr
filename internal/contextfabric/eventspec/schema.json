@@ -1093,6 +1093,63 @@
     ]
   },
   {
+    "id": "contextfabric.category_fact_composition",
+    "msg": "context fabric status category fact composition",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per composed subject kind of one investigation, written once before the facts are read; the composition table has three subject kinds.",
+    "max_lines_per_scope": 3,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "status"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "project",
+          "repository",
+          "team"
+        ]
+      },
+      {
+        "key": "composed_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "flow",
+          "health",
+          "identity",
+          "investment",
+          "landscape",
+          "metrics",
+          "readiness",
+          "workload"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.client_synthesis_decision",
     "msg": "context fabric client synthesis decision",
     "level": "info",
@@ -2558,6 +2615,105 @@
     ]
   },
   {
+    "id": "contextfabric.coverage_disclosure_phrasing",
+    "msg": "context fabric coverage disclosure phrasing",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per synthesis call that composes a result; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "phrased",
+          "partial_absent",
+          "rejected_by_guard",
+          "discarded_undecodable",
+          "absent"
+        ]
+      },
+      {
+        "key": "violation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "unknown_detail_id",
+          "unknown_to_model_facing_set",
+          "duplicate_detail_id",
+          "text_bound",
+          "digits_forbidden",
+          "parse_failed"
+        ]
+      },
+      {
+        "key": "phrased",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.coverage_entries_capped",
+    "msg": "context fabric coverage entries capped",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most two lines per investigation: the cap runs on the served result, and once more after the model failure degrade files its detail.",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_entries_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_entries_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_entries_bound",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.direct_read",
     "msg": "context fabric direct read",
     "level": "info",
@@ -3556,6 +3712,34 @@
           "internal"
         ],
         "applicability": "written when the search, a read, the authorization, a source-row read or the built expansion failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.evidence_label_fallback",
+    "msg": "context fabric evidence ref label fell back to the generic label",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the label stamp runs once on the result the request serves.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_evidence_label_fallback",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",
@@ -6740,6 +6924,108 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.period_delta_composition",
+    "msg": "context fabric period delta composition",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per eligible subject kind (team and project) the comparison touched, written once per investigation.",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "status"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "project",
+          "team"
+        ]
+      },
+      {
+        "key": "grain",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "project",
+          "team"
+        ]
+      },
+      {
+        "key": "composed_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "flow",
+          "health",
+          "identity",
+          "investment",
+          "landscape",
+          "metrics",
+          "readiness",
+          "workload"
+        ]
+      },
+      {
+        "key": "prior_read_issued",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "failure_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "anchor_unresolved",
+          "deadline_exceeded",
+          "canceled",
+          "read_failed"
+        ]
+      },
+      {
+        "key": "unserved_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "transition_counts",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unchanged",
+          "improved",
+          "worsened",
+          "unknown_prior",
+          "unknown_current",
+          "unknown_both",
+          "prior_read_failed",
+          "anchor_unresolved"
+        ]
       },
       {
         "key": "request_id",
