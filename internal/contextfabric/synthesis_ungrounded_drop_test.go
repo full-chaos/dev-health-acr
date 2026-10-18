@@ -1,8 +1,11 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -29,7 +32,8 @@ func partlyUngroundedDraft() (SynthesisInput, SynthesisDraft) {
 func TestAPartlyUngroundedSynthesisIsServedWithoutTheUngroundedItems(t *testing.T) {
 	input, draft := partlyUngroundedDraft()
 	runtime := &recordingModelRuntime{fakeModelRuntime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)}}
-	synthesizer := RuntimeAnswerSynthesizer{Runtime: runtime}
+	var logs bytes.Buffer
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: runtime, Telemetry: NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&logs, nil)))}
 
 	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
 
@@ -47,6 +51,28 @@ func TestAPartlyUngroundedSynthesisIsServedWithoutTheUngroundedItems(t *testing.
 	}
 	if !slices.Contains(result.Limitations, contractsv1.ContextFabricUngroundedItemsDroppedLimitation) {
 		t.Fatalf("limitations %v, want the dropped-items line", result.Limitations)
+	}
+	if strings.Contains(strings.ToLower(result.DirectJudgment+result.DeterministicAnswer), "is complete") {
+		t.Fatalf("prose %q / %q says complete beside a partial status", result.DirectJudgment, result.DeterministicAnswer)
+	}
+	for _, want := range []string{"dropped_claim_value_contradicts_canonical=1", "dropped_driver_claim_ungrounded=1", "dropped_finding_claim_ungrounded=1"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("served-answer drop line lacks %s: %s", want, logs.String())
+		}
+	}
+}
+
+func TestADuplicatedClaimIDIsNeverHiddenByDroppingOneOfThem(t *testing.T) {
+	input, draft := partlyUngroundedDraft()
+	twin := draft.ClaimedFacts[0]
+	twin.Value = draft.ClaimedFacts[1].Value
+	draft.ClaimedFacts = []ClaimedFact{twin, draft.ClaimedFacts[0]}
+	runtime := &recordingModelRuntime{fakeModelRuntime: fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)}}
+
+	_, err := RuntimeAnswerSynthesizer{Runtime: runtime}.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+	if err == nil {
+		t.Fatal("Synthesize() served a draft whose duplicated claim id was hidden by the drop")
 	}
 }
 

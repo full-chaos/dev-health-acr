@@ -511,6 +511,7 @@ type SynthesisDraft struct {
 	// ungroundedDropped counts the claims, drivers and findings DropUngroundedSynthesisItems left out; composeSynthesisResult
 	// discloses it.
 	ungroundedDropped int
+	ungroundedReasons map[SynthesisRejectionReason]int
 	// CoverageDisclosures (CHAOS-4690 Commit F, design §4.1) is the
 	// LENIENTLY-decoded model-authored coverage_disclosures subdocument --
 	// the ONE new model-authorable surface this commit adds. It is nil
@@ -2552,7 +2553,7 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 		r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
 	}
 	draft = r.withholdBareScoreClaims(ctx, principal, input, draft)
-	draft = DropUngroundedSynthesisItems(ctx, principal, input, draft)
+	draft = DropUngroundedSynthesisItems(input, draft)
 	if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 		return draft, ClassifySynthesisRejection(draft, input, validateErr)
 	}
@@ -2567,6 +2568,10 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 // composeSynthesisResult composes the served result from a validated draft,
 // or, with modelFailed, from the draft a failed call is served with.
 func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, bound *synthesisInputBound, failure *SynthesisFailure) (InvestigationResult, error) {
+	// The prose below is composed from the draft's status, so the status is lowered first for an answer that left items out.
+	if draft.ungroundedDropped > 0 && draft.Status == InvestigationComplete {
+		draft.Status = InvestigationPartial
+	}
 	// CHAOS-4355: attachCanonicalRows is the ONLY place a ClaimedFact.Rows
 	// is ever set. ValidateAgainst has just rejected any draft claim that
 	// carried a non-empty Rows of its own, so every claim reaching this
@@ -2673,8 +2678,8 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricUngroundedItemsDroppedLimitation})
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
-		if result.Status == InvestigationComplete {
-			result.Status = InvestigationPartial
+		if recorder, ok := r.Telemetry.(ungroundedItemDropRecorder); ok {
+			recorder.RecordUngroundedItemsDropped(ctx, principal, draft.ungroundedReasons)
 		}
 	}
 	if failure != nil {

@@ -2,7 +2,6 @@ package contextfabric
 
 import (
 	"context"
-	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -22,18 +21,20 @@ import (
 //
 // A draft that would be left with no claim, driver or finding is returned
 // unchanged: there is no grounded remainder to serve.
-func DropUngroundedSynthesisItems(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft) SynthesisDraft {
+func DropUngroundedSynthesisItems(input SynthesisInput, draft SynthesisDraft) SynthesisDraft {
 	allowedSubjects := synthesisSubjects(input)
 	labels := canonicalSubjectLabels(input)
 	allowedPaths, allowedEvidence := synthesisAllowedPathsAndEvidence(input)
 
 	reasons := map[SynthesisRejectionReason]int{}
-	seen := map[string]struct{}{}
+	idCount := make(map[string]int, len(draft.ClaimedFacts))
+	for _, claim := range draft.ClaimedFacts {
+		idCount[claim.ClaimID]++
+	}
 	removed := map[string]struct{}{}
 	kept := make([]ClaimedFact, 0, len(draft.ClaimedFacts))
 	for _, claim := range draft.ClaimedFacts {
-		_, duplicate := seen[claim.ClaimID]
-		seen[claim.ClaimID] = struct{}{}
+		duplicate := idCount[claim.ClaimID] > 1
 		reason, ungrounded := ungroundedClaimReason(input, claim, allowedSubjects, labels)
 		if duplicate || !ungrounded {
 			kept = append(kept, claim)
@@ -126,7 +127,14 @@ func DropUngroundedSynthesisItems(ctx context.Context, principal storage.Princip
 	draft.Drivers = drivers
 	draft.RemainingWork, draft.ReadinessGaps, draft.Conflicts = sections[0], sections[1], sections[2]
 	draft.ungroundedDropped += total
-	recordUngroundedItemsDropped(ctx, principal, reasons)
+	merged := make(map[SynthesisRejectionReason]int, len(draft.ungroundedReasons)+len(reasons))
+	for reason, count := range draft.ungroundedReasons {
+		merged[reason] += count
+	}
+	for reason, count := range reasons {
+		merged[reason] += count
+	}
+	draft.ungroundedReasons = merged
 	return draft
 }
 
@@ -160,10 +168,16 @@ func ungroundedClaimReason(input SynthesisInput, claim ClaimedFact, allowedSubje
 	}
 }
 
-// recordUngroundedItemsDropped logs, at Info, how many items were left out and
-// the closed rejection reason of each, so a served rate can be read with the
-// mix of reasons that would otherwise have rejected the answer.
-func recordUngroundedItemsDropped(ctx context.Context, principal storage.Principal, reasons map[SynthesisRejectionReason]int) {
+// ungroundedItemDropRecorder is the optional telemetry for items left out of a
+// SERVED answer because the stored facts do not support them. It is called at
+// composition, so it counts only answers that were served.
+type ungroundedItemDropRecorder interface {
+	RecordUngroundedItemsDropped(ctx context.Context, principal storage.Principal, reasons map[SynthesisRejectionReason]int)
+}
+
+// RecordUngroundedItemsDropped implements ungroundedItemDropRecorder. Content-safe: an org id and one count per closed
+// rejection reason.
+func (t SlogEngineTelemetry) RecordUngroundedItemsDropped(ctx context.Context, principal storage.Principal, reasons map[SynthesisRejectionReason]int) {
 	attrs := []any{"org_id", SanitizeLogAttr(principal.OrgID)}
 	for reason, count := range reasons {
 		if !ValidSynthesisRejectionReason(reason) {
@@ -172,5 +186,5 @@ func recordUngroundedItemsDropped(ctx context.Context, principal storage.Princip
 		attrs = append(attrs, "dropped_"+SanitizeLogAttr(string(reason)), count)
 	}
 	attrs = append(attrs, requestIDLogAttrs(ctx)...)
-	slog.Default().InfoContext(ctx, "context fabric synthesis left out items the stored facts do not support", attrs...)
+	t.logger.InfoContext(ctx, "context fabric served answer left out items the stored facts do not support", attrs...)
 }
