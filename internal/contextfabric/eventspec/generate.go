@@ -346,6 +346,16 @@ func goVarName(e Event) string {
 		return "CohortNarrowingDisclosure"
 	case GroupedCohortCompleteness.ID:
 		return "GroupedCohortCompleteness"
+	case ReadRequirementPopulation.ID:
+		return "ReadRequirementPopulation"
+	case ObservationCover.ID:
+		return "ObservationCover"
+	case MembershipCardinality.ID:
+		return "MembershipCardinality"
+	case BudgetAssertion.ID:
+		return "BudgetAssertion"
+	case ItemAccountingDisagreement.ID:
+		return "ItemAccountingDisagreement"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:
