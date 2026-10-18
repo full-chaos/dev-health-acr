@@ -832,6 +832,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,
 		ContextFabricBudgetTrimClaimedFactsLimitation,
+		ContextFabricUngroundedItemsDroppedLimitation,
 		ContextFabricSingleSubjectCountLimitation,
 		ContextFabricSubjectTermsFromFrameLimitation,
 		ContextFabricSubjectTermsMissingLimitation,
