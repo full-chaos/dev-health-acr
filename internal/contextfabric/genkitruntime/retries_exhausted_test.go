@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
@@ -14,7 +13,7 @@ import (
 // cause.
 func TestWithRetryNamesAnExhaustedAttemptBudget(t *testing.T) {
 	t.Parallel()
-	retryable := core.NewError(core.UNAVAILABLE, "provider down")
+	retryable := newModelStatusError(statusUnavailable, "provider down")
 	cases := []struct {
 		name         string
 		maxAttempts  int
@@ -25,7 +24,7 @@ func TestWithRetryNamesAnExhaustedAttemptBudget(t *testing.T) {
 		{"every attempt retryable", 2, []error{retryable, retryable}, 2, true},
 		{"one attempt allowed, retryable", 1, []error{retryable}, 1, true},
 		{"retryable then cancelled on the last attempt", 2, []error{retryable, context.Canceled}, 2, true},
-		{"first of two attempts not retryable", 2, []error{core.NewError(core.INVALID_ARGUMENT, "bad")}, 1, false},
+		{"first of two attempts not retryable", 2, []error{newModelStatusError(statusInvalidArgument, "bad")}, 1, false},
 		{"a later attempt serves", 2, []error{retryable, nil}, 2, false},
 	}
 	for _, testCase := range cases {

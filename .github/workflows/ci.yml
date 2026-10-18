@@ -55,10 +55,27 @@ jobs:
   # a push to main, and a draft carrying the `ci-full` label run everything.
   # Heavy jobs `needs: plan` and gate on this output; `verify` reads the same
   # output to decide which jobs may report `skipped`.
+  #
+  # The same job decides which `unit` / `race*` shards a pull request runs
+  # (scripts/ci/reached-shards.sh; the rule is in its header). A shard runs when
+  # its test-shard.sh package list holds a package the change reaches; on any
+  # event other than pull_request, on a shared input (go.mod, go.sum,
+  # Makefile, .github/, scripts/ci/, ci/, internal/testsupport/, contracts/,
+  # root testdata/, clients/), and whenever the selection cannot finish, every
+  # shard runs (reach_mode=full). A skipped leg is a matrix `exclude:` entry
+  # (unit_skip / race_skip); a skipped isolated race job, or a matrix whose every
+  # leg is skipped, is named in skip_jobs and its job `if:` turns it off.
+  # `verify` accepts those skips ONLY from these outputs, ONLY when
+  # reach_mode=reached, and ONLY on a pull_request event.
   plan:
     runs-on: ubuntu-latest
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
+      reach_mode: ${{ steps.reach.outputs.reach_mode }}
+      reach_reason: ${{ steps.reach.outputs.reach_reason }}
+      skip_jobs: ${{ steps.reach.outputs.skip_jobs }}
+      unit_skip: ${{ steps.reach.outputs.unit_skip }}
+      race_skip: ${{ steps.reach.outputs.race_skip }}
     steps:
       - name: Decide whether the heavy lanes run
         id: decide
@@ -75,6 +92,22 @@ jobs:
           fi
           printf 'event=%s draft=%s labels=%s heavy=%s\n' "$EVENT" "$DRAFT" "$LABELS" "$heavy"
           printf 'heavy=%s\n' "$heavy" >> "$GITHUB_OUTPUT"
+      # fetch-depth 2: a pull_request checkout is the merge commit, and its
+      # first parent is the base tip, so HEAD^1..HEAD is exactly what lands.
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false, fetch-depth: 2}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: github.event_name == 'pull_request'
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - name: Select the unit and race shards this change reaches
+        id: reach
+        env:
+          EVENT: ${{ github.event_name }}
+        run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
   # triggered by the SAME push, with no cross-workflow `needs` (GitHub
   # Actions has none). The introducing PR hit this directly: mirror-images.yml
@@ -247,6 +280,8 @@ jobs:
       # packages would still report success.
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
+      - name: Test the reached-shard selection and the lane check that accepts its skips
+        run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
         run: scripts/ci/test-unit-split-partition.sh
       - name: Test the shard budget guard
@@ -346,10 +381,14 @@ jobs:
     # (Makefile) via the same `make isolated-timeout` lookup below.
     # test-shard-closure.sh calls every leg 1-5 and requires their union to be
     # exactly `go list ./...`, so the package cannot silently leave every leg.
+    # On a pull request the plan job excludes every leg whose packages the
+    # change does not reach (unit_skip), and skips the job when that is every
+    # leg; push and workflow_dispatch exclude nothing.
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        exclude: ${{ fromJSON(needs.plan.outputs.unit_skip) }}
     name: unit (shard ${{ matrix.shard }} of 9)
     runs-on: ubuntu-latest
     # mirror-preflight is a single job again (the ARC pool is gone), so a
@@ -357,7 +396,10 @@ jobs:
     # thing. While it was a `-hosted`/`-self-hosted` pair this job carried an
     # explicit `if:` instead, because exactly one leg ran and the cascade
     # would otherwise have skipped this job along with the leg that never ran.
-    needs: mirror-preflight
+    needs:
+      - mirror-preflight
+      - plan
+    if: ${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -557,11 +599,12 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race')
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+        exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}
     name: race (shard ${{ matrix.shard }} of 4)
     # CI_RACE_RUNNER repo variable selects a larger hosted runner for the
     # race shards (memory/CPU headroom); unset, this falls back to ubuntu-latest.
@@ -671,7 +714,7 @@ jobs:
     # Same CI_RACE_RUNNER contract as the `race` job above.
     needs:
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -733,7 +776,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -773,7 +816,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-heavy')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -811,7 +854,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-mid')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -849,7 +892,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fourth')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -904,7 +947,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -942,7 +985,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-heavy')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -982,7 +1025,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-mid')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1030,7 +1073,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1068,7 +1111,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle-heavy')
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1613,6 +1656,14 @@ jobs:
     # CHAOS-9950 exception: when the plan job reports heavy=false (a draft PR
     # without the `ci-full` label) the heavy lanes must be exactly `skipped`;
     # the step below reads plan.outputs.heavy and allows nothing else.
+    #
+    # Reached-shard exception: on a pull_request event only, a job the plan
+    # named in skip_jobs (reach_mode=reached) must be exactly `skipped`. The
+    # step reads reach_mode, skip_jobs, unit_skip and race_skip from the plan
+    # outputs, never from a job's own `if:` result; reach_mode=reached on any
+    # other event, a non-empty list under reach_mode=full, and a named job that
+    # ran all fail the gate. The merge steps pass unit_skip as -absent, so the
+    # merge requires exactly the unit legs the matrix kept.
     if: '!cancelled()'
     needs:
       - plan
@@ -1657,16 +1708,16 @@ jobs:
           path: .tmp/unit-shards
       - name: Merge JUnit reports
         if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
-        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml
+        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml -absent '${{ needs.plan.outputs.unit_skip }}'
       - name: Merge coverage profiles and convert to Cobertura once
         if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
         run: |
           set -euo pipefail
-          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out
+          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out -absent '${{ needs.plan.outputs.unit_skip }}'
           make coverage-cobertura
       - name: List every shard's failed tests
         if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
-        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json -absent '${{ needs.plan.outputs.unit_skip }}'
       # The behaviour check. The steps above are text a later edit can disable,
       # gate off, or replace with `true` while this job still reads green;
       # this one recomputes testcase / suite counts from the raw shard files
@@ -1677,7 +1728,7 @@ jobs:
       # greps for every step as a second line, and cannot see any of this.)
       - name: Verify the merged reports against the shards
         if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
-        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
+        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json -absent '${{ needs.plan.outputs.unit_skip }}'
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
@@ -1700,6 +1751,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           failed=0
@@ -1714,6 +1766,58 @@ jobs:
             *) printf 'plan output heavy is %s, expected true or false\n' "$heavy" >&2; failed=1; heavy=invalid ;;
           esac
 
+          # The reached-shard outputs are READ the same way. A shard skip is
+          # accepted only when the plan said reach_mode=reached, only on a
+          # pull_request event (EVENT is the run's own event, not a plan
+          # output), and only for a job the plan named in skip_jobs. A FULL
+          # plan must exclude nothing, and a job the plan named must really
+          # be skipped (a named job that ran means its `if:` is not wired).
+          reach="$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.reach_mode // "missing"')"
+          printf 'event=%s plan reach_mode=%s\n' "$EVENT" "$reach"
+          skip_jobs='[]'
+          case "$reach" in
+            full | reached) ;;
+            *) printf 'plan output reach_mode is %s, expected full or reached\n' "$reach" >&2; failed=1; reach=invalid ;;
+          esac
+          if [ "$reach" = reached ] && [ "$EVENT" != pull_request ]; then
+            printf 'plan output reach_mode=reached on a %s event: only a pull_request may skip shards\n' "$EVENT" >&2
+            failed=1
+            reach=invalid
+          fi
+          for list in skip_jobs unit_skip race_skip; do
+            value="$(printf '%s' "$NEEDS" | jq -r --arg k "$list" '.plan.outputs[$k] // "missing"')"
+            printf 'plan %s=%s\n' "$list" "$value"
+            if ! printf '%s' "$value" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              printf 'plan output %s is %s, expected a JSON list\n' "$list" "$value" >&2
+              failed=1
+              continue
+            fi
+            if [ "$reach" != reached ] && [ "$value" != '[]' ]; then
+              printf 'plan output %s=%s, but only reach_mode=reached on a pull_request may skip anything\n' "$list" "$value" >&2
+              failed=1
+            fi
+            [ "$list" != skip_jobs ] || skip_jobs="$value"
+          done
+          printf 'plan reach_reason=%s\n' "$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.reach_reason // "missing"')"
+
+          # A matrix job the plan skips whole ("unit", "race" in skip_jobs) is
+          # only legitimate when its leg list excludes every leg of that matrix,
+          # read from this commit's ci.yml; otherwise a whole suite could be
+          # skipped by a name alone while its legs were never excluded.
+          if [ "$reach" = reached ]; then
+            for matrix in unit race; do
+              printf '%s' "$skip_jobs" | jq -e --arg j "$matrix" 'index($j) != null' >/dev/null 2>&1 || continue
+              legs="$(awk -v j="  $matrix:" '$0 == j { g=1; next } g && /^  [A-Za-z0-9_-]+:/ { g=0 } g && /^ {8}shard: \[/ { print; exit }' .github/workflows/ci.yml \
+                | sed -E 's/.*\[([^]]*)\].*/\1/' | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -n | paste -sd, - || true)"
+              excluded="$(printf '%s' "$NEEDS" | jq -r --arg k "${matrix}_skip" '.plan.outputs[$k] // "[]"' \
+                | jq -r '[.[]?.shard] | sort | map(tostring) | join(",")' 2>/dev/null || true)"
+              if [ -z "$legs" ] || [ "$legs" != "$excluded" ]; then
+                printf '%s is skipped whole, but %s_skip excludes legs [%s] of the matrix legs [%s]\n' "$matrix" "$matrix" "$excluded" "$legs" >&2
+                failed=1
+              fi
+            done
+          fi
+
           # LIGHT lanes run on every event and must be a literal success.
           # Every other lane is heavy: a literal success when heavy=true, and
           # when heavy=false (a draft PR without the ci-full label) it must be
@@ -1721,9 +1825,21 @@ jobs:
           light=" plan mirror-preflight scripts lint docs-mermaid helm unit reports "
           while IFS=$'\t' read -r job result; do
             printf '%s: %s\n' "$job" "$result"
+            declared=no
+            if [ "$reach" = reached ] && printf '%s' "$skip_jobs" | jq -e --arg j "$job" 'index($j) != null' >/dev/null; then
+              declared=yes
+            fi
+            if [ "$declared" = yes ] && [ "$result" != skipped ]; then
+              printf '%s: the plan skipped it (skip_jobs) but its result is %s\n' "$job" "$result" >&2
+              failed=1
+              continue
+            fi
             if [ "$result" != success ]; then
               if [ "$heavy" = false ] && [ "$result" = skipped ] \
                  && [[ "$light" != *" $job "* ]]; then
+                continue
+              fi
+              if [ "$declared" = yes ] && [ "$result" = skipped ]; then
                 continue
               fi
               failed=1
