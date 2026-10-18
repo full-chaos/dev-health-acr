@@ -126,11 +126,13 @@
           "type": "[String!]",
           "kind": "scalar",
           "default": "null",
-          "allowed": false,
-          "source": "none",
-          "refusal": {
-            "code": "variable_not_allowed",
-            "reason": "not on the variable allowlist of CapacityCompletionDistribution"
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
           }
         },
         {
@@ -198,7 +200,7 @@
         {
           "caller": "unrestricted",
           "served": true,
-          "basis": "[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"
+          "basis": "[ops] capacityforecast/clickhouse.go:47-61 apply teamId and teamIds (RM §16)"
         },
         {
           "caller": "restricted",
@@ -301,11 +303,13 @@
           "type": "[String!]",
           "kind": "scalar",
           "default": "null",
-          "allowed": false,
-          "source": "none",
-          "refusal": {
-            "code": "variable_not_allowed",
-            "reason": "not on the variable allowlist of CapacityForecast"
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
           }
         },
         {
@@ -373,7 +377,7 @@
         {
           "caller": "unrestricted",
           "served": true,
-          "basis": "[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"
+          "basis": "[ops] capacityforecast/clickhouse.go:47-61 apply teamId and teamIds (RM §16)"
         },
         {
           "caller": "restricted",

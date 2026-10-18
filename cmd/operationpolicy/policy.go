@@ -490,6 +490,7 @@ func declaredPolicy() policyDeclaration {
 				Variables: map[string]variableDecl{
 					"orgId":             principalOrg,
 					"input.teamId":      teamID,
+					"input.teamIds":     teamIDs,
 					"input.targetItems": between(1, 100000),
 					"input.targetDate":  client,
 					"input.historyDays": between(1, 180),
@@ -501,7 +502,7 @@ func declaredPolicy() policyDeclaration {
 				Constraints: []dr.Constraint{
 					{Kind: dr.ConstraintMaxDaysAhead, Path: "input.targetDate", MaxDays: 365, Code: dr.RefusalVariableOutOfRange, Reason: "targetDate at most 365 days ahead (design D.6)"},
 				},
-				Unrestricted: served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"),
+				Unrestricted: served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId and teamIds (RM §16)"),
 				Restricted:   refusedFor("no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"),
 				Notes:        []string{"non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)", "null result = no history, indistinguishable from no target (capacityforecast.go:229-260)"},
 			},
@@ -512,6 +513,7 @@ func declaredPolicy() policyDeclaration {
 				Variables: map[string]variableDecl{
 					"orgId":             principalOrg,
 					"input.teamId":      teamID,
+					"input.teamIds":     teamIDs,
 					"input.targetItems": between(1, 100000),
 					"input.targetDate":  client,
 					"input.historyDays": between(1, 180),
@@ -523,7 +525,7 @@ func declaredPolicy() policyDeclaration {
 				Constraints: []dr.Constraint{
 					{Kind: dr.ConstraintMaxDaysAhead, Path: "input.targetDate", MaxDays: 365, Code: dr.RefusalVariableOutOfRange, Reason: "targetDate at most 365 days ahead (design D.6)"},
 				},
-				Unrestricted: served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"),
+				Unrestricted: served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId and teamIds (RM §16)"),
 				Restricted:   refusedFor("no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"),
 				Notes:        []string{"non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)", "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)"},
 			},

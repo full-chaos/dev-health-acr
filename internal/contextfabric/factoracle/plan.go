@@ -572,7 +572,7 @@ var temporaryAllowances = map[string]temporaryAllowance{
 	"capacityForecast": {
 		Operation: "capacityForecast", Window: "input.historyDays", Narrow: 30, Echo: "capacityForecast.historyDays", WideStated: 91, NarrowStated: 31,
 		Paths:    []string{"capacityForecast.backlogSize"},
-		Contract: "sha256:f93d3cf5c8b5ecd443fbacaeeb7a21aa84a06d7177f748732c2c06a13a8478dc",
+		Contract: "sha256:d819e0dba5f5b07865dd70702f3e0a8aba74c49b68ac387904f74b829d3b970c",
 	},
 	"workGraphFlow": {
 		Operation: "workGraphFlow",
