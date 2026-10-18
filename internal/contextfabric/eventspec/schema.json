@@ -3048,6 +3048,108 @@
     ]
   },
   {
+    "id": "contextfabric.driver_identity_collisions",
+    "msg": "context fabric driver identity collisions resolved before validation",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_driver_identity_collisions",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "cf_driver_identity_restated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "cf_driver_identity_reidentified",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.driver_source_state_corrected",
+    "msg": "context fabric driver source state corrected from grounded facts",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_driver_source_state_corrected",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.dual_table_facts",
+    "msg": "context fabric dual table facts",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "dual_table_claims",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "secondary_rows_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.engine_fact_gate_info",
     "msg": "context fabric engine fact gate",
     "level": "info",
@@ -6216,6 +6318,35 @@
       {
         "key": "via_stored_ancestry",
         "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.model_rows_stripped",
+    "msg": "context fabric model-authored claimed fact rows stripped before validation",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per model draw that authored table content, plus the synthesizer's defensive re-check: at most three draws (the resynthesis ceiling) and one re-check per synthesis call, and a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 8,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_model_rows_stripped",
+        "type": "int",
         "presence": "required"
       },
       {
