@@ -1061,11 +1061,11 @@
     }
   ],
   "residual": {
-    "feature_delivery": 135.08976757047958,
-    "maintenance": 192.08706624687716,
-    "operational": 50.2414246538375,
-    "quality": 775.0909383838812,
-    "risk": 36.49088291829696
+    "feature_delivery": 147.53421201493234,
+    "maintenance": 192.0870662468658,
+    "operational": 50.24142465384648,
+    "quality": 791.9798272727285,
+    "risk": 49.15754958497075
   },
   "expect": {
     "analytics": {
@@ -1074,22 +1074,11 @@
       "shapes_run": 24,
       "leaves": 384,
       "compared": 90,
-      "matches": 82,
-      "by_class": {},
-      "findings": [
-        {
-          "root": "analytics",
-          "pair": "investment_org",
-          "key": "",
-          "detail": "the acr repository sum is off what the store rows give by feature_delivery=12.444444444454348 maintenance=-1.1368683772161603e-11 operational=8.981260180007666e-12 quality=16.888888888850943 risk=12.666666666674018 and it equals the witness of 0 classes []"
-        },
-        {
-          "root": "analytics",
-          "pair": "investment_repository",
-          "key": "",
-          "detail": "3 repository and theme values of the acr mix are off what the store rows give"
-        }
-      ],
+      "matches": 85,
+      "by_class": {
+        "attribution_basis": 5
+      },
+      "findings": [],
       "not_joined": [
         "investment: team team-867dd8af3dc41f34 is denied to the venue token"
       ],
@@ -1098,7 +1087,63 @@
       "operation_leaves": 192,
       "cross_paths": 192,
       "cross_matches": 192,
-      "differences": [],
+      "differences": [
+        {
+          "pair": "investment_org",
+          "key": "feature_delivery",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 1243.8062493062428,
+            "ops": 1391.340461321175,
+            "residual": 147.53421201493234
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "maintenance",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 1259.8948717948808,
+            "ops": 1451.9819380417466,
+            "residual": 192.0870662468658
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "operational",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 754.752994227987,
+            "ops": 804.9944188818334,
+            "residual": 50.24142465384648
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "quality",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 2614.7135586635914,
+            "ops": 3406.69338593632,
+            "residual": 791.9798272727285
+          }
+        },
+        {
+          "pair": "investment_org",
+          "key": "risk",
+          "class": "attribution_basis",
+          "exact": true,
+          "values": {
+            "acr_repository_sum": 649.8323260073205,
+            "ops": 698.9898755922912,
+            "residual": 49.15754958497075
+          }
+        }
+      ],
       "unmeasured": [
         "analytics.sankey.__typename",
         "analytics.sankey.coverage.__typename",
@@ -1162,19 +1207,19 @@
       "by_class": {},
       "findings": [],
       "not_joined": [
-        "workload: team team-def8433a2e8d6297 is denied to the venue token",
-        "workload: team team-61bd8bc15156c0ee is denied to the venue token",
+        "workload: team team-0d1960fdd1afb4df is denied to the venue token",
+        "workload: team team-1b8f0d851d16f793 is denied to the venue token",
         "workload: team team-2e19b89503204e87 is denied to the venue token",
+        "workload: team team-3ba0dcb9ae40bd9c is denied to the venue token",
+        "workload: team team-4a2fa35331bc8f8d is denied to the venue token",
+        "workload: team team-61bd8bc15156c0ee is denied to the venue token",
         "workload: team team-867dd8af3dc41f34 is denied to the venue token",
+        "workload: team team-87322f1683ef642a is denied to the venue token",
         "workload: team team-a47c33e1b419b670 is denied to the venue token",
         "workload: team team-acb0ac434ec24ecb is denied to the venue token",
-        "workload: team team-3ba0dcb9ae40bd9c is denied to the venue token",
-        "workload: team team-87322f1683ef642a is denied to the venue token",
-        "workload: team team-4a2fa35331bc8f8d is denied to the venue token",
-        "workload: team team-1b8f0d851d16f793 is denied to the venue token",
         "workload: team team-c87aedca0c7a6316 is denied to the venue token",
         "workload: team team-cfced7395643e325 is denied to the venue token",
-        "workload: team team-0d1960fdd1afb4df is denied to the venue token",
+        "workload: team team-def8433a2e8d6297 is denied to the venue token",
         "workload: team team-e8c4f67d9fe51be2 is denied to the venue token"
       ],
       "run_operation": "served",
@@ -1267,8 +1312,8 @@
       "listener": "served",
       "shapes_run": 8,
       "leaves": 766,
-      "compared": 98,
-      "matches": 96,
+      "compared": 32,
+      "matches": 24,
       "by_class": {},
       "findings": [
         {
@@ -1281,13 +1326,49 @@
         {
           "root": "compoundingRisk",
           "pair": "health_rows",
-          "key": "team on 2026-10-08",
+          "key": "repository on 2026-10-13",
           "detail": "the acr health fact has no ops row for its own day"
         },
         {
           "root": "compoundingRisk",
           "pair": "health_rows",
-          "key": "team on 2026-10-18",
+          "key": "repository on 2026-10-14",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-16",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-16",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
           "detail": "the acr health fact has no ops row for its own day"
         }
       ],
@@ -1372,55 +1453,55 @@
         }
       ],
       "not_joined": [
-        "flow: team team-c8c5c68250fc5b7e is denied to the venue token",
-        "flow: team team-bcd795ed2069800b is denied to the venue token",
-        "flow: team team-8a95d98f6926f2bf is denied to the venue token",
-        "flow: team team-31f3c2cb403b7903 is denied to the venue token",
-        "flow: team team-585f1fe02a3c3b1a is denied to the venue token",
         "flow: team team-08b205af44fa96ab is denied to the venue token",
-        "flow: team team-a1594e485bb8ce9d is denied to the venue token",
-        "flow: team team-327fe7ab89323919 is denied to the venue token",
-        "flow: team team-def8433a2e8d6297 is denied to the venue token",
-        "flow: team team-61bd8bc15156c0ee is denied to the venue token",
+        "flow: team team-0d1960fdd1afb4df is denied to the venue token",
+        "flow: team team-1b8f0d851d16f793 is denied to the venue token",
+        "flow: team team-1fbf9b54a08e28b5 is denied to the venue token",
+        "flow: team team-2c23e5fd317dc84c is denied to the venue token",
         "flow: team team-2e19b89503204e87 is denied to the venue token",
+        "flow: team team-31f3c2cb403b7903 is denied to the venue token",
+        "flow: team team-327fe7ab89323919 is denied to the venue token",
+        "flow: team team-3ba0dcb9ae40bd9c is denied to the venue token",
+        "flow: team team-4a2fa35331bc8f8d is denied to the venue token",
+        "flow: team team-585f1fe02a3c3b1a is denied to the venue token",
+        "flow: team team-61bd8bc15156c0ee is denied to the venue token",
         "flow: team team-867dd8af3dc41f34 is denied to the venue token",
+        "flow: team team-87322f1683ef642a is denied to the venue token",
+        "flow: team team-8a95d98f6926f2bf is denied to the venue token",
+        "flow: team team-a1594e485bb8ce9d is denied to the venue token",
         "flow: team team-a47c33e1b419b670 is denied to the venue token",
         "flow: team team-acb0ac434ec24ecb is denied to the venue token",
-        "flow: team team-3ba0dcb9ae40bd9c is denied to the venue token",
-        "flow: team team-87322f1683ef642a is denied to the venue token",
-        "flow: team team-4a2fa35331bc8f8d is denied to the venue token",
-        "flow: team team-1b8f0d851d16f793 is denied to the venue token",
-        "flow: team team-c87aedca0c7a6316 is denied to the venue token",
-        "flow: team team-cfced7395643e325 is denied to the venue token",
-        "flow: team team-0d1960fdd1afb4df is denied to the venue token",
         "flow: team team-b2c1ff62d6380ecd is denied to the venue token",
-        "flow: team team-2c23e5fd317dc84c is denied to the venue token",
-        "flow: team team-1fbf9b54a08e28b5 is denied to the venue token",
+        "flow: team team-bcd795ed2069800b is denied to the venue token",
+        "flow: team team-c87aedca0c7a6316 is denied to the venue token",
+        "flow: team team-c8c5c68250fc5b7e is denied to the venue token",
+        "flow: team team-cfced7395643e325 is denied to the venue token",
+        "flow: team team-def8433a2e8d6297 is denied to the venue token",
         "flow: team team-e8c4f67d9fe51be2 is denied to the venue token",
-        "readiness: team team-c8c5c68250fc5b7e is denied to the venue token",
-        "readiness: team team-bcd795ed2069800b is denied to the venue token",
-        "readiness: team team-8a95d98f6926f2bf is denied to the venue token",
-        "readiness: team team-31f3c2cb403b7903 is denied to the venue token",
-        "readiness: team team-585f1fe02a3c3b1a is denied to the venue token",
         "readiness: team team-08b205af44fa96ab is denied to the venue token",
-        "readiness: team team-a1594e485bb8ce9d is denied to the venue token",
-        "readiness: team team-327fe7ab89323919 is denied to the venue token",
-        "readiness: team team-def8433a2e8d6297 is denied to the venue token",
-        "readiness: team team-61bd8bc15156c0ee is denied to the venue token",
+        "readiness: team team-0d1960fdd1afb4df is denied to the venue token",
+        "readiness: team team-1b8f0d851d16f793 is denied to the venue token",
+        "readiness: team team-2c23e5fd317dc84c is denied to the venue token",
         "readiness: team team-2e19b89503204e87 is denied to the venue token",
+        "readiness: team team-31f3c2cb403b7903 is denied to the venue token",
+        "readiness: team team-327fe7ab89323919 is denied to the venue token",
+        "readiness: team team-3ba0dcb9ae40bd9c is denied to the venue token",
+        "readiness: team team-4a2fa35331bc8f8d is denied to the venue token",
+        "readiness: team team-585f1fe02a3c3b1a is denied to the venue token",
+        "readiness: team team-61bd8bc15156c0ee is denied to the venue token",
         "readiness: team team-867dd8af3dc41f34 is denied to the venue token",
+        "readiness: team team-87322f1683ef642a is denied to the venue token",
+        "readiness: team team-8a95d98f6926f2bf is denied to the venue token",
+        "readiness: team team-a1594e485bb8ce9d is denied to the venue token",
         "readiness: team team-a47c33e1b419b670 is denied to the venue token",
         "readiness: team team-acb0ac434ec24ecb is denied to the venue token",
-        "readiness: team team-dcdc65fa855c60aa is denied to the venue token",
-        "readiness: team team-3ba0dcb9ae40bd9c is denied to the venue token",
-        "readiness: team team-87322f1683ef642a is denied to the venue token",
-        "readiness: team team-4a2fa35331bc8f8d is denied to the venue token",
-        "readiness: team team-1b8f0d851d16f793 is denied to the venue token",
-        "readiness: team team-c87aedca0c7a6316 is denied to the venue token",
-        "readiness: team team-cfced7395643e325 is denied to the venue token",
-        "readiness: team team-0d1960fdd1afb4df is denied to the venue token",
         "readiness: team team-b2c1ff62d6380ecd is denied to the venue token",
-        "readiness: team team-2c23e5fd317dc84c is denied to the venue token",
+        "readiness: team team-bcd795ed2069800b is denied to the venue token",
+        "readiness: team team-c87aedca0c7a6316 is denied to the venue token",
+        "readiness: team team-c8c5c68250fc5b7e is denied to the venue token",
+        "readiness: team team-cfced7395643e325 is denied to the venue token",
+        "readiness: team team-dcdc65fa855c60aa is denied to the venue token",
+        "readiness: team team-def8433a2e8d6297 is denied to the venue token",
         "readiness: team team-e8c4f67d9fe51be2 is denied to the venue token"
       ],
       "run_operation": "served",
