@@ -1,8 +1,11 @@
 package genkitruntime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,5 +87,50 @@ func TestInvalidSchemaReplyIsStillRedrawn(t *testing.T) {
 	_, _, err := refusalRuntime(t, client, nil).InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
 	if err == nil || len(client.requests) != 3 {
 		t.Fatalf("err = %v provider calls = %d, want an error after 3 draws", err, len(client.requests))
+	}
+}
+
+// The phrasing stage bills a refusal like the other two: its usage reaches
+// the caller with the error, and the Info line names the operation.
+func TestRefusalUsageAndInfoLineAcrossEveryStage(t *testing.T) {
+	var logs bytes.Buffer
+	gen := llmGenerator{logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+	var err error
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+		t.Fatal(err)
+	}
+	if gen.synthesis, err = newOutputSchema(synthesisOutput{}); err != nil {
+		t.Fatal(err)
+	}
+	if gen.phrasing, err = newOutputSchema(phrasingOutput{}); err != nil {
+		t.Fatal(err)
+	}
+	gen.clients = LLMClients{refusalModel: &scriptedLLM{model: refusalModel, replies: []llmReply{refusalReply()}}}
+	request := generationRequest{Model: refusalModel}
+	stages := map[string]func() (contextfabric.ModelUsage, error){
+		"interpret": func() (contextfabric.ModelUsage, error) {
+			_, usage, err := gen.Interpret(context.Background(), request)
+			return usage, err
+		},
+		"synthesize": func() (contextfabric.ModelUsage, error) {
+			_, usage, err := gen.Synthesize(context.Background(), request)
+			return usage, err
+		},
+		"phrase": func() (contextfabric.ModelUsage, error) {
+			_, usage, err := gen.Phrase(context.Background(), request)
+			return usage, err
+		},
+	}
+	for stage, call := range stages {
+		logs.Reset()
+		usage, err := call()
+		if !errors.Is(err, errModelRefusal) || usage.InputTokens != 900 {
+			t.Fatalf("%s: err = %v input tokens = %d, want errModelRefusal and 900", stage, err, usage.InputTokens)
+		}
+		line := logs.String()
+		if strings.Count(line, llmRefusedMessage) != 1 || !strings.Contains(line, "operation="+stage) ||
+			!strings.Contains(line, "outcome=model_refusal") || !strings.Contains(line, "input_tokens=900") {
+			t.Fatalf("%s: Info line = %q, want one refusal line naming the operation, outcome and billed tokens", stage, line)
+		}
 	}
 }

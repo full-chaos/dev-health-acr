@@ -291,10 +291,7 @@ func schemaViolations(result *gojsonschema.Result) []string {
 func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
 	text, usage, err := g.complete(ctx, "interpret", request, g.interpretation)
 	if err != nil {
-		if errors.Is(err, errModelRefusal) {
-			return interpretationOutput{}, usage, err
-		}
-		return interpretationOutput{}, contextfabric.ModelUsage{}, err
+		return interpretationOutput{}, usage, err
 	}
 	candidate, checkErr := g.check(ctx, "interpret", text, g.interpretation)
 	var output interpretationOutput
@@ -315,10 +312,7 @@ func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) 
 func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
 	text, usage, err := g.complete(ctx, "synthesize", request, g.synthesis)
 	if err != nil {
-		if errors.Is(err, errModelRefusal) {
-			return synthesisOutput{}, usage, err
-		}
-		return synthesisOutput{}, contextfabric.ModelUsage{}, err
+		return synthesisOutput{}, usage, err
 	}
 	candidate, checkErr := g.check(ctx, "synthesize", text, g.synthesis)
 	var output synthesisOutput
@@ -339,7 +333,7 @@ func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest)
 func (g llmGenerator) Phrase(ctx context.Context, request generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
 	text, usage, err := g.complete(ctx, "phrase", request, g.phrasing)
 	if err != nil {
-		return phrasingOutput{}, contextfabric.ModelUsage{}, err
+		return phrasingOutput{}, usage, err
 	}
 	candidate, checkErr := g.check(ctx, "phrase", text, g.phrasing)
 	if checkErr != nil {
