@@ -353,6 +353,7 @@ type OperationRunnerCounters struct {
 	RowsForeign   int64
 	PathsRemoved  int64
 	PathsWithheld int64
+	PageCuts      int64
 }
 
 // Counters returns the process totals of foreign rows refused, output values

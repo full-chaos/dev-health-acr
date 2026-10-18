@@ -100,6 +100,7 @@ const (
 	GraphQLQueryLogMessage    = "context fabric graphql query"
 	GraphQLRowsForeignLog     = "context fabric graphql query refused a row outside the grant"
 	GraphQLPathsRemovedLog    = "context fabric graphql query removed unselected response paths"
+	GraphQLPageCutLog         = "context fabric graphql query page cut"
 	GraphQLListenerRefusedLog = "context fabric graphql query was refused by the MCP listener"
 	graphqlRebuiltOperation   = "AcrGraphQLQuery"
 	graphqlUnknownRootField   = "unknown"
