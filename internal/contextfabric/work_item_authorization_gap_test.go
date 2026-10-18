@@ -49,7 +49,7 @@ func runWorkItemGapDispatchWith(t *testing.T, census WorkItemMembershipCensus, w
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
 		}),
 		Synthesizer: synthesizer,
-		Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
+		Results:     store, Requirements: registryDeriver{}, Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_gap_001" }})
 	if err != nil {
 		t.Fatal(err)
