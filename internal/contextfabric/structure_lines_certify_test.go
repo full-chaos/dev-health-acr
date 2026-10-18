@@ -328,7 +328,26 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 			s.RecordProjectedRowsByFactKind(c, principalOrg1, map[contextfabric.FactKind]int{contractsv1.ContextFabricFactMetrics: 2})
 		}},
 	}...)
-	if len(cases) != 15 {
+	for _, extra := range []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.DualTableFacts, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordDualTableFacts(c, principalOrg1, 1, 2)
+		}},
+		{eventspec.ModelRowsStripped, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordModelRowsStripped(c, principalOrg1, 1)
+		}},
+		{eventspec.DriverSourceStateCorrected, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordDriverSourceStateCorrected(c, principalOrg1, 1)
+		}},
+		{eventspec.DriverIdentityCollisions, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordDriverIdentityCollisions(c, principalOrg1, contextfabric.DriverIdentityCollisions{Restated: 1})
+		}},
+	} {
+		cases = append(cases, extra)
+	}
+	if len(cases) != 19 {
 		t.Fatalf("want one case per declared line, have %d", len(cases))
 	}
 	for _, tc := range cases {
@@ -467,4 +486,54 @@ func TestProjectedRowsLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
 	if strings.Count(buf.String(), "by fact kind") != 1 || !strings.Contains(buf.String(), `"rows_projected_by_fact_kind":5`) {
 		t.Fatalf("kinds outside the contract were not summed into one class line: %s", buf.String())
 	}
+}
+
+func TestSynthesisCountLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
+	t.Parallel()
+	run := func(variant string) []byte {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		if err := contextfabric.SynthesizeWithTelemetryForTest(ctx, sink, variant); err != nil {
+			t.Fatalf("%s: %v", variant, err)
+		}
+		return buf.Bytes()
+	}
+	count := func(raw []byte, event eventspec.Event) int { return bytes.Count(raw, []byte(`"msg":"`+event.Msg+`"`)) }
+
+	clean := run("clean")
+	certifyRequestLine(t, clean, eventspec.DriverIdentityCollisions, map[string]any{"org_id": "org_1", "cf_driver_identity_collisions": 0, "cf_driver_identity_restated": 0, "cf_driver_identity_reidentified": 0})
+	certifyRequestLine(t, clean, eventspec.DualTableFacts, map[string]any{"org_id": "org_1", "dual_table_claims": 0, "secondary_rows_bytes": 0})
+	for _, event := range []eventspec.Event{eventspec.ModelRowsStripped, eventspec.DriverSourceStateCorrected} {
+		if count(clean, event) != 0 {
+			t.Errorf("%s was written for a clean draft", event.ID)
+		}
+		log, _ := certify.Parse(clean)
+		if err := certify.CertifyAbsent(log, event, map[string]any{"request_id": factScopeCertifyRequestID}); err != nil {
+			t.Errorf("%s: %v", event.ID, err)
+		}
+	}
+
+	collision := run("collision")
+	line := certifyRequestLine(t, collision, eventspec.DriverIdentityCollisions, map[string]any{"cf_driver_identity_collisions": 1})
+	if line["cf_driver_identity_reidentified"].(float64)+line["cf_driver_identity_restated"].(float64) != 1 {
+		t.Errorf("collision parts do not add to the total: %v", line)
+	}
+
+	stripped := run("stripped")
+	certifyRequestLine(t, stripped, eventspec.ModelRowsStripped, map[string]any{"org_id": "org_1", "cf_model_rows_stripped": 1})
+
+	corrected := run("source_state")
+	certifyRequestLine(t, corrected, eventspec.DriverSourceStateCorrected, map[string]any{"org_id": "org_1", "cf_driver_source_state_corrected": 1})
+
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordDualTableFacts(ctx, principalOrg1, 3, 1024)
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 3, "secondary_rows_bytes": 1024})
+	buf.Reset()
+	sink.RecordDualTableFacts(ctx, principalOrg1, 3, 1024)
+	sink.RecordDualTableFacts(ctx, principalOrg1, 1, 1)
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 3, "secondary_rows_bytes": 1024})
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 1, "secondary_rows_bytes": 1})
+	sink.RecordDualTableFacts(ctx, principalOrg1, 2, 2)
+	certifyRefused(t, buf.Bytes(), eventspec.DualTableFacts, "a third dual table line in one request (two synthesis calls)", map[string]any{"dual_table_claims": 2})
 }
