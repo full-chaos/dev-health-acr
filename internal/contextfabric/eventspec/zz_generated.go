@@ -42,6 +42,9 @@ var ByID = map[string]Event{
 	"contextfabric.direct_read":                        DirectRead,
 	"contextfabric.direct_read_authorization":          DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":          DirectRelationshipsRead,
+	"contextfabric.driver_identity_collisions":         DriverIdentityCollisions,
+	"contextfabric.driver_source_state_corrected":      DriverSourceStateCorrected,
+	"contextfabric.dual_table_facts":                   DualTableFacts,
 	"contextfabric.engine_fact_gate_info":              EngineFactGateInfo,
 	"contextfabric.engine_fact_gate_warn":              EngineFactGateWarn,
 	"contextfabric.evidence_expansion":                 EvidenceExpansion,
@@ -62,6 +65,7 @@ var ByID = map[string]Event{
 	"contextfabric.interpretation_ensemble_resolved":   InterpretationEnsembleResolved,
 	"contextfabric.interpreted_time_bound":             InterpretedTimeBound,
 	"contextfabric.kind_carry":                         KindCarry,
+	"contextfabric.model_rows_stripped":                ModelRowsStripped,
 	"contextfabric.operation_read":                     OperationRead,
 	"contextfabric.organization_subject_read":          OrganizationSubjectRead,
 	"contextfabric.ownership_routing":                  OwnershipRouting,
@@ -2138,6 +2142,147 @@ func (f DirectRelationshipsReadFields) SlogArgs() []any {
 	}
 }
 
+// DriverIdentityCollisionsFields is contextfabric.driver_identity_collisions's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DriverIdentityCollisions.Fields declares in spec.go.
+type DriverIdentityCollisionsFields struct {
+	OrgID                        string
+	CfDriverIdentityCollisions   int
+	CfDriverIdentityRestated     int
+	CfDriverIdentityReidentified int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DriverIdentityCollisionsFields uniformly, set ONLY by NewDriverIdentityCollisionsFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDriverIdentityCollisionsFields is the generated constructor for DriverIdentityCollisionsFields -- every
+// field DriverIdentityCollisions.Fields declares is a required parameter.
+func NewDriverIdentityCollisionsFields(orgID string, cfDriverIdentityCollisions int, cfDriverIdentityRestated int, cfDriverIdentityReidentified int) DriverIdentityCollisionsFields {
+	return DriverIdentityCollisionsFields{
+		OrgID:                        orgID,
+		CfDriverIdentityCollisions:   cfDriverIdentityCollisions,
+		CfDriverIdentityRestated:     cfDriverIdentityRestated,
+		CfDriverIdentityReidentified: cfDriverIdentityReidentified,
+		constructed:                  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDriverIdentityCollisionsFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DriverIdentityCollisionsFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DriverIdentityCollisions's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DriverIdentityCollisionsFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cf_driver_identity_collisions", f.CfDriverIdentityCollisions,
+		"cf_driver_identity_restated", f.CfDriverIdentityRestated,
+		"cf_driver_identity_reidentified", f.CfDriverIdentityReidentified,
+	}
+}
+
+// DriverSourceStateCorrectedFields is contextfabric.driver_source_state_corrected's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DriverSourceStateCorrected.Fields declares in spec.go.
+type DriverSourceStateCorrectedFields struct {
+	OrgID                        string
+	CfDriverSourceStateCorrected int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DriverSourceStateCorrectedFields uniformly, set ONLY by NewDriverSourceStateCorrectedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDriverSourceStateCorrectedFields is the generated constructor for DriverSourceStateCorrectedFields -- every
+// field DriverSourceStateCorrected.Fields declares is a required parameter.
+func NewDriverSourceStateCorrectedFields(orgID string, cfDriverSourceStateCorrected int) DriverSourceStateCorrectedFields {
+	return DriverSourceStateCorrectedFields{
+		OrgID:                        orgID,
+		CfDriverSourceStateCorrected: cfDriverSourceStateCorrected,
+		constructed:                  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDriverSourceStateCorrectedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DriverSourceStateCorrectedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DriverSourceStateCorrected's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DriverSourceStateCorrectedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cf_driver_source_state_corrected", f.CfDriverSourceStateCorrected,
+	}
+}
+
+// DualTableFactsFields is contextfabric.dual_table_facts's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DualTableFacts.Fields declares in spec.go.
+type DualTableFactsFields struct {
+	OrgID              string
+	DualTableClaims    int
+	SecondaryRowsBytes int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DualTableFactsFields uniformly, set ONLY by NewDualTableFactsFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDualTableFactsFields is the generated constructor for DualTableFactsFields -- every
+// field DualTableFacts.Fields declares is a required parameter.
+func NewDualTableFactsFields(orgID string, dualTableClaims int, secondaryRowsBytes int) DualTableFactsFields {
+	return DualTableFactsFields{
+		OrgID:              orgID,
+		DualTableClaims:    dualTableClaims,
+		SecondaryRowsBytes: secondaryRowsBytes,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDualTableFactsFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DualTableFactsFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DualTableFacts's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DualTableFactsFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"dual_table_claims", f.DualTableClaims,
+		"secondary_rows_bytes", f.SecondaryRowsBytes,
+	}
+}
+
 // EngineFactGateInfoFields is contextfabric.engine_fact_gate_info's generated typed construction interface
 // (CHAOS-5516): one Go field per Field EngineFactGateInfo.Fields declares in spec.go.
 type EngineFactGateInfoFields struct {
@@ -4029,6 +4174,50 @@ func (f KindCarryFields) SlogArgs() []any {
 		"redeemed_kind", contextfabric.SanitizeLogAttr(f.RedeemedKind),
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
+	}
+}
+
+// ModelRowsStrippedFields is contextfabric.model_rows_stripped's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelRowsStripped.Fields declares in spec.go.
+type ModelRowsStrippedFields struct {
+	OrgID               string
+	CfModelRowsStripped int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelRowsStrippedFields uniformly, set ONLY by NewModelRowsStrippedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelRowsStrippedFields is the generated constructor for ModelRowsStrippedFields -- every
+// field ModelRowsStripped.Fields declares is a required parameter.
+func NewModelRowsStrippedFields(orgID string, cfModelRowsStripped int) ModelRowsStrippedFields {
+	return ModelRowsStrippedFields{
+		OrgID:               orgID,
+		CfModelRowsStripped: cfModelRowsStripped,
+		constructed:         true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelRowsStrippedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelRowsStrippedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelRowsStripped's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelRowsStrippedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cf_model_rows_stripped", f.CfModelRowsStripped,
 	}
 }
 
