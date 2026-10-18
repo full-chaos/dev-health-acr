@@ -395,6 +395,7 @@ func RequirementLineEventsFromEngineForTest(t *testing.T) RequirementLineEventsF
 		collect(rec)
 	}
 	ledger := unreconciledLedger()
+	ledger.Disagreement = string(contractsv1.ContextFabricChargedDrivers)
 	for _, stage := range ItemAccountingStagesForTest() {
 		out.Accountings = append(out.Accountings, itemAccountingEventFor(stage, ledger, 30))
 	}

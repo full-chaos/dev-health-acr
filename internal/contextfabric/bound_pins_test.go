@@ -92,6 +92,11 @@ func TestEventLineBoundsAreTheEngineCallSitesTimesThePasses(t *testing.T) {
 		{eventspec.AnswerReuseContainment, len(callsNamed(t, "recordReuseContainment")) * passes, "recordReuseContainment call sites x passes"},
 		{eventspec.StoredAnswerability, largestGroup(callsNamed(t, "RecordStoredAnswerability"), 2) * passes, "RecordStoredAnswerability call sites per surface x passes"},
 		{eventspec.AnswerReuseServedRequestID, len(callsNamed(t, "RecordAnswerReuseServedRequestID")) * passes, "RecordAnswerReuseServedRequestID call sites x passes"},
+		{eventspec.ReadRequirementPopulation, len(callsNamed(t, "RecordReadRequirementPopulation")) * contractsv1.ContextFabricPlanRequirementOutcomeMaxCount, "one call site, one line per outcome row of the served answer"},
+		{eventspec.ObservationCover, len(callsNamed(t, "RecordReadRequirementObservationCover")) * contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * passes, "one call site, one line per outcome row of each pass"},
+		{eventspec.MembershipCardinality, len(callsNamed(t, "RecordMembershipCardinality")) * passes, "RecordMembershipCardinality call sites x passes"},
+		{eventspec.BudgetAssertion, len(callsNamed(t, "finalizeServed")) * passes, "finalizeServed call sites (the only recording entry; the measure-only path emits nothing) x passes"},
+		{eventspec.ItemAccountingDisagreement, len(callsNamed(t, "RecordItemAccounting")) * passes, "RecordItemAccounting call sites x passes"},
 	}
 	for _, tc := range cases {
 		if tc.want == 0 {
