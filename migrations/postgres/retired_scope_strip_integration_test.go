@@ -33,6 +33,8 @@ func TestRunner_upgradeTo54StripsTheRetiredContextAdminScope(t *testing.T) {
 	const orgID = "70d529e0-0000-4000-8000-000000000001"
 	const deviceHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const requestDeviceHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const adminOnlyDeviceHash = "9999999999999999999999999999999999999999999999999999999999999999"
+	const adminOnlyUserHash = "8888888888888888888888888888888888888888888888888888888888888888"
 	const userHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	const requestUserHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, scopes, created_at)
@@ -42,8 +44,9 @@ func TestRunner_upgradeTo54StripsTheRetiredContextAdminScope(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, authorized_scopes, created_at, expires_at, poll_interval_seconds, issuance_provenance)
 		VALUES ($1, $2, 'pending', '["context:admin","context:read"]', timestamptz '2026-10-18 12:00:00+00', timestamptz '2026-10-18 12:10:00+00', 5, 'device_authorization'),
-		       ($3, $4, 'pending', '["context:read"]', timestamptz '2026-10-18 12:00:00+00', timestamptz '2026-10-18 12:10:00+00', 5, 'device_authorization')`,
-		deviceHash, userHash, requestDeviceHash, requestUserHash)
+		       ($3, $4, 'pending', '["context:read"]', timestamptz '2026-10-18 12:00:00+00', timestamptz '2026-10-18 12:10:00+00', 5, 'device_authorization'),
+		       ($5, $6, 'pending', '["context:admin"]', timestamptz '2026-10-18 12:00:00+00', timestamptz '2026-10-18 12:10:00+00', 5, 'device_authorization')`,
+		deviceHash, userHash, requestDeviceHash, requestUserHash, adminOnlyDeviceHash, adminOnlyUserHash)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.oauth_device_grants (device_code_hash, client_id, client_kind, resource, scope, created_at, expires_at)
 		VALUES ($1, 'acrc_00000000000000000000000000000000', 'dynamic', 'https://example.com/mcp', 'context:read context:admin evidence:read', now(), now() + interval '1 hour')`, deviceHash)
@@ -68,7 +71,15 @@ func TestRunner_upgradeTo54StripsTheRetiredContextAdminScope(t *testing.T) {
 	require.JSONEq(t, `[]`, scalar(`SELECT scopes::text FROM acr.client_credentials WHERE credential_id = 'cred-only-admin'`), "a credential whose only scope was the retired one is left with an empty scope set; self-rotate and self-revoke refuse it with the invalid-credential error")
 	require.JSONEq(t, `["context:read"]`, scalar(`SELECT authorized_scopes::text FROM acr.device_authorizations WHERE device_code_hash = $1`, deviceHash))
 	require.Equal(t, "context:read evidence:read", scalar(`SELECT scope FROM acr.oauth_device_grants WHERE device_code_hash = $1`, deviceHash))
-	require.Equal(t, "", scalar(`SELECT scope FROM acr.oauth_authorization_requests WHERE device_code_hash = $1`, requestDeviceHash))
+	require.Equal(t, "0", scalar(`SELECT count(*)::text FROM acr.device_authorizations WHERE device_code_hash IN ($1, $2)`, requestDeviceHash, adminOnlyDeviceHash),
+		"an unredeemed authorization whose scope would be empty is deleted, never widened to the default scopes")
+	require.Equal(t, "0", scalar(`SELECT count(*)::text FROM acr.oauth_authorization_requests`), "the OAuth request of a deleted authorization cascades away")
+
+	_, err = db.ExecContext(ctx, `INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, scopes, created_at)
+		VALUES ('cred-late-admin', $1, 'late', 'fcacr_dddd', 'hash-4', '["context:admin"]', now())`, orgID)
+	require.Error(t, err, "a writer still running the previous release cannot write the retired scope back")
+	_, err = db.ExecContext(ctx, `UPDATE acr.client_credentials SET scopes = '["context:admin"]' WHERE credential_id = 'cred-without-admin'`)
+	require.Error(t, err, "an update cannot reintroduce the retired scope either")
 
 	for _, table := range []struct{ name, column string }{
 		{"client_credentials", "scopes::text"},
