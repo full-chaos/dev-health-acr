@@ -15,7 +15,9 @@ set -euo pipefail
 #      listed package; for an empty change list; and whenever this script
 #      cannot finish (fail open: an error is FULL, never an empty selection).
 #   2. A Go file in package P changes P. A non-Go file changes P when it sits
-#      under P/.../testdata/ or is one of P's //go:embed inputs.
+#      under P/.../testdata/, is one of P's //go:embed inputs, or no longer
+#      exists (a deleted or renamed-away file under P may have been an embed
+#      input or a file P's tests read, and the current tree cannot say).
 #   3. A package is reached when its test binary (`go list -test` Deps of
 #      P.test, plus P) holds a changed package.
 #   4. Reads the build graph cannot see, derived from test source on every run:
@@ -35,7 +37,9 @@ set -euo pipefail
 #                             `race` when every leg of that matrix is skipped
 #   unit_skip=<JSON list>     matrix exclude entries {"shard":N} for `unit`
 #   race_skip=<JSON list>     the same for `race`
-# FULL prints [] for all three lists. A report goes to stderr.
+# FULL prints [] for all three lists. A report goes to stderr: every changed
+# package with the file that changed it, every reached package with the rule
+# that reached it, and every shard decision with a reached package it holds.
 #
 # Usage: reached-shards.sh --event NAME [--changed FILE] [--reached-out FILE] [--workflow FILE]
 #   --changed      one changed path per line; default: the diff of the pull
@@ -186,6 +190,7 @@ select_shards() {
       ip="${dir_pkg[$d]:-}"
       [ -n "$ip" ] || { emit_full "Go file outside every listed package: $f"; return 0; }
       changed_pkg[$ip]=1
+      printf 'reached-shards: changed package %s (%s)\n' "$ip" "$f" >&2
       continue
     fi
     d="$f"
@@ -194,8 +199,9 @@ select_shards() {
       ip="${dir_pkg[$d]:-}"
       if [ -n "$ip" ]; then
         if [ "$d" = . ]; then rel="$f"; else rel="${f#"$d"/}"; fi
-        if { [[ "$rel" == */* ]] && has_testdata_dir "${rel%/*}/"; } || [ -n "${embed[$ip|$rel]:-}" ]; then
+        if { [[ "$rel" == */* ]] && has_testdata_dir "${rel%/*}/"; } || [ -n "${embed[$ip|$rel]:-}" ] || [ ! -e "$repo_root/$f" ]; then
           changed_pkg[$ip]=1
+          printf 'reached-shards: changed package %s (%s)\n' "$ip" "$f" >&2
         fi
         break
       fi
@@ -203,10 +209,16 @@ select_shards() {
     done
   done
 
-  local -A reached=()
+  local -A reached=() basis=()
   for owner in "${!deps_of[@]}"; do
     for ip in "${!changed_pkg[@]}"; do
-      case "${deps_of[$owner]}" in *" $ip "*) reached[$owner]=1; break ;; esac
+      case "${deps_of[$owner]}" in
+        *" $ip "*)
+          reached[$owner]=1
+          if [ "$owner" = "$ip" ]; then basis[$owner]="changed"; else basis[$owner]="test binary imports $ip"; fi
+          break
+          ;;
+      esac
     done
   done
 
@@ -242,7 +254,7 @@ select_shards() {
   for tf in "${!has_root[@]}"; do
     if [ "${has_root[$tf]}" = 2 ] || [ -n "${has_enum[$tf]:-}" ]; then
       ip="${file_pkg[$tf]}"
-      [ -n "${reached[$ip]:-}" ] || walkers=$((walkers + 1))
+      [ -n "${reached[$ip]:-}" ] || { walkers=$((walkers + 1)); basis[$ip]="tests walk the module tree (${tf#"$repo_root"/})"; }
       reached[$ip]=1
     fi
   done
@@ -256,7 +268,7 @@ select_shards() {
   while IFS= read -r tf; do
     [ -n "$tf" ] || continue
     ip="${file_pkg[$tf]}"
-    [ -n "${reached[$ip]:-}" ] || literal=$((literal + 1))
+    [ -n "${reached[$ip]:-}" ] || { literal=$((literal + 1)); basis[$ip]="test source names a changed file (${tf#"$repo_root"/})"; }
     reached[$ip]=1
   done <<<"$matched"
   rm -f "$patterns"
@@ -264,13 +276,18 @@ select_shards() {
   if [ -n "$reached_out" ]; then
     printf '%s\n' "${!reached[@]}" | LC_ALL=C sort >"$reached_out"
   fi
+  for ip in "${!reached[@]}"; do
+    printf 'reached-shards: reached %s (%s)\n' "$ip" "${basis[$ip]:-}"
+  done | LC_ALL=C sort >&2
   printf 'reached-shards: %s changed file(s), %s changed package(s), %s reached package(s) (%s by tree walk, %s by a literal file name)\n' \
     "${#changed[@]}" "${#changed_pkg[@]}" "${#reached[@]}" "$walkers" "$literal" >&2
 
-  # holds_reached PACKAGE... -> true when any argument is reached.
+  # holds_reached PACKAGE... -> true when any argument is reached; sets
+  # held to the first reached one for the decision log.
+  local held=""
   holds_reached() {
     local pkg
-    for pkg in "$@"; do [ -n "${reached[$pkg]:-}" ] && return 0; done
+    for pkg in "$@"; do [ -n "${reached[$pkg]:-}" ] && { held="$pkg"; return 0; }; done
     return 1
   }
 
@@ -329,10 +346,10 @@ select_shards() {
     read -r -a pkgs <"$legdir/${key//:/.}" || true
     [ "${#pkgs[@]}" -gt 0 ] || { printf 'reached-shards: %s selects no package\n' "$key" >&2; rm -rf "$legdir"; return 1; }
     if holds_reached "${pkgs[@]}"; then
-      printf 'reached-shards: run  %s\n' "$key" >&2
+      printf 'reached-shards: run  %s (holds %s)\n' "$key" "$held" >&2
       continue
     fi
-    printf 'reached-shards: skip %s\n' "$key" >&2
+    printf 'reached-shards: skip %s (holds no reached package)\n' "$key" >&2
     case "$key" in
       unit:*) unit_skip+="${unit_skip:+,}{\"shard\":${key#unit:}}" ;;
       race:*) race_skip+="${race_skip:+,}{\"shard\":${key#race:}}" ;;

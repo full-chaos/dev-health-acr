@@ -72,6 +72,7 @@ jobs:
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
       reach_mode: ${{ steps.reach.outputs.reach_mode }}
+      reach_reason: ${{ steps.reach.outputs.reach_reason }}
       skip_jobs: ${{ steps.reach.outputs.skip_jobs }}
       unit_skip: ${{ steps.reach.outputs.unit_skip }}
       race_skip: ${{ steps.reach.outputs.race_skip }}
@@ -1797,6 +1798,25 @@ jobs:
             fi
             [ "$list" != skip_jobs ] || skip_jobs="$value"
           done
+          printf 'plan reach_reason=%s\n' "$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.reach_reason // "missing"')"
+
+          # A matrix job the plan skips whole ("unit", "race" in skip_jobs) is
+          # only legitimate when its leg list excludes every leg of that matrix,
+          # read from this commit's ci.yml; otherwise a whole suite could be
+          # skipped by a name alone while its legs were never excluded.
+          if [ "$reach" = reached ]; then
+            for matrix in unit race; do
+              printf '%s' "$skip_jobs" | jq -e --arg j "$matrix" 'index($j) != null' >/dev/null 2>&1 || continue
+              legs="$(awk -v j="  $matrix:" '$0 == j { g=1; next } g && /^  [A-Za-z0-9_-]+:/ { g=0 } g && /^ {8}shard: \[/ { print; exit }' .github/workflows/ci.yml \
+                | sed -E 's/.*\[([^]]*)\].*/\1/' | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -n | paste -sd, - || true)"
+              excluded="$(printf '%s' "$NEEDS" | jq -r --arg k "${matrix}_skip" '.plan.outputs[$k] // "[]"' \
+                | jq -r '[.[]?.shard] | sort | map(tostring) | join(",")' 2>/dev/null || true)"
+              if [ -z "$legs" ] || [ "$legs" != "$excluded" ]; then
+                printf '%s is skipped whole, but %s_skip excludes legs [%s] of the matrix legs [%s]\n' "$matrix" "$matrix" "$excluded" "$legs" >&2
+                failed=1
+              fi
+            done
+          fi
 
           # LIGHT lanes run on every event and must be a literal success.
           # Every other lane is heavy: a literal success when heavy=true, and

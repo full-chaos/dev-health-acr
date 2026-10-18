@@ -158,6 +158,17 @@ else
     grep -qF "\"$dedicated\"" <<<"$skip_jobs" || fail "pr-leaf: $dedicated does not reach $leaf_pkg but is not skipped (skip_jobs=$skip_jobs)"
   done
   [ "$skipped_any" -eq 1 ] || fail "pr-leaf: no unit or race leg was skipped, so this case proves nothing"
+  # The report names the changed package, why each package is reached, and a
+  # reached package behind every run decision.
+  grep -qxF "reached-shards: changed package $leaf_pkg ($leaf)" "$tmp/pr-leaf.err" \
+    || fail "pr-leaf: the report does not name the changed package and the file that changed it"
+  grep -qxF "reached-shards: reached $leaf_pkg (changed)" "$tmp/pr-leaf.err" \
+    || fail "pr-leaf: the report does not give the reach basis of the changed package"
+  while IFS= read -r held; do
+    grep -qxF "$held" "$tmp/pr-leaf.reached" || fail "pr-leaf: a run decision names $held, which is not reached"
+  done < <(sed -nE 's/^reached-shards: run  [a-z0-9:-]+ \(holds (.*)\)$/\1/p' "$tmp/pr-leaf.err")
+  [ "$(grep -c '^reached-shards: run  ' "$tmp/pr-leaf.err")" -eq "$(grep -c '^reached-shards: run  .* (holds ' "$tmp/pr-leaf.err")" ] \
+    || fail "pr-leaf: a run decision does not name the reached package it holds"
   [ "$fails" -eq 0 ] && ok "pr-leaf runs only legs that hold a reached package (unit_skip=$unit_skip race_skip=$race_skip)"
 fi
 
@@ -185,7 +196,8 @@ fi
 # testdata rule and the //go:embed rule can reach the package.
 for case in \
   "pr-testdata-unnamed internal/contextfabric/genkitruntime/testdata/interpretation_system_prompt.golden internal/contextfabric/genkitruntime" \
-  "pr-embed migrations/postgres/0053_graph_walk_version_reuse_key.sql internal/storage/postgres"; do
+  "pr-embed migrations/postgres/0053_graph_walk_version_reuse_key.sql internal/storage/postgres" \
+  "pr-deleted migrations/postgres/9999_removed_input.sql migrations/postgres"; do
   read -r name path want <<<"$case"
   base="${path##*/}"
   if grep -rqF --include='*_test.go' "$base" "$repo_root"; then
@@ -238,7 +250,7 @@ lane() {
   for kv in "$@"; do
     needs="$(jq --arg j "${kv%%=*}" --arg r "${kv#*=}" '.[$j].result = $r' <<<"$needs")"
   done
-  NEEDS="$needs" EVENT="$event" bash "$lane_script" >"$tmp/lane-$name.log" 2>&1 || rc=$?
+  (cd "$repo_root" && NEEDS="$needs" EVENT="$event" bash "$lane_script") >"$tmp/lane-$name.log" 2>&1 || rc=$?
   if { [ "$want" -eq 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" -ne 0 ] && [ "$rc" -ne 0 ]; }; then
     ok "lane check $name (rc=$rc)"
   else
@@ -254,6 +266,10 @@ reached_fo='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race-factorac
 full_with_skip='{"heavy":"true","reach_mode":"full","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]"}'
 full_with_leg='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[{\"shard\":2}]","race_skip":"[]"}'
 no_reach='{"heavy":"true"}'
+whole_unit_no_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]"}'
+whole_unit_some_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":5},{\"shard\":6}]","race_skip":"[]"}'
+whole_race_partial='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":1}]"}'
+whole_race_all='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":4},{\"shard\":1},{\"shard\":3},{\"shard\":2}]"}'
 no_reach_lists='{"heavy":"true","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
 bad_reach='{"heavy":"true","reach_mode":"partial","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
 draft_full='{"heavy":"false","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
@@ -267,6 +283,10 @@ lane push-reached-mode 1 push "$reached_unit" unit=skipped
 lane push-reached-mode-all-green 1 push "$reached_none"
 lane dispatch-reached-mode 1 workflow_dispatch "$reached_unit" unit=skipped
 lane pr-declared-skip 0 pull_request "$reached_unit" unit=skipped
+lane pr-whole-unit-no-legs 1 pull_request "$whole_unit_no_legs" unit=skipped
+lane pr-whole-unit-some-legs 1 pull_request "$whole_unit_some_legs" unit=skipped
+lane pr-whole-race-partial 1 pull_request "$whole_race_partial" race=skipped
+lane pr-whole-race-all 0 pull_request "$whole_race_all" race=skipped
 lane pr-undeclared-skip 1 pull_request "$reached_none" unit=skipped
 lane pr-declared-skip-failed 1 pull_request "$reached_unit" unit=failure
 lane pr-declared-skip-but-ran 1 pull_request "$reached_fo"

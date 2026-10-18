@@ -861,7 +861,7 @@ check_verify_reads_plan() {
 check_reach_gating() {
   local file="$1" block status=0 job key line
   block="$(job_block "$file" plan)"
-  for key in reach_mode skip_jobs unit_skip race_skip; do
+  for key in reach_mode reach_reason skip_jobs unit_skip race_skip; do
     grep -qxF "      $key: \${{ steps.reach.outputs.$key }}" <<<"$block" || {
       printf 'plan does not output %s from the reach step\n' "$key" >&2; status=1; }
   done
@@ -909,6 +909,8 @@ check_reach_gating() {
   # shellcheck disable=SC2016
   grep -qF 'if [ "$declared" = yes ] && [ "$result" = skipped ]; then' <<<"$block" || {
     printf 'verify has no reached-shard skip allowance\n' >&2; status=1; }
+  grep -qF 'is skipped whole, but %s_skip excludes legs' <<<"$block" || {
+    printf 'verify does not require a whole-matrix skip to exclude every leg\n' >&2; status=1; }
   return "$status"
 }
 
@@ -1475,6 +1477,8 @@ assert_check_fails 'verify stopped reading reach_mode' check_reach_gating \
 # shellcheck disable=SC2016
 assert_check_fails 'verify accepts reach_mode=reached on any event' check_reach_gating \
   "$(mutate_reach verify-any-event 'if [ "$reach" = reached ] && [ "$EVENT" != pull_request ]; then' 'if false; then')"
+assert_check_fails 'verify stopped checking whole-matrix skips against their legs' check_reach_gating \
+  "$(mutate_reach verify-whole 'is skipped whole, but %s_skip excludes legs' 'is skipped whole')"
 # shellcheck disable=SC2016
 assert_check_fails 'verify accepts a skipped job that ran anyway' check_reach_gating \
   "$(mutate_reach verify-ran 'if [ "$declared" = yes ] && [ "$result" != skipped ]; then' 'if false; then')"
