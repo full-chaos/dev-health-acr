@@ -115,8 +115,11 @@ check_verify_if_always() {
   # a missing condition (seen on hosted runners once this block grew).
   local block
   block="$(job_block "$file" verify)"
-  grep -Eq "^ {4}if: '!cancelled\(\)'" <<<"$block" || {
-    printf 'verify job is missing "if: '"'"'!cancelled()'"'"'"\n' >&2
+  # The only extra clause allowed is the CI_SKIP_DRAFT_PRS draft gate, so a
+  # draft may skip verify when the repo variable is on and nothing else can.
+  local gate="(!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))"
+  grep -Fxq "    if: \"!cancelled() && ${gate}\"" <<<"$block" || {
+    printf 'verify job is missing "if: !cancelled() && <draft gate>"\n' >&2
     return 1
   }
 }
@@ -780,8 +783,9 @@ check_reports_steps() {
         ;;
     esac
   done
-  if ! grep -qxF "    if: '!cancelled()'" <<<"$block"; then
-    printf 'verify job condition is not exactly !cancelled()\n' >&2
+  local gate="(!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))"
+  if ! grep -qxF "    if: \"!cancelled() && ${gate}\"" <<<"$block"; then
+    printf 'verify job condition is not exactly !cancelled() plus the draft gate\n' >&2
     status=1
   fi
 
@@ -1148,7 +1152,7 @@ cmp -s "$workflow" "$reports_without_needs" && { printf 'NEGATIVE CONTROL SETUP 
 assert_check_fails 'dropped unit from verify.needs' check_reports_job "$reports_without_needs"
 
 reports_success_only="$tmpdir/reports-success-only.yml"
-sed "s/^    if: '!cancelled()'\$/    if: success()/" "$workflow" > "$reports_success_only"
+sed 's/^    if: "!cancelled() && .*$/    if: success()/' "$workflow" > "$reports_success_only"
 cmp -s "$workflow" "$reports_success_only" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_success_only did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'gated verify on success(), so a failing shard skips the merged JUnit' \
   check_reports_job "$reports_success_only"
@@ -1229,7 +1233,7 @@ awk '{ print } /^  verify:$/ { print "    continue-on-error: true" }' "$workflow
 assert_check_fails 'added continue-on-error: true to the verify job' check_reports_steps "$reports_job_continue"
 
 reports_job_if_true="$tmpdir/reports-job-if-true.yml"
-sed "s/^    if: '!cancelled()'\$/    if: '!cancelled() \&\& false'/" "$workflow" > "$reports_job_if_true"
+sed 's/^    if: "!cancelled() && .*$/    if: "!cancelled() \&\& false"/' "$workflow" > "$reports_job_if_true"
 cmp -s "$workflow" "$reports_job_if_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_job_if_true did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'made the verify job condition always false' check_reports_steps "$reports_job_if_true"
 

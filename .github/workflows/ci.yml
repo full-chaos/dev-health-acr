@@ -68,6 +68,7 @@ jobs:
   # `verify` accepts those skips ONLY from these outputs, ONLY when
   # reach_mode=reached, and ONLY on a pull_request event.
   plan:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-latest
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
@@ -127,6 +128,7 @@ jobs:
   # SELF_HOSTED_RUNNERS repo variable. The ARC pool is gone, so the pair is
   # collapsed to this single hosted job and every consumer needs it directly.
   mirror-preflight:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -144,6 +146,7 @@ jobs:
       - name: Verify every mirrored image is resolvable before any job pulls one
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
   scripts:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -252,6 +255,7 @@ jobs:
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
   lint:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -305,6 +309,7 @@ jobs:
   # mermaid-cli version is pinned once in scripts/docs/mermaid-cli-version.txt
   # and read by both this job and the script so they cannot drift apart.
   docs-mermaid:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -326,6 +331,7 @@ jobs:
   # job-level `paths:` filter would leave this lane `skipped`, and `verify`
   # requires a literal success from every light lane.
   helm:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -1664,7 +1670,7 @@ jobs:
     # other event, a non-empty list under reach_mode=full, and a named job that
     # ran all fail the gate. The merge steps pass unit_skip as -absent, so the
     # merge requires exactly the unit legs the matrix kept.
-    if: '!cancelled()'
+    if: "!cancelled() && (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))"
     needs:
       - plan
       - mirror-preflight

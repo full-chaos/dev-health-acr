@@ -76,6 +76,7 @@ on:
   # workflow_dispatch workflow once its file is on the default branch, so
   # this workflow is undispatchable until it merges.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/mutation-battery.yml'
       - 'scripts/battery/**'
@@ -100,6 +101,7 @@ jobs:
   # plan/arm/aggregate path rather than a second copy of it that could pass
   # while the real path is broken.
   config:
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     name: config
     runs-on: ubuntu-latest
     outputs:
@@ -459,7 +461,7 @@ jobs:
     # `always()` so a matrix job that died still reaches the aggregate, which
     # reports it as a missing arm -- a HARNESS_ERROR -- instead of the run
     # simply skipping the verdict and looking inconclusive.
-    if: always()
+    if: always() && (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full')))
     runs-on: ubuntu-latest
     steps:
       # ONLY the harness: the aggregate reads verdicts, never source.
@@ -572,7 +574,7 @@ jobs:
     # here the expected result deliberately contains a HARNESS_ERROR, so the
     # question is not "did anything go wrong" but "did exactly the two things we
     # planted go wrong, and nothing else".
-    if: always() && needs.config.outputs.mode == 'smoke'
+    if: (!(vars.CI_SKIP_DRAFT_PRS == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci-full'))) && (always() && needs.config.outputs.mode == 'smoke')
     runs-on: ubuntu-latest
     steps:
       # actions/download-artifact v6.0.0
