@@ -171,7 +171,7 @@ func TestProjectNativeThemeMixIsBoundToTheOrganizationAndRequestedProjects(t *te
 
 func TestProjectNativeThemeMixProbeRowIsEvidenceOfTruncationNeverServed(t *testing.T) {
 	t.Parallel()
-	const limit = 200
+	const limit = 250
 	var groups [][]nativePhasedUnit
 	projects := make([]string, 0, limit+1)
 	for i := 0; i <= limit; i++ {

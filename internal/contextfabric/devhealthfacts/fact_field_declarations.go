@@ -730,6 +730,7 @@ func readinessFields() []fieldDecl {
 			declAggregate(fInt("backlog_size", "count")),
 			declAggregate(fNum("estimate_coverage_ratio", "ratio")),
 			teamBreakdown,
+			fInt("team_breakdown_omitted_count", "count"),
 		),
 	)
 }

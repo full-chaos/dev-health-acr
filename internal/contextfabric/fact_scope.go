@@ -1167,6 +1167,10 @@ type FactScopeDerivation struct {
 	Target SubjectRef
 	Policy FactScopePolicy
 	Basis  FactScopeBasis
+	// LinkTier is the provenance tier (native, explicit_text, heuristic) of
+	// the issue-to-pull-request link row the target was reached through. Empty
+	// for a target reached by a repository proxy.
+	LinkTier string
 }
 
 // FactReadScope is the resolver's whole output: what may be read, why, and
@@ -1473,6 +1477,12 @@ type FactScopeExpansionResult struct {
 	// truncation detection (Limit+1) or cross-origin duplicates can never
 	// inflate the count.
 	TargetAttributionSource map[string]string
+	// TargetLinkTier is an OPTIONAL provenance tier of the issue-to-pull-request
+	// link row a target was reached through, keyed by FactSubjectKey(target) and
+	// then by the FactSubjectKey of the root it was reached from. A target or
+	// root missing from the map was reached by a repository proxy and carries
+	// no tier.
+	TargetLinkTier map[string]map[string]string
 	// TargetRoot is CHAOS-4260's addition: an OPTIONAL per-target override of
 	// the SPECIFIC origin subject a target was reached through, keyed by the
 	// SAME FactSubjectKey(target). Absent (nil, or a target missing from the
@@ -2353,10 +2363,11 @@ func (r *FactReadScopeResolver) expand(
 				continue
 			}
 			scope.Derivations = append(scope.Derivations, FactScopeDerivation{
-				Root:   root,
-				Target: target,
-				Policy: rule.Policy,
-				Basis:  basis,
+				Root:     root,
+				Target:   target,
+				Policy:   rule.Policy,
+				Basis:    basis,
+				LinkTier: result.TargetLinkTier[key][canonicalFactSubjectKey(root)],
 			})
 			derivationIndex[key] = append(derivationIndex[key], len(scope.Derivations)-1)
 		}
