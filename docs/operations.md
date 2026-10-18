@@ -658,6 +658,11 @@ watermark:
   instead of asserting it, by the same relation-current rule the blocker facts
   use (`internal/contextfabric/relationcurrent`). Edges projected before v11
   for links removed earlier stay until the rebuild.
+- `ClickHouseSourceVersion` v17 → v18: a dependency relationship id derives
+  from the trimmed lower-case `relationship_type`, so `blocks` and `BLOCKS` for
+  one pair are one edge. An edge projected from a spelling that is not already
+  trimmed lower case, and every edge of a `BLOCKED_BY` or `IS_BLOCKED_BY` row,
+  carries the old id until `acr-projector rebuild --org <organization-id>` runs.
 - `TeamsProjectsSourceVersion` v13 → v14: a team owning more than 200
   repositories is no longer quarantined (the entity authorization bound is
   5000), so its `team_repo_ownership` edges project.

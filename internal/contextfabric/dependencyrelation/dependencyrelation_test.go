@@ -67,3 +67,33 @@ func TestBlockerPredicateSQLNamesEverySpellingFromTheMapAndHasNoComparisonOperat
 		t.Fatalf("inverse set is not exactly the swapping spellings: %s", inverse)
 	}
 }
+
+func TestResolveIdentitySpellingIsTrimmedLowerCase(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ raw, want string }{
+		{"blocks", "blocks"},
+		{"BLOCKS", "blocks"},
+		{" Relates_To\t", "relates_to"},
+		{"RELATES", "relates_to"},
+		{"relates", "relates_to"},
+		{"BLOCKED_BY", "blocks"},
+		{"is_blocked_by", "blocks"},
+		{"Requires", "requires"},
+		{"\u00a0Requires", "\u00a0requires"},
+	} {
+		if _, _, got := Resolve(tc.raw); got != tc.want {
+			t.Errorf("Resolve(%q) identity = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// A spelling that is already trimmed lower case and unmapped keeps the id it
+// always had; this is the set whose edges the version bump must not orphan.
+func TestResolveKeepsIdentityOfAlreadyCanonicalSpellings(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"blocks", "relates_to", "duplicates", "related_to", "part_of", "requires"} {
+		if _, _, got := Resolve(raw); got != raw {
+			t.Errorf("Resolve(%q) identity = %q, want it unchanged", raw, got)
+		}
+	}
+}
