@@ -1633,6 +1633,7 @@ type ConfirmedNeedLedgerFields struct {
 	SubstitutionParentChain            string
 	SubstitutionParentChainDepth       int
 	SubstitutionParentChainError       string
+	CandidateHintEvicted               bool
 	RequestID                          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every ConfirmedNeedLedgerFields uniformly, set ONLY by NewConfirmedNeedLedgerFields below. A caller
@@ -1647,7 +1648,7 @@ type ConfirmedNeedLedgerFields struct {
 
 // NewConfirmedNeedLedgerFields is the generated constructor for ConfirmedNeedLedgerFields -- every
 // field ConfirmedNeedLedger.Fields declares is a required parameter.
-func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID string, appliedMembers string, appliedExpectedKind string, appliedAnchorKind string, appliedAnchorValueHash string, appliedAnchorBasis string, appliedCandidateKind string, appliedCandidateValueHash string, appliedHandleKind string, appliedHandleValueHash string, droppedMembers string, anchorAgreement string, anchorDisposition string, captureDecision string, captureSkipReason string, substitutionGuard string, substitutionOrigin string, substitutionParentKind string, substitutionParentID string, substitutionCommittedIDs []string, substitutionOriginResultID string, substitutionOriginReceiptID string, substitutionParentResultID string, substitutionOriginIssuedFor string, substitutionRememberedCheck string, substitutionRememberedReason string, substitutionRememberedContextError string, substitutionParentResultKind string, substitutionParentChain string, substitutionParentChainDepth int, substitutionParentChainError string, requestID string) ConfirmedNeedLedgerFields {
+func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID string, appliedMembers string, appliedExpectedKind string, appliedAnchorKind string, appliedAnchorValueHash string, appliedAnchorBasis string, appliedCandidateKind string, appliedCandidateValueHash string, appliedHandleKind string, appliedHandleValueHash string, droppedMembers string, anchorAgreement string, anchorDisposition string, captureDecision string, captureSkipReason string, substitutionGuard string, substitutionOrigin string, substitutionParentKind string, substitutionParentID string, substitutionCommittedIDs []string, substitutionOriginResultID string, substitutionOriginReceiptID string, substitutionParentResultID string, substitutionOriginIssuedFor string, substitutionRememberedCheck string, substitutionRememberedReason string, substitutionRememberedContextError string, substitutionParentResultKind string, substitutionParentChain string, substitutionParentChainDepth int, substitutionParentChainError string, candidateHintEvicted bool, requestID string) ConfirmedNeedLedgerFields {
 	valid := true
 	if substitutionCommittedIDs == nil {
 		valid = false
@@ -1686,6 +1687,7 @@ func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID s
 		SubstitutionParentChain:            substitutionParentChain,
 		SubstitutionParentChainDepth:       substitutionParentChainDepth,
 		SubstitutionParentChainError:       substitutionParentChainError,
+		CandidateHintEvicted:               candidateHintEvicted,
 		RequestID:                          requestID,
 		constructed:                        valid,
 	}
@@ -1737,6 +1739,7 @@ func (f ConfirmedNeedLedgerFields) SlogArgs() []any {
 		"substitution_parent_chain", contextfabric.SanitizeLogAttr(f.SubstitutionParentChain),
 		"substitution_parent_chain_depth", f.SubstitutionParentChainDepth,
 		"substitution_parent_chain_error", contextfabric.SanitizeLogAttr(f.SubstitutionParentChainError),
+		"candidate_hint_evicted", f.CandidateHintEvicted,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

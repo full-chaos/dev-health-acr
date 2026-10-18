@@ -1,27 +1,27 @@
 {
-  "captured_at": "2026-10-14T16:37:11Z",
+  "captured_at": "2026-10-18T02:34:38Z",
   "window": {
-    "start": "2026-09-14T00:00:00Z",
-    "end": "2026-10-15T00:00:00Z"
+    "start": "2026-09-18T00:00:00Z",
+    "end": "2026-10-19T00:00:00Z"
   },
   "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
-  "ops_build": "dev-health-ops b1d7e1f1d6f0 (bigboy pin 31; not re-read)",
-  "acr_build": "venue image acr-api:venue-213717c8",
+  "ops_build": "dev-health-ops f608a7290b88 (bigboy compose, 2026-10-18)",
+  "acr_build": "venue image acr-api:recapture-f099b055",
   "schema_digest": "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462",
   "venue_fact_query_versions": [
-    "devhealthfacts.clickhouse.v134"
+    "devhealthfacts.clickhouse.v244"
   ],
-  "fact_query_version": "devhealthfacts.clickhouse.v231",
+  "fact_query_version": "devhealthfacts.clickhouse.v244",
   "rows": {
-    "capacity_forecasts": 104,
-    "compounding_risk_daily": 274,
-    "estimate_coverage_metrics_daily": 2432,
+    "capacity_forecasts": 84,
+    "compounding_risk_daily": 288,
+    "estimate_coverage_metrics_daily": 2317,
     "repos": 34,
-    "team_repo_ownership": 827,
+    "team_repo_ownership": 584,
     "teams": 42,
-    "work_item_metrics_daily": 1982,
-    "work_unit_investments": 23275,
-    "work_unit_membership": 6437,
+    "work_item_metrics_daily": 1909,
+    "work_unit_investments": 13138,
+    "work_unit_membership": 7754,
     "work_unit_membership_runs": 2,
     "work_unit_supersessions": 0
   },
@@ -33,8 +33,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -51,8 +51,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -69,8 +69,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -87,8 +87,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -105,8 +105,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -123,8 +123,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -141,8 +141,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -159,8 +159,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -177,8 +177,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -195,8 +195,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -213,8 +213,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -231,8 +231,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -249,8 +249,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -267,8 +267,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -285,8 +285,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -303,8 +303,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -321,8 +321,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -339,8 +339,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -357,8 +357,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -375,8 +375,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -393,8 +393,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -411,8 +411,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -429,8 +429,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -447,8 +447,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-10-15",
-                "startDate": "2026-09-14"
+                "endDate": "2026-10-19",
+                "startDate": "2026-09-18"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -464,7 +464,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-dff1ccec960518c4"
+          "teamId": "team:team-39f52cedcc414ba4"
         }
       }
     },
@@ -474,7 +474,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-dff1ccec960518c4"
+          "teamId": "team:team-39f52cedcc414ba4"
         }
       }
     },
@@ -484,7 +484,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-dff1ccec960518c4"
+          "teamId": "team:team-39f52cedcc414ba4"
         }
       }
     },
@@ -494,7 +494,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-dff1ccec960518c4"
+          "teamId": "team:team-39f52cedcc414ba4"
         }
       }
     },
@@ -504,7 +504,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-dff1ccec960518c4"
+          "teamId": "team:team-39f52cedcc414ba4"
         }
       }
     },
@@ -514,7 +514,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-dff1ccec960518c4"
+          "teamId": "team:team-39f52cedcc414ba4"
         }
       }
     },
@@ -522,9 +522,9 @@
       "shape": "capacityForecasts/capacityForecasts/all",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-14",
+          "fromDate": "2026-09-18",
           "limit": 50,
-          "toDate": "2026-10-14"
+          "toDate": "2026-10-18"
         }
       }
     },
@@ -532,9 +532,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:edges",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-14",
+          "fromDate": "2026-09-18",
           "limit": 50,
-          "toDate": "2026-10-14"
+          "toDate": "2026-10-18"
         }
       }
     },
@@ -542,9 +542,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:pageInfo",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-14",
+          "fromDate": "2026-09-18",
           "limit": 50,
-          "toDate": "2026-10-14"
+          "toDate": "2026-10-18"
         }
       }
     },
@@ -552,9 +552,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:(root)",
       "variables": {
         "filters": {
-          "fromDate": "2026-09-14",
+          "fromDate": "2026-09-18",
           "limit": 50,
-          "toDate": "2026-10-14"
+          "toDate": "2026-10-18"
         }
       }
     },
@@ -664,9 +664,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/all",
       "variables": {
         "input": {
-          "sinceDate": "2026-09-14",
-          "teamId": "team:team-dff1ccec960518c4",
-          "untilDate": "2026-10-14"
+          "sinceDate": "2026-09-18",
+          "teamId": "team:team-39f52cedcc414ba4",
+          "untilDate": "2026-10-18"
         }
       }
     },
@@ -674,9 +674,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/branch:(root)",
       "variables": {
         "input": {
-          "sinceDate": "2026-09-14",
-          "teamId": "team:team-dff1ccec960518c4",
-          "untilDate": "2026-10-14"
+          "sinceDate": "2026-09-18",
+          "teamId": "team:team-39f52cedcc414ba4",
+          "untilDate": "2026-10-18"
         }
       }
     },
@@ -684,9 +684,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/branch:signals",
       "variables": {
         "input": {
-          "sinceDate": "2026-09-14",
-          "teamId": "team:team-dff1ccec960518c4",
-          "untilDate": "2026-10-14"
+          "sinceDate": "2026-09-18",
+          "teamId": "team:team-39f52cedcc414ba4",
+          "untilDate": "2026-10-18"
         }
       }
     },
@@ -697,8 +697,8 @@
           "granularity": "DAY",
           "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -709,8 +709,8 @@
           "granularity": "DAY",
           "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -721,8 +721,8 @@
           "granularity": "DAY",
           "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -803,8 +803,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -813,8 +813,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -823,8 +823,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -833,8 +833,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-09-14T00:00:00Z",
-          "untilUtc": "2026-10-14T00:00:00Z"
+          "sinceUtc": "2026-09-18T00:00:00Z",
+          "untilUtc": "2026-10-18T00:00:00Z"
         }
       }
     },
@@ -842,8 +842,8 @@
       "shape": "securityOverview/securityOverview/all",
       "variables": {
         "filters": {
-          "since": "2026-09-14",
-          "until": "2026-10-14"
+          "since": "2026-09-18",
+          "until": "2026-10-18"
         }
       }
     },
@@ -851,8 +851,8 @@
       "shape": "securityOverview/securityOverview/branch:kpis",
       "variables": {
         "filters": {
-          "since": "2026-09-14",
-          "until": "2026-10-14"
+          "since": "2026-09-18",
+          "until": "2026-10-18"
         }
       }
     },
@@ -860,8 +860,8 @@
       "shape": "securityOverview/securityOverview/branch:severityBreakdown",
       "variables": {
         "filters": {
-          "since": "2026-09-14",
-          "until": "2026-10-14"
+          "since": "2026-09-18",
+          "until": "2026-10-18"
         }
       }
     },
@@ -869,8 +869,8 @@
       "shape": "securityOverview/securityOverview/branch:topRepos",
       "variables": {
         "filters": {
-          "since": "2026-09-14",
-          "until": "2026-10-14"
+          "since": "2026-09-18",
+          "until": "2026-10-18"
         }
       }
     },
@@ -878,8 +878,8 @@
       "shape": "securityOverview/securityOverview/branch:trend",
       "variables": {
         "filters": {
-          "since": "2026-09-14",
-          "until": "2026-10-14"
+          "since": "2026-09-18",
+          "until": "2026-10-18"
         }
       }
     },
@@ -887,8 +887,8 @@
       "shape": "securityOverview/securityOverview/branch:(root)",
       "variables": {
         "filters": {
-          "since": "2026-09-14",
-          "until": "2026-10-14"
+          "since": "2026-09-18",
+          "until": "2026-10-18"
         }
       }
     },
@@ -898,7 +898,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -909,7 +909,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -920,7 +920,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -931,7 +931,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -942,7 +942,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -953,7 +953,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -964,7 +964,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -975,7 +975,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -986,7 +986,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-dff1ccec960518c4"
+            "team:team-39f52cedcc414ba4"
           ]
         }
       }
@@ -1061,32 +1061,32 @@
     }
   ],
   "residual": {
-    "feature_delivery": 323.8000163095155,
-    "maintenance": 324.80001808286704,
-    "operational": 323.80001460807864,
-    "quality": 323.80002468992257,
-    "risk": 323.8000142339404
+    "feature_delivery": 147.53421201493234,
+    "maintenance": 192.0870662468658,
+    "operational": 50.24142465384648,
+    "quality": 791.9798272727285,
+    "risk": 49.15754958497075
   },
   "expect": {
     "analytics": {
       "mode": "value",
       "listener": "served",
       "shapes_run": 24,
-      "leaves": 396,
-      "compared": 85,
-      "matches": 80,
+      "leaves": 384,
+      "compared": 90,
+      "matches": 85,
       "by_class": {
         "attribution_basis": 5
       },
       "findings": [],
       "not_joined": [
-        "investment: team team-45b66571309ea4ca is denied to the venue token"
+        "investment: team team-867dd8af3dc41f34 is denied to the venue token"
       ],
       "run_operation": "served",
       "operations_run": 6,
-      "operation_leaves": 198,
-      "cross_paths": 198,
-      "cross_matches": 198,
+      "operation_leaves": 192,
+      "cross_paths": 192,
+      "cross_matches": 192,
       "differences": [
         {
           "pair": "investment_org",
@@ -1094,9 +1094,9 @@
           "class": "attribution_basis",
           "exact": true,
           "values": {
-            "acr_repository_sum": 901.7878649128518,
-            "ops": 1225.5878812223673,
-            "residual": 323.8000163095155
+            "acr_repository_sum": 1243.8062493062428,
+            "ops": 1391.340461321175,
+            "residual": 147.53421201493234
           }
         },
         {
@@ -1105,9 +1105,9 @@
           "class": "attribution_basis",
           "exact": true,
           "values": {
-            "acr_repository_sum": 969.9108197358152,
-            "ops": 1294.7108378186822,
-            "residual": 324.80001808286704
+            "acr_repository_sum": 1259.8948717948808,
+            "ops": 1451.9819380417466,
+            "residual": 192.0870662468658
           }
         },
         {
@@ -1116,9 +1116,9 @@
           "class": "attribution_basis",
           "exact": true,
           "values": {
-            "acr_repository_sum": 686.8899683649605,
-            "ops": 1010.6899829730392,
-            "residual": 323.80001460807864
+            "acr_repository_sum": 754.752994227987,
+            "ops": 804.9944188818334,
+            "residual": 50.24142465384648
           }
         },
         {
@@ -1127,9 +1127,9 @@
           "class": "attribution_basis",
           "exact": true,
           "values": {
-            "acr_repository_sum": 1627.7557553557656,
-            "ops": 1951.5557800456882,
-            "residual": 323.80002468992257
+            "acr_repository_sum": 2614.7135586635914,
+            "ops": 3406.69338593632,
+            "residual": 791.9798272727285
           }
         },
         {
@@ -1138,9 +1138,9 @@
           "class": "attribution_basis",
           "exact": true,
           "values": {
-            "acr_repository_sum": 630.6555916305845,
-            "ops": 954.4556058645248,
-            "residual": 323.8000142339404
+            "acr_repository_sum": 649.8323260073205,
+            "ops": 698.9898755922912,
+            "residual": 49.15754958497075
           }
         }
       ],
@@ -1201,32 +1201,32 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 4,
-      "leaves": 1502,
-      "compared": 227,
-      "matches": 227,
+      "leaves": 1454,
+      "compared": 224,
+      "matches": 224,
       "by_class": {},
       "findings": [],
       "not_joined": [
-        "workload: team team-0b5b8343240c72e3 is denied to the venue token",
-        "workload: team team-1095edd51dff583f is denied to the venue token",
-        "workload: team team-3eb3c47a5184385d is denied to the venue token",
-        "workload: team team-41988199d69a5219 is denied to the venue token",
-        "workload: team team-45b66571309ea4ca is denied to the venue token",
-        "workload: team team-4f36b6d9a479f32d is denied to the venue token",
-        "workload: team team-508dc9adfd8bfd27 is denied to the venue token",
-        "workload: team team-588c4bf7ddbe52ee is denied to the venue token",
-        "workload: team team-6779deb07a046f7f is denied to the venue token",
-        "workload: team team-7f563800e7d07933 is denied to the venue token",
-        "workload: team team-9cb6d496bfd6e58b is denied to the venue token",
-        "workload: team team-a5a79846c75a0b53 is denied to the venue token",
-        "workload: team team-d50a2ff9c118a42e is denied to the venue token",
-        "workload: team team-f7091b64161f9eaa is denied to the venue token"
+        "workload: team team-0d1960fdd1afb4df is denied to the venue token",
+        "workload: team team-1b8f0d851d16f793 is denied to the venue token",
+        "workload: team team-2e19b89503204e87 is denied to the venue token",
+        "workload: team team-3ba0dcb9ae40bd9c is denied to the venue token",
+        "workload: team team-4a2fa35331bc8f8d is denied to the venue token",
+        "workload: team team-61bd8bc15156c0ee is denied to the venue token",
+        "workload: team team-867dd8af3dc41f34 is denied to the venue token",
+        "workload: team team-87322f1683ef642a is denied to the venue token",
+        "workload: team team-a47c33e1b419b670 is denied to the venue token",
+        "workload: team team-acb0ac434ec24ecb is denied to the venue token",
+        "workload: team team-c87aedca0c7a6316 is denied to the venue token",
+        "workload: team team-cfced7395643e325 is denied to the venue token",
+        "workload: team team-def8433a2e8d6297 is denied to the venue token",
+        "workload: team team-e8c4f67d9fe51be2 is denied to the venue token"
       ],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 751,
-      "cross_paths": 751,
-      "cross_matches": 751,
+      "operation_leaves": 727,
+      "cross_paths": 727,
+      "cross_matches": 727,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1291,7 +1291,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 3,
-      "leaves": 624,
+      "leaves": 84,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -1299,9 +1299,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 312,
-      "cross_paths": 312,
-      "cross_matches": 312,
+      "operation_leaves": 42,
+      "cross_paths": 42,
+      "cross_matches": 42,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1311,9 +1311,9 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 8,
-      "leaves": 1198,
-      "compared": 180,
-      "matches": 180,
+      "leaves": 766,
+      "compared": 32,
+      "matches": 24,
       "by_class": {},
       "findings": [
         {
@@ -1325,20 +1325,68 @@
         },
         {
           "root": "compoundingRisk",
-          "pair": "cross_path",
-          "key": "",
-          "path": "compoundingRisk.trend[*].score",
-          "detail": "run_operation and graphql_query answer differently: 30 and 30 leaves, not the same values"
+          "pair": "health_rows",
+          "key": "repository on 2026-10-13",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-14",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-16",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-16",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
+        },
+        {
+          "root": "compoundingRisk",
+          "pair": "health_rows",
+          "key": "repository on 2026-10-18",
+          "detail": "the acr health fact has no ops row for its own day"
         }
       ],
       "not_joined": [
+        "repository: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
+        "repository: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
+        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
         "team: a subject with compounding risk rows in the store is not a team of the organization tables"
       ],
       "run_operation": "served",
       "operations_run": 2,
-      "operation_leaves": 599,
-      "cross_paths": 597,
-      "cross_matches": 537,
+      "operation_leaves": 383,
+      "cross_paths": 381,
+      "cross_matches": 351,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1348,7 +1396,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 4,
-      "leaves": 1246,
+      "leaves": 1402,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -1356,9 +1404,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 623,
-      "cross_paths": 623,
-      "cross_matches": 623,
+      "operation_leaves": 701,
+      "cross_paths": 701,
+      "cross_matches": 701,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1368,7 +1416,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 6,
-      "leaves": 262,
+      "leaves": 278,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -1376,9 +1424,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 131,
-      "cross_paths": 131,
-      "cross_matches": 131,
+      "operation_leaves": 139,
+      "cross_paths": 139,
+      "cross_matches": 139,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -1395,64 +1443,72 @@
         "forecast_by_design": 1,
         "latest_day_vs_window": 4
       },
-      "findings": [],
+      "findings": [
+        {
+          "root": "throughputForecast",
+          "pair": "cross_path",
+          "key": "",
+          "path": "throughputForecast.reviewBottleneck.value",
+          "detail": "run_operation and graphql_query answer differently: 1 and 1 leaves, not the same values"
+        }
+      ],
       "not_joined": [
-        "flow: team team-076118dcb0536d16 is denied to the venue token",
-        "flow: team team-0b5b8343240c72e3 is denied to the venue token",
-        "flow: team team-1095edd51dff583f is denied to the venue token",
-        "flow: team team-1ba7228526b0f6ec is denied to the venue token",
-        "flow: team team-2400675630afe1ff is denied to the venue token",
-        "flow: team team-300333fd2d3e0b04 is denied to the venue token",
-        "flow: team team-3eb3c47a5184385d is denied to the venue token",
-        "flow: team team-41988199d69a5219 is denied to the venue token",
-        "flow: team team-45b66571309ea4ca is denied to the venue token",
-        "flow: team team-4f36b6d9a479f32d is denied to the venue token",
-        "flow: team team-508dc9adfd8bfd27 is denied to the venue token",
-        "flow: team team-588c4bf7ddbe52ee is denied to the venue token",
-        "flow: team team-5a4b3b84d9d6ab6a is denied to the venue token",
-        "flow: team team-64e00e36e2ecb55f is denied to the venue token",
-        "flow: team team-6779deb07a046f7f is denied to the venue token",
-        "flow: team team-7628d4a7328cdc49 is denied to the venue token",
-        "flow: team team-7b6f35ee76634310 is denied to the venue token",
-        "flow: team team-7f563800e7d07933 is denied to the venue token",
-        "flow: team team-8b39a4cc8095d06f is denied to the venue token",
-        "flow: team team-9cb6d496bfd6e58b is denied to the venue token",
-        "flow: team team-a5a79846c75a0b53 is denied to the venue token",
-        "flow: team team-d50a2ff9c118a42e is denied to the venue token",
-        "flow: team team-dbad7cf865dec928 is denied to the venue token",
-        "flow: team team-f7091b64161f9eaa is denied to the venue token",
-        "flow: team team-f8101dce9561a330 is denied to the venue token",
-        "readiness: team team-076118dcb0536d16 is denied to the venue token",
-        "readiness: team team-0b5b8343240c72e3 is denied to the venue token",
-        "readiness: team team-1095edd51dff583f is denied to the venue token",
-        "readiness: team team-1ba7228526b0f6ec is denied to the venue token",
-        "readiness: team team-300333fd2d3e0b04 is denied to the venue token",
-        "readiness: team team-3eb3c47a5184385d is denied to the venue token",
-        "readiness: team team-41988199d69a5219 is denied to the venue token",
-        "readiness: team team-45b66571309ea4ca is denied to the venue token",
-        "readiness: team team-4f36b6d9a479f32d is denied to the venue token",
-        "readiness: team team-508dc9adfd8bfd27 is denied to the venue token",
-        "readiness: team team-588c4bf7ddbe52ee is denied to the venue token",
-        "readiness: team team-5a4b3b84d9d6ab6a is denied to the venue token",
-        "readiness: team team-64e00e36e2ecb55f is denied to the venue token",
-        "readiness: team team-6779deb07a046f7f is denied to the venue token",
-        "readiness: team team-7628d4a7328cdc49 is denied to the venue token",
-        "readiness: team team-7b6f35ee76634310 is denied to the venue token",
-        "readiness: team team-7f563800e7d07933 is denied to the venue token",
-        "readiness: team team-8b39a4cc8095d06f is denied to the venue token",
-        "readiness: team team-919b9b282e38ab0a is denied to the venue token",
-        "readiness: team team-9cb6d496bfd6e58b is denied to the venue token",
-        "readiness: team team-a5a79846c75a0b53 is denied to the venue token",
-        "readiness: team team-d50a2ff9c118a42e is denied to the venue token",
-        "readiness: team team-dbad7cf865dec928 is denied to the venue token",
-        "readiness: team team-f7091b64161f9eaa is denied to the venue token",
-        "readiness: team team-f8101dce9561a330 is denied to the venue token"
+        "flow: team team-08b205af44fa96ab is denied to the venue token",
+        "flow: team team-0d1960fdd1afb4df is denied to the venue token",
+        "flow: team team-1b8f0d851d16f793 is denied to the venue token",
+        "flow: team team-1fbf9b54a08e28b5 is denied to the venue token",
+        "flow: team team-2c23e5fd317dc84c is denied to the venue token",
+        "flow: team team-2e19b89503204e87 is denied to the venue token",
+        "flow: team team-31f3c2cb403b7903 is denied to the venue token",
+        "flow: team team-327fe7ab89323919 is denied to the venue token",
+        "flow: team team-3ba0dcb9ae40bd9c is denied to the venue token",
+        "flow: team team-4a2fa35331bc8f8d is denied to the venue token",
+        "flow: team team-585f1fe02a3c3b1a is denied to the venue token",
+        "flow: team team-61bd8bc15156c0ee is denied to the venue token",
+        "flow: team team-867dd8af3dc41f34 is denied to the venue token",
+        "flow: team team-87322f1683ef642a is denied to the venue token",
+        "flow: team team-8a95d98f6926f2bf is denied to the venue token",
+        "flow: team team-a1594e485bb8ce9d is denied to the venue token",
+        "flow: team team-a47c33e1b419b670 is denied to the venue token",
+        "flow: team team-acb0ac434ec24ecb is denied to the venue token",
+        "flow: team team-b2c1ff62d6380ecd is denied to the venue token",
+        "flow: team team-bcd795ed2069800b is denied to the venue token",
+        "flow: team team-c87aedca0c7a6316 is denied to the venue token",
+        "flow: team team-c8c5c68250fc5b7e is denied to the venue token",
+        "flow: team team-cfced7395643e325 is denied to the venue token",
+        "flow: team team-def8433a2e8d6297 is denied to the venue token",
+        "flow: team team-e8c4f67d9fe51be2 is denied to the venue token",
+        "readiness: team team-08b205af44fa96ab is denied to the venue token",
+        "readiness: team team-0d1960fdd1afb4df is denied to the venue token",
+        "readiness: team team-1b8f0d851d16f793 is denied to the venue token",
+        "readiness: team team-2c23e5fd317dc84c is denied to the venue token",
+        "readiness: team team-2e19b89503204e87 is denied to the venue token",
+        "readiness: team team-31f3c2cb403b7903 is denied to the venue token",
+        "readiness: team team-327fe7ab89323919 is denied to the venue token",
+        "readiness: team team-3ba0dcb9ae40bd9c is denied to the venue token",
+        "readiness: team team-4a2fa35331bc8f8d is denied to the venue token",
+        "readiness: team team-585f1fe02a3c3b1a is denied to the venue token",
+        "readiness: team team-61bd8bc15156c0ee is denied to the venue token",
+        "readiness: team team-867dd8af3dc41f34 is denied to the venue token",
+        "readiness: team team-87322f1683ef642a is denied to the venue token",
+        "readiness: team team-8a95d98f6926f2bf is denied to the venue token",
+        "readiness: team team-a1594e485bb8ce9d is denied to the venue token",
+        "readiness: team team-a47c33e1b419b670 is denied to the venue token",
+        "readiness: team team-acb0ac434ec24ecb is denied to the venue token",
+        "readiness: team team-b2c1ff62d6380ecd is denied to the venue token",
+        "readiness: team team-bcd795ed2069800b is denied to the venue token",
+        "readiness: team team-c87aedca0c7a6316 is denied to the venue token",
+        "readiness: team team-c8c5c68250fc5b7e is denied to the venue token",
+        "readiness: team team-cfced7395643e325 is denied to the venue token",
+        "readiness: team team-dcdc65fa855c60aa is denied to the venue token",
+        "readiness: team team-def8433a2e8d6297 is denied to the venue token",
+        "readiness: team team-e8c4f67d9fe51be2 is denied to the venue token"
       ],
       "run_operation": "served",
       "operations_run": 1,
       "operation_leaves": 62,
       "cross_paths": 60,
-      "cross_matches": 60,
+      "cross_matches": 59,
       "differences": [
         {
           "pair": "readiness",
@@ -1556,79 +1612,79 @@
   "operation_dark": [],
   "denied_teams": {
     "flow": [
-      "team-076118dcb0536d16",
-      "team-0b5b8343240c72e3",
-      "team-1095edd51dff583f",
-      "team-1ba7228526b0f6ec",
-      "team-2400675630afe1ff",
-      "team-300333fd2d3e0b04",
-      "team-3eb3c47a5184385d",
-      "team-41988199d69a5219",
-      "team-45b66571309ea4ca",
-      "team-4f36b6d9a479f32d",
-      "team-508dc9adfd8bfd27",
-      "team-588c4bf7ddbe52ee",
-      "team-5a4b3b84d9d6ab6a",
-      "team-64e00e36e2ecb55f",
-      "team-6779deb07a046f7f",
-      "team-7628d4a7328cdc49",
-      "team-7b6f35ee76634310",
-      "team-7f563800e7d07933",
-      "team-8b39a4cc8095d06f",
-      "team-9cb6d496bfd6e58b",
-      "team-a5a79846c75a0b53",
-      "team-d50a2ff9c118a42e",
-      "team-dbad7cf865dec928",
-      "team-f7091b64161f9eaa",
-      "team-f8101dce9561a330"
+      "team-08b205af44fa96ab",
+      "team-0d1960fdd1afb4df",
+      "team-1b8f0d851d16f793",
+      "team-1fbf9b54a08e28b5",
+      "team-2c23e5fd317dc84c",
+      "team-2e19b89503204e87",
+      "team-31f3c2cb403b7903",
+      "team-327fe7ab89323919",
+      "team-3ba0dcb9ae40bd9c",
+      "team-4a2fa35331bc8f8d",
+      "team-585f1fe02a3c3b1a",
+      "team-61bd8bc15156c0ee",
+      "team-867dd8af3dc41f34",
+      "team-87322f1683ef642a",
+      "team-8a95d98f6926f2bf",
+      "team-a1594e485bb8ce9d",
+      "team-a47c33e1b419b670",
+      "team-acb0ac434ec24ecb",
+      "team-b2c1ff62d6380ecd",
+      "team-bcd795ed2069800b",
+      "team-c87aedca0c7a6316",
+      "team-c8c5c68250fc5b7e",
+      "team-cfced7395643e325",
+      "team-def8433a2e8d6297",
+      "team-e8c4f67d9fe51be2"
     ],
     "investment": [
-      "team-45b66571309ea4ca"
+      "team-867dd8af3dc41f34"
     ],
     "readiness": [
-      "team-076118dcb0536d16",
-      "team-0b5b8343240c72e3",
-      "team-1095edd51dff583f",
-      "team-1ba7228526b0f6ec",
-      "team-300333fd2d3e0b04",
-      "team-3eb3c47a5184385d",
-      "team-41988199d69a5219",
-      "team-45b66571309ea4ca",
-      "team-4f36b6d9a479f32d",
-      "team-508dc9adfd8bfd27",
-      "team-588c4bf7ddbe52ee",
-      "team-5a4b3b84d9d6ab6a",
-      "team-64e00e36e2ecb55f",
-      "team-6779deb07a046f7f",
-      "team-7628d4a7328cdc49",
-      "team-7b6f35ee76634310",
-      "team-7f563800e7d07933",
-      "team-8b39a4cc8095d06f",
-      "team-919b9b282e38ab0a",
-      "team-9cb6d496bfd6e58b",
-      "team-a5a79846c75a0b53",
-      "team-d50a2ff9c118a42e",
-      "team-dbad7cf865dec928",
-      "team-f7091b64161f9eaa",
-      "team-f8101dce9561a330"
+      "team-08b205af44fa96ab",
+      "team-0d1960fdd1afb4df",
+      "team-1b8f0d851d16f793",
+      "team-2c23e5fd317dc84c",
+      "team-2e19b89503204e87",
+      "team-31f3c2cb403b7903",
+      "team-327fe7ab89323919",
+      "team-3ba0dcb9ae40bd9c",
+      "team-4a2fa35331bc8f8d",
+      "team-585f1fe02a3c3b1a",
+      "team-61bd8bc15156c0ee",
+      "team-867dd8af3dc41f34",
+      "team-87322f1683ef642a",
+      "team-8a95d98f6926f2bf",
+      "team-a1594e485bb8ce9d",
+      "team-a47c33e1b419b670",
+      "team-acb0ac434ec24ecb",
+      "team-b2c1ff62d6380ecd",
+      "team-bcd795ed2069800b",
+      "team-c87aedca0c7a6316",
+      "team-c8c5c68250fc5b7e",
+      "team-cfced7395643e325",
+      "team-dcdc65fa855c60aa",
+      "team-def8433a2e8d6297",
+      "team-e8c4f67d9fe51be2"
     ],
     "workload": [
-      "team-0b5b8343240c72e3",
-      "team-1095edd51dff583f",
-      "team-3eb3c47a5184385d",
-      "team-41988199d69a5219",
-      "team-45b66571309ea4ca",
-      "team-4f36b6d9a479f32d",
-      "team-508dc9adfd8bfd27",
-      "team-588c4bf7ddbe52ee",
-      "team-6779deb07a046f7f",
-      "team-7f563800e7d07933",
-      "team-9cb6d496bfd6e58b",
-      "team-a5a79846c75a0b53",
-      "team-d50a2ff9c118a42e",
-      "team-f7091b64161f9eaa"
+      "team-0d1960fdd1afb4df",
+      "team-1b8f0d851d16f793",
+      "team-2e19b89503204e87",
+      "team-3ba0dcb9ae40bd9c",
+      "team-4a2fa35331bc8f8d",
+      "team-61bd8bc15156c0ee",
+      "team-867dd8af3dc41f34",
+      "team-87322f1683ef642a",
+      "team-a47c33e1b419b670",
+      "team-acb0ac434ec24ecb",
+      "team-c87aedca0c7a6316",
+      "team-cfced7395643e325",
+      "team-def8433a2e8d6297",
+      "team-e8c4f67d9fe51be2"
     ]
   },
-  "subject_team": "team-dff1ccec960518c4",
+  "subject_team": "team-39f52cedcc414ba4",
   "subject_teams_skipped": 1
 }

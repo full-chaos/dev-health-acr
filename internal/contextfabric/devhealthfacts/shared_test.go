@@ -702,3 +702,15 @@ func TestQueryVersionMovedPastTheOverlapInvestmentWindow(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v244 or later -- an answer saved when an Investment read counted a work unit in every window it overlapped must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheUnresolvedCandidateReceipt(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 245 {
+		t.Fatalf("QueryVersion = %q, want v245 or later -- an answer saved when a redeemed candidate receipt left the subject unresolved must not be reused", devhealthfacts.QueryVersion)
+	}
+}

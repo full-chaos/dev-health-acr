@@ -54,12 +54,12 @@ func TestCapacityCompletionDistributionRefusesATeamTheCallerCannotSeeWithoutALea
 	}
 }
 
-func TestCapacityCompletionDistributionRefusesTheMultiTeamInputAndARestrictedCaller(t *testing.T) {
+func TestCapacityCompletionDistributionRefusesAMultiTeamInputWithAnUnseenTeamAndARestrictedCaller(t *testing.T) {
 	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, completionDistributionAnswer }, opHarnessOptions{})
 	multi := h.run(t, opUnrestricted(opOrgA), "capacityCompletionDistribution", map[string]any{"input": map[string]any{"teamIds": []any{opTeamT, "team:t2"}}})
-	if multi.Refusal == nil || multi.Refusal.Code != directread.RefusalVariableNotAllowed || len(h.upstream.requests()) != 0 {
+	if multi.Refusal == nil || multi.Refusal.Code == directread.RefusalVariableNotAllowed || len(h.upstream.requests()) != 0 {
 		raw, _ := json.Marshal(multi)
-		t.Fatalf("input.teamIds must be refused as variable_not_allowed with zero upstream: %s", raw)
+		t.Fatalf("input.teamIds with a team the caller cannot see must be refused by the ownership gate, not as a disallowed variable, with zero upstream: %s", raw)
 	}
 	restricted := h.run(t, opRestrictedA(), "capacityCompletionDistribution", map[string]any{"input": map[string]any{"teamId": opTeamT}})
 	if restricted.Refusal == nil || restricted.Refusal.Code != directread.RefusalOperationNotServedForCaller || len(h.upstream.requests()) != 0 {
