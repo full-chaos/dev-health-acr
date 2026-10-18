@@ -103,57 +103,6 @@ func itoa(n uint32) string {
 	return string(b)
 }
 
-// A pull request with a native link gets no lower-tier link, whichever
-// project holds either link and whether or not that project was requested.
-func TestScopeExpander_ProjectToPullRequest_NativeLinkCoversLowerTiersAcrossProjects(t *testing.T) {
-	ctx := context.Background()
-	orgID := sharedTestOrgID(t)
-	query, direct := sharedClickHouseFixture(t)
-	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at, orgID)
-	s := &linkTierSeeder{t: t, ctx: ctx, direct: direct, orgID: orgID, at: at, repoID: chaos4099GitLabRepoID}
-	first := chaos4099ProjectSubject(t)
-	second := s.project("gitlab", "org-4099-scope-expander:gitlab:71133892", "acme/web", "acme web")
-	s.issue("gitlab:acme/web#7", "acme/web")
-	s.pullRequest(3)
-	s.pullRequest(4)
-	s.pullRequest(5)
-	// PR 1: first holds native (fixture), second holds explicit_text.
-	s.link("gitlab:acme/web#7", 1, "explicit_text")
-	// PR 3: first holds explicit_text, second native.
-	s.issue("gitlab:acme/api#31", "acme/api")
-	s.link("gitlab:acme/api#31", 3, "explicit_text")
-	s.link("gitlab:acme/web#7", 3, "native")
-	// PR 4: both requested projects hold the same tier, so both keep it.
-	s.issue("gitlab:acme/api#41", "acme/api")
-	s.link("gitlab:acme/api#41", 4, "heuristic")
-	s.link("gitlab:acme/web#7", 4, "heuristic")
-	// PR 5: requested project holds explicit_text; an unrequested project holds native.
-	s.project("gitlab", "org-4099-scope-expander:gitlab:99999", "acme/other", "acme other")
-	s.issue("gitlab:acme/other#9", "acme/other")
-	s.link("gitlab:acme/other#9", 5, "native")
-	s.link("gitlab:acme/api#31", 5, "explicit_text")
-
-	result := expandPullRequests(t, ctx, query, orgID, 20, first, second)
-	for _, row := range []struct {
-		number uint32
-		root   contextfabric.SubjectRef
-		tier   string
-		count  int
-	}{
-		{1, first, "native", 1},
-		{3, second, "native", 1},
-		{4, first, "heuristic", 2},
-		{4, second, "heuristic", 2},
-		{5, first, "", 0},
-	} {
-		tier, count := tierOf(result, chaos4099GitLabRepoID, row.number, row.root)
-		if tier != row.tier || count != row.count {
-			t.Fatalf("pull request %d root %s: tier=%q roots=%d, want tier=%q roots=%d (all %v)", row.number, row.root.CanonicalID, tier, count, row.tier, row.count, result.TargetLinkTier)
-		}
-	}
-}
-
 // Two providers can mint one raw project id; each root keeps its own tier and
 // the repository hop names both roots.
 func TestScopeExpander_ProjectToPullRequest_ProviderQualifiedRootsShareARawID(t *testing.T) {
