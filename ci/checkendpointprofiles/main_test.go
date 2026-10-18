@@ -2072,6 +2072,11 @@ func copyRealSourceTree(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	mod, err := os.ReadFile(filepath.Join(realRoot, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dst, "go.mod"), string(mod))
 	inv, err := os.ReadFile(filepath.Join(realRoot, "contracts", "auth", "v1", "endpoint-profiles.acr.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -2556,4 +2561,12 @@ func TestRealTreeWrapperChainsResolveWithoutGaps(t *testing.T) {
 func TestWrapperChainDoesNotTreatANonRejectingHandlerMethodAsAGuard(t *testing.T) {
 	f := chainFixture(t, "\treturn a.authenticator.Passthrough(next)\n", "", "", healthzChainRow(), capabilitiesRow(nil))
 	mustContain(t, f.check(t), "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "is protected", "no guard found")
+}
+
+func TestWrapperChainMissingModuleFileFailsClosed(t *testing.T) {
+	f := chainFixture(t, fixtureGuardedBody, "", "", healthzChainRow(), capabilitiesRow(nil))
+	if err := os.Remove(filepath.Join(f.root, "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "go.mod")
 }

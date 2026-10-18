@@ -1904,6 +1904,9 @@ func discoverChains(root string, routes []discoveredRoute) map[routeKey]chainVer
 		return out
 	}
 	module := moduleOf(root)
+	if module == "" {
+		return gapAll("cannot read the module path from go.mod")
+	}
 	apiPkg, err := loadChainPkg(root, module+"/internal/api")
 	if err != nil {
 		return gapAll("cannot parse internal/api: %v", err)
