@@ -311,10 +311,14 @@ type Event struct {
 	// MaxLinesPerScope bounds the lines one scope may carry for
 	// MultiplicityZeroOrManyPerRequest; zero for every other multiplicity.
 	MaxLinesPerScope int
-	// DataDependentBound states why a MultiplicityZeroOrManyPerRequest event
-	// has no fixed MaxLinesPerScope: the count follows the data a read covers.
-	// Exactly one of the two is declared.
-	DataDependentBound string
+	// UnboundedReason states why a MultiplicityZeroOrManyPerRequest event has
+	// no MaxLinesPerScope: the certifier cannot count it per scope because the
+	// number of lines follows a quantity the request does not fix (the reads a
+	// provider makes, the teams a read covers). Exactly one of the two is
+	// declared, and the events that declare this one are pinned by name in
+	// unbounded_events_test.go, so an unbounded event is a reviewed exemption,
+	// never a default.
+	UnboundedReason string
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -1884,6 +1888,33 @@ func noneOrJoinedPattern(members []string) string {
 	return "^(none|" + one + "(," + one + ")*)$"
 }
 
+// The per-request line bounds below are derived from the engine's call sites,
+// and bound_pins_test.go (package contextfabric_test) recomputes each one from
+// the package source, so a new call site or a larger loop fails there until
+// the bound is reviewed. passesPerRequest is the number of attempts a request
+// makes at the recording: the first pass and the synthesis retry, or the answer
+// reuse attempt and its work item sub-attempt.
+const (
+	passesPerRequest = 2
+	// window canonicalization: 5 RecordWindowCanonicalization call sites.
+	windowCanonicalizationMaxLines = 5 * passesPerRequest
+	// prior subject receipts skipped: 1 call site.
+	priorSubjectReceiptsSkippedMaxLines = 1 * passesPerRequest
+	// prior subject receipt skip reason: one call site per reason, and the scope is the reason.
+	priorSubjectReceiptSkipReasonMaxLines = 1 * passesPerRequest
+	// commit affirmation retraction and commit kept: one call in a loop over the committed subjects, published once.
+	commitAffirmationRetractionMaxLines = contractsv1.ContextFabricProjectedSubjectsMaxCount
+	commitKeptByNoMemberFoundMaxLines   = contractsv1.ContextFabricProjectedSubjectsMaxCount
+	// answer reuse outcome: 16 recordReuseOutcome call sites, each at most once per attempt.
+	answerReuseOutcomeMaxLines = 16 * passesPerRequest
+	// answer reuse containment: 3 recordReuseContainment call sites.
+	answerReuseContainmentMaxLines = 3 * passesPerRequest
+	// stored answerability: 2 call sites of the reuse surface, and the scope is the surface.
+	storedAnswerabilityMaxLines = 2 * passesPerRequest
+	// answer reuse served request id: 2 call sites.
+	answerReuseServedRequestIDMaxLines = 2 * passesPerRequest
+)
+
 const requestIDApplicability = "written when the request context carries a request ID"
 
 // WindowBinderOutcome is the Info line of the temporal binder's proposal for a question: the closed reason, the routed window and grammar, and how many spans were bound.
@@ -1953,7 +1984,7 @@ var WindowCanonicalizationOutcome = Event{
 	Msg:                      "context fabric window canonicalization outcome",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per canonicalization recording; the recorder is called from the veto, gate and decisive paths of one investigation pass, and a gated pass writes it beside the gated line.",
+	MaxLinesPerScope:         windowCanonicalizationMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per canonicalization recording.",
@@ -2586,7 +2617,7 @@ var PriorSubjectReceiptsSkipped = Event{
 	Msg:                      "context fabric prior-subject receipts skipped",
 	Level:                    LevelWarn,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass, so the count follows the branches a request passes, not a fixed number.",
+	MaxLinesPerScope:         priorSubjectReceiptsSkippedMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per receipt-skip recording, and none when no receipt was skipped.",
@@ -2603,7 +2634,7 @@ var PriorSubjectReceiptSkipReason = Event{
 	Msg:                      "context fabric prior-subject receipt skip reason",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "at most one line per skip reason (four) per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass.",
+	MaxLinesPerScope:         priorSubjectReceiptSkipReasonMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id", "reason"},
 	BoundedAggregation:       "one line per skip reason with a non-zero count.",
@@ -2622,7 +2653,7 @@ var CommitAffirmationRetraction = Event{
 	Msg:                      "context fabric commit affirmation retraction",
 	Level:                    LevelWarn,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per retracted subject; the number of subjects an answer names follows the question.",
+	MaxLinesPerScope:         commitAffirmationRetractionMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per subject the commit gate retracts.",
@@ -2643,7 +2674,7 @@ var CommitKeptByNoMemberFound = Event{
 	Msg:                      "context fabric commit kept by no member found",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per kept subject; the number of subjects an answer names follows the question.",
+	MaxLinesPerScope:         commitKeptByNoMemberFoundMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per subject the commit gate keeps by the none-found row.",
@@ -2680,7 +2711,7 @@ var AnswerReuseOutcome = Event{
 	Msg:                      "context fabric answer reuse outcome",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per reuse attempt; a request tries reuse once per candidate lookup it makes and the count follows the lookups.",
+	MaxLinesPerScope:         answerReuseOutcomeMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per answer reuse attempt.",
@@ -2714,7 +2745,7 @@ var AnswerReuseContainment = Event{
 	Msg:                      "context fabric answer reuse containment",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per reuse attempt that measured containment; the count follows the candidate lookups a request makes.",
+	MaxLinesPerScope:         answerReuseContainmentMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per containment measurement.",
@@ -2766,7 +2797,7 @@ var StoredAnswerability = Event{
 	Msg:                      contextfabric.StoredAnswerabilityLogMessage,
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per stored clarification a surface checks; reuse checks one per candidate lookup and the result by id route one per stored result it serves.",
+	MaxLinesPerScope:         storedAnswerabilityMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id", "surface"},
 	BoundedAggregation:       "one line per stored clarification determination.",
@@ -2794,7 +2825,7 @@ var AnswerReuseServedRequestID = Event{
 	Msg:                      "context fabric answer reuse served a stored result's own request id",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per reuse hit; the answer reuse path and the work item reuse path each write one, and the count follows the lookups a request makes.",
+	MaxLinesPerScope:         answerReuseServedRequestIDMaxLines,
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per reuse hit.",
@@ -3064,7 +3095,7 @@ var TeamLinkedMixNativeFirst = Event{
 	Msg:                      "devhealthfacts.team_linked_mix_native_first",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	UnboundedReason:          "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per team chunk of a team linked mix read.",
@@ -3085,7 +3116,7 @@ var TeamLinkedMixSet = Event{
 	Msg:                      "devhealthfacts.team_linked_mix_set",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+	UnboundedReason:          "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per team chunk of a team linked mix read.",
@@ -3104,7 +3135,7 @@ var TeamPRLinkStateNativeFirst = Event{
 	Msg:                      "devhealthfacts.team_pr_link_state_native_first",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+	UnboundedReason:          "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per team pull request link state read.",
@@ -3124,7 +3155,7 @@ var PullRequestProjectNativeFirst = Event{
 	Msg:                      "devhealthfacts.pull_request_project_native_first",
 	Level:                    LevelInfo,
 	Multiplicity:             MultiplicityZeroOrManyPerRequest,
-	DataDependentBound:       "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
+	UnboundedReason:          "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
 	RequiredOnlyConstruction: true,
 	Attribution:              []string{"request_id"},
 	BoundedAggregation:       "one line per pull request project links read.",
@@ -3261,7 +3292,7 @@ var HealthDailyHealthCapCut = Event{
 	Msg:                "health daily_health display cap cut rows",
 	Level:              LevelDebug,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+	UnboundedReason:    "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
 	Attribution:        []string{"org_id"},
 	BoundedAggregation: "one line per health read with a cut daily_health table.",
 	Fields: []Field{
@@ -3278,7 +3309,7 @@ var DeficiencyRuleBasisDayAbsent = Event{
 	Msg:                "devhealthfacts.rule_basis_day_absent",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+	UnboundedReason:    "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
 	Attribution:        []string{"org_id"},
 	BoundedAggregation: "one line per fired compounding-risk rule row without a day.",
 	Fields: []Field{
@@ -3293,7 +3324,7 @@ var DeficiencyRuleBasisDayInvalid = Event{
 	Msg:                "devhealthfacts.rule_basis_day_invalid",
 	Level:              LevelWarn,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+	UnboundedReason:    "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
 	Attribution:        []string{"org_id"},
 	BoundedAggregation: "one line per fired compounding-risk rule row with an invalid day.",
 	Fields: []Field{
@@ -3309,7 +3340,7 @@ var FactBytesBoundExceeded = Event{
 	Msg:                "context_fabric_fact_bytes_bound_exceeded",
 	Level:              LevelWarn,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+	UnboundedReason:    "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
 	Attribution:        []string{"producer", "kind"},
 	BoundedAggregation: "one line per dropped time series of a dual-table fact.",
 	Fields: []Field{
@@ -3326,7 +3357,7 @@ var SubjectIDShapeRejected = Event{
 	Msg:                "context_fabric_subject_id_shape_rejected",
 	Level:              LevelWarn,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+	UnboundedReason:    "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
 	Attribution:        []string{"producer", "kind"},
 	BoundedAggregation: "one line per provider read with a positive rejected count.",
 	Fields: []Field{
@@ -3342,7 +3373,7 @@ var OwningTeamsTruncated = Event{
 	Msg:                "context_fabric_owning_teams_truncated",
 	Level:              LevelWarn,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	DataDependentBound: "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+	UnboundedReason:    "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
 	Attribution:        []string{"producer"},
 	BoundedAggregation: "one line per identity read with truncated owning teams.",
 	Fields: []Field{

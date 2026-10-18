@@ -861,7 +861,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per containment measurement.",
-    "data_dependent_bound": "one line per reuse attempt that measured containment; the count follows the candidate lookups a request makes.",
+    "max_lines_per_scope": 6,
     "fields": [
       {
         "key": "org_id",
@@ -950,7 +950,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per answer reuse attempt.",
-    "data_dependent_bound": "one line per reuse attempt; a request tries reuse once per candidate lookup it makes and the count follows the lookups.",
+    "max_lines_per_scope": 32,
     "fields": [
       {
         "key": "org_id",
@@ -1001,7 +1001,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per reuse hit.",
-    "data_dependent_bound": "one line per reuse hit; the answer reuse path and the work item reuse path each write one, and the count follows the lookups a request makes.",
+    "max_lines_per_scope": 4,
     "fields": [
       {
         "key": "org_id",
@@ -1635,7 +1635,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per subject the commit gate retracts.",
-    "data_dependent_bound": "one line per retracted subject; the number of subjects an answer names follows the question.",
+    "max_lines_per_scope": 250,
     "fields": [
       {
         "key": "org_id",
@@ -1716,7 +1716,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per subject the commit gate keeps by the none-found row.",
-    "data_dependent_bound": "one line per kept subject; the number of subjects an answer names follows the question.",
+    "max_lines_per_scope": 250,
     "fields": [
       {
         "key": "org_id",
@@ -7847,7 +7847,7 @@
       "reason"
     ],
     "bounded_aggregation": "one line per skip reason with a non-zero count.",
-    "data_dependent_bound": "at most one line per skip reason (four) per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass.",
+    "max_lines_per_scope": 2,
     "fields": [
       {
         "key": "org_id",
@@ -7893,7 +7893,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per receipt-skip recording, and none when no receipt was skipped.",
-    "data_dependent_bound": "one line per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass, so the count follows the branches a request passes, not a fixed number.",
+    "max_lines_per_scope": 2,
     "fields": [
       {
         "key": "org_id",
@@ -9865,7 +9865,7 @@
       "surface"
     ],
     "bounded_aggregation": "one line per stored clarification determination.",
-    "data_dependent_bound": "one line per stored clarification a surface checks; reuse checks one per candidate lookup and the result by id route one per stored result it serves.",
+    "max_lines_per_scope": 4,
     "fields": [
       {
         "key": "org_id",
@@ -11499,7 +11499,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per canonicalization recording.",
-    "data_dependent_bound": "one line per canonicalization recording; the recorder is called from the veto, gate and decisive paths of one investigation pass, and a gated pass writes it beside the gated line.",
+    "max_lines_per_scope": 10,
     "fields": [
       {
         "key": "org_id",
@@ -13087,7 +13087,7 @@
       "kind"
     ],
     "bounded_aggregation": "one line per dropped time series of a dual-table fact.",
-    "data_dependent_bound": "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+    "unbounded_reason": "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
     "fields": [
       {
         "key": "producer",
@@ -13150,7 +13150,7 @@
       "org_id"
     ],
     "bounded_aggregation": "one line per health read with a cut daily_health table.",
-    "data_dependent_bound": "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+    "unbounded_reason": "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
     "fields": [
       {
         "key": "org_id",
@@ -13183,7 +13183,7 @@
       "producer"
     ],
     "bounded_aggregation": "one line per identity read with truncated owning teams.",
-    "data_dependent_bound": "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "unbounded_reason": "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
     "fields": [
       {
         "key": "producer",
@@ -13209,7 +13209,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per pull request project links read.",
-    "data_dependent_bound": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
+    "unbounded_reason": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
     "fields": [
       {
         "key": "outcome",
@@ -13263,7 +13263,7 @@
       "org_id"
     ],
     "bounded_aggregation": "one line per fired compounding-risk rule row without a day.",
-    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+    "unbounded_reason": "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
     "fields": [
       {
         "key": "org_id",
@@ -13286,7 +13286,7 @@
       "org_id"
     ],
     "bounded_aggregation": "one line per fired compounding-risk rule row with an invalid day.",
-    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+    "unbounded_reason": "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
     "fields": [
       {
         "key": "org_id",
@@ -13315,7 +13315,7 @@
       "kind"
     ],
     "bounded_aggregation": "one line per provider read with a positive rejected count.",
-    "data_dependent_bound": "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "unbounded_reason": "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
     "fields": [
       {
         "key": "producer",
@@ -13371,7 +13371,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per team chunk of a team linked mix read.",
-    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+    "unbounded_reason": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
     "fields": [
       {
         "key": "outcome",
@@ -13425,7 +13425,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per team chunk of a team linked mix read.",
-    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+    "unbounded_reason": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
     "fields": [
       {
         "key": "outcome",
@@ -13475,7 +13475,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per team pull request link state read.",
-    "data_dependent_bound": "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+    "unbounded_reason": "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
     "fields": [
       {
         "key": "outcome",
