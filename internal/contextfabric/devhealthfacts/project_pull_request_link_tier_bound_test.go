@@ -18,6 +18,9 @@ func TestScopeExpander_LinkTierReadIsBoundToTheTargetPullRequests(t *testing.T) 
 		{match: "GROUP BY concat(p.provider, ':', p.id), toString(l.pr_repo_id), l.pr_number", rows: [][]any{
 			{"github:P", repoID, uint32(2), "native"},
 		}},
+		{match: "GROUP BY p.id, toString(l.pr_repo_id), l.pr_number", rows: [][]any{
+			{"P", repoID, uint32(2), "native"},
+		}},
 		{match: "FROM git_pull_requests AS p FINAL", rows: [][]any{
 			{repoID, uint32(1)}, {repoID, uint32(2)}, {repoID, uint32(3)},
 		}},
@@ -39,7 +42,7 @@ func TestScopeExpander_LinkTierReadIsBoundToTheTargetPullRequests(t *testing.T) 
 	}
 	var tierQueries []capturedQuery
 	for _, query := range client.queries {
-		if strings.Contains(query.statement, "strongest") || strings.Contains(query.statement, "pull_request_keys") {
+		if strings.Contains(query.statement, "GROUP BY") && strings.HasSuffix(query.statement, "toString(l.pr_repo_id), l.pr_number") {
 			tierQueries = append(tierQueries, query)
 		}
 	}
