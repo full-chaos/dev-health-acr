@@ -750,7 +750,7 @@ ORDER BY project_key, scope, scope_id`)
 	if severityErr != nil {
 		return rowCount, rejected, false, severityErr
 	}
-	if severityRowCount >= maxFactRowsProbe {
+	if severityRowCount >= maxProjectPopulationProbe {
 		breakdownTruncated = true
 	}
 	if severityRowCount > rowCount {
@@ -1071,7 +1071,7 @@ func (p *HealthProvider) queryProjectHealthSeverityMax(ctx context.Context, orgI
 	// it have one WITHIN the window today" -- the two together are what
 	// let the caller tell a project that never had a known band apart from
 	// one whose only known bands are all now stale.
-	statement := withRowProbeLimit(`SELECT project_key,
+	statement := withProjectPopulationLimit(`SELECT project_key,
 	countIf(band > 0),
 	countIf(raw_band > 0),
 	count(),

@@ -1265,7 +1265,15 @@ import (
 // v245 -> v246: a project's commitment fact serves a bounded table of its
 // dated issues (id, due date, status, past due) beside the counts, with a
 // truncated flag at 25 rows. An answer saved under v245 has no such table.
-const QueryVersion = "devhealthfacts.clickhouse.v246"
+//
+// v246 -> v247: a project past the shared row budget of a flow, readiness or
+// landscape project read is served (its team count from the uncapped
+// aggregate, its omitted rows named), and an investment project the row cap
+// cut off is named cut, not as having no mix. An answer saved before omitted
+// such a project or called it empty. The project population reads of flow,
+// readiness, landscape, health, workload and the investment mix read up to 250
+// projects, where they read 200.
+const QueryVersion = "devhealthfacts.clickhouse.v247"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1320,6 +1328,21 @@ func withRowLimit(statement string) string {
 // rows still serves at most maxFactRowsPerQuery facts. The two bounds are
 // deliberately separate -- see withRowProbeLimit.
 const maxFactRowsProbe = maxFactRowsPerQuery + 1
+
+// maxProjectPopulationRows is the most projects one project-grain read
+// serves: the answer projection carries up to this many subjects, so a cohort
+// of that size must be read in full. maxProjectPopulationProbe is that plus
+// one, so a population exactly at the bound differs from one that overflowed it.
+const (
+	maxProjectPopulationRows  = contractsv1.ContextFabricProjectedSubjectsMaxCount
+	maxProjectPopulationProbe = maxProjectPopulationRows + 1
+)
+
+// withProjectPopulationLimit bounds a project-grain SELECT (one row per
+// project) to maxProjectPopulationProbe.
+func withProjectPopulationLimit(statement string) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxProjectPopulationProbe)
+}
 
 // withRowProbeLimit is withRowLimit's limit+1 twin: it bounds a provider's
 // SELECT to maxFactRowsProbe so the caller can tell a full page from a

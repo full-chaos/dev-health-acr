@@ -150,7 +150,16 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		// silently query pull requests from only the first 200 while
 		// reporting a clean, non-truncated result.
 		prCounts.Truncated = prCounts.Truncated || repoCounts.Truncated
-		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: prCounts}, nil
+		var targetLinkTier map[string]map[string]string
+		switch request.TimeContext.Axis {
+		case "", contractsv1.ContextFabricTemporalCurrent:
+			tiers, err := e.projectPullRequestLinkTiers(ctx, orgID, decodeProjectOriginIDs(request.Origins), repositoryIDs(authorizedRepos))
+			if err != nil {
+				return contextfabric.FactScopeExpansionResult{}, err
+			}
+			targetLinkTier = pullRequestLinkTierTargets(targets, tiers, projectOriginsByRawID(request.Origins))
+		}
+		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetLinkTier: targetLinkTier, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: prCounts}, nil
 
 	case contextfabric.FactScopePolicyProjectWorkItemPullRequestReview:
 		repos, repoCounts, err := e.projectRepositories(ctx, orgID, request.Origins, maxFactScopeRepositoryFanout, request.TimeContext)
