@@ -474,6 +474,10 @@
         "basis": {
           "type": "string",
           "description": "How the path from the requested subject was formed: direct, activity_proxy or attributed_primary_team."
+        },
+        "link_tier": {
+          "type": "string",
+          "description": "Set on a pull request reached through an issue of the requested subject: the provenance tier of the issue-to-pull-request link (native, explicit_text or heuristic). Absent when the pull request was reached only through its repository."
         }
       },
       "description": "A requested subject a derived fact was reached from."
