@@ -117,6 +117,9 @@ func (s routeSeed) conn() *fakeConn {
 					if len(n.repos) > 0 {
 						r["n"].(*node).Properties[propAuthzRepos] = n.repos
 					}
+					for k, v := range n.props {
+						r["n"].(*node).Properties[k] = v
+					}
 					rows = append(rows, r)
 				}
 			}
