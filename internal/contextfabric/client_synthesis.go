@@ -369,13 +369,16 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 
 // clientSynthesisEnvelopeRefusal is the refusal for a budget whose half share
 // cannot hold the envelope: it measures the smallest input the facts reduce to
-// beside the envelope, so the measured size is the one the turn needs.
+// beside the envelope, so the measured size is the one the turn needs. The
+// probe runs without telemetry: it is a measurement, not a bounding outcome.
 func (r RuntimeAnswerSynthesizer) clientSynthesisEnvelopeRefusal(ctx context.Context, principal storage.Principal, input SynthesisInput, shareErr error, budget int) error {
 	envelope, envelopeErr := r.ClientSynthesis.envelopeBytes()
 	if envelopeErr != nil {
 		return envelopeErr
 	}
-	_, _, _, minimumErr := r.encodeWithinInputBound(ctx, principal, input, r.ClientSynthesis.Encode, 1, 0)
+	quiet := r
+	quiet.Telemetry = nil
+	_, _, _, minimumErr := quiet.encodeWithinInputBound(ctx, principal, input, r.ClientSynthesis.Encode, 1, 0)
 	var overflow *ModelInputOverflow
 	if errors.As(minimumErr, &overflow) {
 		return clientSynthesisBudgetRefusal(minimumErr, envelope, budget)

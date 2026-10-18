@@ -17,6 +17,7 @@ import (
 
 type budgetTurn struct {
 	result     InvestigationResult
+	telemetry  *recordingTelemetry
 	collected  *contractsv1.ContextFabricSynthesisInput
 	totalBytes int
 	err        error
@@ -38,6 +39,7 @@ func runBudgetTurnWithRules(t *testing.T, teams, noteBytes, budget int, rules []
 			"severity": StringFactValue("high"), "note": StringFactValue(strings.Repeat("x", noteBytes)),
 		}})
 	}
+	tel := &recordingTelemetry{}
 	interpretation := InterpretedQuestion{
 		Shape: ShapeDiscoveredCohort, RequestedJudgment: "teams_under_pressure",
 		TimeContext:      TimeContext{Axis: TemporalCurrent},
@@ -64,14 +66,15 @@ func runBudgetTurnWithRules(t *testing.T, teams, noteBytes, budget int, rules []
 			}, nil
 		}),
 		Synthesizer: RuntimeAnswerSynthesizer{
-			Runtime: &clientRuntime{},
-			Options: RuntimeAnswerSynthesizerOptions{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
+			Telemetry: tel,
+			Runtime:   &clientRuntime{},
+			Options:   RuntimeAnswerSynthesizerOptions{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
 			ClientSynthesis: &ClientSynthesisAssembly{
 				PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")),
 				Rules: rules, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode,
 			},
 		},
-		Results: &resultStoreStub{}, Telemetry: &recordingTelemetry{},
+		Results: &resultStoreStub{}, Telemetry: tel,
 	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(300, 0).UTC() }, NewResultID: func() string { return "result_94480001" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
@@ -83,7 +86,7 @@ func runBudgetTurnWithRules(t *testing.T, teams, noteBytes, budget int, rules []
 	request.Options.MaxSerializedBytes = budget
 	ctx, collected := WithSynthesisInputCollector(context.Background())
 	result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org-1"}, request)
-	turn := budgetTurn{result: result, collected: collected(), err: err}
+	turn := budgetTurn{result: result, collected: collected(), err: err, telemetry: tel}
 	if err == nil && turn.collected != nil {
 		body, marshalErr := json.Marshal(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: result, SynthesisInput: turn.collected})
 		if marshalErr != nil {
@@ -205,6 +208,9 @@ func TestClientSynthesisEnvelopeRefusalMeasuresTheSmallestInput(t *testing.T) {
 	}
 	if clientSynthesisBodyShare(budget) >= envelope {
 		t.Fatalf("envelope %d fits the %d share, the early refusal is not reached", envelope, clientSynthesisBodyShare(budget))
+	}
+	if len(turn.telemetry.synthesisInputBounds) != 0 {
+		t.Fatalf("the refusal measurement emitted %d input bound events %+v, want none", len(turn.telemetry.synthesisInputBounds), turn.telemetry.synthesisInputBounds)
 	}
 	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes < int64(envelope+2000+ClientSynthesisAnswerFloorBytes) {
 		t.Fatalf("refusal measured %d against %d, want the caller's %d and at least envelope %d + input 2000 + floor %d", refusal.MeasuredBytes, refusal.MaxSerializedBytes, budget, envelope, ClientSynthesisAnswerFloorBytes)
