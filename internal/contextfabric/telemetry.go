@@ -512,6 +512,7 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, prin
 		"substitution_parent_chain", SanitizeLogAttr(string(parentChainToken(event.SubstitutionParentChain))),
 		"substitution_parent_chain_depth", event.SubstitutionParentChainDepth,
 		"substitution_parent_chain_error", SanitizeLogAttr(string(noneChainError(event.SubstitutionParentChainError))),
+		"candidate_hint_evicted", event.CandidateHintEvicted,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
 }

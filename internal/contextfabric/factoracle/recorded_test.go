@@ -29,8 +29,8 @@ const captureSchemaDigest = "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa
 // the capture is taken again on the venue.
 var contractsAtCapture = map[string]string{
 	"acrRepositoryScopes":            "sha256:43fa66efd5d4c5dfc3699253378000be29e86dee1640f22dff19f40a0eb68c6a",
-	"capacityCompletionDistribution": "sha256:4deebbadf5ad5bd86c3f2be8bef3bbc1e622e110080038cf5359d02fe03dca02",
-	"capacityForecast":               "sha256:f93d3cf5c8b5ecd443fbacaeeb7a21aa84a06d7177f748732c2c06a13a8478dc",
+	"capacityCompletionDistribution": "sha256:be86b79ee399d54ff8d2e22d77c3a3ef260003daaac51b5e8c66f490c7889d6e",
+	"capacityForecast":               "sha256:d819e0dba5f5b07865dd70702f3e0a8aba74c49b68ac387904f74b829d3b970c",
 	"capacityForecasts":              "sha256:c08fb7e162371f005c8a151a2504b88a521e0f5ad855d96087848000821dc7bf",
 	"catalogValues":                  "sha256:00ad023c9a2febf03c47ca10f24c66bdcc7916bac2e5ffc688a2a65d8e3d0258",
 	"cognitiveLoad":                  "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",

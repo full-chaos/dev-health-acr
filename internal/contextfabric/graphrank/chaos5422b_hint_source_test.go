@@ -41,6 +41,7 @@ func TestTheEnumerationPreservesEveryHintSourcesBehaviour(t *testing.T) {
 		"workbench": {candidates: 1, basis: "caller_canonical_id"},
 		string(hintsource.AnswerReuseAuthorizationRecheck): {candidates: 1, basis: "caller_canonical_id"},
 		string(hintsource.PriorSubjectReceipt):             {candidates: 3, basis: "caller_canonical_id"},
+		string(hintsource.ConfirmedCandidateReceipt):       {candidates: 1, basis: "caller_canonical_id"},
 	}
 	for source, expected := range cases {
 		t.Run(source, func(t *testing.T) {

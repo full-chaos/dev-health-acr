@@ -182,6 +182,27 @@ func TestEveryEnumeratedHintSourceHasAnExecutedProductionDriver(t *testing.T) {
 		driven[hintsource.EngineCommittedAnchorCarry] = true
 	})
 
+	t.Run("confirmed_candidate_receipt, through the redeeming turn", func(t *testing.T) {
+		h := newNeedTurnHarness(t, nil)
+		one := h.turn(needTurnRequest("request_hintsource_candidate_one", true), candidateOfferingNeedResponse())
+		offer := one.result.StructureNeeds.CandidateOptions[0]
+		two := needTurnRequest("request_hintsource_candidate_two", true)
+		two.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: offer.ReceiptID}}
+		call := lastPortCall(t, h.turn(two, committingNeedResponse()))
+		sources := make([]string, 0, 1)
+		found := false
+		for _, hint := range call.request.RequestedScope.SubjectHints {
+			sources = append(sources, hint.Source)
+			if hint.Source == string(hintsource.ConfirmedCandidateReceipt) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the redeeming turn put %v on the wire, none of which is %q", sources, hintsource.ConfirmedCandidateReceipt)
+		}
+		driven[hintsource.ConfirmedCandidateReceipt] = true
+	})
+
 	// THE CLOSURE CHECK. A member added to the registry with no driver above
 	// is an unmeasured member, and the enumeration would then be describing
 	// something no test has ever seen produced.

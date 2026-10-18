@@ -1257,7 +1257,11 @@ import (
 // the unit counts once, in the window that holds its to_ts, so adjacent
 // windows add up. An answer saved under v243 counted a unit that spans a
 // window boundary in every window it overlapped.
-const QueryVersion = "devhealthfacts.clickhouse.v244"
+//
+// v244 -> v245: a candidate receipt redeemed this turn resolves the subject it
+// names. An answer saved under v244 for such a request holds the no-match
+// that left the offered pool unresolved and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v245"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
