@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/invopop/jsonschema"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
@@ -660,6 +661,7 @@ type Runtime struct {
 	generator generator
 	config    Config
 	now       func() time.Time
+	sleep     func(context.Context, time.Duration) error
 }
 
 type generator interface {
@@ -909,7 +911,7 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	return &Runtime{generator: gen, config: config, now: time.Now}, nil
+	return &Runtime{generator: gen, config: config, now: time.Now, sleep: sleepContext}, nil
 }
 
 // InterpretQuestion is the production entry point: it always samples the
@@ -2675,6 +2677,7 @@ func drawLogFields(draws []synthesisDraw) []any {
 
 func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {
 	var last error
+	timeoutRetried := false
 	outcomes := make([]attemptOutcome, 0, r.config.MaxAttempts)
 	// record appends THIS attempt's outcome before any return, so the
 	// returned slice length always equals the attempt number the caller used
@@ -2738,8 +2741,65 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 		if !retryable(err) {
 			return outcomes, err
 		}
+		class, _ := llm.ClassOf(err)
+		if class == llm.ClassTimeout {
+			if timeoutRetried {
+				return outcomes, err
+			}
+			timeoutRetried = true
+		}
+		if wait, ok := llmRetryWait(err, attempt); ok {
+			if wait > maxLLMRetryWait {
+				r.logRetryDecision(ctx, class, attempt, wait, false)
+				return outcomes, err
+			}
+			r.logRetryDecision(ctx, class, attempt, wait, true)
+			if sleepErr := r.sleep(ctx, wait); sleepErr != nil {
+				return outcomes, err
+			}
+		}
 	}
 	return outcomes, last
+}
+
+// maxLLMRetryWait bounds the pause before a retried shared-client failure.
+const maxLLMRetryWait = 5 * time.Second
+
+const baseLLMRetryWait = 500 * time.Millisecond
+
+// llmRetryWait is the pause before the next attempt after a retryable
+// shared-client failure: the provider's Retry-After for a rate limit when it
+// sent one, otherwise exponential from baseLLMRetryWait. ok is false for an
+// error that is not the shared client's, which keeps its immediate retry.
+func llmRetryWait(err error, attempt int) (time.Duration, bool) {
+	var typed *llm.Error
+	if _, isClient := llm.ClassOf(err); !isClient || !errors.As(err, &typed) {
+		return 0, false
+	}
+	if typed.Class == llm.ClassRateLimit && typed.RetryAfter > 0 {
+		return typed.RetryAfter, true
+	}
+	wait := baseLLMRetryWait << uint(attempt-1)
+	if wait > maxLLMRetryWait || wait <= 0 {
+		wait = maxLLMRetryWait
+	}
+	return wait, true
+}
+
+func (r *Runtime) logRetryDecision(ctx context.Context, class llm.ErrorClass, attempt int, wait time.Duration, retrying bool) {
+	r.config.Logger.DebugContext(ctx, "context fabric model call retry decision",
+		"error_class", string(class), "attempt", attempt, "wait_ms", wait.Milliseconds(), "retrying", retrying)
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // fallbackWouldSeeADeadContext reports whether invoking the fallback leg
@@ -3111,7 +3171,8 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 
 // retryable decides whether a generation failure may be retried with the
 // EXACT SAME encoded payload. It classifies ONLY on structured status/code
-// (a Genkit gRPC-style status, or context.DeadlineExceeded) -- never by
+// (a Genkit gRPC-style status, a shared-client error class, or
+// context.DeadlineExceeded) -- never by
 // sniffing an error's message text (CHAOS-3770 F2).
 //
 // That restriction is deliberate, not merely cautious: the OpenAI SDK's own
@@ -3136,6 +3197,14 @@ func retryable(err error) bool {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+	if class, ok := llm.ClassOf(err); ok {
+		switch class {
+		case llm.ClassRateLimit, llm.ClassServer, llm.ClassTimeout, llm.ClassTransport:
+			return true
+		default:
+			return false
+		}
 	}
 	// Genkit (and well-behaved plugins) surface transport and provider
 	// failures as *core.GenkitError with a gRPC-style status. Prefer that
