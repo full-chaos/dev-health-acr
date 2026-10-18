@@ -312,6 +312,24 @@ func goVarName(e Event) string {
 		return "StructureReceiptVeto"
 	case StructureExplicit.ID:
 		return "StructureExplicit"
+	case PriorConsulted.ID:
+		return "PriorConsulted"
+	case PriorDegradationPointerDangling.ID:
+		return "PriorDegradationPointerDangling"
+	case PriorDegradation.ID:
+		return "PriorDegradation"
+	case ProjectedRowsCount.ID:
+		return "ProjectedRowsCount"
+	case ProjectedRowsByFactKind.ID:
+		return "ProjectedRowsByFactKind"
+	case DualTableFacts.ID:
+		return "DualTableFacts"
+	case ModelRowsStripped.ID:
+		return "ModelRowsStripped"
+	case DriverSourceStateCorrected.ID:
+		return "DriverSourceStateCorrected"
+	case DriverIdentityCollisions.ID:
+		return "DriverIdentityCollisions"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:

@@ -266,7 +266,7 @@ func TestStructureReceiptVetoLineCertifiesEveryExitTheEngineWrites(t *testing.T)
 	}
 }
 
-// TestEveryStructureLineCertifiesWithoutARequestID emits each of the ten lines
+// TestEveryStructureLineCertifiesWithoutARequestID emits each declared line
 // through the real sink under a context that carries no request id, and
 // requires the line to certify when the assertion states the id is absent,
 // and to be unmatched by the same assertion when the line carries an id.
@@ -308,7 +308,46 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 			s.RecordStructureExplicit(c, principalOrg1, contractsv1.ContextFabricStructureNeedExpectedKind, contextfabric.StructureExplicitApplied)
 		}},
 	}
-	if len(cases) != 10 {
+	cases = append(cases, []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.PriorConsulted, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPriorConsulted(c, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, contextfabric.PriorConsultedOffered)
+		}},
+		{eventspec.PriorDegradationPointerDangling, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPriorDegradation(c, principalOrg1, contextfabric.PriorDegradationPointerDangling)
+		}},
+		{eventspec.PriorDegradation, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPriorDegradation(c, principalOrg1, contextfabric.PriorDegradationStoreUnavailable)
+		}},
+		{eventspec.ProjectedRowsCount, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordProjectedRowsCount(c, principalOrg1, 4, false)
+		}},
+		{eventspec.ProjectedRowsByFactKind, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordProjectedRowsByFactKind(c, principalOrg1, map[contextfabric.FactKind]int{contractsv1.ContextFabricFactMetrics: 2})
+		}},
+	}...)
+	for _, extra := range []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.DualTableFacts, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordDualTableFacts(c, principalOrg1, 1, 2)
+		}},
+		{eventspec.ModelRowsStripped, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordModelRowsStripped(c, principalOrg1, 1)
+		}},
+		{eventspec.DriverSourceStateCorrected, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordDriverSourceStateCorrected(c, principalOrg1, 1)
+		}},
+		{eventspec.DriverIdentityCollisions, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordDriverIdentityCollisions(c, principalOrg1, contextfabric.DriverIdentityCollisions{Restated: 1})
+		}},
+	} {
+		cases = append(cases, extra)
+	}
+	if len(cases) != 19 {
 		t.Fatalf("want one case per declared line, have %d", len(cases))
 	}
 	for _, tc := range cases {
@@ -362,4 +401,145 @@ func TestNoAttributionRefusesAKeyThatIsNotAConditionalAttributionField(t *testin
 			t.Errorf("NoAttribution %q was accepted", key)
 		}
 	}
+}
+
+func TestPriorConsultedAndDegradationLinesCertifyWhatTheEngineWrites(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for _, tc := range []struct {
+		saw, offered, revoked bool
+		want                  string
+	}{{true, true, false, "offered"}, {true, false, false, "suppressed_verification"}, {true, false, true, "suppressed_revoked"}} {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		for _, member := range structureNeedKinds() {
+			contextfabric.RecordPriorConsultOutcomeForTest(ctx, sink, principalOrg1, member, tc.saw, tc.offered, tc.revoked)
+		}
+		for _, member := range structureNeedKinds() {
+			line := certifyRequestLine(t, buf.Bytes(), eventspec.PriorConsulted, map[string]any{"org_id": "org_1", "member": string(member), "outcome": tc.want})
+			seen[line["outcome"].(string)] = true
+		}
+	}
+	seen["degraded"] = true // named by the vocabulary, never written by the engine (priors.go)
+	sameMembers(t, "prior consulted outcomes", keysOf(seen), contextfabric.PriorConsultedOutcomeVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	contextfabric.RecordPriorConsultOutcomeForTest(ctx, sink, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, false, false, false)
+	if buf.Len() != 0 {
+		t.Fatalf("a member with no candidate wrote a line: %s", buf.String())
+	}
+	sink.RecordPriorConsulted(ctx, principalOrg1, contractsv1.ContextFabricStructureNeedWindow, "future_outcome")
+	certifyRefused(t, buf.Bytes(), eventspec.PriorConsulted, "an unknown prior outcome")
+
+	infoSeen := map[string]bool{}
+	for _, state := range contextfabric.PriorDegradationInfoVocabulary() {
+		buf.Reset()
+		contextfabric.RecordPriorDegradationForTest(ctx, sink, principalOrg1, contextfabric.PriorDegradationState(state))
+		certifyRequestLine(t, buf.Bytes(), eventspec.PriorDegradation, map[string]any{"state": state})
+		infoSeen[state] = true
+	}
+	buf.Reset()
+	contextfabric.RecordPriorDegradationForTest(ctx, sink, principalOrg1, contextfabric.PriorDegradationPointerDangling)
+	certifyRequestLine(t, buf.Bytes(), eventspec.PriorDegradationPointerDangling, map[string]any{"state": "pointer_dangling"})
+	certifyRefused(t, buf.Bytes(), eventspec.PriorDegradation, "a dangling pointer on the Info line")
+	buf.Reset()
+	contextfabric.RecordPriorDegradationForTest(ctx, sink, principalOrg1, contextfabric.PriorDegradationNone)
+	if buf.Len() != 0 {
+		t.Fatalf("no degradation wrote a line: %s", buf.String())
+	}
+	sink.RecordPriorDegradation(ctx, principalOrg1, "future_state")
+	certifyRefused(t, buf.Bytes(), eventspec.PriorDegradation, "an unknown degradation state")
+}
+
+func TestProjectedRowsLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
+	t.Parallel()
+	kinds := contextfabric.ProjectedRowsFactKindLogVocabulary()
+	claimed := append([]string(nil), kinds[:len(kinds)-1]...)
+	claimed = append(claimed, "Which team owns payments-api?")
+	rows, byKind, truncated := contextfabric.ProjectedRowsOfClaimsForTest(claimed)
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, rows, truncated)
+	sink.RecordProjectedRowsByFactKind(ctx, principalOrg1, byKind)
+	if strings.Contains(buf.String(), "payments-api") {
+		t.Fatalf("a claim kind from the model reached the log: %s", buf.String())
+	}
+	certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsCount, map[string]any{"org_id": "org_1", "rows_count": 0, "truncated": false})
+	seen := map[string]bool{}
+	for _, kind := range kinds {
+		line := certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsByFactKind, map[string]any{"fact_kind": kind, "rows_projected_by_fact_kind": 0})
+		seen[line["fact_kind"].(string)] = true
+	}
+	sameMembers(t, "projected rows fact kinds", keysOf(seen), kinds)
+	if got := strings.Count(buf.String(), "projected rows count by fact kind"); got != len(kinds) {
+		t.Fatalf("%d by kind lines for %d claimed kinds, want one each with the foreign kind as one class line", got, len(kinds))
+	}
+	buf.Reset()
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, 7, true)
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, 3, false)
+	certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsCount, map[string]any{"rows_count": 7, "truncated": true})
+	certifyRequestLine(t, buf.Bytes(), eventspec.ProjectedRowsCount, map[string]any{"rows_count": 3, "truncated": false})
+	sink.RecordProjectedRowsCount(ctx, principalOrg1, 1, false)
+	certifyRefused(t, buf.Bytes(), eventspec.ProjectedRowsCount, "a third projected rows line in one request", map[string]any{"rows_count": 1})
+	buf.Reset()
+	sink.RecordProjectedRowsByFactKind(ctx, principalOrg1, map[contextfabric.FactKind]int{"future_a": 2, "future_b": 3})
+	if strings.Count(buf.String(), "by fact kind") != 1 || !strings.Contains(buf.String(), `"rows_projected_by_fact_kind":5`) {
+		t.Fatalf("kinds outside the contract were not summed into one class line: %s", buf.String())
+	}
+}
+
+func TestSynthesisCountLinesCertifyWhatTheSynthesizerWrites(t *testing.T) {
+	t.Parallel()
+	run := func(variant string) []byte {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		if err := contextfabric.SynthesizeWithTelemetryForTest(ctx, sink, variant); err != nil {
+			t.Fatalf("%s: %v", variant, err)
+		}
+		return buf.Bytes()
+	}
+	count := func(raw []byte, event eventspec.Event) int { return bytes.Count(raw, []byte(`"msg":"`+event.Msg+`"`)) }
+
+	clean := run("clean")
+	certifyRequestLine(t, clean, eventspec.DriverIdentityCollisions, map[string]any{"org_id": "org_1", "cf_driver_identity_collisions": 0, "cf_driver_identity_restated": 0, "cf_driver_identity_reidentified": 0})
+	certifyRequestLine(t, clean, eventspec.DualTableFacts, map[string]any{"org_id": "org_1", "dual_table_claims": 0, "secondary_rows_bytes": 0})
+	for _, event := range []eventspec.Event{eventspec.ModelRowsStripped, eventspec.DriverSourceStateCorrected} {
+		if count(clean, event) != 0 {
+			t.Errorf("%s was written for a clean draft", event.ID)
+		}
+		log, _ := certify.Parse(clean)
+		if err := certify.CertifyAbsent(log, event, map[string]any{"request_id": factScopeCertifyRequestID}); err != nil {
+			t.Errorf("%s: %v", event.ID, err)
+		}
+	}
+
+	collision := run("collision")
+	certifyRequestLine(t, collision, eventspec.DriverIdentityCollisions, map[string]any{
+		"cf_driver_identity_collisions": 1, "cf_driver_identity_reidentified": 1, "cf_driver_identity_restated": 0,
+	})
+
+	stripped := run("stripped")
+	certifyRequestLine(t, stripped, eventspec.ModelRowsStripped, map[string]any{"org_id": "org_1", "cf_model_rows_stripped": 1})
+
+	corrected := run("source_state")
+	certifyRequestLine(t, corrected, eventspec.DriverSourceStateCorrected, map[string]any{"org_id": "org_1", "cf_driver_source_state_corrected": 1})
+
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	producedClaims, producedBytes := contextfabric.DualTableCountsForTest()
+	if producedClaims != 1 || producedBytes == 0 {
+		t.Fatalf("the row attachment over a dual table fact reported %d claims and %d bytes, want 1 claim and a nonzero cost", producedClaims, producedBytes)
+	}
+	sink.RecordDualTableFacts(ctx, principalOrg1, producedClaims, producedBytes)
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": producedClaims, "secondary_rows_bytes": producedBytes})
+	buf.Reset()
+	sink.RecordDualTableFacts(ctx, principalOrg1, 3, 1024)
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 3, "secondary_rows_bytes": 1024})
+	buf.Reset()
+	sink.RecordDualTableFacts(ctx, principalOrg1, 3, 1024)
+	sink.RecordDualTableFacts(ctx, principalOrg1, 1, 1)
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 3, "secondary_rows_bytes": 1024})
+	certifyRequestLine(t, buf.Bytes(), eventspec.DualTableFacts, map[string]any{"dual_table_claims": 1, "secondary_rows_bytes": 1})
+	sink.RecordDualTableFacts(ctx, principalOrg1, 2, 2)
+	certifyRefused(t, buf.Bytes(), eventspec.DualTableFacts, "a third dual table line in one request (two synthesis calls)", map[string]any{"dual_table_claims": 2})
 }

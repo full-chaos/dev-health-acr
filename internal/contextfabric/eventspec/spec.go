@@ -2194,6 +2194,163 @@ var StructureExplicit = Event{
 	},
 }
 
+// PriorConsulted is the Info line of the outcome of consulting the organization's active prior version for one structure member.
+var PriorConsulted = Event{
+	ID:                       "contextfabric.prior_consulted",
+	Msg:                      "context fabric prior consulted",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         5,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per structure member with a candidate prior entry, written at most once per member per investigation.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureNeedKindLogVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorConsultedOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// PriorDegradationPointerDangling is the Warn line of a prior consultation whose active version pointer names a missing snapshot.
+var PriorDegradationPointerDangling = Event{
+	ID:                       "contextfabric.prior_degradation_pointer_dangling",
+	Msg:                      "context fabric prior consultation degraded: active version pointer names a missing snapshot",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the prior read is shared between both consult sites.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorDegradationPointerDanglingVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// PriorDegradation is the Info line of a prior consultation that degraded to engine derived offers only, for any state but a dangling pointer.
+var PriorDegradation = Event{
+	ID:                       "contextfabric.prior_degradation",
+	Msg:                      "context fabric prior consultation degraded",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the prior read is shared between both consult sites.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorDegradationInfoVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ProjectedRowsCount is the Info line of how many canonical rows a synthesis attached to its claims, and whether the attachment was truncated.
+var ProjectedRowsCount = Event{
+	ID:                       "contextfabric.projected_rows_count",
+	Msg:                      "context fabric projected rows count",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that reaches claim assembly; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rows_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ProjectedRowsByFactKind is the Info line of the rows a synthesis attached for one fact kind, written for a claimed kind even when its count is zero.
+var ProjectedRowsByFactKind = Event{
+	ID:                       "contextfabric.projected_rows_by_fact_kind",
+	Msg:                      "context fabric projected rows count by fact kind",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         54,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per distinct fact kind claimed by one synthesis call, kinds outside the contract summed into one class line, so at most the requestable kinds, the cardinality kind and the class per call, and two calls per request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "fact_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectedRowsFactKindLogVocabulary()},
+		{Key: "rows_projected_by_fact_kind", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// DualTableFacts is the Info line of how many claims carried a second time series table and the extra bytes it cost.
+var DualTableFacts = Event{
+	ID:                       "contextfabric.dual_table_facts",
+	Msg:                      "context fabric dual table facts",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "dual_table_claims", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "secondary_rows_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ModelRowsStripped is the Info line of how many model authored claimed fact table contents were stripped before validation; written only when the count is above zero.
+var ModelRowsStripped = Event{
+	ID:                       "contextfabric.model_rows_stripped",
+	Msg:                      "context fabric model-authored claimed fact rows stripped before validation",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         8,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per model draw that authored table content, plus the synthesizer's defensive re-check: at most three draws (the resynthesis ceiling) and one re-check per synthesis call, and a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cf_model_rows_stripped", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// DriverSourceStateCorrected is the Info line of how many drivers had a supplied source state corrected from the facts their claims ground to; written only when the count is above zero.
+var DriverSourceStateCorrected = Event{
+	ID:                       "contextfabric.driver_source_state_corrected",
+	Msg:                      "context fabric driver source state corrected from grounded facts",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cf_driver_source_state_corrected", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// DriverIdentityCollisions is the Info line of the driver identity collisions resolved before validation: the total and its restated and reidentified parts, written on every call, zeros included.
+var DriverIdentityCollisions = Event{
+	ID:                       "contextfabric.driver_identity_collisions",
+	Msg:                      "context fabric driver identity collisions resolved before validation",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cf_driver_identity_collisions", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cf_driver_identity_restated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cf_driver_identity_reidentified", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // PriorSubjectReceiptsSkipped is the Warn line of the prior-subject receipts a turn skipped: how many, never which.
 var PriorSubjectReceiptsSkipped = Event{
 	ID:                       "contextfabric.prior_subject_receipts_skipped",
@@ -4986,6 +5143,15 @@ var All = []Event{
 	StructureReceipt,
 	StructureReceiptVeto,
 	StructureExplicit,
+	PriorConsulted,
+	PriorDegradationPointerDangling,
+	PriorDegradation,
+	ProjectedRowsCount,
+	ProjectedRowsByFactKind,
+	DualTableFacts,
+	ModelRowsStripped,
+	DriverSourceStateCorrected,
+	DriverIdentityCollisions,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
