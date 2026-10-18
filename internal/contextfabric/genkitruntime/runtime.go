@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
@@ -3119,7 +3118,7 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 // error type (openai-go/internal/apierror.Error, aliased as openai.Error)
 // formats Error() as "%s %q: %d %s %s" with the raw provider response body
 // as the last verbatim component, and compat_oai/generate.go wraps that
-// error with a plain fmt.Errorf rather than a *core.GenkitError. So by the
+// error with a plain fmt.Errorf rather than a modelStatusError. So by the
 // time an error from the real production transport reaches this function,
 // it is routinely UNSTRUCTURED, and its message can legitimately be a
 // non-transient validation failure whose body happens to contain a word
@@ -3139,15 +3138,15 @@ func retryable(err error) bool {
 		return true
 	}
 	// Genkit (and well-behaved plugins) surface transport and provider
-	// failures as *core.GenkitError with a gRPC-style status. Prefer that
+	// failures as *modelStatusError with a gRPC-style status. Prefer that
 	// structured signal over string sniffing when it is present -- and once
 	// present, trust it completely: an unmatched status (e.g. INTERNAL, or
 	// anything else Genkit's own validation paths raise) is not retryable
 	// either, never falling through to string matching on its own Message.
-	var genkitErr *core.GenkitError
+	var genkitErr *modelStatusError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {
-		case core.RESOURCE_EXHAUSTED, core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+		case statusResourceExhausted, statusUnavailable, statusDeadlineExceeded, statusAborted:
 			return true
 		default:
 			// Includes INVALID_ARGUMENT (malformed request or
@@ -3213,14 +3212,14 @@ func classifyModelErrorKind(err error) error {
 	if classified, ok := classifyLLMError(err); ok {
 		return classified
 	}
-	var genkitErr *core.GenkitError
+	var genkitErr *modelStatusError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {
-		case core.RESOURCE_EXHAUSTED:
+		case statusResourceExhausted:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelRateLimited, genkitErr.Status)
-		case core.INVALID_ARGUMENT:
+		case statusInvalidArgument:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
-		case core.INTERNAL:
+		case statusInternal:
 			// Genkit reports its own structured-output/schema mismatch as
 			// INTERNAL (see ai.jsonHandler.ParseMessage), so INTERNAL is
 			// ambiguous between a genuine provider fault and invalid model
@@ -3231,7 +3230,7 @@ func classifyModelErrorKind(err error) error {
 				return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
 			}
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
-		case core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+		case statusUnavailable, statusDeadlineExceeded, statusAborted:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
 		default:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
@@ -3454,7 +3453,7 @@ type outputTimeContext struct {
 }
 
 // JSONSchema hand-authors outputTimeContext's schema (invopop/jsonschema's
-// Marshaler convention, respected by genkit's own core.InferSchemaMap --
+// Marshaler convention, respected by inferSchemaMap --
 // see InterpretationOutputSchema's doc comment) instead of the
 // struct-tag-derived default, to encode the axis-shape rules no jsonschema
 // struct tag can express: each of the four axes allows a DIFFERENT,
