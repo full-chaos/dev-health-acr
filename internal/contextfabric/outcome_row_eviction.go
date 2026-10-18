@@ -75,7 +75,7 @@ func withOutcomeEvictionLimitation(limitations []string, evicted int) ([]string,
 		return limitations, 0
 	}
 	total := evicted
-	kept := make([]string, 0, len(limitations)+1)
+	kept := make([]string, 0, len(limitations))
 	for _, limitation := range limitations {
 		if prior, ok := contractsv1.ParseContextFabricOutcomeEvictionLimitation(limitation); ok {
 			total += prior

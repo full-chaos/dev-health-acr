@@ -3968,6 +3968,7 @@ var SynthesisRetrySelection = Event{
 		{Key: "outcome_items_served", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_items_declared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_completeness_state", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome_rows_evicted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_reduction_declined", Type: FieldString, Presence: PresenceRequired},
 		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired},
 		{Key: "quota_availability", Type: FieldString, Presence: PresenceRequired},

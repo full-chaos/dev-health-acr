@@ -52,6 +52,26 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
+	"budgetTrimDisclose#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"apply#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"applyFactRowTruncation#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"dropPathsOf#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"planCandidateNarrowing#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
 	"cutWalkListMembers#DeleteFunc#0": {
 		sameShapedTotal: 1,
 		reason:          "a DELETION, not an addition: it drops the earlier N of M sentence (matched by parse) from a clone, so the list only shrinks, and the restated sentence is added through appendBoundedLimitations",
