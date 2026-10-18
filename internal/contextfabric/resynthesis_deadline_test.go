@@ -85,7 +85,38 @@ func TestTheDeadlineLogSaysWhenTheFirstPassFactsWereNotServed(t *testing.T) {
 	if err == nil {
 		t.Fatal("error = nil, want the retry's deadline error when the facts do not fit")
 	}
-	if line := sink.String(); !strings.Contains(line, "narrowing retry lost the deadline") || !strings.Contains(line, `"facts_only_served":false`) {
-		t.Fatalf("log = %s, want the deadline line with facts_only_served false", line)
+	var found int
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		if !strings.Contains(line, "narrowing retry lost the deadline") {
+			continue
+		}
+		found++
+		if !strings.Contains(line, `"level":"INFO"`) || !strings.Contains(line, `"facts_only_served":false`) {
+			t.Fatalf("log = %s, want an INFO line with facts_only_served false", line)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("deadline log lines = %d, want exactly 1", found)
+	}
+}
+
+// A member-cut retry keeps the caller's full deadline: no facts-only fallback
+// exists on that path, so cutting it early would only lose an answer that could
+// still have finished.
+func TestTheRetryContextLeavesATailOnlyWhenAReserveIsConfigured(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	parent, _ := ctx.Deadline()
+
+	capped, release := (&Engine{synthesisDeadlineReserve: 20 * time.Second}).retryContext(ctx)
+	defer release()
+	if got, _ := capped.Deadline(); parent.Sub(got) != retryTailMax {
+		t.Fatalf("tail = %v, want %v", parent.Sub(got), retryTailMax)
+	}
+	whole, release2 := (&Engine{}).retryContext(ctx)
+	defer release2()
+	if got, _ := whole.Deadline(); !got.Equal(parent) {
+		t.Fatalf("no reserve: deadline moved by %v", parent.Sub(got))
 	}
 }

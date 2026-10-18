@@ -653,7 +653,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// narration.
 	// This records execution, independently of whether the retry fit.
 	firstPass.RetryAttempted = true
-	retryCtx, cancelRetry := e.retryContext(ctx)
+	retryCtx, cancelRetry := context.WithCancel(ctx)
+	if len(cutRemoved) == 0 {
+		cancelRetry()
+		retryCtx, cancelRetry = e.retryContext(ctx)
+	}
 	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(retryCtx, principal, retryParams)
 	retryCtxExpired := retryCtx.Err() != nil
 	cancelRetry()
