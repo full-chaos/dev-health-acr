@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"testing"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -262,4 +263,67 @@ func PeriodDeltaForTest(ctx context.Context, sink EngineTelemetry, scenario stri
 	}
 	frame := QuestionFrame{Obligations: []AnswerObligation{ObligationPeriodDelta}}
 	engine.applyPeriodDelta(ctx, storage.Principal{OrgID: "org_1"}, frame, []SubjectRef{team, project}, current, time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), anchored)
+}
+
+// PlanEventsForTest is every plan narrowing, retry selection and cohort
+// narrowing disclosure event the engine produced across its budget scenarios.
+type PlanEventsForTest struct {
+	Narrowings  []PlanNarrowingEvent
+	Retries     []PlanNarrowingEvent
+	Disclosures []CohortNarrowingDisclosureEvent
+}
+
+// PlanEventsFromEngineForTest drives the engine through the scenarios that
+// write the plan lines: an answer that fits, an answer narrowed by one retry,
+// refusals (no reserve, nothing to narrow, a retry that still does not fit)
+// and a cohort cut under the byte ceiling, and returns the events it recorded.
+func PlanEventsFromEngineForTest(t *testing.T) PlanEventsForTest {
+	t.Helper()
+	var out PlanEventsForTest
+	collect := func(rec *recordingTelemetry) {
+		out.Narrowings = append(out.Narrowings, rec.planNarrowings...)
+		out.Retries = append(out.Retries, rec.synthesisRetrySelections...)
+		out.Disclosures = append(out.Disclosures, rec.cohortNarrowingDisclosures...)
+	}
+	run := func(cohort *Cohort, claims int, options EngineOptions) {
+		calls := 0
+		rec := &recordingTelemetry{}
+		engine := budgetStageEngine(t, cohort, claims, options, &calls, rec)
+		_, _ = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+		collect(rec)
+	}
+	run(budgetStageCohort(2), 1, budgetStageOptions(40, time.Second))
+	run(budgetStageCohort(6), 2, budgetStageOptions(12, time.Second))
+	run(budgetStageCohort(4), 20, budgetStageOptions(4, 0))
+	run(budgetStageCohort(1), 20, budgetStageOptions(4, time.Second))
+	run(budgetStageCohort(4), 20, budgetStageOptions(4, time.Second))
+	rec := &recordingTelemetry{}
+	_, _, _ = chaos6561InvestigateWithin(t, 11, 0, chaos6561HeadroomItems(t, 10), 0, rec)
+	collect(rec)
+	return out
+}
+
+// GroupedCohortEventsForTest drives the engine through a grouped question
+// whose plan agrees with its facts, whose plan disagrees with them, and whose
+// facts name no group axis, and returns the grouped cohort completeness events
+// it recorded.
+func GroupedCohortEventsForTest(t *testing.T) []GroupedCohortCompletenessEvent {
+	t.Helper()
+	var events []GroupedCohortCompletenessEvent
+	for _, run := range []struct {
+		kind  SubjectKind
+		facts []CanonicalFact
+	}{
+		{SubjectTeam, []CanonicalFact{teamScopedFact("project_a", "team_security", "Security"), teamScopedFact("project_b", "team_security", "Security")}},
+		{SubjectRepository, []CanonicalFact{teamScopedFact("project_a", "team_security", "Security"), teamScopedFact("project_b", "team_security", "Security")}},
+		{SubjectTeam, []CanonicalFact{ungroupableFact("project_a"), ungroupableFact("project_b")}},
+	} {
+		rec := &recordingTelemetry{}
+		engine, request := groupingEngineFixture(t, rec, run.kind, run.facts)
+		if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		events = append(events, rec.groupedCohortCompletenesses...)
+	}
+	return events
 }
