@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/llm"
@@ -97,7 +96,7 @@ func TestLLMInterpretSendsTheSampleSeedAndTheGenkitSchemaText(t *testing.T) {
 	if sent.Seed == nil || *sent.Seed != want {
 		t.Fatalf("seed = %v, want the sample-0 seed %d", sent.Seed, want)
 	}
-	schema, _ := json.Marshal(core.InferSchemaMap(interpretationOutput{}))
+	schema, _ := json.Marshal(inferSchemaMap(interpretationOutput{}))
 	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONObject || !strings.HasSuffix(sent.System, "Output should be in JSON format and conform to the following schema:\n\n```"+string(schema)+"```") {
 		t.Fatalf("format = %+v, system tail missing: want Genkit's json_object request with the schema as text", sent.Format)
 	}
@@ -121,7 +120,7 @@ func TestLLMSynthesizeSendsNoSeed(t *testing.T) {
 	if sent.Seed != nil {
 		t.Fatalf("synthesis seed = %d, want none", *sent.Seed)
 	}
-	schema, _ := json.Marshal(core.InferSchemaMap(synthesisOutput{}))
+	schema, _ := json.Marshal(inferSchemaMap(synthesisOutput{}))
 	if sent.Format == nil || sent.Format.Type != llm.FormatTypeJSONObject || !strings.HasSuffix(sent.System, "```"+string(schema)+"```") {
 		t.Fatal("synthesis is not Genkit's json_object request with the schema as text")
 	}

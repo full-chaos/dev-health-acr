@@ -55,37 +55,52 @@ func constantsOfType(t *testing.T, dir, typeName string) []string {
 func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 	t.Parallel()
 	for key, vocabulary := range map[string][]string{
-		"WindowCarryOutcome":                WindowCarryOutcomeVocabulary(),
-		"KindCarryOutcome":                  KindCarryOutcomeVocabulary(),
-		"StatedWindowAxisOutcome":           StatedWindowAxisOutcomeVocabulary(),
-		"WindowCanonicalizationOutcome":     WindowCanonicalizationOutcomeVocabulary(),
-		"WindowBindReason":                  WindowBindReasonVocabulary(),
-		"CarrySeedSource":                   CarrySeedSourceVocabulary(),
-		"ConfirmedNeedLedgerWindowDecision": ConfirmedNeedLedgerWindowDecisionVocabulary(),
-		"AnswerReuseBypassReason":           AnswerReuseBypassReasonVocabulary(),
-		"SynthesisStatusOverrideReason":     SynthesisStatusOverrideReasonVocabulary(),
-		"StoredAnswerabilityStep":           StoredAnswerabilityStepVocabulary(),
-		"StoredAnswerabilityDetermination":  append(StoredAnswerabilityDeterminationVocabulary(), string(StoredAnswerabilityNotApplicable)),
-		"GatedOfferResolutionOutcome":       GatedOfferResolutionOutcomeVocabulary(),
-		"CohortStructureGateOutcome":        CohortStructureGateOutcomeVocabulary(),
-		"StructureReceiptOutcome":           StructureReceiptOutcomeVocabulary(),
-		"StructureExplicitOutcome":          StructureExplicitOutcomeVocabulary(),
-		"InterpretedTimeBoundOutcome":       InterpretedTimeBoundOutcomeLogVocabulary(),
-		"PriorConsultedOutcome":             PriorConsultedOutcomeVocabulary(),
-		"PriorDegradationState":             append(append(PriorDegradationPointerDanglingVocabulary(), PriorDegradationInfoVocabulary()...), ""),
-		"CoverageDisclosureOutcome":         CoverageDisclosureOutcomeVocabulary(),
-		"CoverageDisclosureViolation":       CoverageDisclosureViolationVocabulary(),
-		"PeriodDeltaFailureReason":          PeriodDeltaFailureReasonVocabulary(),
-		"PeriodDeltaTransition":             PeriodDeltaTransitionLogVocabulary(),
+		"WindowCarryOutcome":                    WindowCarryOutcomeVocabulary(),
+		"KindCarryOutcome":                      KindCarryOutcomeVocabulary(),
+		"StatedWindowAxisOutcome":               StatedWindowAxisOutcomeVocabulary(),
+		"WindowCanonicalizationOutcome":         WindowCanonicalizationOutcomeVocabulary(),
+		"WindowBindReason":                      WindowBindReasonVocabulary(),
+		"CarrySeedSource":                       CarrySeedSourceVocabulary(),
+		"ConfirmedNeedLedgerWindowDecision":     ConfirmedNeedLedgerWindowDecisionVocabulary(),
+		"AnswerReuseBypassReason":               AnswerReuseBypassReasonVocabulary(),
+		"SynthesisStatusOverrideReason":         SynthesisStatusOverrideReasonVocabulary(),
+		"StoredAnswerabilityStep":               StoredAnswerabilityStepVocabulary(),
+		"StoredAnswerabilityDetermination":      append(StoredAnswerabilityDeterminationVocabulary(), string(StoredAnswerabilityNotApplicable)),
+		"GatedOfferResolutionOutcome":           GatedOfferResolutionOutcomeVocabulary(),
+		"CohortStructureGateOutcome":            CohortStructureGateOutcomeVocabulary(),
+		"StructureReceiptOutcome":               StructureReceiptOutcomeVocabulary(),
+		"StructureExplicitOutcome":              StructureExplicitOutcomeVocabulary(),
+		"InterpretedTimeBoundOutcome":           InterpretedTimeBoundOutcomeLogVocabulary(),
+		"PriorConsultedOutcome":                 PriorConsultedOutcomeVocabulary(),
+		"PriorDegradationState":                 append(append(PriorDegradationPointerDanglingVocabulary(), PriorDegradationInfoVocabulary()...), ""),
+		"CoverageDisclosureOutcome":             CoverageDisclosureOutcomeVocabulary(),
+		"CoverageDisclosureViolation":           CoverageDisclosureViolationVocabulary(),
+		"PeriodDeltaFailureReason":              PeriodDeltaFailureReasonVocabulary(),
+		"PeriodDeltaTransition":                 PeriodDeltaTransitionLogVocabulary(),
+		"contracts:ContextFabricQuestionFamily": QuestionFamilyLogVocabulary(),
+		"FactsOnlyDeclined":                     FactsOnlyDeclinedLogVocabulary(),
+		"RetryDeclinedReason":                   RetryDeclinedReasonVocabulary(),
+		"NarrowingContinuationAxis":             NarrowingContinuationAxisLogVocabulary(),
+		"OutcomeReductionDeclined":              OutcomeReductionDeclinedLogVocabulary(),
+		"ItemQuotaAvailability":                 ItemQuotaAvailabilityLogVocabulary(),
+		"CeilingFitStep":                        CeilingFitStepVocabulary(),
+		"CohortNarrowingDisclosureOutcome":      CohortNarrowingDisclosureOutcomeVocabulary(),
+		"CohortGroupingRefusal":                 CohortGroupingRefusalLogVocabulary(),
 		// The contract enums the lines declare by hand-listed members.
-		"contracts:ContextFabricWindowProvenance":      WindowProvenanceLogVocabulary(),
-		"contracts:ContextFabricInvestigationStatus":   InvestigationStatusLogVocabulary(),
-		"contracts:ContextFabricSubjectMatchMechanism": CommitWinningMechanismVocabulary(),
-		"contracts:ContextFabricStructureNeedKind":     StructureNeedKindLogVocabulary(),
-		"contracts:ContextFabricStructureOfferSource":  StructureOfferSourceLogVocabulary(),
-		"contracts:ContextFabricInvestigationShape":    InvestigationShapeLogVocabulary(),
-		"contracts:ContextFabricFactKind":              ProjectedRowsFactKindLogVocabulary(),
-		"contracts:ContextFabricTemporalAxis":          InterpretedTimeBoundAxisLogVocabulary(),
+		"contracts:ContextFabricWindowProvenance":        WindowProvenanceLogVocabulary(),
+		"contracts:ContextFabricInvestigationStatus":     InvestigationStatusLogVocabulary(),
+		"contracts:ContextFabricSubjectMatchMechanism":   CommitWinningMechanismVocabulary(),
+		"contracts:ContextFabricStructureNeedKind":       StructureNeedKindLogVocabulary(),
+		"contracts:ContextFabricStructureOfferSource":    StructureOfferSourceLogVocabulary(),
+		"contracts:ContextFabricInvestigationShape":      InvestigationShapeLogVocabulary(),
+		"contracts:ContextFabricFactKind":                ProjectedRowsFactKindLogVocabulary(),
+		"contracts:ContextFabricPlanNarrowingStage":      PlanNarrowingStageVocabulary(),
+		"contracts:ContextFabricNarrowingBasis":          NarrowingBasisLogVocabulary(),
+		"contracts:ContextFabricBudgetOverrun":           BudgetOverrunLogVocabulary(),
+		"contracts:ContextFabricLedgerStatus":            LedgerStatusLogVocabulary(),
+		"contracts:ContextFabricAnswerCompletenessState": AnswerCompletenessStateLogVocabulary(),
+		"contracts:ContextFabricSubjectKind":             SubjectKindLogVocabulary(),
+		"contracts:ContextFabricTemporalAxis":            InterpretedTimeBoundAxisLogVocabulary(),
 	} {
 		dir, typeName := ".", key
 		if name, ok := strings.CutPrefix(key, "contracts:"); ok {
@@ -94,14 +109,14 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		declared := constantsOfType(t, dir, typeName)
 		var members []string
 		for _, value := range declared {
-			if value != "" {
+			if value != "" && value != logUnclassified {
 				members = append(members, value)
 			}
 		}
 		sort.Strings(members)
 		var want []string
 		for _, value := range vocabulary {
-			if value != "" && value != structureLineUnrecognised {
+			if value != "" && value != structureLineUnrecognised && value != logUnclassified {
 				want = append(want, value)
 			}
 		}
