@@ -663,10 +663,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// The retry lost the deadline race, but the request still has its
 		// tail. The first pass was a valid model answer: serve its facts
 		// rather than the timeout, and say so loudly.
-		slog.Default().InfoContext(ctx, "context fabric narrowing retry lost the deadline; serving the first-pass facts",
-			"org_id", SanitizeLogAttr(principal.OrgID), "overrun", string(overrun),
-			"members_before", before, "members_after", after)
 		served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, RetryDeclinedInsufficientDeadline, before, true)
+		slog.Default().InfoContext(ctx, "context fabric narrowing retry lost the deadline",
+			"org_id", SanitizeLogAttr(principal.OrgID), "overrun", string(overrun),
+			"members_before", before, "members_after", after,
+			"facts_only_served", notServed == FactsOnlyServedOrUntried, "facts_only_declined", string(notServed))
 		if notServed == FactsOnlyServedOrUntried {
 			return served, pending, nil
 		}
@@ -1206,7 +1207,7 @@ func narrowedInputOver(params synthesisAssemblyParams, graph GraphContext, facts
 // deadline, or no reserve, the retry keeps the caller's context.
 func (e *Engine) retryContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	deadline, hasDeadline := ctx.Deadline()
-	tail := e.synthesisDeadlineReserve / retryTailDivisor
+	tail := min(e.synthesisDeadlineReserve/retryTailDivisor, retryTailMax)
 	if !hasDeadline || tail <= 0 || time.Until(deadline) <= tail {
 		return context.WithCancel(ctx)
 	}
@@ -1216,6 +1217,10 @@ func (e *Engine) retryContext(ctx context.Context) (context.Context, context.Can
 // retryTailDivisor: the tail kept after a retry is this fraction of the
 // synthesis deadline reserve.
 const retryTailDivisor = 10
+
+// retryTailMax bounds the tail: composing the facts-only answer calls no model,
+// so a long tail would only cut off retries that could still have finished.
+const retryTailMax = 2 * time.Second
 
 // retryDeadlineAvailable reports whether enough of the request deadline
 // remains to run a second synthesis.

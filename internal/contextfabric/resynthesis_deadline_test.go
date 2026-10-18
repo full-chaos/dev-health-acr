@@ -1,7 +1,10 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,5 +61,31 @@ func TestANarrowingRetryThatLosesTheDeadlineServesTheFirstPassFacts(t *testing.T
 	}
 	if served := factsOnlyServedEvent(telemetry); served == nil || !served.RetryAttempted || served.RetryDeclined != RetryDeclinedInsufficientDeadline {
 		t.Fatalf("served event %+v, want facts-only served after a retry that ran", served)
+	}
+}
+
+// The Info line states what the caller got: when the facts-only answer does
+// not fit the budget the caller still gets the retry's error, and the line says
+// the facts were not served.
+func TestTheDeadlineLogSaysWhenTheFirstPassFactsWereNotServed(t *testing.T) {
+	var sink bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+	calls := 0
+	options := budgetStageOptions(12, 2*time.Second)
+	options.MaxSerializedBytes = 3000
+	engine := budgetStageEngine(t, budgetStageCohort(6), 2, options, &calls)
+	engine.synthesizer = &blockingRetrySynthesizer{AnswerSynthesizer: engine.synthesizer}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+	if err == nil {
+		t.Fatal("error = nil, want the retry's deadline error when the facts do not fit")
+	}
+	if line := sink.String(); !strings.Contains(line, "narrowing retry lost the deadline") || !strings.Contains(line, `"facts_only_served":false`) {
+		t.Fatalf("log = %s, want the deadline line with facts_only_served false", line)
 	}
 }
