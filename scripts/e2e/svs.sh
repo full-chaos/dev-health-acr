@@ -330,7 +330,9 @@ remove_runtime_entitlement() {
 bootstrap_failure_ops() {
   local output org_id token db
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null
-  wait_go_api
+  token="$(mint_ops_service_token)" || svs_die 'Ops credential provisioning failed'
+  write_secret "$STATE/secrets/ops-token" "$token"
+  wait_go_api "$token"
   if ! output="$(dho admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
     svs_die 'Ops organization provisioning failed'
@@ -338,9 +340,6 @@ bootstrap_failure_ops() {
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || svs_die 'Ops organization provisioning did not return an ID'
   dho admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated SVS control plane' --expires-days 1 >/dev/null
-  token="$(dho service-credentials create --service acr --scope entitlements:read)"
-  [[ "$token" == svc_acr_* ]] || svs_die 'Ops credential provisioning returned an invalid token shape'
-  write_secret "$STATE/secrets/ops-token" "$token"
   printf '%s' "$org_id" > "$STATE/org-id"
   db="acr_${PROJECT//-/}_e2e"
   compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
