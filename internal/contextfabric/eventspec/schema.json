@@ -9193,6 +9193,40 @@
     ]
   },
   {
+    "id": "contextfabric.service_limitation_lookalikes_dropped",
+    "msg": "context fabric draft limitations matching service disclosures dropped",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_limitation_lookalikes_dropped",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "cf_limitation_lookalike_recognisers",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.stated_window_axis_decision",
     "msg": "context fabric stated window axis decision",
     "level": "info",

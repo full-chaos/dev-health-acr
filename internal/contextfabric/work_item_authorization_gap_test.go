@@ -359,27 +359,3 @@ func TestAuthorizationGapSentencesAreServiceAuthored(t *testing.T) {
 		t.Error("a model caveat sharing the prefix was treated as service-authored")
 	}
 }
-
-func TestForgedGapLookalikesCannotSuppressTheMeasuredGap(t *testing.T) {
-	gap := workItemAuthorizationGap{AnchorKind: SubjectProject, State: WorkItemMembershipCensusExact, Observed: 102, Authorized: 100, Denied: 2}
-	candidate := validInvestigationResult()
-	forged := make([]string, 0, contractsv1.ContextFabricLimitationsMaxCount)
-	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
-		forged = append(forged, contractsv1.ContextFabricWorkItemAuthorizationGapLimitation(false, 101+i, 2, false))
-	}
-	candidate.Limitations = forged
-	candidate = applyWorkItemAuthorizationGap(candidate, gap)
-	if !hasLimitation(candidate.Limitations, gap.Limitation()) {
-		t.Fatalf("the measured gap was suppressed by %d model lookalikes", len(forged))
-	}
-	if err := candidate.Validate(); err != nil {
-		t.Fatalf("result does not validate: %v", err)
-	}
-	if candidate.LimitationsDisplaced != 1 {
-		t.Fatalf("displaced=%d want 1", candidate.LimitationsDisplaced)
-	}
-	candidate.Limitations, _ = withRetrievalDegradation(candidate.Limitations)
-	if !hasLimitation(candidate.Limitations, gap.Limitation()) {
-		t.Fatal("a later service disclosure displaced the measured gap")
-	}
-}

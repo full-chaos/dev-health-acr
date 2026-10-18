@@ -341,6 +341,9 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 		{eventspec.DriverSourceStateCorrected, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
 			s.RecordDriverSourceStateCorrected(c, principalOrg1, 1)
 		}},
+		{eventspec.ServiceLimitationLookalikesDropped, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordServiceLimitationLookalikesDropped(c, principalOrg1, 1, []string{"fixed"})
+		}},
 		{eventspec.DriverIdentityCollisions, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
 			s.RecordDriverIdentityCollisions(c, principalOrg1, contextfabric.DriverIdentityCollisions{Restated: 1})
 		}},
@@ -371,7 +374,7 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 			})
 		}},
 	}...)
-	if len(cases) != 24 {
+	if len(cases) != 25 {
 		t.Fatalf("want one case per declared line, have %d", len(cases))
 	}
 	for _, tc := range cases {

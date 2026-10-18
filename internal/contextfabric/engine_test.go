@@ -576,7 +576,8 @@ type recordingTelemetry struct {
 	rememberedWindowAxes       []rememberedWindowAxisDecision
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
-	modelRowsStripped []int
+	modelRowsStripped           []int
+	serviceLimitationLookalikes []serviceLimitationLookalikeRecord
 	// driverIdentityCollisions (CHAOS-5364) mirrors the SAME
 	// list-not-count discipline -- and here the LIST is load-bearing beyond
 	// the counts: the producer reports on every pass, zeros included, so the
@@ -1044,6 +1045,15 @@ func (r *recordingTelemetry) RecordDualTableFacts(_ context.Context, _ storage.P
 
 func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {
 	r.modelRowsStripped = append(r.modelRowsStripped, claims)
+}
+
+type serviceLimitationLookalikeRecord struct {
+	dropped     int
+	recognisers []string
+}
+
+func (r *recordingTelemetry) RecordServiceLimitationLookalikesDropped(_ context.Context, _ storage.Principal, dropped int, recognisers []string) {
+	r.serviceLimitationLookalikes = append(r.serviceLimitationLookalikes, serviceLimitationLookalikeRecord{dropped: dropped, recognisers: recognisers})
 }
 
 func (r *recordingTelemetry) RecordDriverIdentityCollisions(_ context.Context, _ storage.Principal, collisions DriverIdentityCollisions) {
