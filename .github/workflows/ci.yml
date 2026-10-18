@@ -258,6 +258,12 @@ jobs:
         run: python3 scripts/battery/test_plan_matrix.py
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
+      # The plan job drops a non-race unit leg on a pull request when its race
+      # jobs run the same tests (scripts/ci/reached-shards.sh rule 6). This
+      # proves it by compiled test lists: every test such a leg runs is run by
+      # its race jobs, none skips under -race, and neither side narrows the run.
+      - name: Verify every unit leg dropped as a race duplicate is covered by its race jobs
+        run: scripts/ci/test-unit-race-dedup.sh
   lint:
     runs-on: ubuntu-latest
     steps:
