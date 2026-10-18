@@ -181,10 +181,13 @@ name through `scripts/ci/race-split.sh` (the heavy lists live beside it; the `re
 so a new test cannot drop out). On a pull request the `plan` job runs
 `scripts/ci/reached-shards.sh`: a `unit`/`race*` shard runs only when its `test-shard.sh` package
 list holds a package the change reaches (its test binary imports a changed package, its tests walk
-the module tree, or its test source names a changed file). Pushes to `main`, any other event, and a
-change to go.mod, go.sum, Makefile, `.github/`, `scripts/ci/`, `ci/`, `internal/testsupport/`,
-`contracts/`, root `testdata/` or `clients/` run every shard; `verify` accepts a skip only from the
-plan's outputs on a pull request. The rule is in the script header. `docs-mermaid` renders every fenced mermaid block under `docs/**`;
+the module tree, or its test source names a changed file). Pushes to `main` and any other event
+run every shard; on a pull request a change to go.mod, go.sum, Makefile, `.github/`, `scripts/ci/`,
+`ci/`, `internal/testsupport/`, `contracts/`, root `testdata/` or `clients/` reaches every package.
+When the heavy lanes run on a pull request, the unit legs that hold only `devhealthfacts` or
+`devhealthsource` are skipped, because their race jobs run the same tests under `-race`; `verify`
+requires those race jobs to succeed. `verify` accepts a skip only from the plan's outputs on a pull
+request. The rule is in the script header. `docs-mermaid` renders every fenced mermaid block under `docs/**`;
 the `scripts` job also runs the mutation-battery plan-matrix test (`scripts/battery/test_plan_matrix.py`). `make verify` remains the local one-command equivalent. Builds land in ignored `.tmp/`.
 
 `make fullstack-opencode-e2e` needs Docker, a sibling `full-chaos/dev-health` checkout and the

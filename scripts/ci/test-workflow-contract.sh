@@ -866,17 +866,20 @@ check_verify_reads_plan() {
 check_reach_gating() {
   local file="$1" block status=0 job key line
   block="$(job_block "$file" plan)"
-  for key in reach_mode reach_reason skip_jobs unit_skip race_skip; do
+  for key in reach_mode reach_reason skip_jobs unit_skip race_skip dedup_needs; do
     grep -qxF "      $key: \${{ steps.reach.outputs.$key }}" <<<"$block" || {
       printf 'plan does not output %s from the reach step\n' "$key" >&2; status=1; }
   done
   grep -qxF '        id: reach' <<<"$block" || { printf 'plan has no step with id: reach\n' >&2; status=1; }
   # shellcheck disable=SC2016
-  grep -qxF '        run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"' <<<"$block" || {
+  grep -qxF '        run: scripts/ci/reached-shards.sh --event "$EVENT" --heavy "$HEAVY" >> "$GITHUB_OUTPUT"' <<<"$block" || {
     printf 'plan does not run scripts/ci/reached-shards.sh into GITHUB_OUTPUT\n' >&2; status=1; }
   # shellcheck disable=SC2016 # the literal GitHub expression text
   grep -qxF '          EVENT: ${{ github.event_name }}' <<<"$block" || {
     printf 'plan does not hand the selector the run event\n' >&2; status=1; }
+  # shellcheck disable=SC2016 # the literal GitHub expression text
+  grep -qxF '          HEAVY: ${{ steps.decide.outputs.heavy }}' <<<"$block" || {
+    printf 'plan does not hand the selector its own heavy decision\n' >&2; status=1; }
   grep -qF 'fetch-depth: 2' <<<"$block" || {
     printf 'plan checkout lacks fetch-depth: 2, so the merge commit has no base parent to diff against\n' >&2; status=1; }
 
@@ -916,6 +919,10 @@ check_reach_gating() {
     printf 'verify has no reached-shard skip allowance\n' >&2; status=1; }
   grep -qF 'is skipped whole, but %s_skip excludes legs' <<<"$block" || {
     printf 'verify does not require a whole-matrix skip to exclude every leg\n' >&2; status=1; }
+  grep -qF "for list in skip_jobs unit_skip race_skip dedup_needs; do" <<<"$block" || {
+    printf 'verify does not validate plan.outputs.dedup_needs\n' >&2; status=1; }
+  grep -qF "a unit leg was dropped as its race duplicate, but its result is" <<<"$block" || {
+    printf 'verify does not require the race jobs a dropped unit leg relies on to succeed\n' >&2; status=1; }
   return "$status"
 }
 
@@ -1460,6 +1467,14 @@ mutate_reach() { # NAME OLD NEW -> path of a copy with the first OLD replaced
 # shellcheck disable=SC2016
 assert_check_fails 'plan stopped running the selector' check_reach_gating \
   "$(mutate_reach no-selector 'run: scripts/ci/reached-shards.sh --event "$EVENT"' 'run: true --event "$EVENT"')"
+# shellcheck disable=SC2016
+assert_check_fails 'plan stopped passing its heavy decision' check_reach_gating \
+  "$(mutate_reach no-heavy ' --heavy "$HEAVY"' '')"
+# shellcheck disable=SC2016
+assert_check_fails 'plan stopped exporting dedup_needs' check_reach_gating \
+  "$(mutate_reach no-dedup-output 'dedup_needs: ${{ steps.reach.outputs.dedup_needs }}' 'dedup_needs: "[]"')"
+assert_check_fails 'verify stopped requiring the dedup race jobs' check_reach_gating \
+  "$(mutate_reach verify-no-dedup 'a unit leg was dropped as its race duplicate, but its result is' 'ignored')"
 # shellcheck disable=SC2016 # the literal GitHub expression text
 assert_check_fails 'plan stopped exporting unit_skip' check_reach_gating \
   "$(mutate_reach no-output 'unit_skip: ${{ steps.reach.outputs.unit_skip }}' 'unit_skip: "[]"')"

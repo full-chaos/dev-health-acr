@@ -8,12 +8,13 @@ set -euo pipefail
 # shard budgets and test-shard-closure.sh's union proof are unchanged.
 #
 # The rule, in order:
-#   1. FULL (every shard) for any event other than pull_request; for a change
-#      to go.mod, go.sum, go.work*, Makefile, or anything under .github/,
-#      scripts/ci/, ci/, internal/testsupport/, contracts/, testdata/ (the
-#      repository root's) or clients/; for a Go file in a directory that is no
-#      listed package; for an empty change list; and whenever this script
-#      cannot finish (fail open: an error is FULL, never an empty selection).
+#   1. FULL (every shard, nothing skipped) for any event other than
+#      pull_request, and whenever this script cannot finish (fail open: an
+#      error is FULL, never an empty selection). On a pull_request, EVERY
+#      package is reached for a change to go.mod, go.sum, go.work*, Makefile,
+#      or anything under .github/, scripts/ci/, ci/, internal/testsupport/,
+#      contracts/, testdata/ (the repository root's) or clients/; for a Go file
+#      in a directory that is no listed package; and for an empty change list.
 #   2. A Go file in package P changes P. A non-Go file changes P when it sits
 #      under P/.../testdata/, is one of P's //go:embed inputs, or no longer
 #      exists (a deleted or renamed-away file under P may have been an embed
@@ -28,6 +29,14 @@ set -euo pipefail
 #      packages whose test source names the file's base name as a literal.
 #   A test that opens a file by a COMPUTED name outside rules 1-4 is not seen;
 #   main pushes run every shard, so such a miss fails there, not silently.
+#   6. Race duplicates, pull_request only, and only with --heavy true (the race
+#      jobs are scheduled): a non-race `unit` leg whose packages are all
+#      unit-dedicated packages (test-shard.sh --print-unit-dedicated-packages)
+#      is skipped when every race job that runs those packages is scheduled
+#      (not in skip_jobs); those race jobs then cover the same tests under
+#      -race. Their job keys go to dedup_needs, and verify requires each of
+#      them to succeed. With --heavy false (a draft without ci-full) no race
+#      job runs, so no unit leg is skipped this way.
 #
 # Output (stdout, GITHUB_OUTPUT lines):
 #   reach_mode=full|reached   reached only for a pull_request
@@ -37,11 +46,14 @@ set -euo pipefail
 #                             `race` when every leg of that matrix is skipped
 #   unit_skip=<JSON list>     matrix exclude entries {"shard":N} for `unit`
 #   race_skip=<JSON list>     the same for `race`
-# FULL prints [] for all three lists. A report goes to stderr: every changed
+#   dedup_needs=<JSON list>   race job keys a rule-6 skip relies on
+# FULL prints [] for all four lists. A report goes to stderr: every changed
 # package with the file that changed it, every reached package with the rule
 # that reached it, and every shard decision with a reached package it holds.
 #
-# Usage: reached-shards.sh --event NAME [--changed FILE] [--reached-out FILE] [--workflow FILE]
+# Usage: reached-shards.sh --event NAME [--heavy true|false] [--changed FILE] [--reached-out FILE] [--workflow FILE]
+#   --heavy        the plan job's heavy output; required on pull_request (any
+#                  other value fails the selection, which is FULL)
 #   --changed      one changed path per line; default: the diff of the pull
 #                  request merge commit (HEAD^1..HEAD) actions/checkout makes
 #   --reached-out  also write the reached packages, one per line
@@ -49,6 +61,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflow="$repo_root/.github/workflows/ci.yml"
 event=""
+heavy=""
 changed_file=""
 reached_out=""
 
@@ -59,16 +72,16 @@ enumerates='filepath\.WalkDir\(|filepath\.Walk\(|fs\.WalkDir\(|os\.ReadDir\(|fil
 computed_root_path='repopath\.Path\(t, [^"]'
 
 usage() {
-  printf 'usage: %s --event NAME [--changed FILE] [--reached-out FILE] [--workflow FILE]\n' "${0##*/}" >&2
+  printf 'usage: %s --event NAME [--heavy true|false] [--changed FILE] [--reached-out FILE] [--workflow FILE]\n' "${0##*/}" >&2
 }
 
-emit() { # mode reason skip_jobs unit_skip race_skip
-  printf 'reach_mode=%s\nreach_reason=%s\nskip_jobs=%s\nunit_skip=%s\nrace_skip=%s\n' "$1" "$2" "$3" "$4" "$5"
+emit() { # mode reason skip_jobs unit_skip race_skip dedup_needs
+  printf 'reach_mode=%s\nreach_reason=%s\nskip_jobs=%s\nunit_skip=%s\nrace_skip=%s\ndedup_needs=%s\n' "$1" "$2" "$3" "$4" "$5" "$6"
 }
 
 emit_full() {
   printf 'reached-shards: FULL: %s\n' "$1" >&2
-  emit full "$1" '[]' '[]' '[]'
+  emit full "$1" '[]' '[]' '[]' '[]'
 }
 
 job_block() {
@@ -109,7 +122,11 @@ go_list() {
 
 select_shards() {
   local -a changed=()
-  local list line
+  local list line every=""
+  case "$heavy" in
+    true | false) ;;
+    *) printf 'reached-shards: --heavy is %s, expected true or false\n' "${heavy:-<unset>}" >&2; return 1 ;;
+  esac
   if [ -n "$changed_file" ]; then
     [ -r "$changed_file" ] || { printf 'reached-shards: cannot read %s\n' "$changed_file" >&2; return 1; }
     list="$(cat "$changed_file")"
@@ -121,18 +138,16 @@ select_shards() {
   while IFS= read -r line; do
     [ -n "$line" ] && changed+=("$line")
   done <<<"$list"
-  if [ "${#changed[@]}" -eq 0 ]; then
-    emit_full "no changed file was read"
-    return 0
-  fi
+  [ "${#changed[@]}" -gt 0 ] || every="no changed file was read"
 
   local f p
   for f in "${changed[@]}"; do
+    [ -z "$every" ] || break
     for p in "${full_files[@]}"; do
-      [ "$f" = "$p" ] && { emit_full "shared input changed: $f"; return 0; }
+      [ "$f" = "$p" ] && { every="shared input changed: $f"; break; }
     done
     for p in "${full_prefixes[@]}"; do
-      case "$f" in "$p"*) emit_full "shared input changed: $f"; return 0 ;; esac
+      case "$f" in "$p"*) every="shared input changed: $f"; break ;; esac
     done
   done
 
@@ -188,7 +203,10 @@ select_shards() {
       d=.
       [[ "$f" == */* ]] && d="${f%/*}"
       ip="${dir_pkg[$d]:-}"
-      [ -n "$ip" ] || { emit_full "Go file outside every listed package: $f"; return 0; }
+      if [ -z "$ip" ]; then
+        [ -n "$every" ] || every="Go file outside every listed package: $f"
+        continue
+      fi
       changed_pkg[$ip]=1
       printf 'reached-shards: changed package %s (%s)\n' "$ip" "$f" >&2
       continue
@@ -210,6 +228,10 @@ select_shards() {
   done
 
   local -A reached=() basis=()
+  if [ -n "$every" ]; then
+    printf 'reached-shards: every package reached: %s\n' "$every" >&2
+    for ip in "${dir_pkg[@]}"; do reached[$ip]=1; basis[$ip]="every package reached: $every"; done
+  fi
   for owner in "${!deps_of[@]}"; do
     for ip in "${!changed_pkg[@]}"; do
       case "${deps_of[$owner]}" in
@@ -356,6 +378,36 @@ select_shards() {
       *) skip_jobs+="${skip_jobs:+,}\"$key\"" ;;
     esac
   done
+  local dedicated dedup_needs="" pkg cover covers ok
+  if [ "$heavy" = true ]; then
+    dedicated=" $(cd "$repo_root" && scripts/ci/test-shard.sh --print-unit-dedicated-packages) "
+    [ "$dedicated" != "  " ] || { printf 'reached-shards: no unit-dedicated package listed\n' >&2; rm -rf "$legdir"; return 1; }
+    for key in "${keys[@]}"; do
+      case "$key" in unit:*) ;; *) continue ;; esac
+      case ",$unit_skip," in *",{\"shard\":${key#unit:}},"*) continue ;; esac
+      read -r -a pkgs <"$legdir/${key//:/.}" || true
+      ok=1
+      covers=""
+      for pkg in "${pkgs[@]}"; do
+        case "$dedicated" in *" $pkg "*) ;; *) ok=0; break ;; esac
+        cover=0
+        for job in "${keys[@]}"; do
+          case "$job" in unit:* | race:*) continue ;; esac
+          case " $(cat "$legdir/$job") " in *" $pkg "*) ;; *) continue ;; esac
+          cover=1
+          case ",$skip_jobs," in *",\"$job\","*) ok=0 ;; esac
+          covers+=" $job"
+        done
+        [ "$cover" -eq 1 ] || ok=0
+      done
+      [ "$ok" -eq 1 ] || continue
+      printf 'reached-shards: skip %s (race duplicate of%s)\n' "$key" "$covers" >&2
+      unit_skip+="${unit_skip:+,}{\"shard\":${key#unit:}}"
+      for job in $covers; do
+        case ",$dedup_needs," in *",\"$job\","*) ;; *) dedup_needs+="${dedup_needs:+,}\"$job\"" ;; esac
+      done
+    done
+  fi
   rm -rf "$legdir"
   for job in unit race; do
     case "$job" in unit) skips="$unit_skip" ;; race) skips="$race_skip" ;; esac
@@ -366,14 +418,15 @@ select_shards() {
     [ "$all_skipped" -eq 0 ] || skip_jobs="\"$job\"${skip_jobs:+,}$skip_jobs"
   done
 
-  emit reached "${#changed_pkg[@]} changed package(s) reach ${#reached[@]} package(s)" \
-    "[$skip_jobs]" "[$unit_skip]" "[$race_skip]"
+  emit reached "${every:-${#changed_pkg[@]} changed package(s) reach ${#reached[@]} package(s)}" \
+    "[$skip_jobs]" "[$unit_skip]" "[$race_skip]" "[$dedup_needs]"
 }
 
 main() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --event) event="${2-}"; shift 2 ;;
+      --heavy) heavy="${2-}"; shift 2 ;;
       --changed) changed_file="${2-}"; shift 2 ;;
       --reached-out) reached_out="${2-}"; shift 2 ;;
       --workflow) workflow="${2-}"; shift 2 ;;

@@ -58,11 +58,16 @@ jobs:
   #
   # The same job decides which `unit` / `race*` shards a pull request runs
   # (scripts/ci/reached-shards.sh; the rule is in its header). A shard runs when
-  # its test-shard.sh package list holds a package the change reaches; on any
-  # event other than pull_request, on a shared input (go.mod, go.sum,
-  # Makefile, .github/, scripts/ci/, ci/, internal/testsupport/, contracts/,
-  # root testdata/, clients/), and whenever the selection cannot finish, every
-  # shard runs (reach_mode=full). A skipped leg is a matrix `exclude:` entry
+  # its test-shard.sh package list holds a package the change reaches. On any
+  # event other than pull_request, and whenever the selection cannot finish,
+  # every shard runs (reach_mode=full). On a pull request a shared input
+  # (go.mod, go.sum, Makefile, .github/, scripts/ci/, ci/,
+  # internal/testsupport/, contracts/, root testdata/, clients/) reaches every
+  # package. Also on a pull request, when the heavy lanes run, a unit leg that
+  # holds only unit-dedicated packages (devhealthfacts, devhealthsource) is
+  # skipped when every race job running those packages is scheduled: those
+  # race jobs run the same tests under -race, and dedup_needs names them so
+  # verify can require each one to succeed. A skipped leg is a matrix `exclude:` entry
   # (unit_skip / race_skip); a skipped isolated race job, or a matrix whose every
   # leg is skipped, is named in skip_jobs and its job `if:` turns it off.
   # `verify` accepts those skips ONLY from these outputs, ONLY when
@@ -76,6 +81,7 @@ jobs:
       skip_jobs: ${{ steps.reach.outputs.skip_jobs }}
       unit_skip: ${{ steps.reach.outputs.unit_skip }}
       race_skip: ${{ steps.reach.outputs.race_skip }}
+      dedup_needs: ${{ steps.reach.outputs.dedup_needs }}
     steps:
       - name: Decide whether the heavy lanes run
         id: decide
@@ -107,7 +113,8 @@ jobs:
         id: reach
         env:
           EVENT: ${{ github.event_name }}
-        run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"
+          HEAVY: ${{ steps.decide.outputs.heavy }}
+        run: scripts/ci/reached-shards.sh --event "$EVENT" --heavy "$HEAVY" >> "$GITHUB_OUTPUT"
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
   # triggered by the SAME push, with no cross-workflow `needs` (GitHub
   # Actions has none). The introducing PR hit this directly: mirror-images.yml
@@ -382,8 +389,9 @@ jobs:
     # test-shard-closure.sh calls every leg 1-5 and requires their union to be
     # exactly `go list ./...`, so the package cannot silently leave every leg.
     # On a pull request the plan job excludes every leg whose packages the
-    # change does not reach (unit_skip), and skips the job when that is every
-    # leg; push and workflow_dispatch exclude nothing.
+    # change does not reach, and every dedicated-package leg whose race jobs
+    # are scheduled (unit_skip), and skips the job when that is every leg;
+    # push and workflow_dispatch exclude nothing.
     strategy:
       fail-fast: false
       matrix:
@@ -1784,7 +1792,8 @@ jobs:
             failed=1
             reach=invalid
           fi
-          for list in skip_jobs unit_skip race_skip; do
+          dedup_needs='[]'
+          for list in skip_jobs unit_skip race_skip dedup_needs; do
             value="$(printf '%s' "$NEEDS" | jq -r --arg k "$list" '.plan.outputs[$k] // "missing"')"
             printf 'plan %s=%s\n' "$list" "$value"
             if ! printf '%s' "$value" | jq -e 'type == "array"' >/dev/null 2>&1; then
@@ -1797,6 +1806,7 @@ jobs:
               failed=1
             fi
             [ "$list" != skip_jobs ] || skip_jobs="$value"
+            [ "$list" != dedup_needs ] || dedup_needs="$value"
           done
           printf 'plan reach_reason=%s\n' "$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.reach_reason // "missing"')"
 
@@ -1816,6 +1826,20 @@ jobs:
                 failed=1
               fi
             done
+          fi
+
+          # A unit leg the plan dropped as a race duplicate is covered only by
+          # the race jobs in dedup_needs, so each of them must have run and
+          # succeeded; a skipped one (a draft, a reach skip) fails the gate.
+          if [ "$reach" = reached ]; then
+            while IFS= read -r job; do
+              [ -n "$job" ] || continue
+              result="$(printf '%s' "$NEEDS" | jq -r --arg j "$job" '.[$j].result // "missing"')"
+              if [ "$result" != success ]; then
+                printf '%s: a unit leg was dropped as its race duplicate, but its result is %s\n' "$job" "$result" >&2
+                failed=1
+              fi
+            done < <(printf '%s' "$dedup_needs" | jq -r '.[]?' 2>/dev/null)
           fi
 
           # LIGHT lanes run on every event and must be a literal success.

@@ -27,6 +27,8 @@ fail() {
 ok() { printf 'ok   %s\n' "$*"; }
 
 # run_reached NAME EVENT PATH... -> writes $tmp/NAME.out (key=value) and
+# runs the selector with --heavy "$HEAVY" (default true; set HEAVY=false or
+# HEAVY= for a draft PR or a missing value) and
 # $tmp/NAME.reached (one reached package per line). Never fails the caller:
 # a selector that exits non-zero leaves an empty .out, which every assertion
 # below reads as "no verdict".
@@ -36,7 +38,7 @@ run_reached() {
   printf '%s\n' "$@" >"$tmp/$name.changed"
   : >"$tmp/$name.out"
   : >"$tmp/$name.reached"
-  (cd "$repo_root" && "$reached" --event "$event" --changed "$tmp/$name.changed" \
+  (cd "$repo_root" && "$reached" --event "$event" --heavy "${HEAVY-true}" --changed "$tmp/$name.changed" \
     --reached-out "$tmp/$name.reached") >"$tmp/$name.out" 2>"$tmp/$name.err" || true
 }
 
@@ -44,19 +46,21 @@ out_value() { # NAME KEY
   sed -n "s/^$2=//p" "$tmp/$1.out" | tail -n1
 }
 
-expect_full() { # NAME
-  local name="$1" mode skip unit race
+expect_lists() { # NAME MODE: MODE and every skip list [] (nothing skipped)
+  local name="$1" want="$2" mode skip unit race dedup
   mode="$(out_value "$name" reach_mode)"
   skip="$(out_value "$name" skip_jobs)"
   unit="$(out_value "$name" unit_skip)"
   race="$(out_value "$name" race_skip)"
-  if [ "$mode" = full ] && [ "$skip" = '[]' ] && [ "$unit" = '[]' ] && [ "$race" = '[]' ]; then
-    ok "$name runs every shard ($(out_value "$name" reach_reason))"
+  dedup="$(out_value "$name" dedup_needs)"
+  if [ "$mode" = "$want" ] && [ "$skip" = '[]' ] && [ "$unit" = '[]' ] && [ "$race" = '[]' ] && [ "$dedup" = '[]' ]; then
+    ok "$name runs every shard, reach_mode=$want ($(out_value "$name" reach_reason))"
   else
-    fail "$name: want reach_mode=full and every skip list [], got mode=${mode:-<none>} skip_jobs=${skip:-<none>} unit_skip=${unit:-<none>} race_skip=${race:-<none>}"
+    fail "$name: want reach_mode=$want and every skip list [], got mode=${mode:-<none>} skip_jobs=${skip:-<none>} unit_skip=${unit:-<none>} race_skip=${race:-<none>} dedup_needs=${dedup:-<none>}"
     sed 's/^/    /' "$tmp/$name.err" | tail -n 5
   fi
 }
+expect_full() { expect_lists "$1" full; }
 
 # ---- shard lists, read the way ci.yml runs them -----------------------------
 
@@ -96,7 +100,9 @@ expect_full dispatch-leaf
 run_reached merge-group-leaf merge_group "$leaf"
 expect_full merge-group-leaf
 
-# ---- 2. shared inputs run every shard on a pull request -------------------
+# ---- 2. shared inputs reach every package on a pull request ---------------
+# With no race job scheduled (HEAVY=false) every shard runs; with race jobs
+# scheduled only the race-duplicate unit legs drop (section 7).
 
 i=0
 for shared in go.mod go.sum Makefile scripts/ci/test-shard.sh .github/workflows/ci.yml \
@@ -104,22 +110,27 @@ for shared in go.mod go.sum Makefile scripts/ci/test-shard.sh .github/workflows/
   contracts/openapi/acr-v1.json testdata/evaluation/v1/new.json clients/conformance/client-bundle.v1.json \
   no/such/package/dir/file.go; do
   i=$((i + 1))
-  run_reached "pr-shared-$i" pull_request "$leaf" "$shared"
-  expect_full "pr-shared-$i"
+  HEAVY=false run_reached "pr-shared-$i" pull_request "$leaf" "$shared"
+  expect_lists "pr-shared-$i" reached
 done
 
 # ---- 3. fail open: no verdict the selector can defend is FULL, never empty ---
 
-run_reached pr-empty pull_request
-expect_full pr-empty
+HEAVY=false run_reached pr-empty pull_request
+expect_lists pr-empty reached
+
+HEAVY='' run_reached pr-heavy-missing pull_request "$leaf"
+expect_full pr-heavy-missing
+HEAVY=maybe run_reached pr-heavy-invalid pull_request "$leaf"
+expect_full pr-heavy-invalid
 
 : >"$tmp/unreadable.err"
-(cd "$repo_root" && "$reached" --event pull_request --changed "$tmp/does-not-exist" \
+(cd "$repo_root" && "$reached" --event pull_request --heavy true --changed "$tmp/does-not-exist" \
   --reached-out "$tmp/unreadable.reached") >"$tmp/pr-unreadable.out" 2>"$tmp/pr-unreadable.err" || true
 expect_full pr-unreadable
 
 printf '%s\n' "$leaf" >"$tmp/golist-fails.changed"
-(cd "$repo_root" && GOFLAGS=-modfile=/nonexistent/go.mod "$reached" --event pull_request \
+(cd "$repo_root" && GOFLAGS=-modfile=/nonexistent/go.mod "$reached" --event pull_request --heavy true \
   --changed "$tmp/golist-fails.changed" --reached-out "$tmp/golist-fails.reached") \
   >"$tmp/pr-golist-fails.out" 2>"$tmp/pr-golist-fails.err" || true
 expect_full pr-golist-fails
@@ -221,6 +232,76 @@ for walker in internal/contextfabric/devhealthschema internal/testsupport/repopa
   fi
 done
 
+# ---- 6b. race-duplicate unit legs (pull_request, race jobs scheduled) -------
+
+# unit_legs_of PKG -> the unit legs whose package list is exactly PKG.
+dedicated_legs_of() {
+  local n
+  for n in $(matrix_legs unit); do
+    [ "$(leg_packages unit "$n")" = "$1" ] && printf '%s\n' "$n"
+  done
+  return 0
+}
+facts="$module/internal/contextfabric/devhealthfacts"
+facts_legs="$(dedicated_legs_of "$facts")"
+[ -n "$facts_legs" ] || { printf 'no unit leg holds only %s; the fixture no longer matches ci.yml\n' "$facts" >&2; exit 2; }
+facts_go=""
+for f in "$repo_root"/internal/contextfabric/devhealthfacts/*.go; do
+  case "$f" in *_test.go) continue ;; esac
+  facts_go="internal/contextfabric/devhealthfacts/${f##*/}"
+  break
+done
+[ -n "$facts_go" ] || { printf 'no non-test Go file in devhealthfacts\n' >&2; exit 2; }
+
+run_reached pr-dedup-facts pull_request "$facts_go"
+unit_skip="$(out_value pr-dedup-facts unit_skip)"
+dedup="$(out_value pr-dedup-facts dedup_needs)"
+skip_jobs="$(out_value pr-dedup-facts skip_jobs)"
+for n in $facts_legs; do
+  grep -qF "{\"shard\":$n}" <<<"$unit_skip" \
+    || fail "pr-dedup-facts: unit leg $n holds only devhealthfacts, whose race jobs run, but it is not skipped (unit_skip=$unit_skip)"
+done
+for job in race-devhealthfacts race-devhealthfacts-heavy race-devhealthfacts-mid race-devhealthfacts-fourth; do
+  grep -qF "\"$job\"" <<<"$dedup" || fail "pr-dedup-facts: dedup_needs lacks $job (dedup_needs=$dedup)"
+  grep -qF "\"$job\"" <<<"$skip_jobs" && fail "pr-dedup-facts: $job is skipped while a unit leg relies on it"
+done
+for n in 1 2 3 4; do
+  grep -qF "{\"shard\":$n}" <<<"$unit_skip" && fail "pr-dedup-facts: round-robin unit leg $n was dropped as a race duplicate"
+done
+[ "$fails" -eq 0 ] && ok "pr-dedup-facts drops unit legs $(tr '\n' ' ' <<<"$facts_legs")and needs their 4 race jobs"
+
+HEAVY=false run_reached pr-dedup-draft pull_request "$facts_go"
+unit_skip="$(out_value pr-dedup-draft unit_skip)"
+before="$fails"
+for n in $facts_legs; do
+  grep -qF "{\"shard\":$n}" <<<"$unit_skip" \
+    && fail "pr-dedup-draft: unit leg $n is skipped although no race job is scheduled (heavy=false)"
+done
+[ "$(out_value pr-dedup-draft dedup_needs)" = '[]' ] || fail "pr-dedup-draft: dedup_needs must be [] with heavy=false"
+[ "$fails" -eq "$before" ] && ok "pr-dedup-draft keeps the devhealthfacts unit legs when no race job is scheduled"
+
+HEAVY=true run_reached pr-dedup-gomod pull_request go.mod
+unit_skip="$(out_value pr-dedup-gomod unit_skip)"
+skip_jobs="$(out_value pr-dedup-gomod skip_jobs)"
+before="$fails"
+[ "$(out_value pr-dedup-gomod reach_mode)" = reached ] || fail "pr-dedup-gomod: want reach_mode=reached on a pull request"
+if [ "$skip_jobs" != '[]' ] || [ "$(out_value pr-dedup-gomod race_skip)" != '[]' ]; then
+  fail "pr-dedup-gomod: go.mod reaches every package, so no race job or race leg may skip (skip_jobs=$skip_jobs)"
+fi
+for n in $(matrix_legs unit); do
+  pkgs="$(leg_packages unit "$n")"
+  dedicated_only=1
+  while IFS= read -r pkg; do
+    grep -qxF "$pkg" <<<"$(cd "$repo_root" && scripts/ci/test-shard.sh --print-unit-dedicated-packages | tr ' ' '\n')" || dedicated_only=0
+  done <<<"$pkgs"
+  if grep -qF "{\"shard\":$n}" <<<"$unit_skip"; then
+    [ "$dedicated_only" -eq 1 ] || fail "pr-dedup-gomod: unit leg $n holds a non-dedicated package and is skipped"
+  else
+    [ "$dedicated_only" -eq 0 ] || fail "pr-dedup-gomod: unit leg $n holds only dedicated packages, all race jobs run, and it still runs"
+  fi
+done
+[ "$fails" -eq "$before" ] && ok "pr-dedup-gomod skips exactly the dedicated-only unit legs (unit_skip=$unit_skip)"
+
 # ---- 6. verify's lane check, run from ci.yml --------------------------------
 
 lane_script="$tmp/lane-check.sh"
@@ -259,20 +340,24 @@ lane() {
   fi
 }
 
-full='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
-reached_unit='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":1},{\"shard\":2},{\"shard\":3},{\"shard\":4},{\"shard\":5},{\"shard\":6},{\"shard\":7},{\"shard\":8},{\"shard\":9}]","race_skip":"[]"}'
-reached_none='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
-reached_fo='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race-factoracle\"]","unit_skip":"[]","race_skip":"[]"}'
-full_with_skip='{"heavy":"true","reach_mode":"full","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]"}'
-full_with_leg='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[{\"shard\":2}]","race_skip":"[]"}'
+full='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+reached_unit='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":1},{\"shard\":2},{\"shard\":3},{\"shard\":4},{\"shard\":5},{\"shard\":6},{\"shard\":7},{\"shard\":8},{\"shard\":9}]","race_skip":"[]","dedup_needs":"[]"}'
+reached_none='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+reached_fo='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race-factoracle\"]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+full_with_skip='{"heavy":"true","reach_mode":"full","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+full_with_leg='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[{\"shard\":2}]","race_skip":"[]","dedup_needs":"[]"}'
 no_reach='{"heavy":"true"}'
-whole_unit_no_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]"}'
-whole_unit_some_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":5},{\"shard\":6}]","race_skip":"[]"}'
-whole_race_partial='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":1}]"}'
-whole_race_all='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":4},{\"shard\":1},{\"shard\":3},{\"shard\":2}]"}'
-no_reach_lists='{"heavy":"true","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
-bad_reach='{"heavy":"true","reach_mode":"partial","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
-draft_full='{"heavy":"false","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
+whole_unit_no_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+whole_unit_some_legs='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":5},{\"shard\":6}]","race_skip":"[]","dedup_needs":"[]"}'
+whole_race_partial='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":1}]","dedup_needs":"[]"}'
+whole_race_all='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race\"]","unit_skip":"[]","race_skip":"[{\"shard\":4},{\"shard\":1},{\"shard\":3},{\"shard\":2}]","dedup_needs":"[]"}'
+no_reach_lists='{"heavy":"true","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+dedup_facts='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":5},{\"shard\":7}]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\",\"race-devhealthfacts-heavy\",\"race-devhealthfacts-mid\",\"race-devhealthfacts-fourth\"]"}'
+dedup_full='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\"]"}'
+dedup_draft='{"heavy":"false","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":5},{\"shard\":7}]","race_skip":"[]","dedup_needs":"[\"race-devhealthfacts\",\"race-devhealthfacts-heavy\",\"race-devhealthfacts-mid\",\"race-devhealthfacts-fourth\"]"}'
+dedup_missing='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[{\"shard\":5}]","race_skip":"[]"}'
+bad_reach='{"heavy":"true","reach_mode":"partial","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
+draft_full='{"heavy":"false","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]","dedup_needs":"[]"}'
 heavy_lanes=(race race-devhealthschema race-devhealthfacts race-devhealthfacts-heavy race-devhealthfacts-mid
   race-devhealthfacts-fourth race-devhealthsource race-devhealthsource-heavy race-devhealthsource-mid
   race-factoracle race-factoracle-heavy build contracts container-contract-smoke container-reproducible container-oci-scan)
@@ -299,6 +384,12 @@ lane pr-unknown-reach-mode 1 pull_request "$bad_reach"
 draft_skips=()
 for job in "${heavy_lanes[@]}"; do draft_skips+=("$job=skipped"); done
 lane pr-draft-heavy-skipped 0 pull_request "$draft_full" "${draft_skips[@]}"
+lane pr-dedup-race-green 0 pull_request "$dedup_facts"
+lane pr-dedup-race-skipped 1 pull_request "$dedup_facts" race-devhealthfacts-mid=skipped
+lane pr-dedup-draft 1 pull_request "$dedup_draft" "${draft_skips[@]}"
+lane pr-dedup-race-failed 1 pull_request "$dedup_facts" race-devhealthfacts=failure
+lane pr-dedup-under-full 1 pull_request "$dedup_full"
+lane pr-dedup-missing 1 pull_request "$dedup_missing"
 
 if [ "$fails" -ne 0 ]; then
   printf '%s failure(s)\n' "$fails"
