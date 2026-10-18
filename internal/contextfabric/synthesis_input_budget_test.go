@@ -209,8 +209,8 @@ func TestClientSynthesisEnvelopeRefusalMeasuresTheSmallestInput(t *testing.T) {
 	if clientSynthesisBodyShare(budget) >= envelope {
 		t.Fatalf("envelope %d fits the %d share, the early refusal is not reached", envelope, clientSynthesisBodyShare(budget))
 	}
-	if len(turn.telemetry.synthesisInputBounds) != 0 {
-		t.Fatalf("the refusal measurement emitted %d input bound events %+v, want none", len(turn.telemetry.synthesisInputBounds), turn.telemetry.synthesisInputBounds)
+	if len(turn.telemetry.synthesisInputBounds) != 1 || turn.telemetry.synthesisInputBounds[0].Outcome != SynthesisInputBoundExhausted {
+		t.Fatalf("input bound events = %+v, want one exhausted event", turn.telemetry.synthesisInputBounds)
 	}
 	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes < int64(envelope+2000+ClientSynthesisAnswerFloorBytes) {
 		t.Fatalf("refusal measured %d against %d, want the caller's %d and at least envelope %d + input 2000 + floor %d", refusal.MeasuredBytes, refusal.MaxSerializedBytes, budget, envelope, ClientSynthesisAnswerFloorBytes)
@@ -223,7 +223,7 @@ func TestClientSynthesisEnvelopeRefusalMeasuresTheSmallestInput(t *testing.T) {
 func TestClientSynthesisEnvelopeOverHalfBudgetServesWhenTheSmallestInputFits(t *testing.T) {
 	t.Parallel()
 	const budget = 16384
-	rules := []string{strings.Repeat("r", 9000)}
+	rules := slices.Repeat([]string{strings.Repeat("r", 500)}, contractsv1.ContextFabricSynthesisInputRulesMaxCount)
 	turn := runBudgetTurnWithRules(t, 1, 200, budget, rules)
 	if turn.err != nil || turn.collected == nil {
 		t.Fatalf("Investigate() error = %v bundle = %v, want the turn served", turn.err, turn.collected)
@@ -246,7 +246,7 @@ func TestClientSynthesisEnvelopeOverHalfBudgetServesWhenTheSmallestInputFits(t *
 func TestClientSynthesisEnvelopeOverHalfBudgetRefusesWhenTheSmallestInputDoesNotFit(t *testing.T) {
 	t.Parallel()
 	const budget = 16384
-	rules := []string{strings.Repeat("r", 9000)}
+	rules := slices.Repeat([]string{strings.Repeat("r", 500)}, contractsv1.ContextFabricSynthesisInputRulesMaxCount)
 	turn := runBudgetTurnWithRules(t, 1, 5000, budget, rules)
 	var refusal AnswerBudgetRefusal
 	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) {
