@@ -3263,8 +3263,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		issuers := parentReceiptIssuers{named: carryParentSeed(request), issuedFor: substitutionInput.Parent.IssuedFor, loaded: priorLoadedResults}
 		origin := subjectSubstitutionOriginOf(substitutionCommitted, substitutionInput.Parent.Subject, issuers, priorOutcomes, request.RequestedScope.SubjectHints, appliedNeeds)
 		substitutionInput.Origin, substitutionInput.OriginReceiptResultID, substitutionInput.OriginReceiptID, substitutionInput.OriginIssuedFor = origin.Origin, origin.ReceiptResultID, origin.ReceiptID, origin.IssuedFor
-
-		substitutionInput.RedeemedChoice = substitutionInput.RedeemedChoice || subjectSubstitutionRedeemedCandidate(substitutionCommitted, issuers, structureCanon.Confirmed)
+		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, issuers, priorOutcomes) || subjectSubstitutionRedeemedCandidate(substitutionCommitted, issuers, structureCanon.Confirmed)
 		// The re-read costs a keyed graph call, so it is asked only when its
 		// answer can change what this turn hands back: the identities already
 		// differ and the caller did not pick this one, so the guard is about
