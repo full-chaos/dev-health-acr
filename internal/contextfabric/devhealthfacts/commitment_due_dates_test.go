@@ -194,10 +194,16 @@ func TestCommitmentDueDateStatementIsBoundedAndReadsTheSameAuthorizedItems(t *te
 		t.Errorf("statement does not start with SELECT:\n%s", statement)
 	}
 	authorized := devhealthfacts.CommitmentAuthorizedItemIDsSQLForTest(storage.Principal{OrgID: "org-commitment"}, nil)
+	limited := false
+	for _, line := range strings.Split(statement, "\n") {
+		limited = limited || strings.HasPrefix(line, "LIMIT 26 BY project_key")
+	}
+	if !limited {
+		t.Errorf("no executable LIMIT 26 BY project_key line:\n%s", statement)
+	}
 	for _, fragment := range []string{
 		"FROM project_rows\n  WHERE work_item_id IN " + authorized,
 		"due_at IS NOT NULL",
-		"LIMIT 26 BY project_key",
 		"ifNull(w.type, '') NOT IN ('pr', 'merge_request')",
 	} {
 		if !strings.Contains(statement, fragment) {

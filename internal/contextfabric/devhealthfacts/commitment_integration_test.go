@@ -204,6 +204,9 @@ func TestCommitmentServedAtTheReadFactsBoundaryForEveryProviderOnRealClickHouse(
 	wantAbsent(t, fact, "commitment_status")
 	fact = servedCommitment(t, restricted, linear)
 	wantServed(t, fact, map[string]any{"target_date": "2026-11-01", "commitment_status": "stated", "items_total": "8", "items_past_due_open": "1", "items_unreadable_count": "0"})
+	if got := servedDueDates(t, fact); len(got) != len(wantDueDates) || got[0] != wantDueDates[0] {
+		t.Errorf("restricted issue_due_dates = %+v, want the %d authorized rows starting %+v", got, len(wantDueDates), wantDueDates[0])
+	}
 	if fact.PopulationScope != "caller_authorized_items" {
 		t.Errorf("restricted population_scope = %q, want caller_authorized_items", fact.PopulationScope)
 	}

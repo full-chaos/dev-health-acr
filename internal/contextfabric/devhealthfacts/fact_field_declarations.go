@@ -697,7 +697,7 @@ func commitmentFieldDecls() []fieldDecl {
 		declCallerScoped(fStr("next_sprint_end")),
 		declCallerScoped(fStr("latest_sprint_end")),
 		declCallerScoped(fTable("issue_due_dates",
-			cRef(declBareWorkItemRef, cStr("work_item_id")), cStr("due_at"), cStr("status"), cBool("past_due"),
+			cStr("work_item_id"), cStr("due_at"), cStr("status"), cBool("past_due"),
 		)),
 		declCallerScoped(fBool("issue_due_dates_truncated")),
 	)
