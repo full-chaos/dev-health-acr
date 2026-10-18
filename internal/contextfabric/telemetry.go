@@ -1702,6 +1702,7 @@ func planNarrowingLogAttrs(ctx context.Context, principal storage.Principal, eve
 		"outcome_items_served", event.OutcomeItemsServed,
 		"outcome_items_declared", event.OutcomeItemsDeclared,
 		"outcome_completeness_state", SanitizeLogAttr(string(event.OutcomeCompletenessState)),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 		"outcome_reduction_declined", SanitizeLogAttr(string(event.OutcomeReductionDeclined)),
 		// The item ACCOUNT and the per-group quota for the document this
 		// line describes. quota_availability is what makes the four
@@ -2775,6 +2776,7 @@ func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, princi
 		"tables_ranking_unscored", event.TablesRankingUnscored,
 		"served", event.Served,
 		"declined", string(event.Declined),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric fact row truncation", args...)
@@ -2805,6 +2807,7 @@ func (t SlogEngineTelemetry) RecordClaimDepthNarrowing(ctx context.Context, prin
 		"per_member_cap", event.PerMemberCap,
 		"served", event.Served,
 		"declined", string(event.Declined),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric claim depth narrowing", args...)
@@ -2835,6 +2838,7 @@ func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal stora
 		"dropped_path_ids", SanitizeLogStrings(event.DroppedPathIDs),
 		"served", event.Served,
 		"declined", string(event.Declined),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric path drop", args...)
