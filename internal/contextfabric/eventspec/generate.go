@@ -330,6 +330,16 @@ func goVarName(e Event) string {
 		return "DriverSourceStateCorrected"
 	case DriverIdentityCollisions.ID:
 		return "DriverIdentityCollisions"
+	case EvidenceLabelFallback.ID:
+		return "EvidenceLabelFallback"
+	case CoverageEntriesCapped.ID:
+		return "CoverageEntriesCapped"
+	case CoverageDisclosurePhrasing.ID:
+		return "CoverageDisclosurePhrasing"
+	case CategoryFactComposition.ID:
+		return "CategoryFactComposition"
+	case PeriodDeltaComposition.ID:
+		return "PeriodDeltaComposition"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:
