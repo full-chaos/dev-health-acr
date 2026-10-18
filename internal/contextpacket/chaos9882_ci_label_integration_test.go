@@ -43,6 +43,13 @@ func TestCIRunLabelOnARealStore(t *testing.T) {
 		"edge-ci-mix":  "Ci build",
 		"edge-ci-pad":  "\t CI \n",
 		"edge-cix":     "CIX",
+		"edge-nbsp-ci": "CI\u00a0build",
+		"edge-ls-ci":   "ci\u2028build",
+		"edge-nel-ci":  "Ci\u0085build",
+		"edge-ideo-ci": "CI\u3000build",
+		"edge-nbsp":    "\u00a0",
+		"edge-ls-pad":  "\u2028\u0085 pad\u3000",
+		"edge-zwsp":    "CI\u200bbuild",
 	}
 	for id, name := range edgeNames {
 		scopeExec(t, ctx, direct, fmt.Sprintf(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id, pipeline_name) VALUES ('%s', '%s', 'success', %s, %s, '%s', '%s')`, scopeRepoID, id, event, synced, scopeOrgA, name))

@@ -21,6 +21,8 @@ func TestCIRunLabelCarriesThePipelineNameWhenStored(t *testing.T) {
 		{"run-4", "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at, "CI"},
 		{"run-5", "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at, "ci build"},
 		{"run-6", "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at, "CIX"},
+		{"run-7", "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at, "CI\u00a0build"},
+		{"run-8", "repo-1", "main", "success", "example-org/widget-service", at, at, uint8(1), at, "\u00a0"},
 	}})
 	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
 	if err != nil {
@@ -40,6 +42,8 @@ func TestCIRunLabelCarriesThePipelineNameWhenStored(t *testing.T) {
 		"ci_pipeline_run.v2:repo-1:run-4": "CI #run-4",
 		"ci_pipeline_run.v2:repo-1:run-5": "ci build #run-5",
 		"ci_pipeline_run.v2:repo-1:run-6": "CI CIX #run-6",
+		"ci_pipeline_run.v2:repo-1:run-7": "CI\u00a0build #run-7",
+		"ci_pipeline_run.v2:repo-1:run-8": "CI run-8",
 	}
 	seen := 0
 	for _, entity := range batch.Entities {

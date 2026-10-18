@@ -25,6 +25,15 @@ func TestCIRunLabelRule(t *testing.T) {
 		{"CIX", "7", "CI CIX #7"},
 		{"CI-build", "7", "CI CI-build #7"},
 		{"build CI", "7", "CI build CI #7"},
+		{"CI\u00a0build", "7", "CI\u00a0build #7"},
+		{"CI\u2028build", "7", "CI\u2028build #7"},
+		{"ci\u0085build", "7", "ci\u0085build #7"},
+		{"CI\u3000build", "7", "CI\u3000build #7"},
+		{"\u00a0", "7", "CI 7"},
+		{"\u2028\u0085\u3000", "7", "CI 7"},
+		{"\u00a0CI\u00a0", "7", "CI #7"},
+		{"\u00a0build\u00a0", "7", "CI build #7"},
+		{"CI\u200bbuild", "7", "CI CI\u200bbuild #7"},
 	} {
 		if got := contextpacket.CIRunLabel(tc.name, tc.run); got != tc.want {
 			t.Errorf("CIRunLabel(%q, %q) = %q, want %q", tc.name, tc.run, got, tc.want)
