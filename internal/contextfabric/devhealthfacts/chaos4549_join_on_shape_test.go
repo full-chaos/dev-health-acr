@@ -243,15 +243,15 @@ func sweepScopeExpander(ctx context.Context, orgID string) []capturedQuery {
 	client := &fakeClient{tables: []fakeTable{
 		// projectPullRequestLinkTiers: its select shares the first hop's
 		// aggregate text, so it is matched first by its own GROUP BY.
-		// Column order: project id, repo id, pull request number, strongest tier.
-		{match: "GROUP BY p.id, toString(l.pr_repo_id), l.pr_number", rows: [][]any{
-			{"proj-4549-scope", scopeRepoID, uint32(1), "native"},
+		// Column order: provider-qualified project key, repo id, pull request number, strongest tier.
+		{match: "GROUP BY concat(p.provider, ':', p.id), toString(l.pr_repo_id), l.pr_number", rows: [][]any{
+			{"github:proj-4549-scope", scopeRepoID, uint32(1), "native"},
 		}},
 		// projectRepositories' first hop (chaos4099_scope_expander.go).
 		// Column order: toString(l.pr_repo_id), ifNull(r.repo, ''),
-		// min(p.id), argMax(l.provenance, l.link_rank), the origin id list.
+		// min(provider-qualified key), argMax(l.provenance, l.link_rank), the origin id list.
 		{match: "argMax(l.provenance, l.link_rank)", rows: [][]any{
-			{scopeRepoID, scopeRepoSlug, "proj-4549-scope", "native", []string{"proj-4549-scope"}},
+			{scopeRepoID, scopeRepoSlug, "github:proj-4549-scope", "native", []string{"github:proj-4549-scope"}},
 		}},
 		// teamRepositories' first hop. Column order: repo_id_str,
 		// repo_slug, argMin(source, source_rank), min(origin_team_id), the
