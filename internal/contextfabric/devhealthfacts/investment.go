@@ -549,7 +549,8 @@ func investmentProjectMixCutReason(cut, requested int) string {
 // read was not reached by it. A project with no fact that a cut read did not
 // reach was never evaluated. A project served from the owning-team roll-up
 // whose native read was cut before it may also have a native mix, which would
-// replace the roll-up, so it is cut as well.
+// replace the roll-up, so it is cut as well. A fact that carries no mix (only a
+// count) hides a roll-up the same way, so either cut reaches it.
 func splitProjectsCutByRowCap(subjects []contextfabric.SubjectRef, facts []contextfabric.CanonicalFact, rollupCutAfter, nativeCutAfter string) (noMix, cut []contextfabric.SubjectRef) {
 	served := map[string]string{}
 	for _, f := range facts {
@@ -569,10 +570,14 @@ func splitProjectsCutByRowCap(subjects []contextfabric.SubjectRef, facts []conte
 		}
 		source, hasFact := served[contextfabric.FactSubjectKey(subject)]
 		nativeUnreached := nativeCutAfter != "" && key > nativeCutAfter
+		rollupUnreached := rollupCutAfter != "" && key > rollupCutAfter
 		switch {
-		case hasFact && nativeUnreached && source != contextfabric.InvestmentMixSourceProjectNative:
+		case hasFact && source == contextfabric.InvestmentMixSourceProjectNative:
+		case hasFact && source == contextfabric.InvestmentMixSourceOwningTeamRollup && nativeUnreached:
 			cut = append(cut, subject)
-		case !hasFact && (nativeUnreached || (rollupCutAfter != "" && key > rollupCutAfter)):
+		case hasFact && source != contextfabric.InvestmentMixSourceOwningTeamRollup && (nativeUnreached || rollupUnreached):
+			cut = append(cut, subject)
+		case !hasFact && (nativeUnreached || rollupUnreached):
 			cut = append(cut, subject)
 		case !hasFact:
 			noMix = append(noMix, subject)

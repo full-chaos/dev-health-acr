@@ -363,7 +363,7 @@ INNER JOIN (
 	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS ec ON ` + projectIdentityMatchSQL("ec", "work_scope_id") + ` AND ec.rn = 1
 GROUP BY p.provider, p.id
-ORDER BY p.id -- project population`)
+ORDER BY p.provider, p.id -- project population`)
 	byProject = make(map[string]readinessProjectPopulation)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++

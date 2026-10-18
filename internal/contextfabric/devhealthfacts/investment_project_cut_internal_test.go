@@ -47,3 +47,13 @@ func TestSplitProjectsCutByRowCapNamesARollupProjectBeyondTheNativeCut(t *testin
 		t.Fatalf("noMix = %v, want only the no-fact project the cut read did reach", noMix)
 	}
 }
+
+func TestSplitProjectsCutByRowCapNamesACountOnlyFactBeyondTheRollupCut(t *testing.T) {
+	t.Parallel()
+	countOnly, before := cutTestSubject("n"), cutTestSubject("b")
+	facts := []contextfabric.CanonicalFact{cutTestFact(countOnly, ""), cutTestFact(before, "")}
+	noMix, cut := splitProjectsCutByRowCap([]contextfabric.SubjectRef{countOnly, before}, facts, "linear:g", "")
+	if len(cut) != 1 || cut[0].Label != "n" || len(noMix) != 0 {
+		t.Fatalf("cut = %v noMix = %v, want only the count-only fact past the roll-up cut", cut, noMix)
+	}
+}

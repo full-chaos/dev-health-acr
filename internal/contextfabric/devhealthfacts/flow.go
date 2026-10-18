@@ -645,7 +645,7 @@ func (p *FlowProvider) queryProjectFlowPopulation(ctx context.Context, orgID str
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (` + flowProjectLatestScopeSQL(timeBound) + `) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id
-ORDER BY p.id -- project population`)
+ORDER BY p.provider, p.id -- project population`)
 	byProject = make(map[string]flowProjectPopulation)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
