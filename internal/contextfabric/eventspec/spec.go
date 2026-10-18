@@ -2194,6 +2194,92 @@ var StructureExplicit = Event{
 	},
 }
 
+// PriorConsulted is the Info line of the outcome of consulting the organization's active prior version for one structure member.
+var PriorConsulted = Event{
+	ID:                       "contextfabric.prior_consulted",
+	Msg:                      "context fabric prior consulted",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         5,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per structure member with a candidate prior entry, written at most once per member per investigation.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.StructureNeedKindLogVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorConsultedOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// PriorDegradationPointerDangling is the Warn line of a prior consultation whose active version pointer names a missing snapshot.
+var PriorDegradationPointerDangling = Event{
+	ID:                       "contextfabric.prior_degradation_pointer_dangling",
+	Msg:                      "context fabric prior consultation degraded: active version pointer names a missing snapshot",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the prior read is shared between both consult sites.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorDegradationPointerDanglingVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// PriorDegradation is the Info line of a prior consultation that degraded to engine derived offers only, for any state but a dangling pointer.
+var PriorDegradation = Event{
+	ID:                       "contextfabric.prior_degradation",
+	Msg:                      "context fabric prior consultation degraded",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: the prior read is shared between both consult sites.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PriorDegradationInfoVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ProjectedRowsCount is the Info line of how many canonical rows a synthesis attached to its claims, and whether the attachment was truncated.
+var ProjectedRowsCount = Event{
+	ID:                       "contextfabric.projected_rows_count",
+	Msg:                      "context fabric projected rows count",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that reaches claim assembly; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rows_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ProjectedRowsByFactKind is the Info line of the rows a synthesis attached for one fact kind, written for a claimed kind even when its count is zero.
+var ProjectedRowsByFactKind = Event{
+	ID:                       "contextfabric.projected_rows_by_fact_kind",
+	Msg:                      "context fabric projected rows count by fact kind",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         54,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per distinct fact kind claimed by one synthesis call, kinds outside the contract summed into one class line, so at most the requestable kinds, the cardinality kind and the class per call, and two calls per request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "fact_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectedRowsFactKindLogVocabulary()},
+		{Key: "rows_projected_by_fact_kind", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // PriorSubjectReceiptsSkipped is the Warn line of the prior-subject receipts a turn skipped: how many, never which.
 var PriorSubjectReceiptsSkipped = Event{
 	ID:                       "contextfabric.prior_subject_receipts_skipped",
@@ -4986,6 +5072,11 @@ var All = []Event{
 	StructureReceipt,
 	StructureReceiptVeto,
 	StructureExplicit,
+	PriorConsulted,
+	PriorDegradationPointerDangling,
+	PriorDegradation,
+	ProjectedRowsCount,
+	ProjectedRowsByFactKind,
 	QuestionFamilyResolution,
 	HealthDailyHealthCapCut,
 	DeficiencyRuleBasisDayAbsent,
