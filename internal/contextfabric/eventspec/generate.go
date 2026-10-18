@@ -652,7 +652,7 @@ type jsonEvent struct {
 	Attribution        []string    `json:"attribution"`
 	BoundedAggregation string      `json:"bounded_aggregation"`
 	MaxLinesPerScope   int         `json:"max_lines_per_scope,omitempty"`
-	DataDependentBound string      `json:"data_dependent_bound,omitempty"`
+	UnboundedReason    string      `json:"unbounded_reason,omitempty"`
 	Fields             []jsonField `json:"fields"`
 }
 
@@ -689,7 +689,7 @@ func generateSchema() ([]byte, error) {
 			Attribution:        e.Attribution,
 			BoundedAggregation: e.BoundedAggregation,
 			MaxLinesPerScope:   e.MaxLinesPerScope,
-			DataDependentBound: e.DataDependentBound,
+			UnboundedReason:    e.UnboundedReason,
 			Fields:             toJSONFields(e.Fields),
 		})
 	}
