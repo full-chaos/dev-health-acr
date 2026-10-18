@@ -342,6 +342,12 @@ func goVarName(e Event) string {
 		return "CategoryFactComposition"
 	case PeriodDeltaComposition.ID:
 		return "PeriodDeltaComposition"
+	case PlanNarrowing.ID:
+		return "PlanNarrowing"
+	case CohortNarrowingDisclosure.ID:
+		return "CohortNarrowingDisclosure"
+	case GroupedCohortCompleteness.ID:
+		return "GroupedCohortCompleteness"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:

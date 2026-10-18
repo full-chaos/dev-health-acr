@@ -374,7 +374,25 @@ func TestEveryStructureLineCertifiesWithoutARequestID(t *testing.T) {
 			})
 		}},
 	}...)
-	if len(cases) != 25 {
+	planEvent := contextfabric.PlanNarrowingEvent{Family: contextfabric.QuestionFamilyUnclassified, FamilyVersion: contextfabric.QuestionFamilyTableVersion, Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Overrun: contractsv1.ContextFabricBudgetFits, LedgerStatus: contractsv1.ContextFabricLedgerReconciled, QuotaAvailability: contextfabric.ItemQuotaBounded}
+	cases = append(cases, []struct {
+		event eventspec.Event
+		emit  func(contextfabric.SlogEngineTelemetry, context.Context)
+	}{
+		{eventspec.PlanNarrowing, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordPlanNarrowing(c, principalOrg1, planEvent)
+		}},
+		{eventspec.SynthesisRetrySelection, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordSynthesisRetrySelection(c, principalOrg1, planEvent)
+		}},
+		{eventspec.CohortNarrowingDisclosure, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordCohortNarrowingDisclosure(c, principalOrg1, contextfabric.CohortNarrowingDisclosureEvent{Family: contextfabric.QuestionFamilyUnclassified, Kind: contextfabric.SubjectProject, Outcome: contextfabric.CohortNarrowingDisclosed, Declared: 11, Served: 10, Steps: 1})
+		}},
+		{eventspec.GroupedCohortCompleteness, func(s contextfabric.SlogEngineTelemetry, c context.Context) {
+			s.RecordGroupedCohortCompleteness(c, principalOrg1, contextfabric.GroupedCohortCompletenessEvent{Family: contextfabric.QuestionFamilyGroupedCohortStatus, GroupCount: 2})
+		}},
+	}...)
+	if len(cases) != 29 {
 		t.Fatalf("want one case per declared line, have %d", len(cases))
 	}
 	for _, tc := range cases {

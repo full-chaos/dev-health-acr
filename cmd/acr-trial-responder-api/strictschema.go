@@ -96,7 +96,7 @@ func stripNullFields(v any) any {
 // requirements, plus a list of human-readable notes describing every
 // rewrite it made. The notes name constructs and property names from the
 // SCHEMA's own structure only (Go type/field names via genkitruntime's
-// core.InferSchemaMap reflection) -- never request/response content -- so
+// inferSchemaMap reflection) -- never request/response content -- so
 // logging them carries no corpus-privacy risk, unlike everything else this
 // package logs.
 func normalizeForStrictSchema(schema any) (any, []string) {
