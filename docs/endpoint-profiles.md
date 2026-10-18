@@ -320,17 +320,24 @@ registration; a missing `go.mod` or a guard package that cannot be parsed. A
 found guard does not settle a gap: the guard says nothing about the path the
 walk did not read, so a protected row with any gap needs the hatch. The guard
 type is trusted only at the exact module-relative `internal/auth` import path.
-Local variables (`:=`, `=`, `var`) are followed only when every expression
-assigned to the name has the same resolvable type; a name assigned values of
-differing or unresolvable types is untyped, and a guard called through it is
-not seen. Type aliases of the guard type, and structs that embed it, are
-resolved. A value the walk cannot type in a
-handler or wrapper position is a gap too: `ServeHTTP` on a receiver of unknown
-type, a call of a function value (index element, call result, local variable)
-or of a handler-typed function parameter, when the call hands a `net/http`
-handler, response writer or request to it. Untyped function values that take
-no `net/http` value (a store lookup, a callback on plain data) are not
-handler positions and are not gaps.
+**The structural rule: typed cases are the allow-list.** In a handler body the
+walk follows only what it can type with certainty: the registering receiver,
+struct fields, parameters, locals whose every assignment (`:=`, `=`, `var`) has
+the same resolvable type, type aliases and embedded structs. Anything else in
+a handler position is a gap. Concretely, a call is a gap when it invokes a
+method whose name belongs to a handler wrapper declared in this module (derived
+from the parsed declarations: methods of the api and guard packages that return
+`http.Handler`, plus `ServeHTTP`) on a receiver whose type is not established,
+including a local assigned values of differing or unresolvable types; when it
+invokes `ServeHTTP` on anything but a `net/http` handler or a module type with a
+readable `ServeHTTP`; when it calls an untyped function value, or a function
+parameter that takes or returns a handler, response writer or request, and is
+handed such a value; when it passes a handler to a package outside the module;
+or when it goes through an interface whose method returns `http.Handler`. Calls
+that are not handler wrappers (store reads, logging, encoding) are data and are
+not gaps. Boundary: a guard reached only by a function value that closes over
+the writer and request elsewhere and is then called with no `net/http` value is
+outside what a lexical walk can see.
 
 The reconciliation is **lexical**. It states that a guard call sits in the
 route's wrapper chain. It does not prove control flow reaches the call, that

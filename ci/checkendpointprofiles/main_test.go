@@ -2357,7 +2357,7 @@ func writeChainApp(t *testing.T, root, wrapperBody, extraRoutes, extraDecls stri
 	seedFixtureGuardPackage(t, root)
 	writeFile(t, filepath.Join(root, fixtureAppFile),
 		"package api\n\n"+
-			"import (\n\t\"net/http\"\n\n\t\"example.test/fx/internal/auth\"\n)\n\n"+
+			"import (\n\t\"net/http\"\n\n\t\"example.test/fx/internal/auth\"\n\t\"foreign.example/lib/foreign\"\n)\n\n"+
 			"type App struct{ authenticator *auth.Authenticator }\n\n"+
 			"func (a *App) Handler() http.Handler {\n"+
 			"\tmux := http.NewServeMux()\n"+
@@ -2753,4 +2753,83 @@ func (a *App) viaEmbed(e *embedder, next http.Handler) http.Handler { return e.M
 			}
 		})
 	}
+}
+
+func TestWrapperChainStructuralCutUnestablishedReceiversFailClosed(t *testing.T) {
+	const decls = `
+type other struct{}
+
+func (o *other) RequireScope(required string, next http.Handler) http.Handler { return next }
+
+func pickAuth() *other { return nil }
+
+func (a *App) differingLocal() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g := a.authenticator
+		g = nil
+		g.RequireScope("x", nil)
+	})
+}
+
+func (a *App) callResultReceiver() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pickAuth().RequireScope("x", nil)
+	})
+}
+
+func (a *App) plainDataCall() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		table := []string{}
+		_ = table
+		err := error(nil)
+		if err != nil {
+			_ = err.Error()
+		}
+	})
+}
+
+func (a *App) sameTypeTwice() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g := a.authenticator
+		g = a.authenticator
+		g.RequireScope("x", nil)
+	})
+}
+`
+	for _, tc := range []struct{ name, route, handler, kind, want string }{
+		{"local assigned differing types", "/dif", `a.differingLocal()`, "gap", "call of RequireScope on a receiver of unestablished type g"},
+		{"call-result receiver", "/res", `a.callResultReceiver()`, "gap", "call of RequireScope on a receiver of unestablished type"},
+		{"non-wrapper method on an untyped value is data", "/dat", `a.plainDataCall()`, "clean", ""},
+		{"local assigned the same type twice is established", "/sam", `a.sameTypeTwice()`, "guard", "Authenticator.RequireScope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := "\tmux.Handle(\"POST " + tc.route + "\", " + tc.handler + ")\n"
+			pub := extraRow("POST "+tc.route, "POST", tc.route, nil)
+			f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), pub)
+			errs := f.check(t)
+			switch tc.kind {
+			case "gap":
+				mustContain(t, errs, "UNRESOLVED WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+			case "guard":
+				mustContain(t, errs, "CLASSIFICATION CONTRADICTS WRAPPER CHAIN", "POST "+tc.route+" [", tc.want)
+			default:
+				if len(errs) != 0 {
+					t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+				}
+			}
+		})
+	}
+}
+
+func TestWrapperChainHandlerPassedOutsideTheModuleFromAHandlerBodyIsAGap(t *testing.T) {
+	const decls = `
+func (a *App) leaf(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		foreign.Serve(next, w, r)
+	})
+}
+`
+	extra := "\tmux.Handle(\"POST /ext\", a.leaf(http.HandlerFunc(healthzHandler)))\n"
+	f := chainFixture(t, fixtureGuardedBody, extra, decls, healthzChainRow(), capabilitiesRow(nil), extraRow("POST /ext", "POST", "/ext", nil))
+	mustContain(t, f.check(t), "UNRESOLVED WRAPPER CHAIN", "POST /ext [", "handler passed to foreign.Serve outside the module")
 }

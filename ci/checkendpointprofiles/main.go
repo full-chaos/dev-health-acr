@@ -1557,15 +1557,16 @@ func newChainCtx(fn chainFunc, env map[string]string) chainCtx {
 }
 
 type chainWalker struct {
-	root    string
-	api     *chainPkg
-	pkgs    map[string]*chainPkg
-	pkgErrs map[string]error
-	v       chainVerdict
-	seen    map[*ast.FuncDecl]bool
-	active  map[*ast.FuncDecl]bool
-	cut     bool
-	rejects map[string]bool
+	root         string
+	api          *chainPkg
+	pkgs         map[string]*chainPkg
+	pkgErrs      map[string]error
+	v            chainVerdict
+	seen         map[*ast.FuncDecl]bool
+	active       map[*ast.FuncDecl]bool
+	cut          bool
+	rejects      map[string]bool
+	handlerNames map[string]bool
 }
 
 func (w *chainWalker) pkgFor(path string) *chainPkg {
@@ -2007,6 +2008,78 @@ func (w *chainWalker) interfaceWrapperCall(c chainCtx, call *ast.CallExpr) (stri
 	return "", false
 }
 
+// handlerMethodNames is the set of method names, derived from the parsed
+// declarations (never listed), that wrap or serve a handler: every method of the
+// api and guard packages whose single result is http.Handler, plus ServeHTTP.
+// A call of such a name on a receiver whose type the walk cannot establish
+// could be the guard, so it is a gap: the walk's typed cases are the allow-list
+// and everything else in a handler position fails closed.
+func (w *chainWalker) handlerMethodNames() map[string]bool {
+	if w.handlerNames != nil {
+		return w.handlerNames
+	}
+	names := map[string]bool{"ServeHTTP": true}
+	for _, path := range []string{w.api.path, moduleOf(w.root) + guardPkgSuffix} {
+		p := w.pkgFor(path)
+		if p == nil {
+			continue
+		}
+		for key, m := range p.methods {
+			if w.returnsHandler(m) {
+				names[key[strings.Index(key, ".")+1:]] = true
+			}
+		}
+	}
+	w.handlerNames = names
+	return names
+}
+
+func (w *chainWalker) isImportIdent(c chainCtx, id *ast.Ident) bool {
+	if _, local := c.locals[id.Name]; local {
+		return false
+	}
+	if _, param := c.params[id.Name]; param {
+		return false
+	}
+	return importPathOf(c.fn.file, id.Name) != ""
+}
+
+// unestablishedWrapperCall reports (a) a handler-wrapper method name called on a
+// receiver whose type is not established, including a local whose assignments
+// type differently or not at all, and (b) a call into a package outside the
+// module that is handed a net/http handler.
+func (w *chainWalker) unestablishedWrapperCall(c chainCtx, call *ast.CallExpr) (string, bool) {
+	s, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := s.X.(*ast.Ident); ok && w.isImportIdent(c, id) {
+		path := importPathOf(c.fn.file, id.Name)
+		if path != "net/http" && !strings.HasPrefix(path, moduleOf(w.root)+"/") {
+			for _, a := range call.Args {
+				switch a := a.(type) {
+				case *ast.Ident:
+					if t, ok := c.params[a.Name]; ok && (w.isNetHTTP(c.fn, t, "Handler") || w.isNetHTTP(c.fn, t, "HandlerFunc")) {
+						return "handler passed to " + w.text(c.fn, call.Fun, nil) + " outside the module", true
+					}
+				case *ast.CallExpr:
+					if w.isNetHTTP(c.fn, a.Fun, "HandlerFunc") {
+						return "handler passed to " + w.text(c.fn, call.Fun, nil) + " outside the module", true
+					}
+				}
+			}
+		}
+		return "", false
+	}
+	if !w.handlerMethodNames()[s.Sel.Name] {
+		return "", false
+	}
+	if _, established := w.typeOf(c, s.X); established {
+		return "", false
+	}
+	return "call of " + s.Sel.Name + " on a receiver of unestablished type " + w.text(c.fn, s.X, nil), true
+}
+
 // untypedHandlerCall reports a call in a handler body that invokes a value the
 // walk cannot type, in a position where that value is a handler or a wrapper:
 // ServeHTTP on a receiver of unknown type, a call of a function value (index
@@ -2135,6 +2208,10 @@ func (w *chainWalker) scan(c chainCtx, body ast.Node, depth int) {
 			return true
 		}
 		if what, ok := w.untypedHandlerCall(c, call); ok {
+			w.gap("%s", what)
+			return true
+		}
+		if what, ok := w.unestablishedWrapperCall(c, call); ok {
 			w.gap("%s", what)
 			return true
 		}
