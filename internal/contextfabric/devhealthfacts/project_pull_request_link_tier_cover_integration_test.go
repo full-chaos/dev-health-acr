@@ -61,7 +61,13 @@ func (s *linkTierSeeder) link(workItemID string, number uint32, tier string) {
 
 func expandPullRequests(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, limit int, origins ...contextfabric.SubjectRef) contextfabric.FactScopeExpansionResult {
 	t.Helper()
+	return expandPullRequestsAt(t, ctx, query, orgID, limit, contextfabric.TimeContext{}, origins...)
+}
+
+func expandPullRequestsAt(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, limit int, timeContext contextfabric.TimeContext, origins ...contextfabric.SubjectRef) contextfabric.FactScopeExpansionResult {
+	t.Helper()
 	result, err := devhealthfacts.NewScopeExpander(query).ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+		TimeContext:     timeContext,
 		Principal:       storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}},
 		RequirementKind: contextfabric.FactPullRequests,
 		Origins:         origins,
@@ -196,5 +202,39 @@ func TestScopeExpander_ProjectToPullRequest_ProviderQualifiedRootsShareARawID(t 
 	}
 	if !roots[gitlab.CanonicalID] || !roots[github.CanonicalID] {
 		t.Fatalf("repository roots of pull request 6 = %v, want both providers' roots", roots)
+	}
+}
+
+// The historical (valid_time) repository hop names each provider's root when
+// two providers share one raw project id.
+func TestScopeExpander_ProjectToPullRequest_AsOfProviderQualifiedRootsShareARawID(t *testing.T) {
+	ctx := context.Background()
+	orgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
+	at := time.Now().UTC()
+	seedChaos4099Fixture(t, ctx, direct, at.Add(-48*time.Hour), orgID)
+	s := &linkTierSeeder{t: t, ctx: ctx, direct: direct, orgID: orgID, at: at.Add(-48 * time.Hour), repoID: chaos4099GitLabRepoID}
+	const rawID = "shared-raw-project-id"
+	gitlab := s.project("gitlab", rawID, "gl-shared-key", "gitlab shared")
+	github := s.project("github", rawID, "gh-shared-key", "github shared")
+	s.issue("gitlab:shared#1", "gl-shared-key")
+	s.issue("github:shared#1", "gh-shared-key")
+	s.pullRequest(6)
+	s.link("gitlab:shared#1", 6, "native")
+	s.link("github:shared#1", 6, "native")
+
+	asOf := at
+	result := expandPullRequestsAt(t, ctx, query, orgID, 20, contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}, github, gitlab)
+	roots := map[string]bool{}
+	for _, target := range result.Targets {
+		if target.CanonicalID != "pull_request:"+chaos4099GitLabRepoID+":6" {
+			continue
+		}
+		for _, root := range result.TargetRoots[contextfabric.FactSubjectKey(target)] {
+			roots[root.CanonicalID] = true
+		}
+	}
+	if !roots[gitlab.CanonicalID] || !roots[github.CanonicalID] {
+		t.Fatalf("as-of repository roots of pull request 6 = %v, want both providers' roots", roots)
 	}
 }
