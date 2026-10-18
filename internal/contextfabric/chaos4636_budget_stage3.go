@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -542,7 +543,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		refuse := func() (InvestigationResult, assemblyTelemetry, error) {
 			var tried factsOnlyTry
 			if factsOnlyDeclinedReason(declined) && e.factsOnlyEligible(ctx, params, result) {
-				served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, declined, before)
+				served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, declined, before, false)
 				if notServed == FactsOnlyServedOrUntried {
 					return served, pending, nil
 				}
@@ -652,9 +653,29 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// narration.
 	// This records execution, independently of whether the retry fit.
 	firstPass.RetryAttempted = true
-	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
+	retryCtx, cancelRetry := context.WithCancel(ctx)
+	if len(cutRemoved) == 0 {
+		cancelRetry()
+		retryCtx, cancelRetry = e.retryContext(ctx)
+	}
+	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(retryCtx, principal, retryParams)
+	retryCtxExpired := retryCtx.Err() != nil
+	cancelRetry()
 	retryPending.RetryAttempted = firstPass.RetryAttempted
 	budget.MaxSerializedBytes = answerFitBytes(params.Request, plan.Budget.MaxSerializedBytes, retryPending.ClientSynthesisInput)
+	if retryErr != nil && retryCtxExpired && ctx.Err() == nil && len(cutRemoved) == 0 && factsOnlyDeclinedReason(RetryDeclinedInsufficientDeadline) && e.factsOnlyEligible(ctx, params, result) {
+		// The retry lost the deadline race, but the request still has its
+		// tail. The first pass was a valid model answer: serve its facts
+		// rather than the timeout, and say so loudly.
+		served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, RetryDeclinedInsufficientDeadline, before, true)
+		slog.Default().InfoContext(ctx, "context fabric narrowing retry lost the deadline",
+			"org_id", SanitizeLogAttr(principal.OrgID), "overrun", string(overrun),
+			"members_before", before, "members_after", after,
+			"facts_only_served", notServed == FactsOnlyServedOrUntried, "facts_only_declined", string(notServed))
+		if notServed == FactsOnlyServedOrUntried {
+			return served, pending, nil
+		}
+	}
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -987,7 +1008,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// they fit. Before the refusal event, for the same reason as the ceiling fit above.
 	var retryFactsOnly factsOnlyTry
 	if retryOverrun != contractsv1.ContextFabricBudgetFits && len(cutRemoved) == 0 && e.factsOnlyEligible(ctx, params, result) {
-		served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, RetryDeclinedNotApplicable, before)
+		served, pending, notServed := e.serveFactsOnly(ctx, principal, plan, params, budget, grouped, RetryDeclinedNotApplicable, before, false)
 		if notServed == FactsOnlyServedOrUntried {
 			return served, pending, nil
 		}
@@ -1184,6 +1205,26 @@ func narrowedInputOver(params synthesisAssemblyParams, graph GraphContext, facts
 		Before: before, After: len(kept), Narrow: true, Basis: basis, Retention: retention,
 	}
 }
+
+// retryContext bounds the narrowing retry so it ends before the request does,
+// leaving a tail in which the first pass's facts can still be served. With no
+// deadline, or no reserve, the retry keeps the caller's context.
+func (e *Engine) retryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, hasDeadline := ctx.Deadline()
+	tail := min(e.synthesisDeadlineReserve/retryTailDivisor, retryTailMax)
+	if !hasDeadline || tail <= 0 || time.Until(deadline) <= tail {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline.Add(-tail))
+}
+
+// retryTailDivisor: the tail kept after a retry is this fraction of the
+// synthesis deadline reserve.
+const retryTailDivisor = 10
+
+// retryTailMax bounds the tail: composing the facts-only answer calls no model,
+// so a long tail would only cut off retries that could still have finished.
+const retryTailMax = 2 * time.Second
 
 // retryDeadlineAvailable reports whether enough of the request deadline
 // remains to run a second synthesis.

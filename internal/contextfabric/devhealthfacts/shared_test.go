@@ -702,3 +702,51 @@ func TestQueryVersionMovedPastTheOverlapInvestmentWindow(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v244 or later -- an answer saved when an Investment read counted a work unit in every window it overlapped must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheUnresolvedCandidateReceipt(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 245 {
+		t.Fatalf("QueryVersion = %q, want v245 or later -- an answer saved when a redeemed candidate receipt left the subject unresolved must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+func TestQueryVersionMovedPastTheCommitmentDueDateTable(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 246 {
+		t.Fatalf("QueryVersion = %q, want v246 or later -- an answer saved when a commitment fact had no due date table must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+func TestQueryVersionMovedPastTheProjectPopulationRead(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 247 {
+		t.Fatalf("QueryVersion = %q, want v247 or later -- an answer saved when a project past the shared scan budget was omitted must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+func TestQueryVersionMovedPastTheGraphQLQueryPageCut(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 248 {
+		t.Fatalf("QueryVersion = %q, want v248 or later -- an answer saved when an over-budget graphql_query list was refused must not be reused", devhealthfacts.QueryVersion)
+	}
+}

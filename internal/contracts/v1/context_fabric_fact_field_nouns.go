@@ -79,7 +79,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"rule_computed_at", "rule_id", "rule_version", "scope", "scope_id", "scope_name", "severity", "severity_as_of",
 		"status_since", "success_criterion", "team_id", "team_name", "title", "unit_from", "unit_to", "window_end",
 		"window_start", "work_scope_id", "work_unit_id", "sizing_note",
-		"latest_sprint_end", "next_sprint_end", "state_source", "target_date", "target_date_provider",
+		"latest_sprint_end", "next_sprint_end", "state_source", "target_date", "target_date_provider", "due_at", "work_item_id",
 	} {
 		classes[name] = StringFieldText
 	}

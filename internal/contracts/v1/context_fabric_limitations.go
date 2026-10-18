@@ -832,6 +832,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,
 		ContextFabricBudgetTrimClaimedFactsLimitation,
+		ContextFabricUngroundedItemsDroppedLimitation,
 		ContextFabricSingleSubjectCountLimitation,
 		ContextFabricSubjectTermsFromFrameLimitation,
 		ContextFabricSubjectTermsMissingLimitation,
@@ -945,7 +946,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricStatedRangeConflictLimitation(limitation) ||
 		IsContextFabricComparisonPeriodUnreadLimitation(limitation) ||
 		IsContextFabricCoverageEntriesDroppedLimitation(limitation) ||
-		IsContextFabricProjectStatusMissingLimitation(limitation)
+		IsContextFabricProjectStatusMissingLimitation(limitation) ||
+		IsContextFabricWorkItemAuthorizationGapLimitation(limitation)
 }
 
 // ContextFabricStatedRangeConflictLimitation is served when a turn ran on the
@@ -1329,3 +1331,32 @@ func IsContextFabricWorkItemRepositoryLimitation(limitation string) bool {
 // was floored to degraded because the retrieved population was truncated and
 // no member of it was served.
 const ContextFabricTruncatedPopulationNoMemberLimitation = "The population for this question was truncated and no member of it was served, so this answer shows none of it."
+
+var workItemAuthorizationGapLimitationPattern = regexp.MustCompile(`^Work items exist in this (project|repository) that are outside this principal's authorized scope: (?:([1-9]\d{0,9}) work items were observed and none are authorized, so no work item can be listed or counted|the census stopped at its bound, with at least ([1-9]\d{0,9}) work items authorized and at least ([1-9]\d{0,9}) more denied and not counted|([1-9]\d{0,9}) work items are authorized and ([1-9]\d{0,9}) more are denied and are not counted)\.$`)
+
+// ContextFabricWorkItemAuthorizationGapLimitation composes the disclosure that
+// a work-item population holds members outside the principal's authorized
+// scope. It is the sole composer: the recogniser below parses exactly these
+// shapes, so a sentence written anywhere else would be displaceable.
+func ContextFabricWorkItemAuthorizationGapLimitation(repository bool, authorized, denied int, lowerBound bool) string {
+	noun := "project"
+	if repository {
+		noun = "repository"
+	}
+	prefix := "Work items exist in this " + noun + " that are outside this principal's authorized scope: "
+	switch {
+	case authorized == 0:
+		return prefix + strconv.Itoa(denied) + " work items were observed and none are authorized, so no work item can be listed or counted."
+	case lowerBound:
+		return prefix + "the census stopped at its bound, with at least " + strconv.Itoa(authorized) + " work items authorized and at least " + strconv.Itoa(denied) + " more denied and not counted."
+	default:
+		return prefix + strconv.Itoa(authorized) + " work items are authorized and " + strconv.Itoa(denied) + " more are denied and are not counted."
+	}
+}
+
+// IsContextFabricWorkItemAuthorizationGapLimitation reports whether a
+// limitation is one ContextFabricWorkItemAuthorizationGapLimitation could have
+// composed.
+func IsContextFabricWorkItemAuthorizationGapLimitation(limitation string) bool {
+	return workItemAuthorizationGapLimitationPattern.MatchString(limitation)
+}

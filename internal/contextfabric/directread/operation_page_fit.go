@@ -86,6 +86,37 @@ func (op *OperationPolicy) hasClientVariable() bool {
 	return false
 }
 
+// singleRootList is the path of the one list a free-form answer can be cut
+// at: the answer holds exactly one root field and, reached from it through
+// objects only, exactly one list. Anything else keeps the budget refusal.
+func singleRootList(data json.RawMessage) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var root map[string]any
+	if err := dec.Decode(&root); err != nil || len(root) != 1 {
+		return "", false
+	}
+	var found []string
+	var walk func(prefix string, node any)
+	walk = func(prefix string, node any) {
+		switch v := node.(type) {
+		case []any:
+			found = append(found, prefix)
+		case map[string]any:
+			for key, child := range v {
+				walk(prefix+"."+key, child)
+			}
+		}
+	}
+	for key, child := range root {
+		walk(key, child)
+	}
+	if len(found) != 1 {
+		return "", false
+	}
+	return found[0], true
+}
+
 // pageCut describes an answer cut to the largest whole-row page of its
 // primary list that fits the response budget.
 type pageCut struct {
@@ -268,7 +299,7 @@ func (c pageCut) statement(maxBytes int, op *OperationPolicy) string {
 	switch {
 	case c.fullBytes <= MaxOperationMaxBytes:
 		out += fmt.Sprintf(" Repeat the same call with max_bytes of at least %d to receive every row.", c.fullBytes)
-	case op.hasClientVariable():
+	case op == nil || op.hasClientVariable():
 		out += fmt.Sprintf(" The whole answer does not fit the largest max_bytes (%d): narrow the call with the operation's variables.", MaxOperationMaxBytes)
 	default:
 		out += fmt.Sprintf(" The whole answer does not fit the largest max_bytes (%d) and this operation has no variable to narrow it.", MaxOperationMaxBytes)

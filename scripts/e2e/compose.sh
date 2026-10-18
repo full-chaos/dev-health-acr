@@ -701,13 +701,29 @@ expect_typed_http_error() {
   "$REPO_ROOT/scripts/e2e/validate-error-receipt.sh" "$expected_http_status" "$expected_code" "$http_status" "$response_body" || die "expected HTTP ${expected_http_status} response with typed ${expected_code} error"
 }
 
+run_oneshot() {
+  local service="$1" failure="$2" attempts=0 row state exit_code
+  compose up -d "$service" >/dev/null
+  while :; do
+    row="$(compose ps -a --format '{{.State}} {{.ExitCode}}' "$service" 2>/dev/null | head -1)"
+    state="${row%% *}"
+    exit_code="${row##* }"
+    if [[ "$state" == 'exited' ]]; then
+      [[ "$exit_code" == '0' ]] && return 0
+      break
+    fi
+    attempts=$((attempts + 1))
+    [[ "$attempts" -lt 90 ]] || break
+    sleep 2
+  done
+  compose logs --no-color --tail 50 "$service" 2>&1 | redact_log || true
+  die "$failure (state=${state:-none} exit=${exit_code:-none})"
+}
+
 prepare_acr_database() {
-  compose up -d acr-db-init >/dev/null
-  compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'
-  compose up -d acr-migrate >/dev/null
-  compose wait acr-migrate >/dev/null || die 'ACR migration failed'
-  compose up -d acr-db-acl >/dev/null
-  compose wait acr-db-acl >/dev/null || die 'ACR runtime ACL reconciliation failed'
+  run_oneshot acr-db-init 'ACR role initialization failed'
+  run_oneshot acr-migrate 'ACR migration failed'
+  run_oneshot acr-db-acl 'ACR runtime ACL reconciliation failed'
 }
 
 run_failure() {
@@ -722,7 +738,7 @@ run_failure() {
     clickhouse-read-denied)
       start_happy; expect_clickhouse_readonly_denial; SAFE_BOUNDARY='read-only ClickHouse user rejected an E2E-only granted insert with exact code 164 before it could mutate evidence' ;;
     migration-failure)
-      bootstrap_ops; compose up -d acr-db-init >/dev/null; compose wait acr-db-init >/dev/null || die 'ACR role initialization failed'; migration_one_checksum="$(openssl dgst -sha256 "$REPO_ROOT/migrations/postgres/0001_acr_core.sql")"; migration_one_checksum="${migration_one_checksum##* }"; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 < "$REPO_ROOT/migrations/postgres/0001_acr_core.sql" >/dev/null; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c "CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); INSERT INTO acr.schema_migrations (version, name, checksum) VALUES (1, '0001_acr_core.sql', '${migration_one_checksum}'); ALTER TABLE acr.agent_episodes ADD CONSTRAINT agent_episodes_org_repo_idempotency_key_key CHECK (false);" >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
+      bootstrap_ops; run_oneshot acr-db-init 'ACR role initialization failed'; migration_one_checksum="$(openssl dgst -sha256 "$REPO_ROOT/migrations/postgres/0001_acr_core.sql")"; migration_one_checksum="${migration_one_checksum##* }"; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 < "$REPO_ROOT/migrations/postgres/0001_acr_core.sql" >/dev/null; compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/migration-password")" postgres psql -h postgres -U "$ACR_MIGRATION_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 -c "CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); INSERT INTO acr.schema_migrations (version, name, checksum) VALUES (1, '0001_acr_core.sql', '${migration_one_checksum}'); ALTER TABLE acr.agent_episodes ADD CONSTRAINT agent_episodes_org_repo_idempotency_key_key CHECK (false);" >/dev/null; expect_failure 1 'apply migration 2' compose run --rm --no-deps acr-migrate; partial_version="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 -c 'SELECT version FROM acr.schema_migrations ORDER BY version')"; [[ "$partial_version" == '1' ]] || die 'migration failure did not leave the expected partial state'; [[ -z "$(compose ps -q acr-api)" ]] || die 'API started despite failed migration'; SAFE_BOUNDARY='migration 2 failed against deliberate incompatible DDL; migration 1 remains as partial state and API stayed gated' ;;
   esac
   note "expected failure verified: ${SAFE_BOUNDARY}"
   return 1

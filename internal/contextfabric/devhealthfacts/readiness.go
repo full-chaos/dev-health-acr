@@ -343,6 +343,44 @@ ORDER BY p.id, ec.day DESC`)
 	return byProject, scanErr
 }
 
+type readinessProjectPopulation struct {
+	rows, teams int64
+}
+
+// queryProjectReadinessPopulation is the project population of
+// readProjectReadiness: one row per project from a server-side aggregate over
+// the same latest-row-per-scope rows the shared reader scans, so a project
+// whose rows sort past that scan's row budget is still known, with its
+// uncapped row and team counts. Inactive teams are filtered the way the
+// reader's result is filtered afterwards.
+func (p *ReadinessProvider) queryProjectReadinessPopulation(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]readinessProjectPopulation, order []string, rowCount int, err error) {
+	statement := withProjectPopulationLimit(`SELECT concat(p.provider, ':', p.id), toInt64(count()), toInt64(uniqExactIf(ec.team_key, ec.has_team = 1))
+FROM ` + projectIdentityJoinSQL() + `
+INNER JOIN (
+	SELECT toUInt8(isNotNull(team_id)) AS has_team, ifNull(team_id, '') AS team_key, work_scope_id, provider,
+		row_number() OVER (PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC, computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size, ifNull(ratio, -1))) DESC) AS rn
+	FROM estimate_coverage_metrics_daily FINAL
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
+) AS ec ON ` + projectIdentityMatchSQL("ec", "work_scope_id") + ` AND ec.rn = 1
+GROUP BY p.provider, p.id
+ORDER BY p.provider, p.id -- project population`)
+	byProject = make(map[string]readinessProjectPopulation)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var key string
+		var pop readinessProjectPopulation
+		if err := row.Scan(&key, &pop.rows, &pop.teams); err != nil {
+			return err
+		}
+		if _, seen := byProject[key]; !seen {
+			order = append(order, key)
+		}
+		byProject[key] = pop
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, order, rowCount, scanErr
+}
+
 // readProjectReadiness rolls FactReadiness up for a project through
 // projects -> team_project_ownership -> estimate_coverage_metrics_daily:
 // every team owning the project contributes its own latest per-(work_scope,
@@ -439,9 +477,30 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		}
 		byProject[r.ProjectSubjectKey] = append(byProject[r.ProjectSubjectKey], r)
 	}
+	// The population is the aggregate's, never the capped reader scan's: the
+	// scan shares one row budget across every requested project, so a project
+	// sorting late can be absent from it. A project the scan reached is kept
+	// even when the aggregate does not list it.
+	populationByProject, populationOrder, populationRowCount, populationErr := p.queryProjectReadinessPopulation(ctx, orgID, ids, timeBound)
+	if populationErr != nil {
+		return 0, rejected, false, populationErr
+	}
+	if populationRowCount >= maxProjectPopulationProbe {
+		rowCount = max(rowCount, maxFactRowsPerQuery)
+	}
+	emissionOrder := append([]string(nil), populationOrder...)
 	for _, projectKey := range projectOrder {
+		if _, known := populationByProject[projectKey]; !known {
+			emissionOrder = append(emissionOrder, projectKey)
+		}
+	}
+	for _, projectKey := range emissionOrder {
 		rows := byProject[projectKey]
-		subject := bySubject[projectKey]
+		subject, known := bySubject[projectKey]
+		if !known {
+			continue
+		}
+		population, hasPopulation := populationByProject[projectKey]
 		seenTeamScope := make(map[string]bool, len(rows))
 		seenTeams := make(map[string]bool, len(rows))
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
@@ -478,15 +537,20 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 			}
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
-		if len(teamRows) == 0 {
+		if len(teamRows) == 0 && !hasPopulation {
 			continue
 		}
 		var omitted int
 		teamRows, omitted = capFactValueRows(teamRows)
+		teamCount := int64(len(seenTeams))
+		if hasPopulation {
+			omitted += max(0, int(population.rows)-len(teamRows)-omitted)
+			teamCount = population.teams
+		}
 		breakdownTruncated = breakdownTruncated || omitted > 0
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis": contextfabric.StringFactValue("project_work_scope_breakdown"),
-			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			"team_count":   contextfabric.IntegerFactValue(teamCount),
 			// CHAOS-4645 F3 FIX: "basis" moves from a per-row column
 			// (constant "estimate_coverage" on every team_breakdown row) to
 			// this sibling scalar field on the fact itself -- the Fable F3
@@ -504,7 +568,9 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 			// provider, day] -- "basis" dropped (see above); dedupeKey above
 			// already partitions on (team_id, work_scope_id, provider), so
 			// Key distinctness is unaffected by its removal.
-			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+		}
+		if len(teamRows) > 0 {
+			fields["team_breakdown"] = contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"team_id", "team_name", "work_scope_id", "provider", "day"},
 				Measures: []string{
@@ -512,7 +578,10 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 				},
 				Grain: timeBound.effectiveGrain(grainDaily),
 				Rows:  teamRows,
-			}),
+			})
+		}
+		if omitted > 0 {
+			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		// codex CHAOS-4645 round-1 P2: see readTeamReadiness's identical note.
 		if dailyTable, ok, dailyOmitted := readinessDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {

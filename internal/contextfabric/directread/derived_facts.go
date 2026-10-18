@@ -16,6 +16,7 @@ type ReachedFrom struct {
 	Kind        string `json:"kind"`
 	CanonicalID string `json:"canonical_id"`
 	Basis       string `json:"basis"`
+	LinkTier    string `json:"link_tier,omitempty"`
 }
 
 // derivedExpansion is one (kind, origin kind) scope decision.
@@ -89,7 +90,7 @@ func newDerivedIndex(scope *contextfabric.FactReadScope, admitted []contextfabri
 			index.byRoot[kind] = map[string][]contextfabric.SubjectRef{}
 		}
 		targetKey, rootKey := contextfabric.FactSubjectKey(derivation.Target), contextfabric.FactSubjectKey(root)
-		reach := ReachedFrom{Kind: string(root.Kind), CanonicalID: root.CanonicalID, Basis: string(derivation.Basis)}
+		reach := ReachedFrom{Kind: string(root.Kind), CanonicalID: root.CanonicalID, Basis: string(derivation.Basis), LinkTier: derivation.LinkTier}
 		if !slices.Contains(index.targets[kind][targetKey], reach) {
 			index.targets[kind][targetKey] = append(index.targets[kind][targetKey], reach)
 		}

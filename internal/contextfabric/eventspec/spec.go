@@ -5531,6 +5531,7 @@ var ConfirmedNeedLedger = Event{
 		{Key: "substitution_parent_chain", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionParentChainTokens},
 		{Key: "substitution_parent_chain_depth", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "substitution_parent_chain_error", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionChainErrorTokens},
+		{Key: "candidate_hint_evicted", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

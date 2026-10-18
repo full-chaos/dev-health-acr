@@ -100,6 +100,7 @@ const (
 	GraphQLQueryLogMessage    = "context fabric graphql query"
 	GraphQLRowsForeignLog     = "context fabric graphql query refused a row outside the grant"
 	GraphQLPathsRemovedLog    = "context fabric graphql query removed unselected response paths"
+	GraphQLPageCutLog         = "context fabric graphql query page cut"
 	GraphQLListenerRefusedLog = "context fabric graphql query was refused by the MCP listener"
 	graphqlRebuiltOperation   = "AcrGraphQLQuery"
 	graphqlUnknownRootField   = "unknown"
@@ -209,6 +210,7 @@ type GraphQLQueryRead struct {
 	RowsChecked   int
 	RowsForeign   int
 	PathsRemoved  int
+	PageCut       bool
 	Completeness  Completeness
 	Result        ResultState
 	Bytes         int
@@ -249,6 +251,7 @@ type GraphQLRunner struct {
 
 	rowsForeignTotal  atomic.Int64
 	pathsRemovedTotal atomic.Int64
+	pageCutTotal      atomic.Int64
 }
 
 // ErrGraphQLRunnerNotConfigured is returned for a runner without its parts.
@@ -288,9 +291,9 @@ func (silentOperationRecorder) RecordOperationRead(context.Context, storage.Prin
 }
 
 // Counters returns the process totals of foreign rows refused and response
-// values removed. Both must stay 0.
+// values removed (both must stay 0) and of answers cut to a page (expected).
 func (r *GraphQLRunner) Counters() OperationRunnerCounters {
-	return OperationRunnerCounters{RowsForeign: r.rowsForeignTotal.Load(), PathsRemoved: r.pathsRemovedTotal.Load()}
+	return OperationRunnerCounters{RowsForeign: r.rowsForeignTotal.Load(), PathsRemoved: r.pathsRemovedTotal.Load(), PageCuts: r.pageCutTotal.Load()}
 }
 
 // Policy returns the runner's root-field policy.
@@ -1327,12 +1330,43 @@ func (x *gqlRun) answer(ctx context.Context, planned []plannedRoot, data []byte,
 	}
 	measured := len(final)
 	x.read.Bytes = measured
+	var cut *pageCut
+	if measured > maxBytes {
+		if listPath, has := singleRootList(final); has {
+			if fit, ok := fitListPage(final, listPath, maxBytes, nil); ok {
+				cut = &fit
+				final = fit.data
+				measured = len(final)
+				x.read.Bytes = measured
+				x.read.PageCut = true
+			}
+		}
+	}
 	if measured > maxBytes {
 		resp := x.refuse(RefusalResponseBudget, "the serialized data exceeds max_bytes; select fewer fields or narrow the window, the scope or the limit argument", "")
 		resp.Refusal.MeasuredBytes = measured
 		resp.Refusal.MaxBytes = maxBytes
 		x.resp = resp
 		return resp, nil
+	}
+	if cut != nil {
+		joined = &CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonPageCut}
+		for i := range results {
+			results[i].Completeness, results[i].CompletenessReason = CompletenessDeclaredPartial, ReasonPageCut
+		}
+		x.resp.Page.RowsReturned = cut.rowsReturned
+		x.resp.Page.RowsRead = cut.rowsRead
+		x.resp.Page.Cut = cut.statement(maxBytes, nil)
+		r.pageCutTotal.Add(1)
+		r.logger.InfoContext(ctx, GraphQLPageCutLog,
+			"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+			"list_path", contextfabric.SanitizeLogAttr(cut.path),
+			"rows_returned", cut.rowsReturned,
+			"rows_read", cut.rowsRead,
+			"full_bytes", cut.fullBytes,
+			"returned_bytes", measured,
+			"max_bytes", maxBytes,
+		)
 	}
 	completeness := CompletenessUnknown
 	if joined != nil {
