@@ -52,8 +52,9 @@ func (s *linkTierSeeder) pullRequest(number uint32) {
 
 func (s *linkTierSeeder) issue(workItemID, projectKey string) {
 	s.t.Helper()
-	s.exec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		workItemID, s.repoID, s.orgID, "issue", "open", "", "", projectKey, s.at)
+	provider, _, _ := strings.Cut(workItemID, ":")
+	s.exec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		workItemID, s.repoID, s.orgID, "issue", "open", "", "", provider, projectKey, s.at)
 }
 
 func (s *linkTierSeeder) link(workItemID string, number uint32, tier string) {
