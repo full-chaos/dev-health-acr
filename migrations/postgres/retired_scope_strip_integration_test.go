@@ -37,7 +37,8 @@ func TestRunner_upgradeTo54StripsTheRetiredContextAdminScope(t *testing.T) {
 	const requestUserHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, scopes, created_at)
 		VALUES ('cred-with-admin', $1, 'legacy', 'fcacr_aaaa', 'hash-1', '["context:read","context:admin","evidence:read"]', now()),
-		       ('cred-without-admin', $1, 'current', 'fcacr_bbbb', 'hash-2', '["context:read"]', now())`, orgID)
+		       ('cred-without-admin', $1, 'current', 'fcacr_bbbb', 'hash-2', '["context:read"]', now()),
+		       ('cred-only-admin', $1, 'admin only', 'fcacr_cccc', 'hash-3', '["context:admin"]', now())`, orgID)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, authorized_scopes, created_at, expires_at, poll_interval_seconds, issuance_provenance)
 		VALUES ($1, $2, 'pending', '["context:admin","context:read"]', timestamptz '2026-10-18 12:00:00+00', timestamptz '2026-10-18 12:10:00+00', 5, 'device_authorization'),
@@ -64,6 +65,7 @@ func TestRunner_upgradeTo54StripsTheRetiredContextAdminScope(t *testing.T) {
 	}
 	require.JSONEq(t, `["context:read","evidence:read"]`, scalar(`SELECT scopes::text FROM acr.client_credentials WHERE credential_id = 'cred-with-admin'`))
 	require.JSONEq(t, `["context:read"]`, scalar(`SELECT scopes::text FROM acr.client_credentials WHERE credential_id = 'cred-without-admin'`))
+	require.JSONEq(t, `[]`, scalar(`SELECT scopes::text FROM acr.client_credentials WHERE credential_id = 'cred-only-admin'`), "a credential whose only scope was the retired one is left with an empty scope set; self-rotate and self-revoke refuse it with the invalid-credential error")
 	require.JSONEq(t, `["context:read"]`, scalar(`SELECT authorized_scopes::text FROM acr.device_authorizations WHERE device_code_hash = $1`, deviceHash))
 	require.Equal(t, "context:read evidence:read", scalar(`SELECT scope FROM acr.oauth_device_grants WHERE device_code_hash = $1`, deviceHash))
 	require.Equal(t, "", scalar(`SELECT scope FROM acr.oauth_authorization_requests WHERE device_code_hash = $1`, requestDeviceHash))
