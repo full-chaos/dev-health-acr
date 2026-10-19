@@ -2912,3 +2912,55 @@ func (a *App) cycleLeaf() http.Handler {
 		})
 	}
 }
+
+var advisoryFieldsUnderTest = []string{
+	"action", "resource_resolver", "current_state_cache_behavior",
+	"entitlement_requirement", "disclosure_behavior", "token_shape",
+}
+
+func minimalValidFixtureCheck(t *testing.T, overrides map[string]any) []string {
+	t.Helper()
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(overrides)})
+	return f.check(t)
+}
+
+func TestGateCatchesEveryAdvisoryNullWithNoGapsEntry(t *testing.T) {
+	for _, field := range advisoryFieldsUnderTest {
+		errs := minimalValidFixtureCheck(t, map[string]any{field: nil, "gaps": []any{}})
+		mustContain(t, errs, "UNSTATED NULL", field)
+	}
+}
+
+func TestGateAcceptsEveryAdvisoryNullWithAFieldPrefixedGap(t *testing.T) {
+	for _, field := range advisoryFieldsUnderTest {
+		errs := minimalValidFixtureCheck(t, map[string]any{field: nil, "gaps": []any{field + ": searched internal/api; not determined."}})
+		if len(errs) != 0 {
+			t.Fatalf("%s: expected no errors, got:\n%s", field, strings.Join(errs, "\n"))
+		}
+	}
+}
+
+func TestGateAcceptsAnAbsentAdvisoryField(t *testing.T) {
+	errs := minimalValidFixtureCheck(t, map[string]any{"gaps": []any{}})
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestGateRefusesAGapThatOnlyMentionsTheFieldInProse(t *testing.T) {
+	for _, gap := range []string{"transaction details were not profiled", "no action was taken", "Action: not traced"} {
+		errs := minimalValidFixtureCheck(t, map[string]any{"action": nil, "gaps": []any{gap}})
+		mustContain(t, errs, "UNSTATED NULL", "action")
+	}
+}
+
+func TestGateRefusesASiblingPrefixNonStringAndOtherFieldGap(t *testing.T) {
+	for _, gaps := range [][]any{
+		{"action_scope: not traced"},
+		{float64(42)},
+		{"token_shape: not traced"},
+	} {
+		errs := minimalValidFixtureCheck(t, map[string]any{"action": nil, "gaps": gaps})
+		mustContain(t, errs, "UNSTATED NULL", "action")
+	}
+}
