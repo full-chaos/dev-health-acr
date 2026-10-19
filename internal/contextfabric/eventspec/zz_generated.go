@@ -2244,6 +2244,8 @@ type DirectReadAuthorizationFields struct {
 	InvalidCount              int
 	InactiveTeamCount         int
 	InactiveLookupFailures    int
+	RemovedTeamCount          int
+	RemovedLookupFailures     int
 	RefusedKinds              []string
 	ErrorClass                string
 	RequestID                 string
@@ -2260,7 +2262,7 @@ type DirectReadAuthorizationFields struct {
 
 // NewDirectReadAuthorizationFields is the generated constructor for DirectReadAuthorizationFields -- every
 // field DirectReadAuthorization.Fields declares is a required parameter.
-func NewDirectReadAuthorizationFields(orgID string, principalClass string, repositoryScopeCount int, decision string, reason string, subjectCount int, admittedCount int, deniedCount int, absentCount int, ownershipUnprovenCount int, organizationMismatchCount int, invalidCount int, inactiveTeamCount int, inactiveLookupFailures int, refusedKinds []string, errorClass string, requestID string) DirectReadAuthorizationFields {
+func NewDirectReadAuthorizationFields(orgID string, principalClass string, repositoryScopeCount int, decision string, reason string, subjectCount int, admittedCount int, deniedCount int, absentCount int, ownershipUnprovenCount int, organizationMismatchCount int, invalidCount int, inactiveTeamCount int, inactiveLookupFailures int, removedTeamCount int, removedLookupFailures int, refusedKinds []string, errorClass string, requestID string) DirectReadAuthorizationFields {
 	valid := true
 	if refusedKinds == nil {
 		valid = false
@@ -2280,6 +2282,8 @@ func NewDirectReadAuthorizationFields(orgID string, principalClass string, repos
 		InvalidCount:              invalidCount,
 		InactiveTeamCount:         inactiveTeamCount,
 		InactiveLookupFailures:    inactiveLookupFailures,
+		RemovedTeamCount:          removedTeamCount,
+		RemovedLookupFailures:     removedLookupFailures,
 		RefusedKinds:              refusedKinds,
 		ErrorClass:                errorClass,
 		RequestID:                 requestID,
@@ -2314,6 +2318,8 @@ func (f DirectReadAuthorizationFields) SlogArgs() []any {
 		"invalid_count", f.InvalidCount,
 		"inactive_team_count", f.InactiveTeamCount,
 		"inactive_lookup_failures", f.InactiveLookupFailures,
+		"removed_team_count", f.RemovedTeamCount,
+		"removed_lookup_failures", f.RemovedLookupFailures,
 		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),

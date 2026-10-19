@@ -244,7 +244,7 @@
     },
     "request_notes": {
       "type": "array",
-      "description": "Sentences true of one fact kind's read as a whole (for example how many of the requested subjects the read could not cover). A coverage row never carries them. Absent when no kind has a note.",
+      "description": "Sentences true of one fact kind's read as a whole (for example how many of the requested subjects the read could not cover). Kind team carries closed notes about the requested teams: team_removed (the provider proved an admitted team gone at its source; its facts are kept and may be out of date) and team_status_unavailable (the removed-team check failed, so an admitted team was not checked). A coverage row never carries them. Absent when no kind has a note.",
       "items": {
         "type": "object",
         "required": [

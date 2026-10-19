@@ -39,6 +39,11 @@ type Authorization struct {
 	// InactiveLookupFailures is 1 when the inactive-team lookup failed and its
 	// subjects were left absent.
 	InactiveLookupFailures int
+	// RemovedTeamCount counts admitted team subjects the provider proved gone.
+	RemovedTeamCount int
+	// RemovedLookupFailures is 1 when the removed-team lookup failed; its
+	// subjects are marked StatusUnchecked.
+	RemovedLookupFailures int
 	// RefusedKinds is the sorted set of known subject kinds that were not
 	// admitted.
 	RefusedKinds []string
@@ -62,6 +67,11 @@ type GatedSubject struct {
 	// ActiveTwinID is the canonical id of the active team that replaces an
 	// inactive one, when exactly one exists and the caller may read it.
 	ActiveTwinID string
+	// Removed is set on an admitted team whose node carries gone_at.
+	Removed bool
+	// StatusUnchecked is set on an admitted team the removed-team lookup could
+	// not check (the lookup failed). Missing is not live.
+	StatusUnchecked bool
 }
 
 // InactiveTeam is the decision of an InactiveTeamAuthority for one team
@@ -286,6 +296,7 @@ func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, r
 					}
 				}
 			}
+			g.markRemovedTeams(ctx, principal, binding, &decision, graphIndexes)
 		}
 	}
 	return finish(decision)
@@ -423,6 +434,68 @@ func (g *SubjectGate) markInactiveTeams(ctx context.Context, principal storage.P
 		decision.Outcomes[index].Inactive = true
 		decision.Outcomes[index].ActiveTwinID = twin
 	}
+}
+
+// markRemovedTeams flags the ADMITTED team subjects the provider proved gone.
+// Denied, absent and ownership-unproven teams are never looked up, so the flag
+// cannot reveal that an unreadable team exists. A failed or short lookup leaves
+// the answer served and marks every checked team StatusUnchecked.
+func (g *SubjectGate) markRemovedTeams(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, decision *Authorization, graphIndexes []int) {
+	reader, ok := g.graph.(contextfabric.RemovedTeamReader)
+	if !ok {
+		return
+	}
+	var teams []contextfabric.SubjectRef
+	var indexes []int
+	for _, index := range graphIndexes {
+		gated := decision.Outcomes[index]
+		if gated.Outcome == SubjectAdmitted && gated.Subject.Kind == contractsv1.ContextFabricSubjectTeam {
+			teams = append(teams, gated.Subject)
+			indexes = append(indexes, index)
+		}
+	}
+	if len(teams) == 0 {
+		return
+	}
+	removed, err := reader.RemovedTeams(ctx, principal, binding, teams)
+	if err != nil {
+		decision.RemovedLookupFailures++
+		for _, index := range indexes {
+			decision.Outcomes[index].StatusUnchecked = true
+		}
+		return
+	}
+	gone := map[string]bool{}
+	for _, subject := range removed {
+		gone[subjectKey(subject)] = true
+	}
+	for _, index := range indexes {
+		if gone[subjectKey(decision.Outcomes[index].Subject)] {
+			decision.Outcomes[index].Removed = true
+			decision.RemovedTeamCount++
+		}
+	}
+}
+
+// teamStatusNotes is the closed team notes for the admitted teams of one
+// decision: team_removed and/or team_status_unavailable, each once.
+func teamStatusNotes(decision Authorization) []string {
+	var removed, unchecked bool
+	for _, gated := range decision.Outcomes {
+		if gated.Outcome != SubjectAdmitted {
+			continue
+		}
+		removed = removed || gated.Removed
+		unchecked = unchecked || gated.StatusUnchecked
+	}
+	var notes []string
+	if removed {
+		notes = append(notes, contractsv1.TeamRemovedNote)
+	}
+	if unchecked {
+		notes = append(notes, contractsv1.TeamStatusUnavailableNote)
+	}
+	return notes
 }
 
 // AdmittedTeams takes one live decision for the requested team subjects and

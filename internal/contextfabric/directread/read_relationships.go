@@ -134,9 +134,13 @@ type RelationshipsResponse struct {
 	Meaning           string                     `json:"meaning"`
 	// NotCollected names relation kinds no source writes for this subject
 	// kind. Absent when every relation kind of the subject is collected.
-	NotCollected []string                    `json:"not_collected,omitempty"`
-	Consistency  string                      `json:"consistency"`
-	Untrusted    RelationshipsUntrustedLabel `json:"untrusted_content"`
+	NotCollected []string `json:"not_collected,omitempty"`
+	// Notes are closed values about the root subject: team_removed when the
+	// provider proved the root team gone, team_status_unavailable when that
+	// could not be checked. Absent otherwise.
+	Notes       []string                    `json:"notes,omitempty"`
+	Consistency string                      `json:"consistency"`
+	Untrusted   RelationshipsUntrustedLabel `json:"untrusted_content"`
 }
 
 // EffectiveRelationshipsRead echoes the request the server executed.
@@ -497,6 +501,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 		record.FailureClass = gatevocab.RelationshipsFailureProof
 		return RelationshipsResponse{}, fmt.Errorf("%w: %w", ErrRelationshipsInternal, consumeErr)
 	}
+	response.Notes = teamStatusNotes(decision)
 	binding, err := r.graph.ResolveInvestigationBinding(ctx, principal)
 	if err != nil {
 		record.FailureClass = gatevocab.RelationshipsFailureGraph
