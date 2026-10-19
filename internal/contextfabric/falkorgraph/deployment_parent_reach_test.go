@@ -16,6 +16,8 @@ type seededNode struct {
 	repos           []string
 	// workItemType is the stored work item `type` property, empty elsewhere.
 	workItemType string
+	// props are extra stored node properties, keyed by their stored name.
+	props map[string]interface{}
 }
 
 type seededEdge struct {
@@ -81,6 +83,9 @@ func seededGraphConn(nodes []seededNode, edges []seededEdge) *fakeConn {
 			r := fakeSubjectNodeRow(n.kind, n.id, n.label)
 			if len(n.repos) > 0 {
 				r["n"].(*node).Properties[propAuthzRepos] = n.repos
+			}
+			for k, v := range n.props {
+				r["n"].(*node).Properties[k] = v
 			}
 			return []row{r}, nil
 		}
