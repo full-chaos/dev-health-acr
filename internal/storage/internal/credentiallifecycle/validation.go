@@ -30,7 +30,6 @@ var knownScopes = map[string]struct{}{
 	"context:read":  {},
 	"evidence:read": {},
 	"episode:write": {},
-	"context:admin": {},
 	"data:read":     {},
 }
 

@@ -15,10 +15,4 @@ func TestRoleScopes(t *testing.T) {
 	if got := RoleScopes("unknown"); got != nil {
 		t.Fatalf("unknown role scopes = %#v, want nil", got)
 	}
-	// context:admin must never appear implicitly in ops -- design brief.
-	for _, scope := range RoleScopes("ops") {
-		if scope == ScopeContextAdmin {
-			t.Fatal("ops role must never implicitly grant context:admin")
-		}
-	}
 }

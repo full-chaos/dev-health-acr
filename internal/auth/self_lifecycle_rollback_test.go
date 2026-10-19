@@ -149,3 +149,25 @@ func TestService_RollbackSelfRotationDoesNotRevokeSourceAfterSuccess(t *testing.
 	require.NotNil(t, storedSource.ExpiresAt)
 	require.True(t, storedSource.ExpiresAt.After(now))
 }
+
+func TestService_SelfLifecycleRefusesACredentialWithNoScopesLeft(t *testing.T) {
+	// Given a credential whose only scope was the retired one, so the
+	// migration left it with an empty scope set.
+	now := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC)
+	store, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: memory.NewAuditStore(), Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	service, err := NewService(store, ServiceOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	source := createSelfCredential(t, service, []string{"owner/repo"})
+	principal := selfPrincipal(source.Credential)
+	principal.Permissions = nil
+
+	// When / Then both self-lifecycle verbs answer with the named invalid-credential error and leave the credential active.
+	_, rotateErr := service.RotateSelf(context.Background(), principal)
+	require.ErrorIs(t, rotateErr, ErrInvalidCredential)
+	_, revokeErr := service.RevokeSelf(context.Background(), principal)
+	require.ErrorIs(t, revokeErr, ErrInvalidCredential)
+	stored, getErr := store.GetByID(context.Background(), source.Credential.OrgID, source.Credential.CredentialID)
+	require.NoError(t, getErr)
+	require.Nil(t, stored.RevokedAt)
+}
