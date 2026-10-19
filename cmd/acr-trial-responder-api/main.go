@@ -49,7 +49,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -58,19 +57,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
+	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/xeipuuv/gojsonschema"
-
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 )
 
 const (
-	defaultModel               = "gpt-5.6-luna"
-	defaultPollInterval        = 2 * time.Second
-	defaultRequestTimeout      = 3 * time.Minute
-	defaultMaxTransportRetries = 5
+	defaultModel          = "gpt-5.6-luna"
+	defaultPollInterval   = 2 * time.Second
+	defaultRequestTimeout = 3 * time.Minute
+	defaultAPIBaseURL     = "https://api.openai.com/v1"
 	// defaultMaxAnswerAttempts (codex xhigh review round 1, High, confirmed)
 	// bounds how many times run()'s poll loop will retry a single request
 	// before giving up on it and writing a terminal
@@ -178,26 +173,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	opts := []option.RequestOption{
-		option.WithAPIKey(apiKey),
-		option.WithMaxRetries(defaultMaxTransportRetries),
-		// Shared with internal/contextfabric/embedprovider and
-		// modelprovider (the ONLY other packages in this repo that build
-		// an OpenAI-compatible transport) -- see that function's own doc
-		// comment for why a non-2xx provider response body must never
-		// reach an error string this process could log or persist.
-		option.WithMiddleware(modelprovider.SanitizeProviderErrorBody),
-	}
+	baseURL := defaultAPIBaseURL
 	if base := strings.TrimSpace(os.Getenv("ACR_TEST_TRIAL_RESPONDER_API_BASE_URL")); base != "" {
 		// Test-only hook (same shape as common.sh's ACR_TRIAL_KIAC_DSN_BIN
 		// precedent): points this binary at a fake HTTP server so the
 		// contract test (main_test.go) never makes a live network call.
 		// No production launcher sets this.
-		opts = append(opts, option.WithBaseURL(base))
+		baseURL = base
 	}
-	client := openai.NewClient(opts...)
+	provider, err := newProvider(apiKey, baseURL, model)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = provider.Close() }()
 
-	r := &responder{client: client, model: model, effort: effort, exchangeDir: exdir, poll: poll, requestTimeout: defaultRequestTimeout, attempts: map[string]int{}, loggedStrictNormalization: map[string]bool{}}
+	r := &responder{provider: provider, model: model, effort: effort, exchangeDir: exdir, poll: poll, requestTimeout: defaultRequestTimeout, attempts: map[string]int{}, loggedStrictNormalization: map[string]bool{}}
 	if err := r.run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
 		os.Exit(1)
@@ -245,9 +236,27 @@ func resolveResponderEffort(raw string) (string, error) {
 	return v, nil
 }
 
+// newProvider builds the shared llm client for this responder: the
+// OpenAI-compatible Chat Completions client (Kind local) pointed at the
+// OpenAI API root, so the wire stays /chat/completions. The old SDK client
+// sent no temperature and no output cap; both stay unset here. The HTTP
+// client has no overall timeout: every call is bounded by the request
+// context (requestTimeout), which is longer than the llm default.
+func newProvider(apiKey, baseURL, model string) (llm.Provider, error) {
+	return llm.NewCompatible(llm.Config{
+		Kind:        llm.KindLocal,
+		APIKey:      llm.NewSecret(apiKey),
+		BaseURL:     baseURL,
+		Model:       model,
+		HTTPClient:  &http.Client{},
+		Temperature: llm.TemperatureOmit,
+		OutputCap:   llm.OutputCapOmit,
+	})
+}
+
 type responder struct {
-	client openai.Client
-	model  string
+	provider llm.Provider
+	model    string
 	// effort is ACR_TEST_TRIAL_RESPONDER_EFFORT, validated by
 	// resolveResponderEffort -- "" means never set ReasoningEffort on the
 	// request (provider default).
@@ -455,45 +464,31 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	// to a model that has no file-write tool available here; the JSON
 	// schema response_format below is this transport's own enforcement of
 	// that same output contract.
-	messages := []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(req.System)}
+	system := req.System
 	if req.Instructions != "" {
-		messages = append(messages, openai.SystemMessage(req.Instructions))
+		system += "\n\n" + req.Instructions
 	}
-	messages = append(messages, openai.UserMessage(req.Prompt))
 
 	callCtx, cancel := context.WithTimeout(ctx, r.requestTimeout)
 	defer cancel()
 	started := time.Now()
-	params := openai.ChatCompletionNewParams{
-		Model:    r.model,
-		Messages: messages,
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:   req.Operation,
-					Schema: strictSchema,
-					// Strict:true (team-lead ruling, 2026-08-26): strictSchema
-					// is normalizeForStrictSchema's own OpenAI-strict-mode-
-					// compatible rewrite of the original schema, not the raw
-					// genkitruntime schema itself -- an earlier attempt to set
-					// Strict:true against the RAW schema got an immediate 400
-					// (confirmed live, reverted; the raw schema's own optional
-					// properties are exactly what strict mode rejects). Grammar-
-					// constrained decoding now enforces conformance at the
-					// source instead of only detecting it after the fact.
-					Strict: openai.Bool(true),
-				},
-			},
-		},
+	// The strict schema is sent with strict:true (team-lead ruling,
+	// 2026-08-26): llm's Chat Completions client always sends a schema
+	// Format as strict json_schema. strictSchema is
+	// normalizeForStrictSchema's own OpenAI-strict-mode-compatible rewrite of
+	// the original schema; the raw schema got an immediate 400 live.
+	strictMap, ok := strictSchema.(map[string]any)
+	if !ok {
+		logf("operation=%s seq=%d class=%s: output_schema is not a JSON object schema", req.Operation, req.Seq, classInvalidRequest)
+		r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Error: classInvalidRequest})
+		return
 	}
-	if r.effort != "" {
-		// omitzero on ChatCompletionNewParams.ReasoningEffort means an empty
-		// r.effort already leaves this field genuinely unset (provider
-		// default) without this guard -- written explicitly anyway so a
-		// reader doesn't have to know that SDK detail to see the intent.
-		params.ReasoningEffort = shared.ReasoningEffort(r.effort)
-	}
-	completion, callErr := r.client.Chat.Completions.New(callCtx, params)
+	answer, callErr := r.provider.Complete(callCtx, llm.Request{
+		System:          system,
+		Prompt:          req.Prompt,
+		Format:          &llm.JSONFormat{Name: req.Operation, Schema: strictMap},
+		ReasoningEffort: r.effort,
+	})
 	elapsed := time.Since(started)
 
 	if callErr != nil {
@@ -507,22 +502,15 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 		return
 	}
 
-	if len(completion.Choices) == 0 {
-		logf("operation=%s seq=%d elapsed=%s class=%s: zero choices returned", req.Operation, req.Seq, elapsed, classInvalidOutput)
-		r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Error: classInvalidOutput})
-		return
-	}
-	msg := completion.Choices[0].Message
-	if msg.Refusal != "" {
-		// msg.Refusal's own text is model-generated, not provider-error
-		// text, but it can still echo request content back -- never
-		// logged or persisted here, same discipline as the request/prompt
-		// bodies themselves.
+	if answer.Refused {
+		// The refusal's own words are model-generated and can echo request
+		// content: llm never returns them, and nothing here logs or
+		// persists them.
 		logf("operation=%s seq=%d elapsed=%s class=%s", req.Operation, req.Seq, elapsed, classModelRefused)
 		r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Error: classModelRefused})
 		return
 	}
-	content := strings.TrimSpace(msg.Content)
+	content := strings.TrimSpace(answer.Text)
 	// codex xhigh review round 1 (High, confirmed) + live acceptance-run
 	// finding (CHAOS-4313 case 57, kiac): malformed or schema-non-conformant
 	// content here is the MODEL's own sampled output, not a deterministic
@@ -677,20 +665,15 @@ func (r *responder) writeResponse(respPath string, resp exchangeResponse) {
 	}
 }
 
-// classifyError maps a Chat Completions call failure to a closed-vocabulary
-// class (this file's own class* constants -- never the provider's raw
-// text) and whether it is TERMINAL. TERMINAL failures (auth, malformed
-// request, a canceled run) are written back immediately so the harness
-// fails this case fast; everything else is left for run()'s own poll loop
-// to retry, on the theory that a moment's wait may resolve it -- the SAME
-// judgment run-responder-codex.sh's unconditional `|| true` already makes
-// for every codex failure, just made explicit and per-class here.
-//
-// Mirrors embedprovider.IsTransientEmbedError's own *openai.Error
-// status-code classification (internal/contextfabric/embedprovider/
-// transient.go) rather than reimplementing it independently -- not reused
-// directly because that function's name and doc comment are scoped to the
-// embeddings call site specifically.
+// classifyError maps a call failure to a closed-vocabulary class (this
+// file's own class* constants -- never the provider's raw text) and whether
+// it is TERMINAL. TERMINAL failures (auth, malformed request, an undecodable
+// reply, a canceled run) are written back immediately so the harness fails
+// this case fast; everything else is left for run()'s own poll loop to retry,
+// on the theory that a moment's wait may resolve it -- the SAME judgment
+// run-responder-codex.sh's unconditional `|| true` already makes for every
+// codex failure, just made explicit and per-class here. llm.ClassOf is the
+// only provider-error discriminator: its message text is never read.
 func classifyError(err error) (class string, terminal bool) {
 	if errors.Is(err, context.Canceled) {
 		return classCanceled, true
@@ -700,80 +683,26 @@ func classifyError(err error) (class string, terminal bool) {
 		// exchange's overall deadline -- worth a fresh attempt.
 		return classNetworkError, false
 	}
-	// codex xhigh review round 1 (High, confirmed): a 2xx response the SDK
-	// cannot JSON-decode is NOT an *openai.Error (a response WAS received
-	// here, unlike the transport-layer case at the bottom of this
-	// function) -- it fell through to the generic "worth retrying" default
-	// before this check existed, so a server that keeps returning
-	// unparseable JSON for a given request shape would retry it FOREVER
-	// (bounded only by defaultMaxAnswerAttempts, never converging).
-	// embedprovider.IsTransientEmbedError classifies the identical shape
-	// as PERSISTENT for exactly this reason -- mirrored here via the same
-	// standard-library sentinel/type checks (*json.SyntaxError,
-	// *json.UnmarshalTypeError, io.EOF for a fully empty 2xx body,
-	// io.ErrUnexpectedEOF for a truncated one).
-	var syntaxErr *json.SyntaxError
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	providerClass, ok := llm.ClassOf(err)
+	if !ok {
+		return classNetworkError, false
+	}
+	switch providerClass {
+	case llm.ClassRateLimit:
+		return classRateLimited, false
+	case llm.ClassServer:
+		return classServerError, false
+	case llm.ClassAuth:
+		return classAuthError, true
+	case llm.ClassInvalidRequest, llm.ClassModelNotFound, llm.ClassContextLength:
+		return classInvalidRequest, true
+	case llm.ClassOutput, llm.ClassGeneric:
+		// A 2xx reply that holds no usable answer (undecodable body, no
+		// choices; llm reports both as ClassGeneric) fails the same way on
+		// every retry.
 		return classInvalidOutput, true
+	default:
+		// Timeouts and transport failures: a network blip is worth retrying.
+		return classNetworkError, false
 	}
-	// *openai.Error is checked BEFORE the apijson substring check below
-	// (codex round-2 fix caught its own regression, confirmed live): that
-	// type's own Error() method (internal/apierror) formats
-	// `r.Request.Method`/`r.Response.StatusCode` unconditionally --
-	// calling .Error() on one that is not fully populated from a real HTTP
-	// round trip panics on a nil *http.Request. The SDK always populates
-	// both fields for an error it constructs itself, so this never panics
-	// on a genuine API error in production; ordering the type check first
-	// means the substring check below (which DOES call err.Error()) is
-	// only ever reached for an error that is provably NOT an *openai.Error
-	// in the first place.
-	var apiErr *openai.Error
-	if errors.As(err, &apiErr) {
-		switch {
-		case apiErr.StatusCode == http.StatusTooManyRequests:
-			return classRateLimited, false
-		case apiErr.StatusCode >= 500 && apiErr.StatusCode < 600:
-			return classServerError, false
-		// codex xhigh review round 1 (High, confirmed): 408 (Request
-		// Timeout) is retry-shaped -- the server itself gave up waiting on
-		// this ONE request, which says nothing about whether an identical
-		// retry would fail the same way -- but the switch's own default
-		// branch below previously classified it (like every other
-		// unlisted status) as a terminal invalid_request.
-		case apiErr.StatusCode == http.StatusRequestTimeout:
-			return classNetworkError, false
-		case apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden:
-			return classAuthError, true
-		default:
-			return classInvalidRequest, true
-		}
-	}
-	// codex xhigh review round 2 (High, confirmed): the openai-go SDK's OWN
-	// response-body decoder (internal/apijson) does not use the standard
-	// library's *json.SyntaxError/*json.UnmarshalTypeError for a
-	// well-formed-JSON-but-wrong-SHAPE 2xx body -- it returns a bare
-	// fmt.Errorf("apijson: could not deserialize to ...") with no wrapped
-	// type at all (confirmed by reading internal/apijson/decoder.go), so
-	// the checks above never match it and it fell through to the generic
-	// "worth retrying" default -- the SAME persistent-failure class those
-	// checks exist to catch, from a different decoder. errors.As/errors.Is
-	// cannot key on this (nothing to unwrap or type-assert); a substring
-	// match on the SDK's own fixed "apijson:" prefix is the only signal
-	// this error shape carries. strings.Contains, not HasPrefix, survives
-	// any future %w wrapping added between this call and the SDK's
-	// decoder (a wrapped error's own message text is always still a
-	// substring of the wrapper's .Error()). Safe to call .Error() here
-	// unconditionally: the *openai.Error case above already returned, so
-	// err is provably some other, ordinary error type.
-	if strings.Contains(err.Error(), "apijson:") {
-		return classInvalidOutput, true
-	}
-	// No *openai.Error, no context error, no JSON decode error: a
-	// transport-layer failure that never reached the server at all
-	// (connection refused/reset, DNS, TLS handshake) -- the same
-	// "network blip, default to worth retrying" judgment embedprovider's
-	// own classifier makes for the identical
-	// shape.
-	return classNetworkError, false
 }
