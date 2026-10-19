@@ -1008,7 +1008,7 @@ check_observed_race_dedup() {
         printf '%s does not keep its test2json events (RACE_JSON_OUT)\n' "$job" >&2; status=1; }
       step="$(job_block "$file" "$job" | awk -v n="name: race-json-$job" 'index($0, n) { found=1 } END { exit found ? 0 : 1 }' && echo yes || echo no)"
       [ "$step" = yes ] || { printf '%s does not upload race-json-%s\n' "$job" "$job" >&2; status=1; }
-      awk '/^      - uses: actions\/upload-artifact/ { s=$0; getline a; getline b; if (b ~ /name: race-json-/ || a ~ /if: always\(\)/) { if (a !~ /if: always\(\)/) bad=1 } } END { exit bad ? 1 : 0 }' <<<"$(job_block "$file" "$job")" || {
+      awk -v n="name: race-json-$job" 'function end() { if (step ~ n && step !~ /\n        if: always\(\)\n/) bad=1; step="" } /^      - / { end() } { step = step "\n" $0 } END { end(); exit bad ? 1 : 0 }' <<<"$(job_block "$file" "$job")" || {
         printf '%s uploads its race-json artifact without if: always()\n' "$job" >&2; status=1; }
     done
   done
@@ -1677,6 +1677,8 @@ assert_check_fails 'a covering race job stopped keeping its test2json events' ch
   "$(mutate_dedup no-json 'RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh '"'"'devhealthfacts (mid third)'"'"'' 'GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh '"'"'devhealthfacts (mid third)'"'"'')"
 assert_check_fails 'a covering race job stopped uploading its events' check_observed_race_dedup \
   "$(mutate_dedup no-upload 'name: race-json-race-devhealthsource-heavy' 'name: race-json-other')"
+assert_check_fails 'a covering race job keeps its events only when it succeeds' check_observed_race_dedup \
+  "$(mutate_dedup upload-success $'        if: always()\n        with:\n          name: race-json-race-devhealthsource-heavy' $'        if: success()\n        with:\n          name: race-json-race-devhealthsource-heavy')"
 # shellcheck disable=SC2016
 assert_check_fails 'verify stopped rechecking the dropped legs' check_observed_race_dedup \
   "$(mutate_dedup no-recheck 'again="$(scripts/ci/observed-race-dedup.sh decide' 'again="$(true decide')"
