@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,30 +11,36 @@ import (
 )
 
 const (
-	fulltextHoldNodes   = 5000
-	fulltextHoldRepeats = 3
+	fulltextHoldBatchSize = 1000
+	fulltextHoldBatches   = 10
+	fulltextHoldNodes     = fulltextHoldBatchSize * fulltextHoldBatches
+	fulltextHoldRepeats   = 3
 )
 
-func applyFulltextHoldBatch(t *testing.T, ctx context.Context, adapter *Adapter, orgID string) {
+func applyFulltextHoldBatches(t *testing.T, ctx context.Context, adapter *Adapter, orgID string) {
 	t.Helper()
-	observed := time.Now().UTC()
 	scope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/allowed"}}
-	entities := make([]contextfabric.EntityProjection, 0, fulltextHoldNodes)
-	for i := 0; i < fulltextHoldNodes; i++ {
-		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: fmt.Sprintf("project_hold_%05d", i), Label: fmt.Sprintf("Hold Project %05d", i)}
-		entities = append(entities, contextfabric.EntityProjection{
-			Subject: subject, Aliases: []string{"shared escalation search term"}, Authorization: scope,
-			EvidenceRefIDs: []string{"evidence_hold"}, ObservedAt: observed, SourceVersion: "v1",
-		})
-	}
-	batch := contextfabric.ProjectionBatch{
-		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_hold", OrgID: orgID, Source: "live-test",
-		SourceVersion: "v1", NextCursor: "cursor-hold", GeneratedAt: observed, Entities: entities,
-		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
-		Tombstones: []contextfabric.ProjectionTombstone{},
-	}
-	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
-		t.Fatalf("ApplyProjectionBatch(%s) error = %v", orgID, err)
+	filler := strings.Repeat("alpha beta gamma delta epsilon zeta eta theta iota kappa ", 20)
+	for b := 0; b < fulltextHoldBatches; b++ {
+		observed := time.Now().UTC()
+		entities := make([]contextfabric.EntityProjection, 0, fulltextHoldBatchSize)
+		for i := 0; i < fulltextHoldBatchSize; i++ {
+			n := b*fulltextHoldBatchSize + i
+			subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: fmt.Sprintf("project_hold_%05d", n), Label: fmt.Sprintf("Hold Project %05d", n)}
+			entities = append(entities, contextfabric.EntityProjection{
+				Subject: subject, Aliases: []string{"shared escalation search term " + filler}, Authorization: scope,
+				EvidenceRefIDs: []string{"evidence_hold"}, ObservedAt: observed, SourceVersion: "v1",
+			})
+		}
+		batch := contextfabric.ProjectionBatch{
+			SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: fmt.Sprintf("batch_hold_%02d", b), OrgID: orgID, Source: "live-test",
+			SourceVersion: "v1", NextCursor: fmt.Sprintf("cursor-hold-%02d", b), GeneratedAt: observed, Entities: entities,
+			Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
+			Tombstones: []contextfabric.ProjectionTombstone{},
+		}
+		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+			t.Fatalf("ApplyProjectionBatch(%s, batch %d) error = %v", orgID, b, err)
+		}
 	}
 }
 
@@ -54,7 +61,7 @@ func rawFulltextHitCount(t *testing.T, ctx context.Context, adapter *Adapter, ke
 	}
 }
 
-// TestLiveFulltextReadWaitsForALargeBatchToBeIndexed applies one batch of fulltextHoldNodes nodes that share a term,
+// TestLiveFulltextReadWaitsForALargeBatchToBeIndexed applies fulltextHoldNodes nodes that share a term, in the largest batches the projection contract allows,
 // which keeps the Subject fulltext index under construction for longer than a first read takes. A control read that
 // goes straight to the index must come back short on every fresh graph, which shows the hold is real; the adapter's
 // read must then leave the index operational and see every node. The test fails when the readiness wait is removed
@@ -70,12 +77,12 @@ func TestLiveFulltextReadWaitsForALargeBatchToBeIndexed(t *testing.T) {
 		t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), controlOrg) })
 		t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), realOrg) })
 
-		applyFulltextHoldBatch(t, ctx, adapter, controlOrg)
+		applyFulltextHoldBatches(t, ctx, adapter, controlOrg)
 		controlKey := graphKey(adapter.config.GraphPrefix, controlOrg)
 		controlHits := rawFulltextHitCount(t, ctx, adapter, controlKey)
 		controlStatus := fulltextIndexStatus(ctx, adapter, controlKey)
 
-		applyFulltextHoldBatch(t, ctx, adapter, realOrg)
+		applyFulltextHoldBatches(t, ctx, adapter, realOrg)
 		realKey := graphKey(adapter.config.GraphPrefix, realOrg)
 		began := time.Now()
 		got, truncated, err := adapter.fulltextSearchNodes(ctx, realKey, realOrg, "escalation", 10, temporalFilter{})
