@@ -37,11 +37,16 @@ var ErrLLMConfigUnusable = errors.New("Dev Health BYO LLM configuration is unusa
 // reason and never runs on the platform model.
 var ErrLLMConfigGateClosed = errors.New("Dev Health BYO LLM configuration is behind a closed byo_llm gate")
 
-// llmConfigReasonHeader carries why ops answered the marked no-config 404;
-// llmConfigGateClosedReason is the closed byo_llm gate.
+// ErrLLMConfigNoInvestigateConfig is an org whose saved BYO keys are for other
+// purposes only: none resolves for investigations. The org is a BYO org, so the
+// turn is refused with its own reason and never runs on the platform model.
+var ErrLLMConfigNoInvestigateConfig = errors.New("Dev Health BYO LLM configuration has no investigate-capable config")
+
+// llmConfigReasonHeader carries why ops answered the marked no-config 404.
 const (
-	llmConfigReasonHeader     = "X-Org-Llm-Config-Reason"
-	llmConfigGateClosedReason = "byo_llm_gate_closed"
+	llmConfigReasonHeader        = "X-Org-Llm-Config-Reason"
+	llmConfigGateClosedReason    = "byo_llm_gate_closed"
+	llmConfigNoInvestigateReason = "byo_no_investigate_config"
 )
 
 // OrgLLMConfig is one org's BYO LLM configuration as ops serves it. APIKey is
@@ -85,10 +90,10 @@ type llmConfigResponse struct {
 }
 
 type llmConfigEntry struct {
-	config     OrgLLMConfig
-	found      bool
-	gateClosed bool
-	expires    time.Time
+	config  OrgLLMConfig
+	found   bool
+	refusal error
+	expires time.Time
 }
 
 type llmConfigCache struct {
@@ -118,24 +123,25 @@ func (c *llmConfigCache) put(orgID string, entry llmConfigEntry) {
 
 // OrgLLMConfig returns orgID's BYO LLM configuration from ops. found=false
 // is "no BYO configured" (404). A saved configuration behind a closed byo_llm
-// gate is ErrLLMConfigGateClosed. An unusable configuration is
+// gate is ErrLLMConfigGateClosed; saved keys for other purposes only are
+// ErrLLMConfigNoInvestigateConfig. An unusable configuration is
 // ErrLLMConfigUnusable; ops being unreachable or answering 5xx is
 // errUnavailable. Answers (found, not found or gate closed) are reused for
-// llmConfigCacheTTL; other errors are never cached.
+// llmConfigCacheTTL, the two refusals included; other errors are never cached.
 func (c *Client) OrgLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, bool, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return OrgLLMConfig{}, false, errors.New("unsupported llm config request")
 	}
 	now := c.now()
 	if entry, ok := c.llmConfigs.get(orgID, now); ok {
-		if entry.gateClosed {
-			return OrgLLMConfig{}, false, ErrLLMConfigGateClosed
+		if entry.refusal != nil {
+			return OrgLLMConfig{}, false, entry.refusal
 		}
 		return entry.config, entry.found, nil
 	}
 	config, found, err := c.fetchLLMConfig(ctx, orgID)
-	if errors.Is(err, ErrLLMConfigGateClosed) {
-		c.llmConfigs.put(orgID, llmConfigEntry{gateClosed: true, expires: now.Add(llmConfigCacheTTL)})
+	if errors.Is(err, ErrLLMConfigGateClosed) || errors.Is(err, ErrLLMConfigNoInvestigateConfig) {
+		c.llmConfigs.put(orgID, llmConfigEntry{refusal: err, expires: now.Add(llmConfigCacheTTL)})
 		return OrgLLMConfig{}, false, err
 	}
 	if err != nil {
@@ -161,8 +167,11 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		if response.Header.Get(llmConfigReasonHeader) == llmConfigGateClosedReason {
+		switch response.Header.Get(llmConfigReasonHeader) {
+		case llmConfigGateClosedReason:
 			return OrgLLMConfig{}, false, ErrLLMConfigGateClosed
+		case llmConfigNoInvestigateReason:
+			return OrgLLMConfig{}, false, ErrLLMConfigNoInvestigateConfig
 		}
 		return OrgLLMConfig{}, false, nil
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:

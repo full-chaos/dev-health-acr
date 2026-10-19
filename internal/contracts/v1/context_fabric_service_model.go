@@ -18,3 +18,11 @@ const ContextFabricOwnModelGateClosedReason = "own_model_gate_closed"
 // a saved model configuration but acr_service_model OFF (its own override):
 // ACR AI features are turned off for it. No model is used.
 const ContextFabricAIFeaturesTurnedOffReason = "ai_features_turned_off"
+
+// ContextFabricNoInvestigateConfigReason is details.reason on the 403
+// feature_not_enabled refusal of an investigation for an organization whose
+// saved BYO model keys are for other purposes only: none is set for
+// investigations. It is a BYO organization, so the service's own model is
+// never used in its place; an organization admin saves an investigate-capable
+// key or turns investigations off.
+const ContextFabricNoInvestigateConfigReason = "byo_no_investigate_config"

@@ -125,7 +125,7 @@ func TestOrgLLMConfigNoInvestigateConfigIsItsOwnErrorAndCached(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
-		if found || err == nil || errors.Is(err, entitlements.ErrLLMConfigUnusable) || errors.Is(err, entitlements.ErrLLMConfigGateClosed) {
+		if found || !errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig) || errors.Is(err, entitlements.ErrLLMConfigUnusable) || errors.Is(err, entitlements.ErrLLMConfigGateClosed) {
 			t.Fatalf("read %d: found = %v err = %v, want its own error, not unusable and not gate closed", i, found, err)
 		}
 	}
