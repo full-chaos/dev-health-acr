@@ -80,7 +80,10 @@ const (
 // response format, and the same document compiled for the local check Genkit
 // ran after every call.
 type outputSchema struct {
-	wire     map[string]any
+	wire map[string]any
+	// strict is wire in the closed form Anthropic structured outputs accept;
+	// a reply that follows it is restored to wire's shape before the check.
+	strict   map[string]any
 	compiled *gojsonschema.Schema
 	// instructions is Genkit's own JSON format instruction for this schema
 	// (ai/format_json.go), which Genkit appended to the system message.
@@ -98,7 +101,7 @@ func newOutputSchema(value any) (outputSchema, error) {
 		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
 	}
 	instructions := fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", string(raw))
-	return outputSchema{wire: wire, compiled: compiled, instructions: instructions}, nil
+	return outputSchema{wire: wire, strict: strictWire(wire), compiled: compiled, instructions: instructions}, nil
 }
 
 // LLMClients maps each model a runtime calls (Config.Model, and
@@ -209,7 +212,7 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 		// Anthropic: the schema itself, as structured outputs or one tool
 		// call, picked by the client before the call.
 		call.System = request.System
-		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.wire}
+		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.strict}
 	} else {
 		// Chat Completions: the request Genkit sent, byte for byte. No schema
 		// on the wire (a JSON object answer) and the schema as text at the
@@ -250,10 +253,14 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 			"input_tokens", usage.InputTokens, "output_tokens", usage.OutputTokens)
 		return "", usage, errModelRefusal
 	}
-	if result.Text != "" {
-		return result.Text, usage, nil
+	reply := result.Text
+	if reply == "" {
+		reply = result.Unparsed
 	}
-	return result.Unparsed, usage, nil
+	if client.Kind() == llm.KindAnthropic {
+		reply = restoreStrictReply(schema.wire, reply)
+	}
+	return reply, usage, nil
 }
 
 func llmUsage(usage llm.Usage) contextfabric.ModelUsage {

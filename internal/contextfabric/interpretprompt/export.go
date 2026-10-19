@@ -39,7 +39,11 @@ const (
 	//
 	// v32 -> v33: the commitment glossary line says the fact lists up to 25
 	// dated issues, past due open ones first.
-	PromptVersion = "context-fabric-interpretation.v33"
+	//
+	// v33 -> v34: an Anthropic turn sends a closed wire form of the output
+	// schema (maps as key/value lists, every property required), so an
+	// answer reused under v33 is never served for a differently shaped call.
+	PromptVersion = "context-fabric-interpretation.v34"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v10 -> v11: the fact_requirements kind enum names commitment.

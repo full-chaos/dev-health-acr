@@ -906,18 +906,25 @@ fallback to another mode):
 
 | Provider | Mode | Enforcement |
 | --- | --- | --- |
-| Anthropic | `output_config` JSON schema when the output schema fits Anthropic's structured-output limits; otherwise one tool call carrying the schema | In schema mode the provider enforces only the subset it accepts: the client drops numeric, string and array bounds before sending, and ACR's local check still enforces them. The tool-call mode is not strict: the model may break the schema. |
+| Anthropic | `output_config` JSON schema (the closed wire form below); one tool call carrying the schema only if the schema were to break a limit | In schema mode the provider enforces only the subset it accepts: the client drops numeric, string and array bounds before sending, and ACR's local check still enforces them. The tool-call mode is not strict: the model may break the schema. |
 | OpenAI and OpenAI-compatible (local, Qwen) | JSON object, with the schema as text in the system message | Not enforced by the provider. |
 
 Provider limits that decide the Anthropic mode (`dev-health-go/llm`,
 `anthropic_schema_fit.go`): at most 24 optional properties and 16 union-typed
 properties across one request, `additionalProperties` false on every object,
 and no conditional keywords (`if`, `then`, `not`). The interpretation and
-synthesis output schemas are over the optional-property limit and hold open
-maps, so on Anthropic they run in tool-call mode and the `context fabric model
-answer format path` log line reports `format_path=tool` with the first limit
-that was broken. A BYO model must therefore return JSON that follows the schema
-without provider enforcement. Models that refuse a forced tool choice (Opus
+synthesis output schemas are sent to Anthropic in a closed wire form
+(`genkitruntime/strict_wire.go`): open maps become key/value lists, scalar
+values become tagged records, the time-context conditional rules move into the
+description (the local check still enforces them), and every property is
+required (an optional string or list is sent as "" or [], an optional object or
+date as null). The reply is restored to the served shape before the local
+check, so the answer contract is unchanged. The `context fabric model answer
+format path` log line reports `format_path=schema`; a `tool` there names the
+limit that was broken. OpenAI-compatible kinds still get no provider-enforced
+schema. A BYO model that returns JSON breaking the schema is refused by the
+local check, never answered by another model.
+Models that refuse a forced tool choice (Opus
 5.5, Sonnet 5.5, Fable 5.1, Mythos 5.1) get tool choice `auto`.
 
 A reply that is not JSON, or that fails the output schema, is a rejected draw.

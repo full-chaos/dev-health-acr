@@ -26,7 +26,7 @@ func TestSchemaRefusedInterpretDrawNamesTheBrokenStage(t *testing.T) {
 		{"prose", "I could not interpret this question.", contractsv1.ContextFabricInterpretationRejectionOutputNotJSON},
 		{"empty object text", " ", contractsv1.ContextFabricInterpretationRejectionOutputNotJSON},
 		{"wrong type", `{"shape":5,"requested_judgment":"x","fact_requirements":[],"clarification_needed":false,"time_context":{"axis":"current"}}`, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation},
-		{"null optional", `{"shape":"open","requested_judgment":"x","fact_requirements":[],"clarification_needed":false,"time_context":{"axis":"current","as_of":null}}`, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation},
+		{"null optional", `{"shape":"open","requested_judgment":"x","fact_requirements":[],"clarification_needed":false,"time_context":{"axis":"current"},"subject_terms":null}`, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &scriptedLLM{model: "claude-haiku-5-5", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{Text: tc.reply}}}}
