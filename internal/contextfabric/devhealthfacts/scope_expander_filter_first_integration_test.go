@@ -47,7 +47,7 @@ var scopeExpanderStatements = []struct {
 	label, table, fragment   string
 	threadBound, unmergedLog bool
 }{
-	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)", false, true},
+	{"projectRepositories", "work_items", "min(concat(p.provider, ':', p.id)), argMax(l.provenance, l.link_rank)", false, true},
 	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history", false, false},
 	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source", false, false},
 	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id", true, false},

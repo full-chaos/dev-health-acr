@@ -22,7 +22,7 @@ import (
 // answer to a work item's project_id, and an ambiguous join key is excluded
 // (key_resolution_count) rather than guessed.
 const currentResolvedProjectsSQL = `(
-  SELECT id, join_key, count() OVER (PARTITION BY join_key) AS key_resolution_count
+  SELECT id, provider, join_key, count() OVER (PARTITION BY join_key) AS key_resolution_count
   FROM (
     SELECT DISTINCT id, provider, join_key FROM (
       SELECT id, provider, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
@@ -32,31 +32,35 @@ const currentResolvedProjectsSQL = `(
   )
 )`
 
+// projectQualifiedKeySQL is the provider-qualified key of a resolved project
+// (p is the currentResolvedProjectsSQL alias), the spelling decodeProjectOriginKeys binds.
+const projectQualifiedKeySQL = `concat(p.provider, '` + projectOriginKeySeparator + `', p.id)`
+
 // projectIssueArmsAsOfSQL is the as-of set of issues a project holds: the
 // membership-interval arm (history touches that overlap the window) and the
 // no-history arm (an issue with no transition rows, admitted on its current
 // project_id column). via_history says which arm produced the row. Both arms
 // read the requested projects' work items and transitions only
 // (requestedProjectHistoryWorkItemIDsSQL).
-var projectIssueArmsAsOfSQL = projectIssueArmsAsOfAmongSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate))
+var projectIssueArmsAsOfSQL = projectIssueArmsAsOfAmongSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectKeysPredicate))
 
 // projectIssueArmsAsOfAmongSQL is projectIssueArmsAsOfSQL over the work item
 // ids candidates names, a superset of the arms' rows: the touches, the work
 // items and the transition subjects of a kept id are read whole.
 func projectIssueArmsAsOfAmongSQL(candidates string) string {
 	return `
-  SELECT iv.subject_id AS work_item_id, 1 AS via_history, p.id AS origin_project_id
+  SELECT iv.subject_id AS work_item_id, 1 AS via_history, ` + projectQualifiedKeySQL + ` AS origin_project_id
   FROM ` + membershipTouchesAsOfAmongSQL(candidates) + ` AS iv
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
-  WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+  WHERE p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
     AND NOT iv.is_malformed AND NOT iv.is_duplicate_add
     AND iv.observed_at <= {window_end:DateTime64(6,'UTC')}
     AND (iv.valid_to IS NULL OR iv.valid_to > {window_start:DateTime64(6,'UTC')})
   UNION ALL
-  SELECT w.work_item_id AS work_item_id, 0 AS via_history, p.id AS origin_project_id
+  SELECT w.work_item_id AS work_item_id, 0 AS via_history, ` + projectQualifiedKeySQL + ` AS origin_project_id
   FROM work_items AS w FINAL
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = w.provider AND p.join_key = w.project_id
-  WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+  WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
     AND (w.repo_id, w.work_item_id) NOT IN (
       SELECT repo_id, subject_id FROM project_membership_transitions FINAL WHERE org_id = {org_id:String} AND subject_kind = 'work_item'` + transitionSubjectsAmongSQL(candidates) + `
     )
@@ -90,33 +94,35 @@ func classifyLinkedRepository(counts *contextfabric.FactScopeExpansionCounts, ca
 // Pull-request-typed work items are not issues and are not counted. They reach
 // no repository through the tree, and the answer must say so rather than read
 // as "nothing is missing".
-func (e *ScopeExpander) projectUnlinkedIssueCount(ctx context.Context, orgID string, projectIDs []string, bounds *asOfBounds) (int, error) {
-	var statement string
-	bindings := []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "project_ids", Value: projectIDs},
-	}
-	if bounds == nil {
-		candidates := requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate)
-		statement = `SELECT uniqExact(w.work_item_id)
+func (e *ScopeExpander) projectUnlinkedIssueCount(ctx context.Context, orgID string, projectKeys []string) (int, error) {
+	candidates := requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate)
+	statement := `SELECT uniqExact(w.work_item_id)
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + candidates + ` AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
   AND ` + workItemIsIssueSQL("w") + `
   AND w.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksAmongSQL(candidates) + `)`
-	} else {
-		candidates := requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)
-		statement = `SELECT uniqExact(a.work_item_id)
+	return e.scalarCount(ctx, statement, []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID},
+		{Name: "project_ids", Value: projectKeys},
+	})
+}
+
+// projectUnlinkedIssueCountAsOf is projectUnlinkedIssueCount over the as-of
+// arms of the requested projects (provider-qualified project keys).
+func (e *ScopeExpander) projectUnlinkedIssueCountAsOf(ctx context.Context, orgID string, projectKeys []string, bounds *asOfBounds) (int, error) {
+	candidates := requestedProjectHistoryWorkItemIDsSQL(requestedProjectKeysPredicate)
+	statement := `SELECT uniqExact(a.work_item_id)
 FROM (` + projectIssueArmsAsOfAmongSQL(candidates) + `) AS a
 LEFT JOIN (SELECT work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `) AS w ON w.work_item_id = a.work_item_id
 WHERE ` + workItemIsIssueSQL("w") + `
   AND a.work_item_id NOT IN (SELECT work_item_id FROM ` + admittedIssueLinksAmongSQL(candidates) + `)`
-		bindings = append(bindings,
-			contextpacket.ClickHouseBinding{Name: "window_start", Value: bounds.start},
-			contextpacket.ClickHouseBinding{Name: "window_end", Value: bounds.end},
-		)
-	}
-	return e.scalarCount(ctx, statement, bindings)
+	return e.scalarCount(ctx, statement, []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID},
+		{Name: "project_ids", Value: projectKeys},
+		{Name: "window_start", Value: bounds.start},
+		{Name: "window_end", Value: bounds.end},
+	})
 }
 
 // teamUnlinkedIssueCount is projectUnlinkedIssueCount for the issues of the

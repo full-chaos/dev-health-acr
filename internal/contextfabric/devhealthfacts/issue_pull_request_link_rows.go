@@ -85,3 +85,18 @@ const admittedLinkedPullRequestRowsSQL = `(
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
   WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
 )`
+
+// strongestLinkTierOfPullRequestsSQL is, for each pull request named by
+// {pull_request_keys} ("<repo id>:<number>"), the strongest admitted link tier
+// across the issues of every project, requested or not: columns cover_repo_id,
+// cover_number, cover_rank. It applies the admission rule of
+// issueLinkRowsAmongSQL (the pull request exists, the work item is an issue,
+// the tier is in the vocabulary) and reads the links of those pull requests only.
+var strongestLinkTierOfPullRequestsSQL = `(
+  SELECT toString(l.repo_id) AS cover_repo_id, l.pr_number AS cover_number, max(` + linkTierRankSQL + `) AS cover_rank
+  FROM work_graph_issue_pr AS l FINAL
+  INNER JOIN (SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND concat(toString(repo_id), '` + projectOriginKeySeparator + `', toString(number)) IN {pull_request_keys:Array(String)}) AS pr ON ` + linkedPullRequestOnSQL + `
+  LEFT JOIN (SELECT org_id, work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND concat(toString(repo_id), '` + projectOriginKeySeparator + `', toString(pr_number)) IN {pull_request_keys:Array(String)})) AS wi ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
+  WHERE l.org_id = {org_id:String} AND concat(toString(l.repo_id), '` + projectOriginKeySeparator + `', toString(l.pr_number)) IN {pull_request_keys:Array(String)} AND ` + workItemIsIssueSQL("wi") + ` AND ` + linkTierRankSQL + ` > 0
+  GROUP BY cover_repo_id, cover_number
+)`

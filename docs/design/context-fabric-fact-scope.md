@@ -762,6 +762,14 @@ missing next hop, never an empty project.
   answer names the tier and never presents a lower tier as native. A link whose
   provenance is outside those three is counted (`UnknownAttributionSourceCount`)
   and never admitted.
+- **Pull request link tier per project root.** A target pull request carries,
+  per requested project root, the tier of that project's own link
+  (`TargetLinkTier`). A pull request that has a native link from any issue of
+  any project, requested or not, carries no lower-tier link for any root (native
+  covers explicit_text and heuristic). The read is bounded to the target pull
+  requests. Requested projects are matched by provider and id on the current and
+  the historical axis, so two providers that mint one raw project id keep
+  separate roots.
 - **Authorization at every hop.** Repositories are authorized before the next
   read. An incident that any unauthorized or unresolvable repository also
   names is dropped whole and counted. A team reached from a project follows the

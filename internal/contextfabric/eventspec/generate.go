@@ -328,6 +328,8 @@ func goVarName(e Event) string {
 		return "ModelRowsStripped"
 	case DriverSourceStateCorrected.ID:
 		return "DriverSourceStateCorrected"
+	case ServiceLimitationLookalikesDropped.ID:
+		return "ServiceLimitationLookalikesDropped"
 	case DriverIdentityCollisions.ID:
 		return "DriverIdentityCollisions"
 	case EvidenceLabelFallback.ID:

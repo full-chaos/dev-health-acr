@@ -323,9 +323,13 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	input = r.withholdBareScores(ctx, principal, input)
 	budget := effectiveCallerBudget(input.Request.Options)
 	maxBytes, err := assembly.inputBoundWithin(budget)
+	var shareOverflow *ModelInputOverflow
+	if errors.As(err, &shareOverflow) {
+		maxBytes, err = 1, nil
+	}
 	measure.MaxBytes = maxBytes
 	if err != nil {
-		return InvestigationResult{}, nil, measure, r.clientSynthesisEnvelopeRefusal(ctx, principal, input, err, budget)
+		return InvestigationResult{}, nil, measure, err
 	}
 	given, encoded, bound, err := r.encodeWithinInputBound(ctx, principal, input, assembly.Encode, maxBytes, assembly.widenedInputBound(budget, maxBytes))
 	if maxBytes < assembly.MaxBytes && err != nil {
@@ -365,28 +369,6 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 		return InvestigationResult{}, nil, measure, err
 	}
 	return result, bundle, measure, nil
-}
-
-// clientSynthesisEnvelopeRefusal is the refusal for a budget whose half share
-// cannot hold the envelope: it measures the smallest input the facts reduce to
-// beside the envelope, so the measured size is the one the turn needs. The
-// probe runs without telemetry: it is a measurement, not a bounding outcome.
-func (r RuntimeAnswerSynthesizer) clientSynthesisEnvelopeRefusal(ctx context.Context, principal storage.Principal, input SynthesisInput, shareErr error, budget int) error {
-	envelope, envelopeErr := r.ClientSynthesis.envelopeBytes()
-	if envelopeErr != nil {
-		return envelopeErr
-	}
-	quiet := r
-	quiet.Telemetry = nil
-	_, _, _, minimumErr := quiet.encodeWithinInputBound(ctx, principal, input, r.ClientSynthesis.Encode, 1, 0)
-	var overflow *ModelInputOverflow
-	if errors.As(minimumErr, &overflow) {
-		return clientSynthesisBudgetRefusal(minimumErr, envelope, budget)
-	}
-	if minimumErr != nil {
-		return minimumErr
-	}
-	return clientSynthesisBudgetRefusal(shareErr, envelope, budget)
 }
 
 func stampClientInterpretationVersion(ctx context.Context, versions *VersionSet) {
@@ -665,8 +647,8 @@ func clientSynthesisBodyShare(budget int) int {
 // inputBoundWithin is the byte bound of the synthesis input for a caller byte
 // budget: the service bound, or what the caller's share leaves after the
 // envelope. It depends on the budget alone, so a write-back rebuilds the same
-// input as the turn it answers. A share that cannot hold the envelope is an
-// input that cannot fit.
+// input as the turn it answers. A share that cannot hold the envelope is a
+// ModelInputOverflow: the caller may still widen past the share.
 func (a *ClientSynthesisAssembly) inputBoundWithin(budget int) (int, error) {
 	if budget <= 0 {
 		return a.MaxBytes, nil
