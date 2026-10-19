@@ -2077,12 +2077,30 @@ func windowConfirmationSkipped(request InvestigationRequest, effective *contract
 	return !request.Options.AllowClarification && effective != nil && effective.Provenance == WindowInferredDefault
 }
 
-// windowConfirmationSkippedWarning names the window the answer used and that
-// its confirmation was skipped.
+// windowConfirmationSkippedWarning names the window the answer used, how
+// confident the engine is in it, and that its confirmation was skipped.
 func windowConfirmationSkippedWarning(effective *contractsv1.ContextFabricEffectiveEvidenceWindow) string {
 	used := string(effective.RelativeID)
 	if effective.Start != nil && effective.End != nil {
 		used += " (" + effective.Start.UTC().Format("2006-01-02") + " to " + effective.End.UTC().Format("2006-01-02") + ")"
 	}
-	return "No evidence window was stated and clarification was not permitted, so this answer used the default window " + used + " at low confidence; window confirmation was skipped."
+	confidence := ""
+	if effective.Confidence != "" {
+		confidence = " at " + string(effective.Confidence) + " confidence"
+	}
+	return "Clarification was not permitted, so this answer used the inferred evidence window " + used + confidence + "; window confirmation was skipped."
+}
+
+// appendRequiredWarning adds a warning that must be served even when the list
+// is already at its bound: it takes the place of the last entry then.
+func appendRequiredWarning(warnings []string, sentence string) []string {
+	for _, w := range warnings {
+		if w == sentence {
+			return warnings
+		}
+	}
+	if len(warnings) >= contractsv1.ContextFabricWarningsMaxCount {
+		warnings = warnings[:contractsv1.ContextFabricWarningsMaxCount-1]
+	}
+	return append(warnings, sentence)
 }

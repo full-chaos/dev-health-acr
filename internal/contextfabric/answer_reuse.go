@@ -744,10 +744,10 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		}
 	}
 	// CHAOS-4040 (sol-max ruling 2026-08-21): a DECISIVE candidate carrying
-	// an inferred (unconfirmed) window predates this ticket's gate -- no
-	// FRESH Save can ever produce that combination any more
-	// (windowConfirmationRequiredResult intercepts every inferred window
-	// before a decisive terminal is ever reached, window.go). Rejected
+	// an inferred (unconfirmed) window is never served from reuse: such an
+	// answer is only produced when the caller declined clarification
+	// (windowConfirmationSkipped), and it must be investigated fresh each
+	// time. Rejected
 	// UNCONDITIONALLY, not only inside the windowKey!="" branch above:
 	// windowKey=="" is the ORDINARY no-explicit-window request (the exact
 	// shape most likely to have matched one of these old rows on every

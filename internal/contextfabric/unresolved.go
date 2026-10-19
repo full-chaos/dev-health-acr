@@ -615,7 +615,7 @@ func (e *Engine) terminalResult(
 	}
 	terminalWarnings := []string{}
 	if confirmationSkipped {
-		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationSkippedWarning(effectiveWindow))
+		terminalWarnings = appendRequiredWarning(terminalWarnings, windowConfirmationSkippedWarning(effectiveWindow))
 	}
 	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationNudgeSentence)

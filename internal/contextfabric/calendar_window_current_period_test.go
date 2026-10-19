@@ -78,6 +78,11 @@ type calendarServedRun struct {
 
 func runServedWindowCase(t *testing.T, now time.Time, question string, allowClarification bool) calendarServedRun {
 	t.Helper()
+	return runServedWindowCaseWithDraft(t, now, question, allowClarification, nil)
+}
+
+func runServedWindowCaseWithDraft(t *testing.T, now time.Time, question string, allowClarification bool, mutateDraft func(*SynthesisDraft)) calendarServedRun {
+	t.Helper()
 	project := acceptanceProject()
 	var run calendarServedRun
 	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
@@ -88,7 +93,11 @@ func runServedWindowCase(t *testing.T, now time.Time, question string, allowClar
 		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
 		context:    bootstrapGraphContext(project),
 	}
-	runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: bootstrapDraft(project), receipt: acceptanceReceipt()}
+	draft := bootstrapDraft(project)
+	if mutateDraft != nil {
+		mutateDraft(&draft)
+	}
+	runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: draft, receipt: acceptanceReceipt()}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: &countingInterpreter{interpretation: bootstrapInterpretation()},
 		Graph:       graph,
@@ -196,5 +205,46 @@ func TestWindowGate_AllowClarificationTrueStillGates(t *testing.T) {
 	run := runServedWindowCase(t, now, validInvestigationRequest().Question, true)
 	if run.result.Status != InvestigationClarificationRequired || run.result.WindowClarification == nil || run.factRead {
 		t.Fatalf("status=%q window_clarification=%v fact_read=%v, want the unchanged confirmation gate", run.result.Status, run.result.WindowClarification != nil, run.factRead)
+	}
+}
+
+func TestWindowGate_SkippedWarningReportsTheWindowItDescribes(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	for _, confidence := range []WindowConfidence{WindowConfidenceHigh, WindowConfidenceLow, ""} {
+		window := &contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault, Confidence: confidence}
+		warning := windowConfirmationSkippedWarning(window)
+		if strings.Contains(warning, "No evidence window was stated") {
+			t.Fatalf("confidence %q: warning %q denies a window the question may state", confidence, warning)
+		}
+		for _, other := range []WindowConfidence{WindowConfidenceHigh, WindowConfidenceLow} {
+			if mentions := strings.Contains(warning, string(other)+" confidence"); mentions != (other == confidence) {
+				t.Fatalf("confidence %q: warning %q mentions %q confidence = %v", confidence, warning, other, mentions)
+			}
+		}
+		if !strings.Contains(warning, "confirmation was skipped") || !strings.Contains(warning, string(RelativeWindowTrailing30D)) {
+			t.Fatalf("confidence %q: warning %q must name the window and the skipped confirmation", confidence, warning)
+		}
+	}
+}
+
+func TestWindowGate_SkippedWarningSurvivesAFullWarningList(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	run := runServedWindowCaseWithDraft(t, now, validInvestigationRequest().Question, false, func(draft *SynthesisDraft) {
+		draft.Warnings = nil
+		for i := 0; i < contractsv1.ContextFabricWarningsMaxCount; i++ {
+			draft.Warnings = append(draft.Warnings, "model warning "+strings.Repeat("x", i%7)+time.Duration(i).String())
+		}
+	})
+	var skipped int
+	for _, warning := range run.result.Warnings {
+		if strings.Contains(warning, "confirmation was skipped") {
+			skipped++
+		}
+	}
+	if skipped != 1 || len(run.result.Warnings) > contractsv1.ContextFabricWarningsMaxCount {
+		t.Fatalf("skipped warnings = %d, total = %d (max %d), want the skipped-confirmation warning kept within the bound", skipped, len(run.result.Warnings), contractsv1.ContextFabricWarningsMaxCount)
 	}
 }
