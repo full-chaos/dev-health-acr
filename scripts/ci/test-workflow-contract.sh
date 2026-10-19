@@ -657,6 +657,28 @@ check_race_runner_uses_variable() {
   return "$status"
 }
 
+# The first-stage jobs (plan, mirror-preflight, scripts, lint) gate every
+# race leg: on a hosted runner they wait behind the hosted queue while the
+# CI_RACE_RUNNER pool idles. They read the same variable with the same hosted
+# fallback, so the variable stays the one kill switch for all of them.
+check_first_stage_runner_uses_variable() {
+  local file="$1" job status=0 block
+  for job in plan mirror-preflight scripts lint; do
+    block="$(job_block "$file" "$job")"
+    if [ -z "$block" ]; then
+      printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2
+      status=1
+      continue
+    fi
+    # shellcheck disable=SC2016
+    if ! grep -qxF '    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
+      printf 'first-stage job "%s" does not run on the CI_RACE_RUNNER variable with a '"'"'ubuntu-latest'"'"' fallback\n' "$job" >&2
+      status=1
+    fi
+  done
+  return "$status"
+}
+
 # A job whose OWN env: sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
 # pulls a mirrored image, so it must not be able to start before
 # mirror-preflight's "Verify every mirrored image is resolvable before any
@@ -937,6 +959,7 @@ run_all_checks() {
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
   check_race_runner_uses_variable "$file"
+  check_first_stage_runner_uses_variable "$file"
   check_testcontainers_needs_mirror_preflight "$file"
   check_heavy_jobs_gated "$file"
   check_verify_reads_plan "$file"
@@ -1435,6 +1458,18 @@ verify_skip_polarity="$tmpdir/verify-skip-polarity.yml"
 sed 's/if \[ "\$heavy" = false \] && \[ "\$result" = skipped \]/if [ "$heavy" = true ] \&\& [ "$result" = skipped ]/' "$workflow" > "$verify_skip_polarity"
 cmp -s "$workflow" "$verify_skip_polarity" && { printf 'polarity mutation did not apply\n' >&2; exit 1; }
 assert_check_fails 'verify allows skipped heavy lanes when heavy=true' check_verify_reads_plan "$verify_skip_polarity"
+
+# (v0) a first-stage job back on a hardcoded hosted label.
+first_stage_hardcoded="$tmpdir/first-stage-hardcoded.yml"
+awk '
+  /^  plan:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  plan:$/ { in_job=0 }
+  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  { print }
+' "$workflow" > "$first_stage_hardcoded"
+cmp -s "$workflow" "$first_stage_hardcoded" && { printf 'NEGATIVE CONTROL SETUP FAILED: first_stage_hardcoded did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put the plan job back on a hardcoded ubuntu-latest' \
+  check_first_stage_runner_uses_variable "$first_stage_hardcoded"
 
 # (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
 # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX env in place -- the exact shape that
