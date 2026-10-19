@@ -7640,6 +7640,11 @@
         ]
       },
       {
+        "key": "outcome_rows_evicted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "outcome_reduction_declined",
         "type": "string",
         "presence": "required",
@@ -11032,6 +11037,11 @@
           "partial",
           "degraded"
         ]
+      },
+      {
+        "key": "outcome_rows_evicted",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "outcome_reduction_declined",

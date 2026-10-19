@@ -98,3 +98,35 @@ func TestAnswerReuseOutcomeVocabularyHoldsEveryOutcomeConstant(t *testing.T) {
 		t.Fatalf("parsed %d outcome constants, vocabulary holds %d", found, len(vocabulary))
 	}
 }
+
+func TestSlogEngineTelemetryCountsOutcomeRowEvictions(t *testing.T) {
+	instruments, read := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		telemetry := NewSlogEngineTelemetry(logger).WithMetrics(instruments)
+		ctx, principal := context.Background(), storage.Principal{OrgID: "org_metrics_test"}
+		telemetry.RecordClaimDepthNarrowing(ctx, principal, ClaimDepthNarrowingEvent{Served: true, OutcomeRowsEvicted: 1})
+		telemetry.RecordFactRowTruncation(ctx, principal, FactRowTruncationEvent{Served: true, OutcomeRowsEvicted: 2})
+		telemetry.RecordPathDrop(ctx, principal, PathDropEvent{Served: true, OutcomeRowsEvicted: 1})
+		telemetry.RecordPlanNarrowing(ctx, principal, PlanNarrowingEvent{OutcomeReductionApplied: true, OutcomeRowsEvicted: 1})
+		telemetry.RecordPathDrop(ctx, principal, PathDropEvent{Served: false, OutcomeRowsEvicted: 1})
+		telemetry.RecordPathDrop(ctx, principal, PathDropEvent{Served: true})
+	})
+	if len(records) != 6 {
+		t.Fatalf("%d log records, want 6: the lines must still be written", len(records))
+	}
+	want := map[string]int64{
+		"acr_outcome_rows_evicted_total{lever=claim_depth}": 1,
+		"acr_outcome_rows_evicted_total{lever=fact_row}":    1,
+		"acr_outcome_rows_evicted_total{lever=path_drop}":   1,
+		"acr_outcome_rows_evicted_total{lever=candidate}":   1,
+	}
+	got := read()
+	if len(got) != len(want) {
+		t.Fatalf("cells %v, want %v", got, want)
+	}
+	for cell, n := range want {
+		if got[cell] != n {
+			t.Fatalf("cell %s = %d, want %d (all %v)", cell, got[cell], n, got)
+		}
+	}
+}
