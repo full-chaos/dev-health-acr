@@ -984,6 +984,12 @@ jobs:
       # single-job run; only the package set is partitioned, four ways, by
       # scripts/ci/test-shard.sh, so each shard still runs a real subset of
       # `go list ./...` under -race with the same deterministic shuffle.
+      - name: Pool environment facts
+        run: |
+          id; nproc; uname -m
+          cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+          cat /sys/fs/cgroup/memory.max 2>/dev/null || true
+          docker info --format 'docker cpus={{.NCPU}} mem={{.MemTotal}}' || true
       - name: Run race and deterministic shuffle tests
         run: |
           set -euo pipefail
