@@ -12,7 +12,7 @@ import (
 const (
 	fulltextHoldBatchSize      = 1000
 	fulltextHoldBatches        = 10
-	fulltextHoldAliasesPerNode = 40
+	fulltextHoldAliasesPerNode = 20
 	fulltextHoldNodes          = fulltextHoldBatchSize * fulltextHoldBatches
 	fulltextHoldRepeats        = 3
 )
@@ -75,50 +75,70 @@ func rawFulltextHitCount(t *testing.T, ctx context.Context, adapter *Adapter, ke
 	}
 }
 
-// TestLiveFulltextReadWaitsForALargeBatchToBeIndexed applies fulltextHoldNodes nodes that share a term, in the largest batches the projection contract allows,
-// which keeps the Subject fulltext index under construction for longer than a first read takes. A control read that
-// goes straight to the index must come back short on every fresh graph, which shows the hold is real; the adapter's
-// read must then leave the index operational and see every node. The test fails when the readiness wait is removed
-// from the fulltext query, on every iteration and not by chance.
-func TestLiveFulltextReadWaitsForALargeBatchToBeIndexed(t *testing.T) {
+func rebuildFulltextIndex(t *testing.T, ctx context.Context, adapter *Adapter, key string) {
+	t.Helper()
+	if _, err := adapter.api.query(ctx, key, "CALL db.idx.fulltext.drop('"+labelSubject+"')", nil, false); err != nil {
+		t.Fatalf("drop the fulltext index: %v", err)
+	}
+	if err := adapter.createFulltextIndex(ctx, key); err != nil {
+		t.Fatalf("recreate the fulltext index: %v", err)
+	}
+}
+
+func awaitFulltextIndexStatus(t *testing.T, ctx context.Context, adapter *Adapter, key string) {
+	t.Helper()
+	began := time.Now()
+	for fulltextIndexStatus(ctx, adapter, key) != labelSubject+":OPERATIONAL" {
+		if time.Since(began) > time.Minute {
+			t.Fatalf("the fulltext index is not operational after a minute")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// TestLiveFulltextReadWaitsForARebuildingIndex projects fulltextHoldNodes nodes that share a term, then drops and
+// recreates the Subject fulltext index, which FalkorDB rebuilds in the background over every stored node: the index is
+// UNDER CONSTRUCTION for longer than a first read takes. A control read that goes straight to the index must come back
+// short on every repeat, which shows the hold is real; the adapter's read must then leave the index operational and
+// see every node. The test fails when the readiness wait is removed from the fulltext query, on every repeat and not by
+// chance.
+func TestLiveFulltextReadWaitsForARebuildingIndex(t *testing.T) {
 	ctx := context.Background()
 	adapter, _ := newLiveFalkorAdapter(t, ctx)
-	stamp := time.Now().UTC().Format("20060102T150405.000000000")
+	orgID := fmt.Sprintf("live-fulltext-hold-%s", time.Now().UTC().Format("20060102T150405.000000000"))
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+	began := time.Now()
+	applyFulltextHoldBatches(t, ctx, adapter, orgID)
+	key := graphKey(adapter.config.GraphPrefix, orgID)
+	awaitFulltextIndexStatus(t, ctx, adapter, key)
+	t.Logf("applied %d nodes in %v", fulltextHoldNodes, time.Since(began))
 
 	for i := 0; i < fulltextHoldRepeats; i++ {
-		controlOrg := fmt.Sprintf("live-fulltext-hold-control-%s-%02d", stamp, i)
-		realOrg := fmt.Sprintf("live-fulltext-hold-real-%s-%02d", stamp, i)
-		t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), controlOrg) })
-		t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), realOrg) })
+		rebuildFulltextIndex(t, ctx, adapter, key)
+		controlHits := rawFulltextHitCount(t, ctx, adapter, key)
+		controlStatus := fulltextIndexStatus(ctx, adapter, key)
+		awaitFulltextIndexStatus(t, ctx, adapter, key)
 
-		appliedAt := time.Now()
-		applyFulltextHoldBatches(t, ctx, adapter, controlOrg)
-		applyTook := time.Since(appliedAt)
-		controlKey := graphKey(adapter.config.GraphPrefix, controlOrg)
-		controlHits := rawFulltextHitCount(t, ctx, adapter, controlKey)
-		controlStatus := fulltextIndexStatus(ctx, adapter, controlKey)
-
-		applyFulltextHoldBatches(t, ctx, adapter, realOrg)
-		realKey := graphKey(adapter.config.GraphPrefix, realOrg)
-		began := time.Now()
-		got, truncated, err := adapter.fulltextSearchNodes(ctx, realKey, realOrg, "escalation", 10, temporalFilter{})
+		rebuildFulltextIndex(t, ctx, adapter, key)
+		readBegan := time.Now()
+		got, truncated, err := adapter.fulltextSearchNodes(ctx, key, orgID, "escalation", 10, temporalFilter{})
 		if err != nil {
-			t.Fatalf("iteration %d: fulltextSearchNodes() error = %v", i, err)
+			t.Fatalf("repeat %d: fulltextSearchNodes() error = %v", i, err)
 		}
-		readTook := time.Since(began)
-		statusAfter := fulltextIndexStatus(ctx, adapter, realKey)
-		hitsAfter := rawFulltextHitCount(t, ctx, adapter, realKey)
-		t.Logf("iteration %d: apply took %v; control hits=%d of %d status=%s; real read returned %d truncated=%v in %v, status after=%s, raw hits after=%d",
-			i, applyTook, controlHits, fulltextHoldNodes, controlStatus, len(got), truncated, readTook, statusAfter, hitsAfter)
+		readTook := time.Since(readBegan)
+		statusAfter := fulltextIndexStatus(ctx, adapter, key)
+		hitsAfter := rawFulltextHitCount(t, ctx, adapter, key)
+		t.Logf("repeat %d: control hits=%d of %d status=%s; real read returned %d truncated=%v in %v, status after=%s, raw hits after=%d",
+			i, controlHits, fulltextHoldNodes, controlStatus, len(got), truncated, readTook, statusAfter, hitsAfter)
 
 		if controlHits >= fulltextHoldNodes {
-			t.Fatalf("iteration %d: the control read saw all %d nodes, so the index was not held under construction", i, fulltextHoldNodes)
+			t.Fatalf("repeat %d: the control read saw all %d nodes, so the index was not held under construction", i, fulltextHoldNodes)
 		}
 		if statusAfter != labelSubject+":OPERATIONAL" {
-			t.Fatalf("iteration %d: the index status after the read is %s, want %s:OPERATIONAL", i, statusAfter, labelSubject)
+			t.Fatalf("repeat %d: the index status after the read is %s, want %s:OPERATIONAL", i, statusAfter, labelSubject)
 		}
 		if hitsAfter != fulltextHoldNodes {
-			t.Fatalf("iteration %d: %d of %d nodes are searchable right after the read", i, hitsAfter, fulltextHoldNodes)
+			t.Fatalf("repeat %d: %d of %d nodes are searchable right after the read", i, hitsAfter, fulltextHoldNodes)
 		}
 	}
 }
