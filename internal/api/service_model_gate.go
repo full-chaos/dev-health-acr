@@ -52,7 +52,11 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		// model withheld: a configuration that vanishes before the resolver
 		// reads it fails the turn as unavailable, never as a silent switch to
 		// the deployment model.
-		if own, err := a.orgHasOwnModel(ctx, principal); err == nil && own {
+		own, err := a.orgHasOwnModel(ctx, principal)
+		if err != nil {
+			return "", false, err
+		}
+		if own {
 			return serviceModelBasisOwnModel, false, nil
 		}
 		return basis, true, nil

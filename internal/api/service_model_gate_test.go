@@ -192,6 +192,7 @@ func TestServiceModelDecisionThatCannotBeMadeFailsClosedBeforeAnyModelCall(t *te
 	}{
 		{name: "entitlement service down and no own model", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{}, code: "upstream_unavailable"},
 		{name: "model configuration store down", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: errors.New("store down")}, code: "store_unavailable"},
+		{name: "service model granted and model configuration store down", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{err: errors.New("store down")}, code: "store_unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := gatedClientRouteRig(t, tc.grants, tc.configs)
