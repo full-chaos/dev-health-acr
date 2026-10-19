@@ -34,10 +34,11 @@ set -euo pipefail
 #      unit-dedicated packages (test-shard.sh --print-unit-dedicated-packages)
 #      is skipped when every race job that runs those packages is scheduled
 #      (not in skip_jobs); those race jobs then cover the same tests under
-#      -race. A leg is kept when any test it runs is skipped under -race: a
-#      Test func whose body names raceDetectorEnabled, race.Enabled or
-#      testing.Short, or one declared in a `//go:build` file excluding race
-#      (race_skipped_tests below); the leg's own test set is read from its
+#      -race. A leg is kept when any test it runs can behave differently
+#      under -race: scripts/ci/race-affected-tests.sh lists them (a closure
+#      over declaration names from raceDetectorEnabled, race.Enabled and
+#      !race build-tagged files, through helpers, variables and in-module
+#      packages); the leg's own test set is read from its
 #      -run/-skip race-split.sh list in ci.yml. Their job keys go to
 #      dedup_needs, and verify requires each of them to succeed. With --heavy
 #      false (a draft without ci-full) no race job runs, so no unit leg is
@@ -105,23 +106,6 @@ list_jobs() {
     in_jobs && /^[^[:space:]]/ { in_jobs=0 }
     in_jobs && /^  [A-Za-z0-9_-]+:/ { line=$0; sub(/^  /, "", line); sub(/:.*/, "", line); print line }
   ' "$workflow"
-}
-
-# race_skipped_tests DIR -> the top-level Test funcs of DIR's test files that
-# do not run under -race: the body names raceDetectorEnabled, race.Enabled or
-# testing.Short(), or the file's //go:build line excludes race.
-race_skipped_tests() {
-  local files=("$1"/*_test.go)
-  [ -e "${files[0]}" ] || return 0
-  awk '
-    function flush() { if (name != "" && hit) print name; name = ""; hit = 0 }
-    FNR == 1 { flush(); norace = 0 }
-    /^\/\/go:build/ && /!race/ { norace = 1 }
-    /^func Test[A-Za-z0-9_]*\(/ { flush(); name = $2; sub(/\(.*/, "", name); hit = norace; next }
-    /^func / { flush(); next }
-    name != "" && /raceDetectorEnabled|race\.Enabled|testing\.Short\(\)/ { hit = 1 }
-    END { flush() }
-  ' "${files[@]}" | LC_ALL=C sort -u
 }
 
 # leg_regime N -> "run|skip <space-separated names>" for unit leg N's
@@ -425,6 +409,7 @@ select_shards() {
     esac
   done
   local dedicated dedup_needs="" pkg cover covers ok
+  local -A race_affected=()
   if [ "$heavy" = true ]; then
     dedicated=" $(cd "$repo_root" && scripts/ci/test-shard.sh --print-unit-dedicated-packages) "
     [ "$dedicated" != "  " ] || { printf 'reached-shards: no unit-dedicated package listed\n' >&2; rm -rf "$legdir"; return 1; }
@@ -451,7 +436,10 @@ select_shards() {
       regime="$(leg_regime "${key#unit:}")" || { rm -rf "$legdir"; return 1; }
       names=" ${regime#* } "
       for pkg in "${pkgs[@]}"; do
-        skipped="$(race_skipped_tests "$repo_root/${pkg#"$module_path"/}")"
+        if [ -z "${race_affected[$pkg]+set}" ]; then
+          race_affected[$pkg]="$("$repo_root/scripts/ci/race-affected-tests.sh" --root "$repo_root" "${pkg#"$module_path"/}")" || { rm -rf "$legdir"; return 1; }
+        fi
+        skipped="${race_affected[$pkg]}"
         for t in $skipped; do
           case "$regime" in
             all) ok=0 ;;

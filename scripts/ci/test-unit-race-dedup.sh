@@ -16,9 +16,12 @@ set -euo pipefail
 #   2. every isolated race job in ci.yml that selects the package is in
 #      dedup_needs, and at least one does;
 #   3. tests(leg) is a subset of the union of tests(race job);
-#   4. no test of the leg is skipped under -race: a Test func whose body names
-#      raceDetectorEnabled, race.Enabled or testing.Short(), or one declared in
-#      a test file whose //go:build line excludes race;
+#   4. no test of the leg can behave differently under -race, as listed by
+#      scripts/ci/race-affected-tests.sh (raceDetectorEnabled, race.Enabled and
+#      !race build-tagged declarations, followed through helpers, variables and
+#      in-module packages; scripts/ci/test-race-affected-tests.sh is its
+#      fixture). testing.Short() is not a race signal: neither side passes
+#      -short (check 5), so it is false in both runs;
 #   5. neither the leg nor its race jobs narrow the run by -short or -tags (in
 #      their ci.yml blocks or the Makefile test-coverage / test-race recipes),
 #      and the race jobs carry every job-level env key the unit job carries;
@@ -85,20 +88,6 @@ selection() {
     return 1
   fi
   printf '%s %s\n' "$flag" "$(scripts/ci/race-split.sh "$split" "$mode")"
-}
-
-race_skipped() { # DIR
-  local files=("$1"/*_test.go)
-  [ -e "${files[0]}" ] || return 0
-  awk '
-    function flush() { if (name != "" && hit) print name; name = ""; hit = 0 }
-    FNR == 1 { flush(); norace = 0 }
-    /^\/\/go:build/ && /!race/ { norace = 1 }
-    /^func Test[A-Za-z0-9_]*\(/ { flush(); name = $2; sub(/\(.*/, "", name); hit = norace; next }
-    /^func / { flush(); next }
-    name != "" && /raceDetectorEnabled|race\.Enabled|testing\.Short\(\)/ { hit = 1 }
-    END { flush() }
-  ' "${files[@]}" | LC_ALL=C sort -u
 }
 
 env_keys() { # JOB_BLOCK on stdin -> job-level env keys
@@ -180,7 +169,7 @@ check() {
         printf 'unit leg %s runs %s test(s) of %s that no race job runs: %s\n' "$n" "$(wc -l <<<"$want" | tr -d ' ')" "$pkg" "$(head -n 5 <<<"$want" | tr '\n' ' ')" >&2
         status=1
       fi
-      skipped="$(race_skipped "$repo_root/${pkg#"$module"/}")"
+      skipped="$(scripts/ci/race-affected-tests.sh "${pkg#"$module"/}")" || { printf 'race-affected-tests.sh failed for %s\n' "$pkg" >&2; status=1; continue; }
       hit="$(LC_ALL=C comm -12 "$tmp/leg" <(printf '%s\n' "$skipped" | grep -v '^$' || true))"
       if [ -n "$hit" ]; then
         printf 'unit leg %s runs test(s) of %s that skip under -race: %s\n' "$n" "$pkg" "$(tr '\n' ' ' <<<"$hit")" >&2
