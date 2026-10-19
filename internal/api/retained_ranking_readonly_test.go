@@ -21,16 +21,19 @@ func (s retainedRankingReadOnlyStore) Save(context.Context, storage.Principal, c
 	return errors.New("unexpected retained result write")
 }
 
-// ResolveSubjects remains available for the existing live authorization check.
-// The reuse recheck reads the graph once for a stored answer that committed a
-// team, to learn whether the team is removed at its source; that read finds
-// none here and nothing else of the answer is rediscovered, like the
-// fact/model spies.
+// ResolveSubjects remains available for the existing live authorization check;
+// no fresh discovery on a reuse hit, like the fact/model spies, except the
+// bounded removed-team recheck for team answers, which finds none here.
 type retainedRankingReuseGraph struct {
 	surfaceGraph
 	t *testing.T
 }
 
 func (g retainedRankingReuseGraph) DiscoverContext(context.Context, storage.Principal, cf.GraphDiscoveryRequest) (cf.GraphContext, error) {
-	return cf.GraphContext{}, nil
+	g.t.Error("retained ranking reuse attempted fresh discovery")
+	return cf.GraphContext{}, errors.New("unexpected retained result discovery")
+}
+
+func (g retainedRankingReuseGraph) RemovedTeams(context.Context, storage.Principal, cf.ResolvedGraphBinding, []cf.SubjectRef) ([]cf.SubjectRef, error) {
+	return nil, nil
 }

@@ -99,3 +99,27 @@ func (a *Adapter) removedCommittedTeams(ctx context.Context, key string, princip
 	slog.Default().InfoContext(ctx, "context_fabric: removed team lookup", "teams", len(teams), "removed", len(removed), "removed_ids", contextfabric.SanitizeLogStrings(removedIDs))
 	return removed, false
 }
+
+var _ contextfabric.RemovedTeamReader = (*Adapter)(nil)
+
+// RemovedTeams implements contextfabric.RemovedTeamReader: the bounded keyed
+// read behind a reuse hit, with the same authorization as DiscoverContext's.
+func (a *Adapter) RemovedTeams(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.SubjectRef, error) {
+	orgID := strings.TrimSpace(principal.OrgID)
+	if orgID == "" {
+		return nil, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
+	}
+	key, err := a.effectiveKey(ctx, orgID, binding)
+	if err != nil {
+		return nil, err
+	}
+	ctx, err = a.withProjectReach(ctx, key, principal)
+	if err != nil {
+		return nil, err
+	}
+	removed, failed := a.removedCommittedTeams(ctx, key, principal, subjects)
+	if failed {
+		return nil, graphNotProjectedError(fmt.Errorf("removed team lookup failed"))
+	}
+	return removed, nil
+}

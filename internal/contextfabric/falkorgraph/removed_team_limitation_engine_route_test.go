@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -133,5 +134,31 @@ func TestAnOwningTeamCohortMemberNeverProvedGoneIsNotFlagged(t *testing.T) {
 	answer := askOwningTeams(t, seedOwnedRepository(), storage.Principal{OrgID: "org-1"})
 	if got := countRemovedTeamLimitation(answer); got != 0 {
 		t.Fatalf("limitations = %q: an active cohort member carries the removed-team sentence", answer.result.Limitations)
+	}
+}
+
+func TestTheBoundedRemovedTeamReadIsOneKeyedQueryAndFlagsOnlyAGoneTeam(t *testing.T) {
+	s := routeSeed{text: map[string]string{}, reach: map[string][]string{}, deployments: map[string][]string{}}
+	s.nodes = append(s.nodes,
+		seededNode{kind: "team", id: "team:gone", label: "Gone", props: map[string]interface{}{propPropertyPrefix + "gone_at": "2026-10-09 17:30:00.000000"}},
+		seededNode{kind: "team", id: "team:live", label: "Live"})
+	base := s.conn()
+	queries := 0
+	conn := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		queries++
+		return base.queryFunc(ctx, key, cypher, params, readOnly)
+	}}
+	adapter := newFakeAdapter(t, conn)
+	gone := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:gone", Label: "Gone"}
+	live := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:live", Label: "Live"}
+	removed, err := adapter.RemovedTeams(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.ResolvedGraphBinding{}, []contextfabric.SubjectRef{gone, live})
+	if err != nil {
+		t.Fatalf("RemovedTeams() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0] != gone {
+		t.Fatalf("removed = %v, want only %v", removed, gone)
+	}
+	if queries != 1 {
+		t.Fatalf("graph queries = %d, want exactly one keyed read for two teams", queries)
 	}
 }

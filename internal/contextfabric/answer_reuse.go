@@ -864,7 +864,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// result's own identifier and generation time, not this call's).
 	// Reused is per-serving metadata, set only on this in-memory copy;
 	// nothing about the stored row is touched.
-	if verdict.ContainmentRan {
+	if verdict.ContainmentRan || verdict.RemovedChecked {
 		candidate = withReusedRemovedTeamState(candidate, verdict.RemovedTeams)
 	}
 	candidate.Reused = true
@@ -1015,8 +1015,8 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
-	if len(evidenceRefs) == 0 && !slices.ContainsFunc(subjects, func(s SubjectRef) bool { return s.Kind == SubjectTeam }) {
-		return reuseRecheckVerdict{Outcome: AnswerReuseHit}
+	if len(evidenceRefs) == 0 {
+		return e.reuseRemovedTeamRecheck(ctx, principal, binding, subjects)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: recheckRequest, Interpretation: candidate.Interpretation, Resolution: resolution, Binding: binding,
@@ -1063,6 +1063,9 @@ type reuseRecheckVerdict struct {
 	// RemovedTeams are the stored answer's committed teams the fresh recheck
 	// proves removed at their source; meaningful only when ContainmentRan.
 	RemovedTeams []SubjectRef
+	// RemovedChecked is set when RemovedTeams was read by the bounded
+	// removed-team recheck rather than by a full discovery.
+	RemovedChecked bool
 }
 
 // recordReuseContainment emits the containment measurement: how many refs
@@ -1199,4 +1202,23 @@ func withReusedRemovedTeamState(candidate InvestigationResult, removed []Subject
 	candidate.Limitations = composed
 	candidate.LimitationsDisplaced += displaced
 	return candidate
+}
+
+// reuseRemovedTeamRecheck is the recheck verdict for a stored answer that
+// cites no evidence: no full discovery runs for it. When the answer committed
+// a team, ONE bounded graph read (bounded by the committed team count) learns
+// whether the team is removed at its source; a graph without that read serves
+// the answer as stored.
+func (e *Engine) reuseRemovedTeamRecheck(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) reuseRecheckVerdict {
+	verdict := reuseRecheckVerdict{Outcome: AnswerReuseHit}
+	reader, ok := e.graph.(RemovedTeamReader)
+	if !ok || !slices.ContainsFunc(subjects, func(s SubjectRef) bool { return s.Kind == SubjectTeam }) {
+		return verdict
+	}
+	removed, err := reader.RemovedTeams(ctx, principal, binding, subjects)
+	if err != nil {
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckUnavailable}
+	}
+	verdict.RemovedTeams, verdict.RemovedChecked = removed, true
+	return verdict
 }
