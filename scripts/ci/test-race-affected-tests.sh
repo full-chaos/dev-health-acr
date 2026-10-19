@@ -11,7 +11,7 @@ detector="${DETECTOR:-$here/race-affected-tests.sh}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 m="$tmp/mod"
-mkdir -p "$m/racesupport" "$m/other" "$m/target"
+mkdir -p "$m/racesupport" "$m/dotsupport" "$m/other" "$m/target"
 printf 'module example.com/fixture\n\ngo 1.22\n' >"$m/go.mod"
 
 cat >"$m/racesupport/on.go" <<'EOF'
@@ -42,6 +42,41 @@ func SkipUnderRace(t *testing.T) {
 
 // Unrelated names its own result and never reads the race signal.
 func Unrelated() int { return 1 }
+
+// Gate checks through a method on a value of an imported type.
+type Gate struct{}
+
+func (Gate) Check(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race")
+	}
+}
+EOF
+cat >"$m/dotsupport/on.go" <<'EOF'
+// +build race
+
+package dotsupport
+
+const legacyRace = true
+EOF
+cat >"$m/dotsupport/off.go" <<'EOF'
+// +build !race
+
+package dotsupport
+
+const legacyRace = false
+EOF
+cat >"$m/dotsupport/skip.go" <<'EOF'
+package dotsupport
+
+import "testing"
+
+// SkipIfRace reads a race constant set by legacy build lines.
+func SkipIfRace(t *testing.T) {
+	if legacyRace {
+		t.Skip("race")
+	}
+}
 EOF
 cat >"$m/other/other.go" <<'EOF'
 package other
@@ -133,8 +168,37 @@ func TestSameNameInAnotherPackage(t *testing.T) {
 func TestPlain(t *testing.T) { _ = Work() }
 EOF
 printf 'package other\n\nconst Exported = 1\n' >"$m/other/exported.go"
+cat >"$m/target/legacy_test.go" <<'EOF'
+// +build !race
 
-want="$(printf '%s\n' TestAlias TestCrossPackageHelper TestDirect TestHelper TestHelperChain TestOnlyWithoutRace TestSubtestOnlyWithoutRace | LC_ALL=C sort)"
+package target
+
+import "testing"
+
+func TestLegacyOnlyWithoutRace(t *testing.T) {}
+EOF
+cat >"$m/target/routes_test.go" <<'EOF'
+package target
+
+import (
+	"testing"
+
+	. "example.com/fixture/dotsupport"
+	rs "example.com/fixture/racesupport"
+)
+
+func TestAliasImport(t *testing.T) { rs.SkipUnderRace(t) }
+
+func TestDotImport(t *testing.T) { SkipIfRace(t) }
+
+func TestMethodOnImportedType(t *testing.T) {
+	var g rs.Gate
+	g.Check(t)
+}
+EOF
+
+want="$(printf '%s\n' TestAlias TestAliasImport TestCrossPackageHelper TestDirect TestDotImport TestHelper TestHelperChain \
+  TestLegacyOnlyWithoutRace TestMethodOnImportedType TestOnlyWithoutRace TestSubtestOnlyWithoutRace | LC_ALL=C sort)"
 rc=0
 got="$(GOFLAGS='-buildvcs=false' GOWORK=off "$detector" --root "$m" target 2>"$tmp/err")" || rc=$?
 if [ "$rc" -ne 0 ]; then

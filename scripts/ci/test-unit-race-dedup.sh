@@ -15,7 +15,9 @@ set -euo pipefail
 #      (test-shard.sh --print-unit-dedicated-packages);
 #   2. every isolated race job in ci.yml that selects the package is in
 #      dedup_needs, and at least one does;
-#   3. tests(leg) is a subset of the union of tests(race job);
+#   3. tests(leg), listed from the plain build, is a subset of the union of
+#      tests(race job), listed from the -race build, so a test the race build
+#      does not compile counts as not run;
 #   4. no test of the leg can behave differently under -race, as listed by
 #      scripts/ci/race-affected-tests.sh (raceDetectorEnabled, race.Enabled and
 #      !race build-tagged declarations, followed through helpers, variables and
@@ -55,15 +57,23 @@ list_jobs() {
 }
 
 # go_tests PKG [run|skip REGEX] -> the top-level tests that invocation runs.
+# With RACE=1 the list comes from the -race build, so a test the race build
+# does not compile (any build constraint form) is absent from it. A control
+# below drops one name from that list through RACE_LIST_DROP.
 # `go test -list .` runs once per package (cached in $tmp); the race-split
 # regexes are anchored name alternations (^(A|B)$), which grep -E reads the
 # same way go test -run does for top-level names.
 go_tests() {
-  local pkg="$1" mode="${2:-all}" regex="${3:-}" cache
-  cache="$tmp/list.$(printf '%s' "$pkg" | tr '/.' '__')"
+  local pkg="$1" mode="${2:-all}" regex="${3:-}" cache flags=()
+  [ "${RACE:-0}" != 1 ] || flags=(-race)
+  cache="$tmp/list${RACE:-0}.$(printf '%s' "$pkg" | tr '/.' '__')"
   if [ ! -s "$cache" ]; then
-    go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u >"$cache"
-    [ -s "$cache" ] || { printf 'go test -list found no test in %s\n' "$pkg" >&2; return 1; }
+    go test "${flags[@]}" -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u >"$cache"
+    [ -s "$cache" ] || { printf 'go test%s -list found no test in %s\n' "${flags[*]:+ ${flags[*]}}" "$pkg" >&2; return 1; }
+    if [ "${RACE:-0}" = 1 ] && [ -n "${RACE_LIST_DROP:-}" ]; then
+      grep -vxF "$RACE_LIST_DROP" "$cache" >"$cache.drop" || true
+      mv "$cache.drop" "$cache"
+    fi
   fi
   case "$regex" in '' | '^('*')$') ;; *) printf 'unexpected selection regex %s\n' "$regex" >&2; return 1 ;; esac
   case "$mode" in
@@ -153,7 +163,7 @@ check() {
         fi
         sel="$(selection "$(grep -E '^ +export GOFLAGS=' <<<"$block" | head -n1 || true)")" || return 1
         # shellcheck disable=SC2086 # "<run|skip> <regex>" or "all", split on purpose
-        union+="$(go_tests "./${pkg#"$module"/}" $sel)"$'\n'
+        union+="$(RACE=1 go_tests "./${pkg#"$module"/}" $sel)"$'\n'
       done < <(list_jobs "$wf")
       if [ "$covered" -eq 0 ]; then
         printf 'unit leg %s holds %s, which no isolated race job runs\n' "$n" "$pkg" >&2
@@ -216,6 +226,18 @@ assert_fails 'race-devhealthsource selects another package' \
 # shellcheck disable=SC2016 # the literal workflow text
 assert_fails 'race-devhealthfacts-heavy runs with -short' \
   "$(mutate short 'export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-heavy)"' 'export GOFLAGS="-trimpath -short -run=$(scripts/ci/race-split.sh devhealthfacts race-heavy)"')"
+# A test the race build does not compile: one name of the devhealthfacts heavy
+# leg is dropped from the -race test list.
+drop="$(RACE=0 go_tests ./internal/contextfabric/devhealthfacts run "$(scripts/ci/race-split.sh devhealthfacts heavy)" | head -n1)"
+[ -n "$drop" ] || { printf 'NEGATIVE CONTROL SETUP FAILED: no devhealthfacts heavy test to drop\n' >&2; exit 1; }
+rm -f "$tmp"/list1.*
+if RACE_LIST_DROP="$drop" check "$wf" >"$tmp/control.log" 2>&1; then
+  printf 'NEGATIVE CONTROL FAILED: %s missing from the -race list -- the check passed\n' "$drop" >&2
+  exit 1
+fi
+printf 'control ok: %s missing from the -race list -> %s\n' "$drop" "$(grep -vE '^unit leg [0-9]+: ' "$tmp/control.log" | head -n1)"
+rm -f "$tmp"/list1.*
+
 # A leg the selector keeps because tests in it skip under -race (devhealthfacts
 # rest), forced into the drop set.
 assert_fails 'devhealthfacts rest leg forced into the drop set' "$wf" 5
