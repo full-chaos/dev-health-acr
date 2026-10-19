@@ -15,13 +15,11 @@ import (
 //
 // It returns the wire type to emit, whether the endpoints must be swapped,
 // and the identity spelling to derive the relationship id from. The identity
-// spelling matters for replay: for an UNMAPPED value it is the raw column
-// value, byte-identical to what this producer has always passed to
-// identity.DeriveRelationship, so no already-projected edge changes id. For a
-// mapped value it is the mapped type's own spelling, so an inverted row and
-// the equivalent forward row derive the SAME id and converge on one edge --
-// and no already-projected edge is affected, because a row that would take
-// this branch could never be projected at all before this change.
+// spelling is the trimmed ASCII lower-case type, so case and padding variants
+// of one type for one pair derive one id (version v18; an edge projected from
+// any other spelling carries the old id until the rebuild). For a mapped value
+// it is the mapped type's own lower-case spelling, so an inverted row and the
+// equivalent forward row derive the SAME id and converge on one edge.
 func dependencyRelationshipType(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEndpoints bool, identitySpelling string) {
 	return dependencyrelation.Resolve(raw)
 }

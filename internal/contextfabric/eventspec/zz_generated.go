@@ -20,165 +20,169 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"api.oauth_step": OAuthStep,
-	"contextfabric.anchor_binding_transition":          AnchorBindingTransition,
-	"contextfabric.answer_display":                     AnswerDisplay,
-	"contextfabric.answer_reuse_bypass":                AnswerReuseBypass,
-	"contextfabric.answer_reuse_containment":           AnswerReuseContainment,
-	"contextfabric.answer_reuse_outcome":               AnswerReuseOutcome,
-	"contextfabric.answer_reuse_served_request_id":     AnswerReuseServedRequestID,
-	"contextfabric.binding_epoch_moved":                BindingEpochMoved,
-	"contextfabric.binding_epoch_unchanged":            BindingEpochUnchanged,
-	"contextfabric.category_fact_composition":          CategoryFactComposition,
-	"contextfabric.client_synthesis_decision":          ClientSynthesisDecision,
-	"contextfabric.cohort_driver_narration":            CohortDriverNarration,
-	"contextfabric.cohort_kind_fulltext":               CohortKindFulltext,
-	"contextfabric.cohort_ranked":                      CohortRanked,
-	"contextfabric.cohort_structure_gate":              CohortStructureGate,
-	"contextfabric.commit_affirmation_retraction":      CommitAffirmationRetraction,
-	"contextfabric.commit_kept_by_no_member_found":     CommitKeptByNoMemberFound,
-	"contextfabric.completeness_authority":             CompletenessAuthority,
-	"contextfabric.confirmed_need_ledger":              ConfirmedNeedLedger,
-	"contextfabric.confirmed_need_ledger_window":       ConfirmedNeedLedgerWindow,
-	"contextfabric.count_population_scope":             CountPopulationScope,
-	"contextfabric.coverage_disclosure_phrasing":       CoverageDisclosurePhrasing,
-	"contextfabric.coverage_entries_capped":            CoverageEntriesCapped,
-	"contextfabric.direct_read":                        DirectRead,
-	"contextfabric.direct_read_authorization":          DirectReadAuthorization,
-	"contextfabric.direct_relationships_read":          DirectRelationshipsRead,
-	"contextfabric.driver_identity_collisions":         DriverIdentityCollisions,
-	"contextfabric.driver_source_state_corrected":      DriverSourceStateCorrected,
-	"contextfabric.dual_table_facts":                   DualTableFacts,
-	"contextfabric.engine_fact_gate_info":              EngineFactGateInfo,
-	"contextfabric.engine_fact_gate_warn":              EngineFactGateWarn,
-	"contextfabric.evidence_expansion":                 EvidenceExpansion,
-	"contextfabric.evidence_label_fallback":            EvidenceLabelFallback,
-	"contextfabric.fact_evaluation_coverage":           FactEvaluationCoverage,
-	"contextfabric.fact_read":                          FactRead,
-	"contextfabric.fact_read_failed":                   FactReadFailed,
-	"contextfabric.fact_result_rejected":               FactResultRejected,
-	"contextfabric.fact_root_refused":                  FactRootRefused,
-	"contextfabric.fact_scope_expansion_decision":      FactScopeExpansionDecision,
-	"contextfabric.fact_scope_expansion_gap":           FactScopeExpansionGap,
-	"contextfabric.fact_table_declaration":             FactTableDeclaration,
-	"contextfabric.fact_table_declaration_rejected":    FactTableDeclarationRejected,
-	"contextfabric.fact_table_declarations_capped":     FactTableDeclarationsCapped,
-	"contextfabric.frame_validation":                   FrameValidation,
-	"contextfabric.gated_offer_resolution":             GatedOfferResolution,
-	"contextfabric.graphql_query":                      GraphQLQuery,
-	"contextfabric.interpretation_ensemble_gap":        InterpretationEnsembleGap,
-	"contextfabric.interpretation_ensemble_resolved":   InterpretationEnsembleResolved,
-	"contextfabric.interpreted_time_bound":             InterpretedTimeBound,
-	"contextfabric.kind_carry":                         KindCarry,
-	"contextfabric.model_rows_stripped":                ModelRowsStripped,
-	"contextfabric.operation_read":                     OperationRead,
-	"contextfabric.organization_subject_read":          OrganizationSubjectRead,
-	"contextfabric.ownership_routing":                  OwnershipRouting,
-	"contextfabric.period_delta_composition":           PeriodDeltaComposition,
-	"contextfabric.plan_carry":                         PlanCarry,
-	"contextfabric.plan_carry_outcome":                 PlanCarryOutcome,
-	"contextfabric.prior_consulted":                    PriorConsulted,
-	"contextfabric.prior_degradation":                  PriorDegradation,
-	"contextfabric.prior_degradation_pointer_dangling": PriorDegradationPointerDangling,
-	"contextfabric.prior_subject_receipt_skip_reason":  PriorSubjectReceiptSkipReason,
-	"contextfabric.prior_subject_receipts_skipped":     PriorSubjectReceiptsSkipped,
-	"contextfabric.project_deployment_walk":            ProjectDeploymentWalk,
-	"contextfabric.project_status_drivers":             ProjectStatusDrivers,
-	"contextfabric.projected_rows_by_fact_kind":        ProjectedRowsByFactKind,
-	"contextfabric.projected_rows_count":               ProjectedRowsCount,
-	"contextfabric.pull_request_status_filter":         PullRequestStatusFilter,
-	"contextfabric.question_family_resolution":         QuestionFamilyResolution,
-	"contextfabric.remembered_window_axis":             RememberedWindowAxis,
-	"contextfabric.render_shape_rule_skipped":          RenderShapeRuleSkipped,
-	"contextfabric.render_shape_selection_summary":     RenderShapeSelectionSummary,
-	"contextfabric.repository_work_item_walk":          RepositoryWorkItemWalk,
-	"contextfabric.requirement_outcome_transition":     RequirementOutcomeTransition,
-	"contextfabric.retained_ranking_accounting":        RetainedRankingAccounting,
-	"contextfabric.semantic_state_persistence":         SemanticStatePersistence,
-	"contextfabric.server_status_shadow":               ServerStatusShadowLine,
-	"contextfabric.stated_window_axis_decision":        StatedWindowAxisDecision,
-	"contextfabric.stored_answerability":               StoredAnswerability,
-	"contextfabric.stored_result_authorization":        StoredResultAuthorization,
-	"contextfabric.structure_explicit":                 StructureExplicit,
-	"contextfabric.structure_needs_disclosed":          StructureNeedsDisclosed,
-	"contextfabric.structure_offer_count":              StructureOfferCount,
-	"contextfabric.structure_receipt":                  StructureReceipt,
-	"contextfabric.structure_receipt_veto":             StructureReceiptVeto,
-	"contextfabric.subjectless_terminal":               SubjectlessTerminal,
-	"contextfabric.supplied_interpretation_decision":   SuppliedInterpretationDecision,
-	"contextfabric.supplied_synthesis_decision":        SuppliedSynthesisDecision,
-	"contextfabric.synthesis_input":                    SynthesisInput,
-	"contextfabric.synthesis_retry_selection":          SynthesisRetrySelection,
-	"contextfabric.synthesis_status_override":          SynthesisStatusOverride,
-	"contextfabric.team_anchor_walk":                   TeamAnchorWalk,
-	"contextfabric.team_blockers_drivers":              TeamBlockersDrivers,
-	"contextfabric.terminal_save_skipped":              TerminalSaveSkipped,
-	"contextfabric.window_binder_outcome":              WindowBinderOutcome,
-	"contextfabric.window_canonicalization_outcome":    WindowCanonicalizationOutcome,
-	"contextfabric.window_carry":                       WindowCarry,
-	"contextfabric.window_continuation_decision":       WindowContinuationDecision,
-	"contextfabric.window_expand_offer_redeemed":       WindowExpandOfferRedeemed,
-	"contextfabric.window_gate_offer_disclosure":       WindowGateOfferDisclosure,
-	"contextfabric.window_gated_for_confirmation":      WindowGatedForConfirmation,
-	"contextfabric.work_item_authorization_gap":        WorkItemAuthorizationGap,
-	"contextfabric.work_item_membership_gate":          WorkItemMembershipGate,
-	"contextfabric.work_item_membership_s1":            WorkItemMembershipS1,
-	"contextfabric.work_item_reuse":                    WorkItemReuse,
-	"contextfabric.work_item_stored_serving":           WorkItemStoredServing,
-	"contextfabric.work_item_tuple_admission":          WorkItemTupleAdmission,
-	"devhealthfacts.fact_bytes_bound_exceeded":         FactBytesBoundExceeded,
-	"devhealthfacts.health_daily_health_cap_cut":       HealthDailyHealthCapCut,
-	"devhealthfacts.owning_teams_truncated":            OwningTeamsTruncated,
-	"devhealthfacts.pull_request_project_native_first": PullRequestProjectNativeFirst,
-	"devhealthfacts.rule_basis_day_absent":             DeficiencyRuleBasisDayAbsent,
-	"devhealthfacts.rule_basis_day_invalid":            DeficiencyRuleBasisDayInvalid,
-	"devhealthfacts.subject_id_shape_rejected":         SubjectIDShapeRejected,
-	"devhealthfacts.team_linked_mix_native_first":      TeamLinkedMixNativeFirst,
-	"devhealthfacts.team_linked_mix_set":               TeamLinkedMixSet,
-	"devhealthfacts.team_pr_link_state_native_first":   TeamPRLinkStateNativeFirst,
-	"genkitruntime.model_interpret_decision":           ModelInterpretDecision,
-	"genkitruntime.model_phrase_decision":              ModelPhraseDecision,
-	"genkitruntime.model_synthesize_decision":          ModelSynthesizeDecision,
-	"graphrank.alias_lookup":                           AliasLookup,
-	"graphrank.anchor_kind_withheld":                   AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary":           AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                           AnchorOffer,
-	"graphrank.anchor_pool":                            AnchorPool,
-	"graphrank.anchor_slot_displaced":                  AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":                  ConfirmedKindRescue,
-	"graphrank.confirmed_kind_scope":                   ConfirmedKindScope,
-	"graphrank.corroboration":                          Corroboration,
-	"graphrank.corroboration_summary":                  CorroborationSummary,
-	"graphrank.decision":                               Decision,
-	"graphrank.decision_summary":                       DecisionSummary,
-	"graphrank.evidence_census_commit":                 EvidenceCensusCommit,
-	"graphrank.evidence_probe":                         EvidenceProbe,
-	"graphrank.evidence_round":                         EvidenceRound,
-	"graphrank.evidence_source_native":                 EvidenceSourceNative,
-	"graphrank.evidence_source_native_probe":           EvidenceSourceNativeProbe,
-	"graphrank.exact_name_search":                      ExactNameSearch,
-	"graphrank.identity_gate":                          IdentityGate,
-	"graphrank.identity_gate_summary":                  IdentityGateSummary,
-	"graphrank.identity_universe":                      IdentityUniverse,
-	"graphrank.kind_coverage_floor":                    KindCoverageFloor,
-	"graphrank.kind_hint_search":                       KindHintSearch,
-	"graphrank.kind_offer":                             KindOffer,
-	"graphrank.kind_offer_withheld":                    KindOfferWithheld,
-	"graphrank.low_population_kind_scope":              LowPopulationKindScope,
-	"graphrank.low_population_kind_scope_summary":      LowPopulationKindScopeSummary,
-	"graphrank.offer_pool":                             OfferPool,
-	"graphrank.offer_pool_summary":                     OfferPoolSummary,
-	"graphrank.ranked_cut_summary":                     RankedCutSummary,
-	"graphrank.reserved_kind_admitted":                 ReservedKindAdmitted,
-	"graphrank.search":                                 Search,
-	"graphrank.search_question":                        SearchQuestion,
-	"graphrank.slice_b_survivor_verdict":               SliceBSurvivorVerdict,
-	"graphrank.slice_b_survivor_verdict_summary":       SliceBSurvivorVerdictSummary,
-	"mcp.hosted_context_scope":                         MCPHostedContextScope,
-	"mcp.http_readiness":                               MCPHTTPReadiness,
-	"mcp.http_request":                                 MCPHTTPRequest,
-	"mcp.http_serving":                                 MCPHTTPServing,
-	"process.otel_export":                              OTelExport,
-	"projectionrun.graph_count_check_finished":         GraphCountCheckFinished,
+	"contextfabric.anchor_binding_transition":             AnchorBindingTransition,
+	"contextfabric.answer_display":                        AnswerDisplay,
+	"contextfabric.answer_reuse_bypass":                   AnswerReuseBypass,
+	"contextfabric.answer_reuse_containment":              AnswerReuseContainment,
+	"contextfabric.answer_reuse_outcome":                  AnswerReuseOutcome,
+	"contextfabric.answer_reuse_served_request_id":        AnswerReuseServedRequestID,
+	"contextfabric.binding_epoch_moved":                   BindingEpochMoved,
+	"contextfabric.binding_epoch_unchanged":               BindingEpochUnchanged,
+	"contextfabric.category_fact_composition":             CategoryFactComposition,
+	"contextfabric.client_synthesis_decision":             ClientSynthesisDecision,
+	"contextfabric.cohort_driver_narration":               CohortDriverNarration,
+	"contextfabric.cohort_kind_fulltext":                  CohortKindFulltext,
+	"contextfabric.cohort_narrowing_disclosure":           CohortNarrowingDisclosure,
+	"contextfabric.cohort_ranked":                         CohortRanked,
+	"contextfabric.cohort_structure_gate":                 CohortStructureGate,
+	"contextfabric.commit_affirmation_retraction":         CommitAffirmationRetraction,
+	"contextfabric.commit_kept_by_no_member_found":        CommitKeptByNoMemberFound,
+	"contextfabric.completeness_authority":                CompletenessAuthority,
+	"contextfabric.confirmed_need_ledger":                 ConfirmedNeedLedger,
+	"contextfabric.confirmed_need_ledger_window":          ConfirmedNeedLedgerWindow,
+	"contextfabric.count_population_scope":                CountPopulationScope,
+	"contextfabric.coverage_disclosure_phrasing":          CoverageDisclosurePhrasing,
+	"contextfabric.coverage_entries_capped":               CoverageEntriesCapped,
+	"contextfabric.direct_read":                           DirectRead,
+	"contextfabric.direct_read_authorization":             DirectReadAuthorization,
+	"contextfabric.direct_relationships_read":             DirectRelationshipsRead,
+	"contextfabric.driver_identity_collisions":            DriverIdentityCollisions,
+	"contextfabric.driver_source_state_corrected":         DriverSourceStateCorrected,
+	"contextfabric.dual_table_facts":                      DualTableFacts,
+	"contextfabric.engine_fact_gate_info":                 EngineFactGateInfo,
+	"contextfabric.engine_fact_gate_warn":                 EngineFactGateWarn,
+	"contextfabric.evidence_expansion":                    EvidenceExpansion,
+	"contextfabric.evidence_label_fallback":               EvidenceLabelFallback,
+	"contextfabric.fact_evaluation_coverage":              FactEvaluationCoverage,
+	"contextfabric.fact_read":                             FactRead,
+	"contextfabric.fact_read_failed":                      FactReadFailed,
+	"contextfabric.fact_result_rejected":                  FactResultRejected,
+	"contextfabric.fact_root_refused":                     FactRootRefused,
+	"contextfabric.fact_scope_expansion_decision":         FactScopeExpansionDecision,
+	"contextfabric.fact_scope_expansion_gap":              FactScopeExpansionGap,
+	"contextfabric.fact_table_declaration":                FactTableDeclaration,
+	"contextfabric.fact_table_declaration_rejected":       FactTableDeclarationRejected,
+	"contextfabric.fact_table_declarations_capped":        FactTableDeclarationsCapped,
+	"contextfabric.frame_validation":                      FrameValidation,
+	"contextfabric.gated_offer_resolution":                GatedOfferResolution,
+	"contextfabric.graphql_query":                         GraphQLQuery,
+	"contextfabric.grouped_cohort_completeness":           GroupedCohortCompleteness,
+	"contextfabric.interpretation_ensemble_gap":           InterpretationEnsembleGap,
+	"contextfabric.interpretation_ensemble_resolved":      InterpretationEnsembleResolved,
+	"contextfabric.interpreted_time_bound":                InterpretedTimeBound,
+	"contextfabric.kind_carry":                            KindCarry,
+	"contextfabric.model_rows_stripped":                   ModelRowsStripped,
+	"contextfabric.operation_read":                        OperationRead,
+	"contextfabric.organization_subject_read":             OrganizationSubjectRead,
+	"contextfabric.ownership_routing":                     OwnershipRouting,
+	"contextfabric.period_delta_composition":              PeriodDeltaComposition,
+	"contextfabric.plan_carry":                            PlanCarry,
+	"contextfabric.plan_carry_outcome":                    PlanCarryOutcome,
+	"contextfabric.plan_narrowing":                        PlanNarrowing,
+	"contextfabric.prior_consulted":                       PriorConsulted,
+	"contextfabric.prior_degradation":                     PriorDegradation,
+	"contextfabric.prior_degradation_pointer_dangling":    PriorDegradationPointerDangling,
+	"contextfabric.prior_subject_receipt_skip_reason":     PriorSubjectReceiptSkipReason,
+	"contextfabric.prior_subject_receipts_skipped":        PriorSubjectReceiptsSkipped,
+	"contextfabric.project_deployment_walk":               ProjectDeploymentWalk,
+	"contextfabric.project_status_drivers":                ProjectStatusDrivers,
+	"contextfabric.projected_rows_by_fact_kind":           ProjectedRowsByFactKind,
+	"contextfabric.projected_rows_count":                  ProjectedRowsCount,
+	"contextfabric.pull_request_status_filter":            PullRequestStatusFilter,
+	"contextfabric.question_family_resolution":            QuestionFamilyResolution,
+	"contextfabric.remembered_window_axis":                RememberedWindowAxis,
+	"contextfabric.render_shape_rule_skipped":             RenderShapeRuleSkipped,
+	"contextfabric.render_shape_selection_summary":        RenderShapeSelectionSummary,
+	"contextfabric.repository_work_item_walk":             RepositoryWorkItemWalk,
+	"contextfabric.requirement_outcome_transition":        RequirementOutcomeTransition,
+	"contextfabric.retained_ranking_accounting":           RetainedRankingAccounting,
+	"contextfabric.semantic_state_persistence":            SemanticStatePersistence,
+	"contextfabric.server_status_shadow":                  ServerStatusShadowLine,
+	"contextfabric.service_limitation_lookalikes_dropped": ServiceLimitationLookalikesDropped,
+	"contextfabric.stated_window_axis_decision":           StatedWindowAxisDecision,
+	"contextfabric.stored_answerability":                  StoredAnswerability,
+	"contextfabric.stored_result_authorization":           StoredResultAuthorization,
+	"contextfabric.structure_explicit":                    StructureExplicit,
+	"contextfabric.structure_needs_disclosed":             StructureNeedsDisclosed,
+	"contextfabric.structure_offer_count":                 StructureOfferCount,
+	"contextfabric.structure_receipt":                     StructureReceipt,
+	"contextfabric.structure_receipt_veto":                StructureReceiptVeto,
+	"contextfabric.subjectless_terminal":                  SubjectlessTerminal,
+	"contextfabric.supplied_interpretation_decision":      SuppliedInterpretationDecision,
+	"contextfabric.supplied_synthesis_decision":           SuppliedSynthesisDecision,
+	"contextfabric.synthesis_input":                       SynthesisInput,
+	"contextfabric.synthesis_retry_selection":             SynthesisRetrySelection,
+	"contextfabric.synthesis_status_override":             SynthesisStatusOverride,
+	"contextfabric.team_anchor_walk":                      TeamAnchorWalk,
+	"contextfabric.team_blockers_drivers":                 TeamBlockersDrivers,
+	"contextfabric.terminal_save_skipped":                 TerminalSaveSkipped,
+	"contextfabric.window_binder_outcome":                 WindowBinderOutcome,
+	"contextfabric.window_canonicalization_outcome":       WindowCanonicalizationOutcome,
+	"contextfabric.window_carry":                          WindowCarry,
+	"contextfabric.window_continuation_decision":          WindowContinuationDecision,
+	"contextfabric.window_expand_offer_redeemed":          WindowExpandOfferRedeemed,
+	"contextfabric.window_gate_offer_disclosure":          WindowGateOfferDisclosure,
+	"contextfabric.window_gated_for_confirmation":         WindowGatedForConfirmation,
+	"contextfabric.work_item_authorization_gap":           WorkItemAuthorizationGap,
+	"contextfabric.work_item_membership_gate":             WorkItemMembershipGate,
+	"contextfabric.work_item_membership_s1":               WorkItemMembershipS1,
+	"contextfabric.work_item_reuse":                       WorkItemReuse,
+	"contextfabric.work_item_stored_serving":              WorkItemStoredServing,
+	"contextfabric.work_item_tuple_admission":             WorkItemTupleAdmission,
+	"devhealthfacts.fact_bytes_bound_exceeded":            FactBytesBoundExceeded,
+	"devhealthfacts.health_daily_health_cap_cut":          HealthDailyHealthCapCut,
+	"devhealthfacts.owning_teams_truncated":               OwningTeamsTruncated,
+	"devhealthfacts.pull_request_project_native_first":    PullRequestProjectNativeFirst,
+	"devhealthfacts.rule_basis_day_absent":                DeficiencyRuleBasisDayAbsent,
+	"devhealthfacts.rule_basis_day_invalid":               DeficiencyRuleBasisDayInvalid,
+	"devhealthfacts.subject_id_shape_rejected":            SubjectIDShapeRejected,
+	"devhealthfacts.team_linked_mix_native_first":         TeamLinkedMixNativeFirst,
+	"devhealthfacts.team_linked_mix_set":                  TeamLinkedMixSet,
+	"devhealthfacts.team_pr_link_state_native_first":      TeamPRLinkStateNativeFirst,
+	"genkitruntime.model_interpret_decision":              ModelInterpretDecision,
+	"genkitruntime.model_phrase_decision":                 ModelPhraseDecision,
+	"genkitruntime.model_synthesize_decision":             ModelSynthesizeDecision,
+	"graphrank.alias_lookup":                              AliasLookup,
+	"graphrank.anchor_kind_withheld":                      AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":              AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                              AnchorOffer,
+	"graphrank.anchor_pool":                               AnchorPool,
+	"graphrank.anchor_slot_displaced":                     AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":                     ConfirmedKindRescue,
+	"graphrank.confirmed_kind_scope":                      ConfirmedKindScope,
+	"graphrank.corroboration":                             Corroboration,
+	"graphrank.corroboration_summary":                     CorroborationSummary,
+	"graphrank.decision":                                  Decision,
+	"graphrank.decision_summary":                          DecisionSummary,
+	"graphrank.evidence_census_commit":                    EvidenceCensusCommit,
+	"graphrank.evidence_probe":                            EvidenceProbe,
+	"graphrank.evidence_round":                            EvidenceRound,
+	"graphrank.evidence_source_native":                    EvidenceSourceNative,
+	"graphrank.evidence_source_native_probe":              EvidenceSourceNativeProbe,
+	"graphrank.exact_name_search":                         ExactNameSearch,
+	"graphrank.identity_gate":                             IdentityGate,
+	"graphrank.identity_gate_summary":                     IdentityGateSummary,
+	"graphrank.identity_universe":                         IdentityUniverse,
+	"graphrank.kind_coverage_floor":                       KindCoverageFloor,
+	"graphrank.kind_hint_search":                          KindHintSearch,
+	"graphrank.kind_offer":                                KindOffer,
+	"graphrank.kind_offer_withheld":                       KindOfferWithheld,
+	"graphrank.low_population_kind_scope":                 LowPopulationKindScope,
+	"graphrank.low_population_kind_scope_summary":         LowPopulationKindScopeSummary,
+	"graphrank.offer_pool":                                OfferPool,
+	"graphrank.offer_pool_summary":                        OfferPoolSummary,
+	"graphrank.ranked_cut_summary":                        RankedCutSummary,
+	"graphrank.reserved_kind_admitted":                    ReservedKindAdmitted,
+	"graphrank.search":                                    Search,
+	"graphrank.search_question":                           SearchQuestion,
+	"graphrank.slice_b_survivor_verdict":                  SliceBSurvivorVerdict,
+	"graphrank.slice_b_survivor_verdict_summary":          SliceBSurvivorVerdictSummary,
+	"mcp.hosted_context_scope":                            MCPHostedContextScope,
+	"mcp.http_readiness":                                  MCPHTTPReadiness,
+	"mcp.http_request":                                    MCPHTTPRequest,
+	"mcp.http_serving":                                    MCPHTTPServing,
+	"process.otel_export":                                 OTelExport,
+	"projectionrun.graph_count_check_finished":            GraphCountCheckFinished,
 }
 
 // OAuthStepFields is api.oauth_step's generated typed construction interface
@@ -1179,6 +1183,65 @@ func (f CohortKindFulltextFields) SlogArgs() []any {
 		"duplicates_with_general", f.DuplicatesWithGeneral,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// CohortNarrowingDisclosureFields is contextfabric.cohort_narrowing_disclosure's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CohortNarrowingDisclosure.Fields declares in spec.go.
+type CohortNarrowingDisclosureFields struct {
+	OrgID      string
+	Family     string
+	MemberKind string
+	Outcome    string
+	Declared   int
+	Served     int
+	Steps      int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CohortNarrowingDisclosureFields uniformly, set ONLY by NewCohortNarrowingDisclosureFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCohortNarrowingDisclosureFields is the generated constructor for CohortNarrowingDisclosureFields -- every
+// field CohortNarrowingDisclosure.Fields declares is a required parameter.
+func NewCohortNarrowingDisclosureFields(orgID string, family string, memberKind string, outcome string, declared int, served int, steps int) CohortNarrowingDisclosureFields {
+	return CohortNarrowingDisclosureFields{
+		OrgID:       orgID,
+		Family:      family,
+		MemberKind:  memberKind,
+		Outcome:     outcome,
+		Declared:    declared,
+		Served:      served,
+		Steps:       steps,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCohortNarrowingDisclosureFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CohortNarrowingDisclosureFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CohortNarrowingDisclosure's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CohortNarrowingDisclosureFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"declared", f.Declared,
+		"served", f.Served,
+		"steps", f.Steps,
 	}
 }
 
@@ -4153,6 +4216,68 @@ func (f GraphQLQueryFields) SlogArgs() []any {
 	}
 }
 
+// GroupedCohortCompletenessFields is contextfabric.grouped_cohort_completeness's generated typed construction interface
+// (CHAOS-5516): one Go field per Field GroupedCohortCompleteness.Fields declares in spec.go.
+type GroupedCohortCompletenessFields struct {
+	OrgID                  string
+	Family                 string
+	PreGroupingComplete    bool
+	PreGroupingTruncated   bool
+	GroupCount             int
+	GroupsMarkedIncomplete int
+	Complete               bool
+	Truncated              bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every GroupedCohortCompletenessFields uniformly, set ONLY by NewGroupedCohortCompletenessFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewGroupedCohortCompletenessFields is the generated constructor for GroupedCohortCompletenessFields -- every
+// field GroupedCohortCompleteness.Fields declares is a required parameter.
+func NewGroupedCohortCompletenessFields(orgID string, family string, preGroupingComplete bool, preGroupingTruncated bool, groupCount int, groupsMarkedIncomplete int, complete bool, truncated bool) GroupedCohortCompletenessFields {
+	return GroupedCohortCompletenessFields{
+		OrgID:                  orgID,
+		Family:                 family,
+		PreGroupingComplete:    preGroupingComplete,
+		PreGroupingTruncated:   preGroupingTruncated,
+		GroupCount:             groupCount,
+		GroupsMarkedIncomplete: groupsMarkedIncomplete,
+		Complete:               complete,
+		Truncated:              truncated,
+		constructed:            true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewGroupedCohortCompletenessFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f GroupedCohortCompletenessFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns GroupedCohortCompleteness's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f GroupedCohortCompletenessFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"pre_grouping_complete", f.PreGroupingComplete,
+		"pre_grouping_truncated", f.PreGroupingTruncated,
+		"group_count", f.GroupCount,
+		"groups_marked_incomplete", f.GroupsMarkedIncomplete,
+		"complete", f.Complete,
+		"truncated", f.Truncated,
+	}
+}
+
 // InterpretationEnsembleGapFields is contextfabric.interpretation_ensemble_gap's generated typed construction interface
 // (CHAOS-5516): one Go field per Field InterpretationEnsembleGap.Fields declares in spec.go.
 type InterpretationEnsembleGapFields struct {
@@ -4852,6 +4977,173 @@ func (f PlanCarryOutcomeFields) SlogArgs() []any {
 		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// PlanNarrowingFields is contextfabric.plan_narrowing's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanNarrowing.Fields declares in spec.go.
+type PlanNarrowingFields struct {
+	OrgID                    string
+	Family                   string
+	FamilyVersion            string
+	Stage                    string
+	Basis                    string
+	BasisObserved            bool
+	Before                   int
+	After                    int
+	Groups                   bool
+	Overrun                  string
+	MeasuredItems            int
+	PredictedItems           int
+	AttributionGlobal        int
+	AttributionMember        int
+	AttributionGroup         int
+	AttributionMultiGroup    int
+	MeasuredBytes            int
+	MaxItems                 int
+	MaxSerializedBytes       int
+	RetryAttempted           bool
+	RetryFit                 bool
+	RetryFailed              bool
+	RefusalPlanned           bool
+	FactsOnlyAttempted       bool
+	FactsOnlyServed          bool
+	FactsOnlyDeclined        string
+	DeadlineReserved         bool
+	RetryDeclined            string
+	NarrowerContinuationAxis string
+	OutcomeReductionApplied  bool
+	OutcomeReductionInnerFit bool
+	OutcomeItemsServed       int
+	OutcomeItemsDeclared     int
+	OutcomeCompletenessState string
+	OutcomeReductionDeclined string
+	LedgerStatus             string
+	QuotaAvailability        string
+	QuotaGroupAllowance      int
+	QuotaGroupsGranted       int
+	QuotaGroupsMeasured      int
+	QuotaGroupsOverAllowance int
+	EvidencePinnedMembers    int
+	CeilingFit               string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanNarrowingFields uniformly, set ONLY by NewPlanNarrowingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanNarrowingFields is the generated constructor for PlanNarrowingFields -- every
+// field PlanNarrowing.Fields declares is a required parameter.
+func NewPlanNarrowingFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string) PlanNarrowingFields {
+	return PlanNarrowingFields{
+		OrgID:                    orgID,
+		Family:                   family,
+		FamilyVersion:            familyVersion,
+		Stage:                    stage,
+		Basis:                    basis,
+		BasisObserved:            basisObserved,
+		Before:                   before,
+		After:                    after,
+		Groups:                   groups,
+		Overrun:                  overrun,
+		MeasuredItems:            measuredItems,
+		PredictedItems:           predictedItems,
+		AttributionGlobal:        attributionGlobal,
+		AttributionMember:        attributionMember,
+		AttributionGroup:         attributionGroup,
+		AttributionMultiGroup:    attributionMultiGroup,
+		MeasuredBytes:            measuredBytes,
+		MaxItems:                 maxItems,
+		MaxSerializedBytes:       maxSerializedBytes,
+		RetryAttempted:           retryAttempted,
+		RetryFit:                 retryFit,
+		RetryFailed:              retryFailed,
+		RefusalPlanned:           refusalPlanned,
+		FactsOnlyAttempted:       factsOnlyAttempted,
+		FactsOnlyServed:          factsOnlyServed,
+		FactsOnlyDeclined:        factsOnlyDeclined,
+		DeadlineReserved:         deadlineReserved,
+		RetryDeclined:            retryDeclined,
+		NarrowerContinuationAxis: narrowerContinuationAxis,
+		OutcomeReductionApplied:  outcomeReductionApplied,
+		OutcomeReductionInnerFit: outcomeReductionInnerFit,
+		OutcomeItemsServed:       outcomeItemsServed,
+		OutcomeItemsDeclared:     outcomeItemsDeclared,
+		OutcomeCompletenessState: outcomeCompletenessState,
+		OutcomeReductionDeclined: outcomeReductionDeclined,
+		LedgerStatus:             ledgerStatus,
+		QuotaAvailability:        quotaAvailability,
+		QuotaGroupAllowance:      quotaGroupAllowance,
+		QuotaGroupsGranted:       quotaGroupsGranted,
+		QuotaGroupsMeasured:      quotaGroupsMeasured,
+		QuotaGroupsOverAllowance: quotaGroupsOverAllowance,
+		EvidencePinnedMembers:    evidencePinnedMembers,
+		CeilingFit:               ceilingFit,
+		constructed:              true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanNarrowingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanNarrowingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanNarrowing's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanNarrowingFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"family_version", contextfabric.SanitizeLogAttr(f.FamilyVersion),
+		"stage", contextfabric.SanitizeLogAttr(f.Stage),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"basis_observed", f.BasisObserved,
+		"before", f.Before,
+		"after", f.After,
+		"groups", f.Groups,
+		"overrun", contextfabric.SanitizeLogAttr(f.Overrun),
+		"measured_items", f.MeasuredItems,
+		"predicted_items", f.PredictedItems,
+		"attribution_global", f.AttributionGlobal,
+		"attribution_member", f.AttributionMember,
+		"attribution_group", f.AttributionGroup,
+		"attribution_multi_group", f.AttributionMultiGroup,
+		"measured_bytes", f.MeasuredBytes,
+		"max_items", f.MaxItems,
+		"max_serialized_bytes", f.MaxSerializedBytes,
+		"retry_attempted", f.RetryAttempted,
+		"retry_fit", f.RetryFit,
+		"retry_failed", f.RetryFailed,
+		"refusal_planned", f.RefusalPlanned,
+		"facts_only_attempted", f.FactsOnlyAttempted,
+		"facts_only_served", f.FactsOnlyServed,
+		"facts_only_declined", contextfabric.SanitizeLogAttr(f.FactsOnlyDeclined),
+		"deadline_reserved", f.DeadlineReserved,
+		"retry_declined", contextfabric.SanitizeLogAttr(f.RetryDeclined),
+		"narrower_continuation_axis", contextfabric.SanitizeLogAttr(f.NarrowerContinuationAxis),
+		"outcome_reduction_applied", f.OutcomeReductionApplied,
+		"outcome_reduction_inner_fit", f.OutcomeReductionInnerFit,
+		"outcome_items_served", f.OutcomeItemsServed,
+		"outcome_items_declared", f.OutcomeItemsDeclared,
+		"outcome_completeness_state", contextfabric.SanitizeLogAttr(f.OutcomeCompletenessState),
+		"outcome_reduction_declined", contextfabric.SanitizeLogAttr(f.OutcomeReductionDeclined),
+		"ledger_status", contextfabric.SanitizeLogAttr(f.LedgerStatus),
+		"quota_availability", contextfabric.SanitizeLogAttr(f.QuotaAvailability),
+		"quota_group_allowance", f.QuotaGroupAllowance,
+		"quota_groups_granted", f.QuotaGroupsGranted,
+		"quota_groups_measured", f.QuotaGroupsMeasured,
+		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
+		"evidence_pinned_members", f.EvidencePinnedMembers,
+		"ceiling_fit", contextfabric.SanitizeLogAttr(f.CeilingFit),
 	}
 }
 
@@ -6102,6 +6394,57 @@ func (f ServerStatusShadowLineFields) SlogArgs() []any {
 	}
 }
 
+// ServiceLimitationLookalikesDroppedFields is contextfabric.service_limitation_lookalikes_dropped's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ServiceLimitationLookalikesDropped.Fields declares in spec.go.
+type ServiceLimitationLookalikesDroppedFields struct {
+	OrgID                            string
+	CfLimitationLookalikesDropped    int
+	CfLimitationLookalikeRecognisers []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ServiceLimitationLookalikesDroppedFields uniformly, set ONLY by NewServiceLimitationLookalikesDroppedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewServiceLimitationLookalikesDroppedFields is the generated constructor for ServiceLimitationLookalikesDroppedFields -- every
+// field ServiceLimitationLookalikesDropped.Fields declares is a required parameter.
+func NewServiceLimitationLookalikesDroppedFields(orgID string, cfLimitationLookalikesDropped int, cfLimitationLookalikeRecognisers []string) ServiceLimitationLookalikesDroppedFields {
+	valid := true
+	if cfLimitationLookalikeRecognisers == nil {
+		valid = false
+	}
+	return ServiceLimitationLookalikesDroppedFields{
+		OrgID:                            orgID,
+		CfLimitationLookalikesDropped:    cfLimitationLookalikesDropped,
+		CfLimitationLookalikeRecognisers: cfLimitationLookalikeRecognisers,
+		constructed:                      valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewServiceLimitationLookalikesDroppedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ServiceLimitationLookalikesDroppedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ServiceLimitationLookalikesDropped's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ServiceLimitationLookalikesDroppedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"cf_limitation_lookalikes_dropped", f.CfLimitationLookalikesDropped,
+		"cf_limitation_lookalike_recognisers", contextfabric.SanitizeLogStrings(f.CfLimitationLookalikeRecognisers),
+	}
+}
+
 // StatedWindowAxisDecisionFields is contextfabric.stated_window_axis_decision's generated typed construction interface
 // (CHAOS-5516): one Go field per Field StatedWindowAxisDecision.Fields declares in spec.go.
 type StatedWindowAxisDecisionFields struct {
@@ -6928,7 +7271,6 @@ type SynthesisRetrySelectionFields struct {
 	QuotaGroupsOverAllowance int
 	EvidencePinnedMembers    int
 	CeilingFit               string
-	RequestID                string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every SynthesisRetrySelectionFields uniformly, set ONLY by NewSynthesisRetrySelectionFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6942,7 +7284,7 @@ type SynthesisRetrySelectionFields struct {
 
 // NewSynthesisRetrySelectionFields is the generated constructor for SynthesisRetrySelectionFields -- every
 // field SynthesisRetrySelection.Fields declares is a required parameter.
-func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string, requestID string) SynthesisRetrySelectionFields {
+func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, factsOnlyAttempted bool, factsOnlyServed bool, factsOnlyDeclined string, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, evidencePinnedMembers int, ceilingFit string) SynthesisRetrySelectionFields {
 	return SynthesisRetrySelectionFields{
 		OrgID:                    orgID,
 		Family:                   family,
@@ -6987,7 +7329,6 @@ func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion
 		QuotaGroupsOverAllowance: quotaGroupsOverAllowance,
 		EvidencePinnedMembers:    evidencePinnedMembers,
 		CeilingFit:               ceilingFit,
-		RequestID:                requestID,
 		constructed:              true,
 	}
 }
@@ -7048,7 +7389,6 @@ func (f SynthesisRetrySelectionFields) SlogArgs() []any {
 		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
 		"evidence_pinned_members", f.EvidencePinnedMembers,
 		"ceiling_fit", contextfabric.SanitizeLogAttr(f.CeilingFit),
-		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 

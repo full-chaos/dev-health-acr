@@ -209,10 +209,50 @@ func TestClientSynthesisEnvelopeRefusalMeasuresTheSmallestInput(t *testing.T) {
 	if clientSynthesisBodyShare(budget) >= envelope {
 		t.Fatalf("envelope %d fits the %d share, the early refusal is not reached", envelope, clientSynthesisBodyShare(budget))
 	}
-	if len(turn.telemetry.synthesisInputBounds) != 0 {
-		t.Fatalf("the refusal measurement emitted %d input bound events %+v, want none", len(turn.telemetry.synthesisInputBounds), turn.telemetry.synthesisInputBounds)
+	if len(turn.telemetry.synthesisInputBounds) != 1 || turn.telemetry.synthesisInputBounds[0].Outcome != SynthesisInputBoundExhausted {
+		t.Fatalf("input bound events = %+v, want one exhausted event", turn.telemetry.synthesisInputBounds)
 	}
 	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes < int64(envelope+2000+ClientSynthesisAnswerFloorBytes) {
 		t.Fatalf("refusal measured %d against %d, want the caller's %d and at least envelope %d + input 2000 + floor %d", refusal.MeasuredBytes, refusal.MaxSerializedBytes, budget, envelope, ClientSynthesisAnswerFloorBytes)
+	}
+}
+
+// An envelope over half the caller's budget does not refuse a turn whose
+// smallest input, envelope and answer floor fit the budget: the input is
+// widened past its share and served bounded.
+func TestClientSynthesisEnvelopeOverHalfBudgetServesWhenTheSmallestInputFits(t *testing.T) {
+	t.Parallel()
+	const budget = 16384
+	rules := slices.Repeat([]string{strings.Repeat("r", 500)}, contractsv1.ContextFabricSynthesisInputRulesMaxCount)
+	turn := runBudgetTurnWithRules(t, 1, 200, budget, rules)
+	if turn.err != nil || turn.collected == nil {
+		t.Fatalf("Investigate() error = %v bundle = %v, want the turn served", turn.err, turn.collected)
+	}
+	assembly := &ClientSynthesisAssembly{PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")), Rules: rules, MaxBytes: clientTestMaxBytes, Encode: clientTestEncode}
+	envelope, err := assembly.envelopeBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientSynthesisBodyShare(budget) >= envelope {
+		t.Fatalf("envelope %d fits the %d share, the half-budget case is not reached", envelope, clientSynthesisBodyShare(budget))
+	}
+	if turn.totalBytes > budget {
+		t.Fatalf("served body = %d bytes, want at most the %d byte budget", turn.totalBytes, budget)
+	}
+}
+
+// When even the smallest input does not fit beside the envelope and the answer
+// floor, the turn is a byte refusal that measures above the caller's budget.
+func TestClientSynthesisEnvelopeOverHalfBudgetRefusesWhenTheSmallestInputDoesNotFit(t *testing.T) {
+	t.Parallel()
+	const budget = 16384
+	rules := slices.Repeat([]string{strings.Repeat("r", 500)}, contractsv1.ContextFabricSynthesisInputRulesMaxCount)
+	turn := runBudgetTurnWithRules(t, 1, 5000, budget, rules)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(turn.err, &refusal) || !errors.Is(turn.err, ErrAnswerExceedsBudget) {
+		t.Fatalf("Investigate() error = %v, want the byte budget refusal", turn.err)
+	}
+	if refusal.MaxSerializedBytes != budget || refusal.MeasuredBytes <= budget {
+		t.Fatalf("refusal measured %d against %d, want measured above the caller's %d", refusal.MeasuredBytes, refusal.MaxSerializedBytes, budget)
 	}
 }

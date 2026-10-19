@@ -1273,7 +1273,17 @@ import (
 // such a project or called it empty. The project population reads of flow,
 // readiness, landscape, health, workload and the investment mix read up to 250
 // projects, where they read 200.
-const QueryVersion = "devhealthfacts.clickhouse.v247"
+//
+// v247 -> v248: a graphql_query answer with one root field and one list over
+// max_bytes is served as the largest whole-row page, declared_partial with
+// page_cut, where it was refused response_budget. An answer saved under v247
+// holds that refusal.
+//
+// v248 -> v249: a CI run whose stored pipeline name begins with the word CI in
+// any letter case is labelled with the name alone, where it read "CI CI #run";
+// a name padded or split by Unicode white space is trimmed and split the same
+// way in Go and in SQL. An answer saved under v248 holds the doubled label.
+const QueryVersion = "devhealthfacts.clickhouse.v249"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

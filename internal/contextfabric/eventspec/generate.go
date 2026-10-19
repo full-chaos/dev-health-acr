@@ -328,6 +328,8 @@ func goVarName(e Event) string {
 		return "ModelRowsStripped"
 	case DriverSourceStateCorrected.ID:
 		return "DriverSourceStateCorrected"
+	case ServiceLimitationLookalikesDropped.ID:
+		return "ServiceLimitationLookalikesDropped"
 	case DriverIdentityCollisions.ID:
 		return "DriverIdentityCollisions"
 	case EvidenceLabelFallback.ID:
@@ -340,6 +342,12 @@ func goVarName(e Event) string {
 		return "CategoryFactComposition"
 	case PeriodDeltaComposition.ID:
 		return "PeriodDeltaComposition"
+	case PlanNarrowing.ID:
+		return "PlanNarrowing"
+	case CohortNarrowingDisclosure.ID:
+		return "CohortNarrowingDisclosure"
+	case GroupedCohortCompleteness.ID:
+		return "GroupedCohortCompleteness"
 	case QuestionFamilyResolution.ID:
 		return "QuestionFamilyResolution"
 	case HealthDailyHealthCapCut.ID:
@@ -652,7 +660,7 @@ type jsonEvent struct {
 	Attribution        []string    `json:"attribution"`
 	BoundedAggregation string      `json:"bounded_aggregation"`
 	MaxLinesPerScope   int         `json:"max_lines_per_scope,omitempty"`
-	DataDependentBound string      `json:"data_dependent_bound,omitempty"`
+	UnboundedReason    string      `json:"unbounded_reason,omitempty"`
 	Fields             []jsonField `json:"fields"`
 }
 
@@ -689,7 +697,7 @@ func generateSchema() ([]byte, error) {
 			Attribution:        e.Attribution,
 			BoundedAggregation: e.BoundedAggregation,
 			MaxLinesPerScope:   e.MaxLinesPerScope,
-			DataDependentBound: e.DataDependentBound,
+			UnboundedReason:    e.UnboundedReason,
 			Fields:             toJSONFields(e.Fields),
 		})
 	}
