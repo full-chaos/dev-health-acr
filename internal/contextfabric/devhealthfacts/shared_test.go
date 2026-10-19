@@ -774,3 +774,15 @@ func TestQueryVersionMovedPastTheProjectLinkTierCover(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v250 or later -- an answer saved when a lower-tier link a native link covers was served, or two providers' project roots collapsed, must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheRefusalFallback(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 251 {
+		t.Fatalf("QueryVersion = %q, want v251 or later -- an answer saved when a fallback model served a question the primary model refused must not be reused", devhealthfacts.QueryVersion)
+	}
+}

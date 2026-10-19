@@ -1291,7 +1291,13 @@ import (
 // providers sharing a raw project id keep separate roots on the current and
 // the historical axis. An answer saved under v249 holds a lower-tier link a
 // native link covers, or one root where two providers' projects were requested.
-const QueryVersion = "devhealthfacts.clickhouse.v250"
+//
+// v250 -> v251: a model refusal ends its draw: no redraw, no retry and no
+// fallback leg. On a runtime with a fallback configured, a question the
+// primary model refused was served by the fallback model; it now ends as a
+// model-output failure. An answer saved under v250 holds a fallback model's
+// answer to a question the primary refused.
+const QueryVersion = "devhealthfacts.clickhouse.v251"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

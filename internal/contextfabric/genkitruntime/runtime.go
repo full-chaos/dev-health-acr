@@ -1146,7 +1146,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	primaryProvider, primaryModel, primaryModelVersion = receipt.Provider, receipt.Model, receipt.ModelVersion
 	if generationErr != nil {
 		primaryFailureClassification = receipt.Outcome
-		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
+		if r.config.Fallback != nil && !errors.Is(generationErr, errModelRefusal) && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
 			// whether it succeeded or failed. mergeFallbackReceipt keeps
@@ -2052,7 +2052,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	primaryProvider, primaryModel, primaryModelVersion = receipt.Provider, receipt.Model, receipt.ModelVersion
 	if generationErr != nil {
 		primaryFailureClassification = receipt.Outcome
-		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
+		if r.config.Fallback != nil && !errors.Is(generationErr, errModelRefusal) && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
 			// whether it succeeded or failed. mergeFallbackReceipt keeps
@@ -3309,6 +3309,9 @@ func classifyModelErrorKind(err error) error {
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
+	}
+	if errors.Is(err, errModelRefusal) {
+		return fmt.Errorf("%w: model refused the request", contextfabric.ErrModelOutput)
 	}
 	if errors.Is(err, errOutputSchemaMismatch) {
 		return fmt.Errorf("%w: model output did not match the expected schema", contextfabric.ErrModelOutput)
