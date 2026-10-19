@@ -112,7 +112,7 @@ func TestTeamsAndProjectsOfALargeOrganizationAreEmittedBeforeTheFactWalk(t *test
 		return func(row []any) (time.Time, string) { return row[column].(time.Time), row[0].(string) }
 	}
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM teams AS tm FINAL", rows: teams, cursorOf: stampOf(6)},
+		{match: "FROM teams AS tm FINAL", rows: teams, cursorOf: stampOf(7)},
 		{match: "FROM projects FINAL\nWHERE", rows: projects, cursorOf: stampOf(7)},
 	}}
 	source := enabledTeamsProjectsSource(t, client)
