@@ -49,7 +49,7 @@
       "public_rationale": "Readiness probe (postgres/clickhouse/entitlement checks); no principal, no org context.",
       "accepted_credential_classes": [],
       "primary_validator": {
-        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver, entitlement_requirement and token_shape are absent (not applicable): internal/api/app.go:140-167: handleReady reads only the request context, runs the readiness checks and writes their statuses; no scope check, entitlement call or credential issuance is on the handler.",
+        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver, entitlement_requirement and token_shape are absent (not applicable): internal/api/app.go:140-167: handleReady reads only the request context, runs the readiness checks and writes their statuses; no scope check, per-organization entitlement gate or credential issuance is on the handler. The readiness checks include the entitlement service health probe (entitlement.Check, wired at internal/runtime/hosted/open.go:133), which is a dependency health check and not a per-organization feature gate.",
         "anchor": {
           "path": "internal/api/app.go",
           "line": 78,
