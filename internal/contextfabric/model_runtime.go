@@ -2552,6 +2552,12 @@ func (r RuntimeAnswerSynthesizer) vetSynthesisDraft(ctx context.Context, princip
 	if r.Telemetry != nil {
 		r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
 	}
+	var lookalikes int
+	var lookalikeRecognisers []string
+	draft.Limitations, lookalikes, lookalikeRecognisers = stripServiceAuthoredLookalikes(draft.Limitations)
+	if recorder, ok := r.Telemetry.(serviceLimitationLookalikeRecorder); ok && lookalikes > 0 {
+		recorder.RecordServiceLimitationLookalikesDropped(ctx, principal, lookalikes, lookalikeRecognisers)
+	}
 	draft = r.withholdBareScoreClaims(ctx, principal, input, draft)
 	draft = DropUngroundedSynthesisItems(input, draft)
 	if validateErr := draft.ValidateAgainst(input); validateErr != nil {
@@ -2614,7 +2620,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		ReadinessGaps:      cloneSlice(draft.ReadinessGaps),
 		Paths:              cloneSlice(input.Graph.Paths),
 		Conflicts:          cloneSlice(draft.Conflicts),
-		Limitations:        cloneSlice(draft.Limitations),
+		Limitations:        slices.DeleteFunc(cloneSlice(draft.Limitations), contractsv1.IsContextFabricOutcomeEvictionLimitation),
 		EvidenceRefIDs:     cloneSlice(draft.EvidenceRefIDs),
 		ClaimedFacts:       claimedFacts,
 		Coverage:           MergeCoverage(principal.OrgID, input.Graph.Coverage, input.Facts.Coverage),

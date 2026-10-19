@@ -34,7 +34,8 @@ func (a *Adapter) fulltextReadyBudget(ctx context.Context) time.Duration {
 // awaitFulltextIndexOperational holds a fulltext query back while the Subject fulltext index of key is still indexing
 // the nodes just written. FalkorDB reports such an index as UNDER CONSTRUCTION and answers a query against it with
 // fewer hits than the graph holds, down to none, which a caller reads as "no match". The whole wait, status reads
-// included, runs inside fulltextReadyBudget; when the budget wins the query runs anyway and the timeout is logged
+// included, runs inside fulltextReadyBudget, and the bound counts as reached by elapsed time, not only by the wait
+// context: a status read can fail on its socket deadline a moment before the context timer fires; when the budget wins the query runs anyway and the timeout is logged
 // loudly, so a short answer is attributable. A status read that fails, or a graph with no fulltext index, does not
 // block the query: the query itself reports a real dependency error. A cancelled caller context ends the wait at
 // once, the query then reports the cancellation.
@@ -45,7 +46,8 @@ func (a *Adapter) awaitFulltextIndexOperational(ctx context.Context, key, orgID 
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	began := time.Now()
+	began := a.now()
+	boundReached := func() bool { return waitCtx.Err() != nil || a.now().Sub(began) >= budget }
 	polls := 0
 	pending := ""
 	for {
@@ -54,7 +56,7 @@ func (a *Adapter) awaitFulltextIndexOperational(ctx context.Context, key, orgID 
 			if ctx.Err() != nil {
 				return
 			}
-			if waitCtx.Err() == nil {
+			if !boundReached() {
 				slog.WarnContext(ctx, "context fabric: fulltext index status unreadable, querying anyway", "org_id", contextfabric.SanitizeLogAttr(orgID), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)))
 				return
 			}
@@ -62,18 +64,18 @@ func (a *Adapter) awaitFulltextIndexOperational(ctx context.Context, key, orgID 
 			pending = fulltextIndexPendingStatus(statuses)
 			if pending == "" {
 				if polls > 0 {
-					slog.DebugContext(ctx, "context fabric: fulltext index became operational", "org_id", contextfabric.SanitizeLogAttr(orgID), "waited_ms", time.Since(began).Milliseconds(), "polls", polls)
+					slog.DebugContext(ctx, "context fabric: fulltext index became operational", "org_id", contextfabric.SanitizeLogAttr(orgID), "waited_ms", a.now().Sub(began).Milliseconds(), "polls", polls)
 				}
 				return
 			}
 		}
 		polls++
-		if waitCtx.Err() != nil || time.Since(began) >= budget {
+		if boundReached() {
 			if ctx.Err() != nil {
 				return
 			}
 			slog.WarnContext(ctx, "context fabric: fulltext index still not operational at the wait bound, querying anyway: the answer may be short",
-				"org_id", contextfabric.SanitizeLogAttr(orgID), "waited_ms", time.Since(began).Milliseconds(), "polls", polls, "index_status", contextfabric.SanitizeLogAttr(pending))
+				"org_id", contextfabric.SanitizeLogAttr(orgID), "waited_ms", a.now().Sub(began).Milliseconds(), "polls", polls, "index_status", contextfabric.SanitizeLogAttr(pending))
 			return
 		}
 		select {

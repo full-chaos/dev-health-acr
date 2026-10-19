@@ -619,7 +619,13 @@ func (e *Engine) planCandidateNarrowing(
 	}
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, measured.Overrun, requirement, obligation)
-	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
+	var evicted int
+	narrowedResult.Completeness.Outcomes, evicted = appendLeverOutcomeRow(narrowedResult.Completeness.Outcomes, row)
+	if evicted > 0 {
+		limitations, displaced := withOutcomeEvictionLimitation(narrowedResult.Limitations, evicted)
+		narrowedResult.Limitations = limitations
+		narrowedResult.LimitationsDisplaced += displaced
+	}
 	narrowedResult = e.finalizeResult(ctx, principal, narrowedResult, *plan, frame, facts, pending, pass, cardinality)
 
 	// Measure what will actually be served. If the reduction did not
@@ -760,6 +766,7 @@ func (e *Engine) recordCandidateNarrowing(
 	event.OutcomeItemsServed = attempt.Narrowing.Served
 	event.OutcomeItemsDeclared = attempt.Narrowing.Declared
 	event.OutcomeCompletenessState = attempt.Result.Completeness.State
+	event.OutcomeRowsEvicted = outcomeRowsEvicted(attempt.Result.Limitations)
 	e.recordPlanNarrowing(ctx, principal, event)
 }
 

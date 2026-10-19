@@ -740,6 +740,18 @@ func (t SlogEngineTelemetry) RecordDriverSourceStateCorrected(ctx context.Contex
 	t.logger.InfoContext(ctx, "context fabric driver source state corrected from grounded facts", args...)
 }
 
+// RecordServiceLimitationLookalikesDropped reports draft limitations the
+// service-authored recognisers accepted and the vetting step removed. Content-safe:
+// an org id, a count and closed recogniser ids -- never the dropped text.
+func (t SlogEngineTelemetry) RecordServiceLimitationLookalikesDropped(ctx context.Context, principal storage.Principal, dropped int, recognisers []string) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"cf_limitation_lookalikes_dropped", dropped,
+		"cf_limitation_lookalike_recognisers", SanitizeLogStrings(recognisers),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric draft limitations matching service disclosures dropped", args...)
+}
+
 // RecordDriverIdentityCollisions implements EngineTelemetry (CHAOS-5364).
 // See the interface's own doc comment for why every field is logged on every
 // call, zeros included. Content-safe: an org id and three counts.
@@ -1609,6 +1621,9 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent) {
 	args := planNarrowingLogAttrs(ctx, principal, event)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
+	if event.OutcomeReductionApplied && event.OutcomeRowsEvicted > 0 {
+		t.metrics.OutcomeRowEvicted(ctx, "candidate")
+	}
 }
 
 // RecordCohortNarrowingDisclosure (CHAOS-6561) emits the disclosure decision
@@ -1702,6 +1717,7 @@ func planNarrowingLogAttrs(ctx context.Context, principal storage.Principal, eve
 		"outcome_items_served", event.OutcomeItemsServed,
 		"outcome_items_declared", event.OutcomeItemsDeclared,
 		"outcome_completeness_state", SanitizeLogAttr(string(event.OutcomeCompletenessState)),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 		"outcome_reduction_declined", SanitizeLogAttr(string(event.OutcomeReductionDeclined)),
 		// The item ACCOUNT and the per-group quota for the document this
 		// line describes. quota_availability is what makes the four
@@ -2775,9 +2791,13 @@ func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, princi
 		"tables_ranking_unscored", event.TablesRankingUnscored,
 		"served", event.Served,
 		"declined", string(event.Declined),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric fact row truncation", args...)
+	if event.Served && event.OutcomeRowsEvicted > 0 {
+		t.metrics.OutcomeRowEvicted(ctx, "fact_row")
+	}
 }
 
 // RecordClaimDepthNarrowing emits one item-axis claim-depth lever
@@ -2805,9 +2825,13 @@ func (t SlogEngineTelemetry) RecordClaimDepthNarrowing(ctx context.Context, prin
 		"per_member_cap", event.PerMemberCap,
 		"served", event.Served,
 		"declined", string(event.Declined),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric claim depth narrowing", args...)
+	if event.Served && event.OutcomeRowsEvicted > 0 {
+		t.metrics.OutcomeRowEvicted(ctx, "claim_depth")
+	}
 }
 
 // RecordPathDrop emits one path-drop lever application (CHAOS-6558), at
@@ -2835,9 +2859,13 @@ func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal stora
 		"dropped_path_ids", SanitizeLogStrings(event.DroppedPathIDs),
 		"served", event.Served,
 		"declined", string(event.Declined),
+		"outcome_rows_evicted", event.OutcomeRowsEvicted,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric path drop", args...)
+	if event.Served && event.OutcomeRowsEvicted > 0 {
+		t.metrics.OutcomeRowEvicted(ctx, "path_drop")
+	}
 }
 
 // RecordMemberCut emits one member-cut decision, at Info.

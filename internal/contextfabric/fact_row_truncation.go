@@ -398,10 +398,12 @@ func applyFactRowTruncation(result InvestigationResult, perTable, declared int) 
 		return result, served, tables, false
 	}
 	result.ClaimedFacts = claims
-	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, factRowTruncationOutcomeRow(served, declared))
+	var evicted int
+	result.Completeness.Outcomes, evicted = appendLeverOutcomeRow(result.Completeness.Outcomes, factRowTruncationOutcomeRow(served, declared))
 	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	composed, evictionDisplaced := withOutcomeEvictionLimitation(composed, evicted)
 	result.Limitations = composed
-	result.LimitationsDisplaced += displaced
+	result.LimitationsDisplaced += displaced + evictionDisplaced
 	result.Coverage.Partial = true
 	// PARTIAL, never complete: the answer carries less than its facts did.
 	// Only a COMPLETE status is lowered; a status already weaker than partial
@@ -529,6 +531,9 @@ func (e *Engine) planFactRowTruncation(
 // axis, before/after bytes, rows before/after, and whether it served. Counts
 // and closed values only.
 type FactRowTruncationEvent struct {
+	// OutcomeRowsEvicted is how many outcome rows the served document has had
+	// evicted at the row cap to make room for a lever's disclosure row.
+	OutcomeRowsEvicted int
 	Family             QuestionFamily
 	Stage              contractsv1.ContextFabricPlanNarrowingStage
 	Pass               int
@@ -577,6 +582,7 @@ func (e *Engine) recordFactRowTruncation(ctx context.Context, principal storage.
 		TablesSourcePrefix:    attempt.Tables.SourcePrefix,
 		TablesSeriesUndated:   attempt.Tables.SeriesUndated,
 		TablesRankingUnscored: attempt.Tables.RankingUnscored,
+		OutcomeRowsEvicted:    outcomeRowsEvicted(attempt.Result.Limitations),
 		Served:                attempt.Served,
 		Declined:              attempt.Declined,
 	})
