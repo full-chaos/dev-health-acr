@@ -2,6 +2,10 @@ package genkitruntime
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -44,5 +48,52 @@ func TestSchemaRefusedInterpretDrawNamesTheBrokenStage(t *testing.T) {
 				t.Errorf("receipt reason = %q, want %q", receipt.InterpretationRejectionReason, tc.want)
 			}
 		})
+	}
+}
+
+func TestSchemaRejectionReasonNamesEveryStage(t *testing.T) {
+	for stage, want := range map[string]contractsv1.ContextFabricInterpretationRejectionReason{
+		"empty":    contractsv1.ContextFabricInterpretationRejectionOutputNotJSON,
+		"not_json": contractsv1.ContextFabricInterpretationRejectionOutputNotJSON,
+		"schema":   contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation,
+		"decode":   contractsv1.ContextFabricInterpretationRejectionOutputDecodeFailed,
+	} {
+		cause := fmt.Errorf("draw: %w", &outputMismatch{stage: stage})
+		if !errors.Is(cause, errOutputSchemaMismatch) {
+			t.Errorf("%s: a stage error must still match errOutputSchemaMismatch", stage)
+		}
+		rejection := contextfabric.NewInterpretationRejection(schemaRejectionReason(cause), cause)
+		if got := contextfabric.InterpretationRejectionReasonOf(rejection); got != want {
+			t.Errorf("%s: reason = %q, want %q", stage, got, want)
+		}
+	}
+	if got := schemaRejectionReason(errors.New("not a mismatch")); got != contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation {
+		t.Errorf("a cause with no stage = %q, want the schema violation reason", got)
+	}
+}
+
+type levelRecorder struct {
+	slog.Handler
+	levels map[string]slog.Level
+}
+
+func (r *levelRecorder) Handle(ctx context.Context, record slog.Record) error {
+	r.levels[record.Message] = record.Level
+	return nil
+}
+
+func TestSchemaRefusalLineIsWrittenAtInfo(t *testing.T) {
+	recorder := &levelRecorder{Handler: slog.NewTextHandler(io.Discard, nil), levels: map[string]slog.Level{}}
+	gen := llmGenerator{logger: slog.New(recorder)}
+	var err error
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+		t.Fatal(err)
+	}
+	gen.clients = LLMClients{"m": &scriptedLLM{model: "m", replies: []llmReply{{result: llm.Result{Text: `{"shape":5}`}}}}}
+	if _, _, err := gen.Interpret(context.Background(), generationRequest{Model: "m"}); err == nil {
+		t.Fatal("an invalid reply was accepted")
+	}
+	if level, ok := recorder.levels[llmDrawRejectedReason]; !ok || level != slog.LevelInfo {
+		t.Fatalf("schema refusal line level = %v (logged %v), want Info", level, ok)
 	}
 }

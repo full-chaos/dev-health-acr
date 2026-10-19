@@ -892,7 +892,9 @@ An organization's own model runs both Context Fabric calls: interpretation
 and synthesis. The organization's own configuration always wins over the
 deployment model, including for an organization that also holds
 `acr_service_model`; the `context fabric service model decision` log line then
-reports `basis=own_model`.
+reports `basis=own_model` with the deployment model withheld for the turn: if
+the configuration is gone when the runtime is resolved, the turn fails as
+model-unavailable and never falls back to the deployment model.
 
 The output mode is picked from the provider before the call, never after a
 refusal (a refused call is billed for its input tokens, so there is no
@@ -900,7 +902,7 @@ fallback to another mode):
 
 | Provider | Mode | Enforcement |
 | --- | --- | --- |
-| Anthropic | `output_config` JSON schema when the output schema fits Anthropic's structured-output limits; otherwise one tool call carrying the schema | The schema mode is enforced by the provider. The tool-call mode is not strict: the model may break the schema. |
+| Anthropic | `output_config` JSON schema when the output schema fits Anthropic's structured-output limits; otherwise one tool call carrying the schema | In schema mode the provider enforces only the subset it accepts: the client drops numeric, string and array bounds before sending, and ACR's local check still enforces them. The tool-call mode is not strict: the model may break the schema. |
 | OpenAI and OpenAI-compatible (local, Qwen) | JSON object, with the schema as text in the system message | Not enforced by the provider. |
 
 Provider limits that decide the Anthropic mode (`dev-health-go/llm`,
@@ -912,7 +914,7 @@ maps, so on Anthropic they run in tool-call mode and the `context fabric model
 answer format path` log line reports `format_path=tool` with the first limit
 that was broken. A BYO model must therefore return JSON that follows the schema
 without provider enforcement. Models that refuse a forced tool choice (Opus
-5.5, Sonnet 5.5, Fable 5.1) get tool choice `auto`.
+5.5, Sonnet 5.5, Fable 5.1, Mythos 5.1) get tool choice `auto`.
 
 A reply that is not JSON, or that fails the output schema, is a rejected draw.
 It is redrawn within the request deadline, and when the last draw is still

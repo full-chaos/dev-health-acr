@@ -82,12 +82,19 @@ func TestOwnModelDeletedAfterTheGateNeverFallsBackToTheDeploymentModel(t *testin
 	}
 }
 
-// The mirror: with the feature, the same organization is served on the
-// deployment model through the same resolver.
-func TestDeploymentModelServesThroughTheResolverWithTheFeature(t *testing.T) {
+// With the feature, an organization that also holds its own model
+// configuration is admitted on that configuration: when it is deleted before
+// the resolver reads it, the turn never falls through to the deployment model.
+func TestEntitledOrgWithOwnModelDeletedAfterTheGateNeverFallsBackToTheDeploymentModel(t *testing.T) {
 	rig := newResolverRouteRig(t, &serviceModelGrants{feature: true})
-	decodeEnvelope(t, rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil))
-	if interprets, synthesizes := rig.model.counts(); interprets != 1 || synthesizes != 1 {
-		t.Fatalf("deployment model calls = interpret %d synthesize %d, want 1 and 1", interprets, synthesizes)
+	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
+	if interprets, synthesizes := rig.model.counts(); interprets != 0 || synthesizes != 0 {
+		t.Fatalf("deployment model calls = interpret %d synthesize %d, want 0 and 0", interprets, synthesizes)
+	}
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body=%s, want 503", recorder.Code, recorder.Body.String())
+	}
+	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "own_model" {
+		t.Fatalf("decision log bases = %v, want [own_model]", got)
 	}
 }

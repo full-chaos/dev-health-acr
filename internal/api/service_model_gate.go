@@ -46,10 +46,14 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	}
 	basis, granted, featureErr := a.deploymentModelGrant(ctx, principal)
 	if granted {
-		// The model resolver always prefers the organization's own model
-		// configuration, so a grant does not name the model that runs.
+		// The resolver always prefers the organization's own model
+		// configuration, so a grant does not name the model that runs. An
+		// organization that has one is admitted on it with the deployment
+		// model withheld: a configuration that vanishes before the resolver
+		// reads it fails the turn as unavailable, never as a silent switch to
+		// the deployment model.
 		if own, err := a.orgHasOwnModel(ctx, principal); err == nil && own {
-			return serviceModelBasisOwnModel, true, nil
+			return serviceModelBasisOwnModel, false, nil
 		}
 		return basis, true, nil
 	}
