@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,9 @@ func answerOnceAgainst(t *testing.T, message map[string]any, effort string) (map
 	t.Helper()
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/chat/completions" {
+			t.Errorf("request = %s %s, want POST /chat/completions", r.Method, r.URL.Path)
+		}
 		raw, _ := io.ReadAll(r.Body)
 		if err := json.Unmarshal(raw, &captured); err != nil {
 			t.Errorf("request body is not JSON: %v", err)
@@ -88,6 +92,25 @@ func TestAnswerOneSendsOneSystemMessageStrictSchemaAndNoSamplingFields(t *testin
 	schema, _ := format["json_schema"].(map[string]any)
 	if format["type"] != "json_schema" || schema["strict"] != true || schema["name"] != "interpret" {
 		t.Errorf("response_format = %v, want strict json_schema named after the operation", format)
+	}
+	var original any
+	if err := json.Unmarshal([]byte(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`), &original); err != nil {
+		t.Fatal(err)
+	}
+	normalized, _ := normalizeForStrictSchema(original)
+	normalizedJSON, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantSchema map[string]any
+	if err := json.Unmarshal(normalizedJSON, &wantSchema); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(schema["schema"], wantSchema) {
+		t.Errorf("sent schema = %v, want the normalized strict schema %v", schema["schema"], wantSchema)
+	}
+	if wantSchema["additionalProperties"] != false {
+		t.Errorf("normalized schema must close additionalProperties, got %v", wantSchema["additionalProperties"])
 	}
 }
 
