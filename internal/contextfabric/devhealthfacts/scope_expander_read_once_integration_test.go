@@ -179,7 +179,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 				body = body[:at]
 			}
 			plainStatement := capturedStatement{statement: strings.ReplaceAll(body, once, plain), bindings: captured.bindings}
-			sentRows, plainRows := scopeRows(t, ctx, query, capturedStatement{statement: body, bindings: captured.bindings}), scopeRows(t, ctx, query, plainStatement)
+			sentRows, plainRows := scopeRows(t, ctx, rawQuery, capturedStatement{statement: body, bindings: captured.bindings}), scopeRows(t, ctx, rawQuery, plainStatement)
 			if len(sentRows) == 0 || !slices.Equal(sentRows, plainRows) {
 				t.Errorf("%s %s: rows differ from the plain-subquery form (or none were returned): sent %q, plain %q", state, statement.label, sentRows, plainRows)
 			}

@@ -284,7 +284,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		if stale == captured.statement {
 			t.Fatal("the statement reads no ownership table with FINAL")
 		}
-		rows := strings.Join(scopeRows(t, ctx, query, capturedStatement{statement: stale, bindings: captured.bindings}), "\n")
+		rows := strings.Join(scopeRows(t, ctx, rawQuery, capturedStatement{statement: stale, bindings: captured.bindings}), "\n")
 		for _, repo := range []string{moved.repo, moved.projectRepo} {
 			if !strings.Contains(rows, repo) {
 				t.Fatalf("the statement without FINAL does not reach %s, so this row cannot see a stale ownership version:\n%s", repo, rows)
@@ -325,7 +325,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	differential := func(t *testing.T, statements map[string]servedStatement) {
 		for _, statement := range scopeExpanderStatements {
 			pair := statements[statement.label]
-			scoped, orgWide := scopeRows(t, ctx, query, pair.scoped), scopeRows(t, ctx, query, pair.orgWide)
+			scoped, orgWide := scopeRows(t, ctx, rawQuery, pair.scoped), scopeRows(t, ctx, rawQuery, pair.orgWide)
 			if len(scoped) == 0 {
 				t.Fatalf("%s: the statement returned no rows, the comparison did not happen", statement.label)
 			}
@@ -409,7 +409,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
 	unmerged(t, "small")
 	var callers []linkHelperCaller
-	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, query, fixture) })
+	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, rawQuery, fixture) })
 	t.Run("link helper callers at the smaller size", func(t *testing.T) { linkHelperCallersCost(t, ctx, query, direct, callers) })
 	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
