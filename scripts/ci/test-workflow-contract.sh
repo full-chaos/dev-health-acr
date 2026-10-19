@@ -657,13 +657,14 @@ check_race_runner_uses_variable() {
   return "$status"
 }
 
-# The first-stage jobs (plan, mirror-preflight, scripts, lint) gate every
+# The first-stage jobs (plan, mirror-preflight, lint) gate every
 # race leg: on a hosted runner they wait behind the hosted queue while the
 # CI_RACE_RUNNER pool idles. They read the same variable with the same hosted
-# fallback, so the variable stays the one kill switch for all of them.
+# fallback, so the variable stays the one kill switch for all of them. The
+# scripts job stays hosted: the pool image carries no shellcheck.
 check_first_stage_runner_uses_variable() {
   local file="$1" job status=0 block
-  for job in plan mirror-preflight scripts lint; do
+  for job in plan mirror-preflight lint; do
     block="$(job_block "$file" "$job")"
     if [ -z "$block" ]; then
       printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2
