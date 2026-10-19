@@ -493,7 +493,7 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 
 	if callErr != nil {
 		class, terminal := classifyError(callErr)
-		logf("operation=%s seq=%d elapsed=%s class=%s terminal=%v", req.Operation, req.Seq, elapsed, class, terminal)
+		logf("operation=%s seq=%d elapsed=%s class=%s terminal=%v llm_class=%s", req.Operation, req.Seq, elapsed, class, terminal, llmClassLabel(callErr))
 		if terminal {
 			r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Error: class})
 			return
@@ -574,7 +574,7 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 		r.retryOrExhaust(respPath, base, req.SessionNonce, logf)
 		return
 	}
-	logf("operation=%s seq=%d elapsed=%s status=ok output_bytes=%d", req.Operation, req.Seq, elapsed, len(content))
+	logf("operation=%s seq=%d elapsed=%s status=ok output_bytes=%d model=%s", req.Operation, req.Seq, elapsed, len(content), answer.Model)
 	r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Output: json.RawMessage(content)})
 }
 
@@ -665,6 +665,16 @@ func (r *responder) writeResponse(respPath string, resp exchangeResponse) {
 	}
 }
 
+// llmClassLabel is the llm class string of err for the per-request log line, so
+// a class llm adds later shows up in the logs even though classifyError folds
+// it into the closed vocabulary; "none" when err is not an llm provider error.
+func llmClassLabel(err error) string {
+	if class, ok := llm.ClassOf(err); ok {
+		return string(class)
+	}
+	return "none"
+}
+
 // classifyError maps a call failure to a closed-vocabulary class (this
 // file's own class* constants -- never the provider's raw text) and whether
 // it is TERMINAL. TERMINAL failures (auth, malformed request, an undecodable
@@ -696,10 +706,19 @@ func classifyError(err error) (class string, terminal bool) {
 		return classAuthError, true
 	case llm.ClassInvalidRequest, llm.ClassModelNotFound, llm.ClassContextLength:
 		return classInvalidRequest, true
-	case llm.ClassOutput, llm.ClassGeneric:
-		// A 2xx reply that holds no usable answer (undecodable body, no
-		// choices; llm reports both as ClassGeneric) fails the same way on
-		// every retry.
+	case llm.ClassOutput:
+		return classInvalidOutput, true
+	case llm.ClassGeneric:
+		// llm reports an unrecognized HTTP status (for example a 409 with an
+		// unknown body) as ClassGeneric with that status; the old status
+		// switch made every unlisted 4xx a terminal invalid_request. With no
+		// status the failure is a 2xx reply that holds no usable answer
+		// (undecodable body, no choices), which fails the same way on every
+		// retry.
+		var typed *llm.Error
+		if errors.As(err, &typed) && typed.StatusCode() >= 400 {
+			return classInvalidRequest, true
+		}
 		return classInvalidOutput, true
 	default:
 		// Timeouts and transport failures: a network blip is worth retrying.
