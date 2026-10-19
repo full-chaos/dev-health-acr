@@ -22,8 +22,10 @@ absent when code evidence shows it does not apply to the route, and `null` when
 it is undetermined in this pass. Every `null` needs a `gaps` entry that begins
 with `<field>:` and says what was searched. Never write `null` for "not
 applicable", and never infer "absent" from silence. The rule is ops-owned
-(`docs/reference/auth/endpoint-profiles.md` in dev-health-ops). The gate change
-that enforces it on every advisory field follows this data change.
+(`docs/reference/auth/endpoint-profiles.md` in dev-health-ops). The gate
+(`ci/checkendpointprofiles`) enforces it on every advisory field: a `null` with
+no `gaps` entry beginning `<field>:` fails with `UNSTATED NULL`, and prose that
+only mentions the field name does not count.
 
 ## Coverage
 
