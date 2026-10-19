@@ -11,6 +11,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -136,19 +137,20 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 			}
 			_ = rows.Close()
 			mustExec(t, f.ctx, f.h.direct, "SYSTEM FLUSH LOGS")
-			r, err := f.h.direct.Query(f.ctx, `SELECT memory_usage, read_rows FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time DESC LIMIT 1`, tag)
+			r, err := f.h.direct.Query(f.ctx, `SELECT memory_usage, read_rows, `+statementthreads.Threadless+` FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time DESC LIMIT 1`, tag)
 			if err != nil {
 				t.Fatalf("query_log: %v", err)
 			}
-			var mem, readRows uint64
+			var mem, readRows, threadless uint64
 			if !r.Next() {
 				_ = r.Close()
 				t.Fatalf("%s %s: no query_log row for %s", stage, frag.Name, tag)
 			}
-			if err := r.Scan(&mem, &readRows); err != nil {
+			if err := r.Scan(&mem, &readRows, &threadless); err != nil {
 				t.Fatal(err)
 			}
 			_ = r.Close()
+			statementthreads.RequireThreadBound(t, stage+" "+frag.Name, threadless)
 			mib := float64(mem) / (1 << 20)
 			if run < 0 {
 				continue
@@ -204,9 +206,9 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 	for i, layout := range []string{"parts", "merged"} {
 		t.Run(layout, func(t *testing.T) {
 			m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000030%d", i), layout, 767)
-			capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
+			capped := statementthreads.Capped(m.query, prodMaxMemoryUsage)
 			only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true, "legacy_paged_statement": true}
-			peaks := measureProjectTeamsFragments(t, m.f, m.query, capped, "prod-"+layout, only, memoryShapeRuns)
+			peaks := measureProjectTeamsFragments(t, m.f, statementthreads.API(m.query), capped, "prod-"+layout, only, memoryShapeRuns)
 			report(t, fmt.Sprintf("%d active parts\n%s", m.parts, fragmentTable(layout, peaks)))
 			paged := peakOf(t, peaks, "paged_statement")
 			raw := peakOf(t, peaks, "ownership_raw_final_x1")
@@ -316,9 +318,9 @@ func TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory(t *testin
 			peaks := map[int]fragmentPeak{}
 			for i, versions := range []int{100, 1000, 2000} {
 				m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-0000000001%d%d", len(layout), i), layout, versions)
-				capped := contextpacket.NewMemoryCappedQueryClient(m.query, prodMaxMemoryUsage)
+				capped := statementthreads.Capped(m.query, prodMaxMemoryUsage)
 				only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true}
-				all := measureProjectTeamsFragments(t, m.f, m.query, capped, fmt.Sprintf("slope-%s-%d", layout, versions), only, slopeRuns)
+				all := measureProjectTeamsFragments(t, m.f, statementthreads.API(m.query), capped, fmt.Sprintf("slope-%s-%d", layout, versions), only, slopeRuns)
 				peak := peakOf(t, all, "paged_statement")
 				report(t, fmt.Sprintf("slope %s: %d versions per pair (%d rows, %d parts):\n%s", layout, versions, memoryShapePairs*versions, m.parts, fragmentTable("slope", all)))
 				peaks[versions] = peak

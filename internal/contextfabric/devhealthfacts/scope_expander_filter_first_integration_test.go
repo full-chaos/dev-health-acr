@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -189,7 +190,7 @@ func seedMovedOwnership(t *testing.T, ctx context.Context, direct clickhousedriv
 
 // scopeRows runs a statement (its SETTINGS clause removed) and returns its rows
 // as sorted text, so two statements' results compare whole.
-func scopeRows(t *testing.T, ctx context.Context, client *runtimeclickhouse.Client, captured capturedStatement) []string {
+func scopeRows(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, captured capturedStatement) []string {
 	t.Helper()
 	body := captured.statement
 	if at := strings.LastIndex(body, "\nSETTINGS "); at >= 0 {
@@ -220,10 +221,11 @@ func scopeRows(t *testing.T, ctx context.Context, client *runtimeclickhouse.Clie
 // (the guard's planted defect, measured on the same data).
 func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	// Every declared table: the link helper's other callers are read through
 	// every provider, and a provider's own tables must exist.
 	for _, statement := range devhealthschema.DDL() {
@@ -282,7 +284,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		if stale == captured.statement {
 			t.Fatal("the statement reads no ownership table with FINAL")
 		}
-		rows := strings.Join(scopeRows(t, ctx, query, capturedStatement{statement: stale, bindings: captured.bindings}), "\n")
+		rows := strings.Join(scopeRows(t, ctx, rawQuery, capturedStatement{statement: stale, bindings: captured.bindings}), "\n")
 		for _, repo := range []string{moved.repo, moved.projectRepo} {
 			if !strings.Contains(rows, repo) {
 				t.Fatalf("the statement without FINAL does not reach %s, so this row cannot see a stale ownership version:\n%s", repo, rows)
@@ -323,7 +325,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	differential := func(t *testing.T, statements map[string]servedStatement) {
 		for _, statement := range scopeExpanderStatements {
 			pair := statements[statement.label]
-			scoped, orgWide := scopeRows(t, ctx, query, pair.scoped), scopeRows(t, ctx, query, pair.orgWide)
+			scoped, orgWide := scopeRows(t, ctx, rawQuery, pair.scoped), scopeRows(t, ctx, rawQuery, pair.orgWide)
 			if len(scoped) == 0 {
 				t.Fatalf("%s: the statement returned no rows, the comparison did not happen", statement.label)
 			}
@@ -407,7 +409,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	fillScopeOrganization(t, ctx, direct, fixture, "small", 100_000)
 	unmerged(t, "small")
 	var callers []linkHelperCaller
-	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, query, fixture) })
+	t.Run("link helper callers outside the expander", func(t *testing.T) { callers = linkHelperCallersDifferential(t, ctx, rawQuery, fixture) })
 	t.Run("link helper callers at the smaller size", func(t *testing.T) { linkHelperCallersCost(t, ctx, query, direct, callers) })
 	mergeScopeTables(t, ctx, direct)
 	smallStatements := served(t)
@@ -500,7 +502,7 @@ type linkHelperCaller struct {
 	whole  string
 }
 
-func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, f everyRootFixture) []linkHelperCaller {
+func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, f everyRootFixture) []linkHelperCaller {
 	recorder := &recordingQueryClient{inner: query}
 	principal := storage.Principal{OrgID: f.orgID, RepositoryScopes: []string{"*"}}
 	subjects := []contextfabric.SubjectRef{f.teamA, f.teamB, f.projectP, f.projectQ, {Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + f.shared, Label: "acme/shared"}}
@@ -561,7 +563,7 @@ func linkHelperCallersDifferential(t *testing.T, ctx context.Context, query *run
 // whole-table reference form, at the larger size, and holds the served form
 // under the caps production applies: its own max_memory_usage or the API
 // statement default, and the client's max_bytes_to_read.
-func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, callers []linkHelperCaller) {
+func linkHelperCallersCost(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, callers []linkHelperCaller) {
 	if len(callers) == 0 {
 		t.Fatal("no link helper caller was captured at the smaller size")
 	}
@@ -572,6 +574,7 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclic
 	t.Logf("CALLER stage: work_items %d rows, work_graph_issue_pr %d rows", workItems, links)
 	run := func(statement capturedStatement) (memory, readBytes, readRows, scalarMisses, scalarHits uint64, code int32, err error) {
 		mark := serverNowMicros(t, ctx, direct)
+		var threadless uint64
 		rows, err := query.Query(ctx, statement.statement, statement.bindings)
 		if err == nil {
 			for rows.Next() {
@@ -582,11 +585,12 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query *runtimeclic
 		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
 			t.Fatalf("flush logs: %v", flushErr)
 		}
-		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code) FROM system.query_log
+		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code), `+statementthreads.ThreadlessCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &scalarMisses, &scalarHits, &code); scanErr != nil {
+  AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &scalarMisses, &scalarHits, &code, &threadless); scanErr != nil {
 			t.Fatalf("read query_log: %v", scanErr)
 		}
+		statementthreads.RequireThreadBound(t, "link helper caller", threadless)
 		return memory, readBytes, readRows, scalarMisses, scalarHits, code, err
 	}
 	for _, caller := range callers {

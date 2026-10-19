@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -22,7 +23,7 @@ const (
 	blockerStatusFillerItems = 150000
 )
 
-func blockerStatusPeaks(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) []uint64 {
+func blockerStatusPeaks(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, statement contextpacket.SourceQuery, plan contextpacket.ReadPlan, runs int) []uint64 {
 	t.Helper()
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
 	if _, err := executor.QueryEvidence(ctx, statement, plan.Bindings()); err != nil {
@@ -41,11 +42,12 @@ func blockerStatusPeaks(t *testing.T, ctx context.Context, query *runtimeclickho
 		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 			t.Fatalf("flush logs: %v", err)
 		}
-		var peak uint64
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage) FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'blocker_status') > 0`, mark).Scan(&peak); err != nil || peak == 0 {
+		var peak, threadless uint64
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'blocker_status') > 0`, mark).Scan(&peak, &threadless); err != nil || peak == 0 {
 			t.Fatalf("run %d: statement not found in query_log (measurement did not happen): %v", run, err)
 		}
+		statementthreads.RequireThreadBound(t, "blocker status", threadless)
 		peaks = append(peaks, peak)
 	}
 	slices.Sort(peaks)
@@ -66,10 +68,11 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 		t.Skip("the bound is the ClickHouse server peak, which the race detector does not change; the unit leg runs this row")
 	}
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",

@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -45,10 +46,11 @@ type readOnceStats struct{ memory, readRows, scalarMiss uint64 }
 // ceiling on its lowest read, so the row can fail on this data.
 func TestScopedHistoricalStatementsReadTheCandidatesOnceOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -84,11 +86,13 @@ SELECT ?, NULL, ?, 'work_item', concat('req-', repeat('x', 64), '-', toString(nu
 			t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 		}
 		var s readOnceStats
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']) FROM system.query_log
+		var threadless uint64
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), `+statementthreads.ThreadlessCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, mark, table, fragment).Scan(&s.memory, &s.readRows, &s.scalarMiss); err != nil {
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, mark, table, fragment).Scan(&s.memory, &s.readRows, &s.scalarMiss, &threadless); err != nil {
 			t.Fatalf("read query_log: %v", err)
 		}
+		statementthreads.RequireThreadBound(t, fragment, threadless)
 		return s
 	}
 	// sample sends a statement once unmeasured and three warm times, and
@@ -175,7 +179,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 				body = body[:at]
 			}
 			plainStatement := capturedStatement{statement: strings.ReplaceAll(body, once, plain), bindings: captured.bindings}
-			sentRows, plainRows := scopeRows(t, ctx, query, capturedStatement{statement: body, bindings: captured.bindings}), scopeRows(t, ctx, query, plainStatement)
+			sentRows, plainRows := scopeRows(t, ctx, rawQuery, capturedStatement{statement: body, bindings: captured.bindings}), scopeRows(t, ctx, rawQuery, plainStatement)
 			if len(sentRows) == 0 || !slices.Equal(sentRows, plainRows) {
 				t.Errorf("%s %s: rows differ from the plain-subquery form (or none were returned): sent %q, plain %q", state, statement.label, sentRows, plainRows)
 			}

@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // The project-linked investment statement scans the organization's work units
@@ -18,7 +19,8 @@ import (
 // sizes and the served mix does not move with unrelated units.
 func TestTeamLinkedInvestmentStatementStaysUnderTheMemoryCeilingOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {
