@@ -248,3 +248,46 @@ func TestWindowGate_SkippedWarningSurvivesAFullWarningList(t *testing.T) {
 		t.Fatalf("skipped warnings = %d, total = %d (max %d), want the skipped-confirmation warning kept within the bound", skipped, len(run.result.Warnings), contractsv1.ContextFabricWarningsMaxCount)
 	}
 }
+
+func TestWindowGate_StoredWindowClarificationIsNotReusedWhenClarificationIsDeclined(t *testing.T) {
+	t.Parallel()
+	for _, allow := range []bool{true, false} {
+		project, candidate := reusableCandidate()
+		candidate.Status = InvestigationClarificationRequired
+		candidate.SubjectResolution = withheldPoolResolution()
+		candidate.StructureNeeds = nil
+		candidate.WindowClarification = &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{{}}}
+		candidate.EffectiveEvidenceWindow = &EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Provenance: WindowInferredDefault}
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Graph: graphReaderStub{
+				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+				bases:      provenCommitBases(project),
+			},
+			Results: &resultStoreStub{},
+			ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+				return candidate, true, nil
+			}),
+		})
+		request := validInvestigationRequest()
+		request.Options.AllowClarification = allow
+		_, hit, _, _ := engine.tryReuse(context.Background(), reusePrincipal(), request, TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
+		if hit != allow {
+			t.Fatalf("allow_clarification=%v: reuse hit = %v, want %v: a window clarification is served only to a caller that can be asked", allow, hit, allow)
+		}
+	}
+}
+
+func TestCalendarWindow_AComparisonKeepsTheBoundsTheBinderFroze(t *testing.T) {
+	t.Parallel()
+	frozenStart, frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	canon := requestWindowCanonicalization{
+		BinderProposal: WindowBindOutcome{Reason: WindowBindRoutedInferred, SpansBound: 1, Calendar: CalendarPeriodThisMonth},
+		CalendarStart:  frozenStart, CalendarEnd: frozenEnd,
+	}
+	interpreted := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	fresh := TimeContext{Axis: TemporalRange, Start: &interpreted, End: &frozenEnd}
+	period := statedPeriodRead(canon, bootstrapInterpretation(), &QuestionFrame{Temporal: TemporalIntentPeriodComparison}, TemporalCurrent, fresh, true, mcpSurface, frozenEnd)
+	if period == nil || !period.Start.Equal(frozenStart) || !period.End.Equal(frozenEnd) {
+		t.Fatalf("period = %+v, want the frozen %v..%v, not the interpreter range", period, frozenStart, frozenEnd)
+	}
+}

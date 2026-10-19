@@ -966,7 +966,7 @@ type statedPeriod struct {
 // the period from now (a supplied range that differs from it is disclosed); a
 // period the closed grammar cannot bound gives it through the interpreter's
 // range, as interpreterPeriodWindow reads one for a current-state frame; a
-// series whose question names a bare calendar period reads the binder's own
+// series or comparison whose question names a bare calendar period reads the binder's own
 // calendar bounds whatever axis the interpreter sampled. A comparison reads its stated period and names the equal period just before
 // it as not read. nil for a current-state frame, an evidence window already
 // committed, a point-in-time phrase, or a question that states no
@@ -986,7 +986,7 @@ func statedPeriodRead(canon requestWindowCanonicalization, interpretation Interp
 			return nil
 		}
 		period = statedPeriod{Start: start, End: end, Origin: StatedWindowOriginQuestionPhrase, Conflict: detectStatedRangeConflict(binder, interpretation.TimeContext, now)}
-	case shape == periodShapeSeries && binder.Calendar != CalendarPeriodNone:
+	case (shape == periodShapeSeries || shape == periodShapeComparison) && binder.Calendar != CalendarPeriodNone:
 		start, end := canon.CalendarStart, canon.CalendarEnd
 		if start.IsZero() || end.IsZero() {
 			var ok bool
