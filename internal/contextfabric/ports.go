@@ -205,6 +205,15 @@ type QuestionInterpreter interface {
 // DiscoverContext then take that SAME binding explicitly, rather than
 // resolving their own -- a caller who forgets to resolve or thread it fails
 // to compile.
+// RemovedTeamReader is the optional bounded read of which of the given team
+// subjects are removed at their source (the node carries gone_at) and readable
+// by the caller. It costs one keyed query per batch of teams and never walks
+// the graph; a reuse hit for an answer that cites no evidence uses it instead
+// of a full discovery.
+type RemovedTeamReader interface {
+	RemovedTeams(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) ([]SubjectRef, error)
+}
+
 type GraphReader interface {
 	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
 	// ResolveSubjects' own request parameter already carries ExpectedKinds/

@@ -976,21 +976,19 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
           printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
-          out="$(mktemp)"
-          budget="$(make -s print-gotest-timeout)"
-          set +e
-          make test-race GOTEST_PKGS="$packages" 2>&1 | tee "$out"
-          pipe=("${PIPESTATUS[@]}")
-          status=${pipe[0]}
-          if [ "$status" -eq 0 ] && [ "${pipe[1]}" -ne 0 ]; then
-            printf '::error::tee failed (exit %s); the captured go test output is incomplete\n' "${pipe[1]}"
-            status=1
-          fi
-          set -e
-          guard=0
-          scripts/ci/shard-budget-guard.sh "${budget%s}" "$out" || guard=$?
-          if [ "$status" -ne 0 ]; then exit "$status"; fi
-          exit "$guard"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$(make -s print-gotest-timeout)" scripts/ci/run-isolated-budget.sh 'shard ${{ matrix.shard }} of 4' "$packages"
+      # Keeps this shard's test2json events so the per-test cost of each shard
+      # package under -race can be read (the text output prints package totals
+      # only). if: always() so a timed-out or failing shard still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-shard-${{ matrix.shard }}
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   # CHAOS-3974: internal/contextfabric/devhealthschema's full-repo
   # declaration-closure tests walk every file in the module, so their cost
@@ -1033,7 +1031,18 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-shared)"
           printf 'isolated (shared) packages:\n%s\n' "$packages"
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=900s
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=900s scripts/ci/run-isolated-budget.sh 'devhealthschema (isolated scope)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthschema
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   # CHAOS-5977: devhealthfacts carries the shared-container HEAVY pattern
   # (scripts/ci/test-shard.sh heavy) -- its real-ClickHouse suite keeps ONE
@@ -1485,7 +1494,18 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh factoracle rest)"
-          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (rest half)' "$packages"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (rest half)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-factoracle
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   race-factoracle-heavy:
     name: race (factoracle heavy, isolated scope)
@@ -1525,7 +1545,18 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh factoracle heavy)"
-          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (heavy half)' "$packages"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (heavy half)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-factoracle-heavy
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   build:
     runs-on: ubuntu-latest

@@ -515,6 +515,7 @@ var ProductionColumns = map[string][]Column{
 		// []string.
 		{Name: "project_keys", Type: "Array(String)"},
 		{Name: "is_active", Type: "UInt8"},
+		{Name: "gone_at", Type: "Nullable(DateTime64(6))"},
 	},
 	// project_membership_transitions is ops migration 077 (CHAOS-4193/4194).
 	// The FULL declared column set, not a reader-scoped subset: acr's own

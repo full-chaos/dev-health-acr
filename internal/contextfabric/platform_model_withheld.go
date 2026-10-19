@@ -41,3 +41,19 @@ func PlatformModelWithheldBasis(ctx context.Context) string {
 	value, _ := ctx.Value(platformModelWithheldKey{}).(platformModelWithheldValue)
 	return value.basis
 }
+
+type deploymentModelBoundKey struct{}
+
+// WithDeploymentModelBound marks a turn the gate admitted on the deployment
+// model: the resolver serves every call of it from the deployment model and
+// never reads the organization's model configuration, so a configuration that
+// appears mid-turn cannot move the turn to another model.
+func WithDeploymentModelBound(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deploymentModelBoundKey{}, true)
+}
+
+// DeploymentModelBound reports whether WithDeploymentModelBound marked ctx.
+func DeploymentModelBound(ctx context.Context) bool {
+	bound, _ := ctx.Value(deploymentModelBoundKey{}).(bool)
+	return bound
+}

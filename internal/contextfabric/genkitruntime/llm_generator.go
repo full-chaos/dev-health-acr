@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -36,6 +37,28 @@ var cutStopReasons = map[string]bool{"length": true, "max_tokens": true, "max_ou
 // output schema. classifyModelError maps it to ErrModelOutput, as it maps
 // Genkit's.
 var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
+
+// outputMismatch is errOutputSchemaMismatch with the stage that failed:
+// "empty", "not_json", "schema" or "decode".
+type outputMismatch struct{ stage string }
+
+func (m *outputMismatch) Error() string        { return genkitSchemaMismatchPrefix + ": " + m.stage }
+func (m *outputMismatch) Is(target error) bool { return target == errOutputSchemaMismatch }
+
+// schemaRejectionReason names the rule a draw broke when it was refused before
+// the validator ran. It never returns Unclassified.
+func schemaRejectionReason(cause error) contextfabric.InterpretationRejectionReason {
+	var mismatch *outputMismatch
+	if errors.As(cause, &mismatch) {
+		switch mismatch.stage {
+		case "empty", "not_json":
+			return contractsv1.ContextFabricInterpretationRejectionOutputNotJSON
+		case "decode":
+			return contractsv1.ContextFabricInterpretationRejectionOutputDecodeFailed
+		}
+	}
+	return contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation
+}
 
 // errModelRefusal marks a reply whose stop reason is a refusal. It is the
 // terminal outcome of its draw: the provider billed the input, and another
@@ -268,10 +291,10 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 	if reason == "" {
 		return candidate, nil
 	}
-	g.logger.DebugContext(ctx, llmDrawRejectedReason, "operation", contextfabric.SanitizeLogAttr(operation),
+	g.logger.InfoContext(ctx, llmDrawRejectedReason, "operation", contextfabric.SanitizeLogAttr(operation),
 		"reason", contextfabric.SanitizeLogAttr(reason), "reply_bytes", len(text),
 		"violations", contextfabric.SanitizeLogStrings(violations))
-	return candidate, fmt.Errorf("%w: %s", errOutputSchemaMismatch, reason)
+	return candidate, &outputMismatch{stage: reason}
 }
 
 // schemaViolations names where a reply broke the output schema: the JSON
@@ -303,7 +326,7 @@ func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) 
 		return rejection.output, usage, rejection
 	}
 	if decodeErr != nil {
-		return interpretationOutput{}, usage, &decodeRejection{cause: fmt.Errorf("%w: decode", errOutputSchemaMismatch)}
+		return interpretationOutput{}, usage, &decodeRejection{cause: &outputMismatch{stage: "decode"}}
 	}
 	return output, usage, nil
 }
@@ -317,7 +340,7 @@ func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest)
 	var output synthesisOutput
 	decodeErr := json.Unmarshal([]byte(candidate), &output)
 	if checkErr == nil && decodeErr != nil {
-		checkErr = fmt.Errorf("%w: decode", errOutputSchemaMismatch)
+		checkErr = &outputMismatch{stage: "decode"}
 	}
 	if checkErr != nil {
 		rejection := &decodeSynthesisRejection{cause: classifyModelError(checkErr), digest: contextfabric.DigestModelValue([]byte(text))}
@@ -340,7 +363,7 @@ func (g llmGenerator) Phrase(ctx context.Context, request generationRequest) (ph
 	}
 	var output phrasingOutput
 	if err := json.Unmarshal([]byte(candidate), &output); err != nil {
-		return phrasingOutput{}, usage, fmt.Errorf("%w: decode", errOutputSchemaMismatch)
+		return phrasingOutput{}, usage, &outputMismatch{stage: "decode"}
 	}
 	return output, usage, nil
 }

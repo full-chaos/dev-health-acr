@@ -101,6 +101,9 @@ func (s routeSeed) conn() *fakeConn {
 				}
 				r := fakeSubjectNodeRow(n.kind, n.id, n.label)
 				r["n"].(*node).Properties[propAuthzRepos] = n.repos
+				for k, v := range n.props {
+					r["n"].(*node).Properties[k] = v
+				}
 				rows = append(rows, r)
 			}
 			return rows, nil
@@ -116,6 +119,9 @@ func (s routeSeed) conn() *fakeConn {
 					r := fakeSubjectNodeRow(n.kind, n.id, n.label)
 					if len(n.repos) > 0 {
 						r["n"].(*node).Properties[propAuthzRepos] = n.repos
+					}
+					for k, v := range n.props {
+						r["n"].(*node).Properties[k] = v
 					}
 					rows = append(rows, r)
 				}

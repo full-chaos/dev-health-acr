@@ -168,7 +168,7 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 // InterpretQuestion/SynthesizeAnswer both convert that into
 // ErrModelUnavailable, matching the pre-CHAOS-3775 nil-runtime behavior.
 func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.ModelRuntime, error) {
-	if r.Configs == nil || orgID == "" {
+	if r.Configs == nil || orgID == "" || contextfabric.DeploymentModelBound(ctx) {
 		return r.deploymentDefault(ctx, orgID)
 	}
 

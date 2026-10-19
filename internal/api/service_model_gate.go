@@ -46,6 +46,19 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	}
 	basis, granted, featureErr := a.deploymentModelGrant(ctx, principal)
 	if granted {
+		// The resolver always prefers the organization's own model
+		// configuration, so a grant does not name the model that runs. An
+		// organization that has one is admitted on it with the deployment
+		// model withheld: a configuration that vanishes before the resolver
+		// reads it fails the turn as unavailable, never as a silent switch to
+		// the deployment model.
+		own, err := a.orgHasOwnModel(ctx, principal)
+		if err != nil {
+			return "", false, err
+		}
+		if own {
+			return serviceModelBasisOwnModel, false, nil
+		}
 		return basis, true, nil
 	}
 	if errors.Is(featureErr, entitlements.ErrOrganizationUnknown) {
@@ -156,6 +169,11 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	}
 	if !allowed {
 		ctx = contextfabric.WithPlatformModelWithheldBasis(ctx, string(basis))
+	}
+	if basis == serviceModelBasisEntitlement || basis == serviceModelBasisDeploymentOpen {
+		// The basis binds the turn: it runs on the deployment model for every
+		// call, whatever the organization configuration says by then.
+		ctx = contextfabric.WithDeploymentModelBound(ctx)
 	}
 	return ctx, true
 }
