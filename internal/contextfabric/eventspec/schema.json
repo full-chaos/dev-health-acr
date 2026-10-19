@@ -13831,8 +13831,14 @@
           "digest_changed",
           "authorization_unverifiable",
           "universal_grant",
-          "coverage_invalid"
+          "coverage_invalid",
+          "limitations_flooded"
         ]
+      },
+      {
+        "key": "result_id_hash",
+        "type": "string",
+        "presence": "required"
       },
       {
         "key": "semantic_read",

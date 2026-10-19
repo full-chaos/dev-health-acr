@@ -8812,6 +8812,7 @@ type WorkItemStoredServingFields struct {
 	OrgID                 string
 	Surface               string
 	Basis                 string
+	ResultIDHash          string
 	SemanticRead          string
 	CensusRead            string
 	CoverageDetailsBefore int
@@ -8833,11 +8834,12 @@ type WorkItemStoredServingFields struct {
 
 // NewWorkItemStoredServingFields is the generated constructor for WorkItemStoredServingFields -- every
 // field WorkItemStoredServing.Fields declares is a required parameter.
-func NewWorkItemStoredServingFields(orgID string, surface string, basis string, semanticRead string, censusRead string, coverageDetailsBefore int, coverageReasonsBefore int, coverageDetailsAfter int, coverageReasonsAfter int, coverageBound int, requestID string) WorkItemStoredServingFields {
+func NewWorkItemStoredServingFields(orgID string, surface string, basis string, resultIDHash string, semanticRead string, censusRead string, coverageDetailsBefore int, coverageReasonsBefore int, coverageDetailsAfter int, coverageReasonsAfter int, coverageBound int, requestID string) WorkItemStoredServingFields {
 	return WorkItemStoredServingFields{
 		OrgID:                 orgID,
 		Surface:               surface,
 		Basis:                 basis,
+		ResultIDHash:          resultIDHash,
 		SemanticRead:          semanticRead,
 		CensusRead:            censusRead,
 		CoverageDetailsBefore: coverageDetailsBefore,
@@ -8866,6 +8868,7 @@ func (f WorkItemStoredServingFields) SlogArgs() []any {
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"surface", contextfabric.SanitizeLogAttr(f.Surface),
 		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"result_id_hash", contextfabric.SanitizeLogAttr(f.ResultIDHash),
 		"semantic_read", contextfabric.SanitizeLogAttr(f.SemanticRead),
 		"census_read", contextfabric.SanitizeLogAttr(f.CensusRead),
 		"coverage_details_before", f.CoverageDetailsBefore,

@@ -4796,7 +4796,8 @@ var WorkItemStoredServing = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reuse", "result_by_id"}},
-		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid"}},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid", "limitations_flooded"}},
+		{Key: "result_id_hash", Type: FieldString, Presence: PresenceRequired},
 		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"available", "absent", "malformed", "unsupported_version", "oversized"}},
 		{Key: "census_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"available", "absent", "malformed", "unsupported_version"}},
 		{Key: "coverage_details_before", Type: FieldInt, Presence: PresenceRequired},
