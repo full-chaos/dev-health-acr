@@ -120,7 +120,7 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeError() envelope (ErrorEnvelope: schema_version, request_id, error{code,message,http_status,retryable,details}); no raw internal error crosses the boundary.",
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:79 is gated by them was not traced in this pass."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:80 is gated by it was not traced; not determined."
       ]
     },
     {
@@ -179,8 +179,8 @@
       "disclosure_behavior": "writeError() closed envelope.",
       "gaps": [
         "Whether/how RequireRepository is invoked for this specific handler was not independently re-traced beyond the shared protectedRuntimeHandler wrapper in this pass -- see internal/auth/middleware.go:187-205 for the mechanism if a CI gate needs the per-route call site.",
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:80 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:80 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:81 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:81 is gated by it was not traced; not determined."
       ]
     },
     {
@@ -238,7 +238,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement (requireEntitlement, checked via runtime.Entitlements.HasEntitlement)",
       "disclosure_behavior": "writeError() closed envelope; 403 feature_not_enabled on entitlement denial, distinct from 401 invalid_token.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:81 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:82 reaches was not traced; not determined."
       ]
     },
     {
@@ -284,7 +284,7 @@
       "disclosure_behavior": "writeError() closed envelope.",
       "gaps": [
         "FINDING: web has no code path that calls this endpoint (web's AcrRuntimeClient issues context:read/evidence:read/credential:issue assertions only, never episode:write -- see web's endpoint-profiles.web.json). episode:write is bearer-only by design (allowWebAssertions=false), consistent with that -- confirms web is deliberately NOT an episode-writer, not an oversight.",
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:82 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:83 reaches was not traced; not determined."
       ]
     },
     {
@@ -444,7 +444,7 @@
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
         "CHAOS-7072 (S1a) serves data_catalog: the catalogue is built for the caller (grant class decides the operation list; the caller section carries scopes, the repository grant class and effective_access, never repository names or grant counts). A caller without data:read gets operations.available=false, reason scope_missing_data_read, and effective_access=no_data_read. Unknown sections parameter = 400 invalid_request.",
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:90 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:88 reaches was not traced; not determined."
       ]
     },
     {
@@ -490,7 +490,7 @@
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
         "CHAOS-7072 (S1a) serves find_subjects (modes list and name; owned_by and handle are not built). Every returned subject passes the direct-read subject gate for the caller in the same call; total_known counts admitted subjects only. No graph composed = 503 upstream_unavailable.",
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:91 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:89 reaches was not traced; not determined."
       ]
     },
     {
@@ -535,7 +535,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent; a ClickHouse outage answers store_unavailable (requireDataStoresReady, CHAOS-6745) after authentication.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:92 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:90 reaches was not traced; not determined."
       ]
     },
     {
@@ -581,7 +581,7 @@
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
         "CHAOS-7072 (S1a) serves run_operation over the internal ops query service (four X-DH-Internal-* headers, no Authorization). A policy refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_query_not_configured) when ACR_DATA_QUERY_URL is unset or the policy did not load; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read.",
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:93 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:91 reaches was not traced; not determined."
       ]
     },
     {
@@ -627,7 +627,7 @@
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
         "CHAOS-7075 (S1b) serves graphql_query over GWC's MCP listener (CHAOS-7085, own port, POST /query; four X-DH-Internal-* headers, no Authorization). acr validates the query against the vendored SDL and the derived root policy and sends only its own rebuilt text. A refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_graphql_not_configured) when ACR_DATA_GRAPHQL_URL is unset or the root policy did not derive; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read.",
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:94 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:92 reaches was not traced; not determined."
       ]
     },
     {
@@ -672,7 +672,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a root the caller may not read answers status denied with denied_or_not_found, identical for denied and absent; a refused cursor answers 400 invalid_request (details.reason invalid_cursor or expired_cursor); a ClickHouse outage answers store_unavailable (requireDataStoresReady, CHAOS-6745) after authentication.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:95 reaches was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:93 reaches was not traced; not determined."
       ]
     },
     {
@@ -708,9 +708,9 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeDeviceRateLimit()/writeOAuthDeviceError() closed shapes.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:96 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:96 is gated by them was not traced in this pass.",
-        "token_shape: undetermined. The handler registered at internal/api/app.go:96 was not traced for this field in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:94 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:94 is gated by it was not traced; not determined.",
+        "token_shape: searched the body of handleDeviceAuthorization (internal/api/device_routes.go:17) for issuer, audience, algorithm and token_type; found none; not determined."
       ],
       "issued_credential": [
         {
@@ -772,8 +772,8 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeTokenExchangeError()/writeOAuthDeviceError() -- ErrSubjectTokenInvalid and ErrWorkloadBindingNotFound map to the SAME invalid_grant code (device_routes.go/token_exchange_routes.go:63-68) so a disabled workload binding is indistinguishable from one that never existed.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:97 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:97 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:95 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:95 is gated by it was not traced; not determined."
       ],
       "issued_credential": [
         {
@@ -862,8 +862,8 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeError() closed envelope.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:98 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:98 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:96 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:96 is gated by it was not traced; not determined."
       ],
       "issued_credential": []
     },
@@ -909,8 +909,8 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:99 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:99 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:97 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:97 is gated by it was not traced; not determined."
       ]
     },
     {
@@ -955,8 +955,8 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:100 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:100 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:98 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:98 is gated by it was not traced; not determined."
       ]
     },
     {
@@ -1001,8 +1001,8 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:109 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:109 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:107 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:107 is gated by it was not traced; not determined."
       ]
     },
     {
@@ -1018,8 +1018,8 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:102 is gated by them was not traced in this pass.",
-        "token_shape: undetermined. The handler registered at internal/api/app.go:102 was not traced for this field in this pass."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:100 is gated by it was not traced; not determined.",
+        "token_shape: searched the body of handleOAuthMetadata (internal/api/oauth_routes.go:72) for issuer, audience, algorithm and token_type; found issuer; not determined."
       ],
       "id": "GET /.well-known/oauth-authorization-server [dev-health-acr-api]",
       "method": "GET",
@@ -1054,7 +1054,7 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:103 is gated by them was not traced in this pass."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:101 is gated by it was not traced; not determined."
       ],
       "id": "GET /authorize [dev-health-acr-api]",
       "method": "GET",
@@ -1130,8 +1130,8 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "JSON: preview {client_name, client_self_asserted, client_kind, redirect_origin, resource, scopes, expires_at}; approve/deny {redirect_url} (the registered redirect URI with code or error=access_denied, state, iss); refusals {error} 400 invalid_request / 409 already_completed / 410 expired / 503 temporarily_unavailable; unknown and malformed handles are indistinguishable.",
       "gaps": [
-        "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:104 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:104 is gated by them was not traced in this pass."
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:102 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:102 is gated by it was not traced; not determined."
       ],
       "issued_credential": [
         {
@@ -1184,7 +1184,7 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:105 is gated by them was not traced in this pass."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:103 is gated by it was not traced; not determined."
       ],
       "id": "POST /token [dev-health-acr-api]",
       "method": "POST",
@@ -1254,8 +1254,8 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:106 is gated by them was not traced in this pass.",
-        "token_shape: undetermined. The handler registered at internal/api/app.go:106 was not traced for this field in this pass."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:104 is gated by it was not traced; not determined.",
+        "token_shape: searched the body of handleOAuthRegister (internal/api/oauth_routes.go:296) for issuer, audience, algorithm and token_type; found none; not determined."
       ],
       "id": "POST /register [dev-health-acr-api]",
       "method": "POST",
@@ -1291,8 +1291,8 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:107 is gated by them was not traced in this pass.",
-        "token_shape: undetermined. The handler registered at internal/api/app.go:107 was not traced for this field in this pass."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:105 is gated by it was not traced; not determined.",
+        "token_shape: searched the body of handleOAuthDeviceAuthorization (internal/api/oauth_routes.go:433) for issuer, audience, algorithm and token_type; found none; not determined."
       ],
       "id": "POST /device_authorization [dev-health-acr-api]",
       "method": "POST",
