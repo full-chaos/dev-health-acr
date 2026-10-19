@@ -15,6 +15,8 @@ func TestServiceModelRefusalKeepsItsReasonOnlyOnTheForbiddenFeatureCode(t *testi
 		reason string
 	}{
 		{name: "service model refusal", status: 403, detail: contractsv1.ErrorDetail{Code: "feature_not_enabled", HTTPStatus: 403, Details: map[string]any{"reason": "service_model_not_entitled"}}, reason: "service_model_not_entitled"},
+		{name: "own model gate closed refusal", status: 403, detail: contractsv1.ErrorDetail{Code: "feature_not_enabled", HTTPStatus: 403, Details: map[string]any{"reason": "own_model_gate_closed"}}, reason: "own_model_gate_closed"},
+		{name: "own model gate closed reason on another code", status: 403, detail: contractsv1.ErrorDetail{Code: "insufficient_scope", HTTPStatus: 403, Details: map[string]any{"reason": "own_model_gate_closed"}}},
 		{name: "runtime not entitled", status: 403, detail: contractsv1.ErrorDetail{Code: "feature_not_enabled", HTTPStatus: 403}},
 		{name: "other feature reason", status: 501, detail: contractsv1.ErrorDetail{Code: "feature_not_enabled", HTTPStatus: 501, Details: map[string]any{"reason": "data_query_not_configured"}}},
 		{name: "reason on another code", status: 403, detail: contractsv1.ErrorDetail{Code: "insufficient_scope", HTTPStatus: 403, Details: map[string]any{"reason": "service_model_not_entitled"}}},

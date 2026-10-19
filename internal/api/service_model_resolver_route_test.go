@@ -82,10 +82,12 @@ func TestOwnModelDeletedAfterTheGateNeverFallsBackToTheDeploymentModel(t *testin
 	}
 }
 
-// The mirror: with the feature, the same organization is served on the
-// deployment model through the same resolver.
-func TestDeploymentModelServesThroughTheResolverWithTheFeature(t *testing.T) {
-	rig := newResolverRouteRig(t, &serviceModelGrants{feature: true})
+// The mirror: an organization with no model configuration that holds the
+// feature and the fallback grant is served on the deployment model through
+// the same resolver.
+func TestDeploymentModelServesThroughTheResolverWithTheFeatureAndTheFallbackGrant(t *testing.T) {
+	rig := newResolverRouteRig(t, &serviceModelGrants{feature: true, fallback: true})
+	rig.app.runtime.OrgModelConfigs = ownModelConfigs{}
 	decodeEnvelope(t, rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil))
 	if interprets, synthesizes := rig.model.counts(); interprets != 1 || synthesizes != 1 {
 		t.Fatalf("deployment model calls = interpret %d synthesize %d, want 1 and 1", interprets, synthesizes)

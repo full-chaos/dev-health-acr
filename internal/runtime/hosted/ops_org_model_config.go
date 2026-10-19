@@ -61,10 +61,11 @@ func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(str
 }
 
 // opsOrgModelConfigs serves contextfabric.OrgModelConfigResolver from ops.
-// No BYO config (404) is ok=false: the platform model answers. Anything else
-// that is not a usable config is an error: modelruntimeresolver turns it
-// into "unavailable for this organization" and never uses the platform
-// model in its place.
+// No BYO config (404) is ok=false: the service model gate then decides
+// whether the platform model may answer. Anything else that is not a usable
+// config (a closed byo_llm gate included) is an error: modelruntimeresolver
+// turns it into "unavailable for this organization" and never uses the
+// platform model in its place.
 type opsOrgModelConfigs struct {
 	source      orgLLMConfigSource
 	generations *versionGenerations

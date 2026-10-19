@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 2f038ac1933f8b52ad1d1400d399d82d9cf725ca9d7df740f39fb8a9f6306f6f
+# canonical-content-sha256: d06178cf418fb288c77a72637c3059007add6285f053a8d2dcb6574c54ec6be5
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1033,10 +1033,11 @@ components:
                           reason:
                             enum:
                               - "service_model_not_entitled"
+                              - "own_model_gate_closed"
                         type: "object"
                     type: "object"
                 type: "object"
-      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a credential caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization holds neither the acr_service_model entitlement nor its own model configuration. No model call was made and nothing was stored. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Web assertion callers are not refused for this reason."
+      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. No model call was made and nothing was stored in either case. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Credential and web assertion callers are decided on the same rule."
     ContextFabricInvestigationUnprocessable:
       content:
         application/json:

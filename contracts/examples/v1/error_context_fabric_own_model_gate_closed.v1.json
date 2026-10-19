@@ -1,0 +1,13 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR032",
+  "error": {
+    "code": "feature_not_enabled",
+    "message": "This organization's own model is saved but not enabled for its plan",
+    "http_status": 403,
+    "retryable": false,
+    "details": {
+      "reason": "own_model_gate_closed"
+    }
+  }
+}

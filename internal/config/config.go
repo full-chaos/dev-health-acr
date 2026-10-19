@@ -201,10 +201,11 @@ type Config struct {
 	// contextfabric.EngineOptions.ServerCompletenessAuthoritySymmetricEnabled's
 	// own doc comment for the mechanism.
 	ServerCompletenessAuthoritySymmetricEnabled bool
-	// ServiceModelOpen (ACR_MCP_SERVICE_MODEL_DEFAULT=on) lets every
-	// credential caller run an investigation on the deployment's own model.
-	// Unset or off: only an organization with the acr_service_model
-	// entitlement or its own model configuration may.
+	// ServiceModelOpen (ACR_MCP_SERVICE_MODEL_DEFAULT=on; development and
+	// venues only, production is off) treats every organization as holding
+	// acr_service_model and platform_model_fallback. Unset or off: an
+	// organization with no model configuration of its own runs on the
+	// deployment's own model only with both flags.
 	ServiceModelOpen bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored

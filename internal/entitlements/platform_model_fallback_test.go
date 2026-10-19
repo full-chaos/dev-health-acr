@@ -81,7 +81,7 @@ func TestOrgLLMConfigGateClosedIsItsOwnErrorAndCached(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
-		if found || err == nil || errors.Is(err, entitlements.ErrLLMConfigUnusable) {
+		if found || !errors.Is(err, entitlements.ErrLLMConfigGateClosed) || errors.Is(err, entitlements.ErrLLMConfigUnusable) {
 			t.Fatalf("read %d: found = %v err = %v, want a gate-closed error that is not unusable", i, found, err)
 		}
 	}

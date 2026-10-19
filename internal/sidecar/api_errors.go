@@ -388,8 +388,13 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 			}
 		}
 	}
-	if detail.Code == "feature_not_enabled" && status == 403 && detail.Details["reason"] == contractsv1.ContextFabricServiceModelNotEntitledReason {
-		apiErr.Reason = contractsv1.ContextFabricServiceModelNotEntitledReason
+	if detail.Code == "feature_not_enabled" && status == 403 {
+		switch detail.Details["reason"] {
+		case contractsv1.ContextFabricServiceModelNotEntitledReason:
+			apiErr.Reason = contractsv1.ContextFabricServiceModelNotEntitledReason
+		case contractsv1.ContextFabricOwnModelGateClosedReason:
+			apiErr.Reason = contractsv1.ContextFabricOwnModelGateClosedReason
+		}
 	}
 	if detail.Code == "rate_limited" && status == 429 {
 		if limit, ok := detail.Details[contractsv1.RateLimitDetailsLimitKey].(string); ok && contractsv1.IsRateLimitLimit(limit) {

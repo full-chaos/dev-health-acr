@@ -19,12 +19,14 @@ import (
 )
 
 // serviceModelGrants answers agent_context_runtime as granted and
-// acr_service_model as configured, and records every entitlement asked for.
+// acr_service_model and platform_model_fallback as configured, and records
+// every entitlement asked for.
 type serviceModelGrants struct {
-	mu      sync.Mutex
-	feature bool
-	err     error
-	asked   []string
+	mu       sync.Mutex
+	feature  bool
+	fallback bool
+	err      error
+	asked    []string
 }
 
 func (g *serviceModelGrants) HasEntitlement(_ context.Context, _ string, entitlement string) (bool, error) {
@@ -36,6 +38,8 @@ func (g *serviceModelGrants) HasEntitlement(_ context.Context, _ string, entitle
 		return true, nil
 	case serviceModelEntitlement:
 		return g.feature, g.err
+	case platformModelFallbackEntitlement:
+		return g.fallback, g.err
 	default:
 		return false, errors.New("unexpected entitlement")
 	}
@@ -157,7 +161,7 @@ func TestServiceModelTurnIsServedOnTheFeatureOwnModelOrOpenDeployment(t *testing
 		basis   string
 		asked   int
 	}{
-		{name: "feature", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{}, basis: "entitlement", asked: 1},
+		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{}, basis: "platform_model_fallback", asked: 1},
 		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
 		{name: "open deployment", grants: &serviceModelGrants{}, configs: ownModelConfigs{}, open: true, basis: "deployment_open", asked: 0},
 	} {
@@ -312,12 +316,13 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 		supplied bool
 		withheld bool
 	}{
-		{name: "feature", grants: &serviceModelGrants{feature: true}, withheld: false},
+		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, withheld: false},
+		{name: "feature and fallback grant with an own model", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{found: true}, withheld: true},
 		{name: "open deployment", grants: &serviceModelGrants{}, open: true, withheld: false},
 		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, withheld: true},
 		{name: "own model whose configuration is unusable", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigUnusable}, withheld: true},
 		{name: "client model", grants: &serviceModelGrants{}, supplied: true, withheld: true},
-		{name: "client model with the feature", grants: &serviceModelGrants{feature: true}, supplied: true, withheld: false},
+		{name: "client model with the feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, supplied: true, withheld: false},
 		{name: "own model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{found: true}, withheld: true},
 		{name: "client model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, supplied: true, withheld: true},
 	} {
