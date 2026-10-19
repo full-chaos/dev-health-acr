@@ -158,3 +158,15 @@ func TestOutcomeEvictionLimitationLandsWhenEveryEntryIsAServiceDisclosure(t *tes
 		t.Fatalf("evicted=%d len=%d displaced=%d, want 1, %d, 1", outcomeRowsEvicted(out), len(out), displaced, contractsv1.ContextFabricLimitationsMaxCount)
 	}
 }
+
+func TestDecisivePathDropReportsTheEvictionTheServedDocumentCarries(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
+	sentence, _ := contractsv1.ContextFabricOutcomeEvictionLimitation(2)
+	served := InvestigationResult{AnswerPlan: &AnswerPlan{}, Limitations: []string{sentence}}
+	engine.recordServedPathDrop(context.Background(), storage.Principal{OrgID: "org_1"}, served, PathDropEvent{}, ResponseBudget{})
+	if len(telemetry.pathDrops) != 1 || telemetry.pathDrops[0].OutcomeRowsEvicted != 2 {
+		t.Fatalf("path drop events %+v, want one reporting 2 evicted rows", telemetry.pathDrops)
+	}
+}
