@@ -73,9 +73,11 @@ jobs:
       heavy: ${{ steps.decide.outputs.heavy }}
       reach_mode: ${{ steps.reach.outputs.reach_mode }}
       reach_reason: ${{ steps.reach.outputs.reach_reason }}
-      skip_jobs: ${{ steps.reach.outputs.skip_jobs }}
+      skip_jobs: ${{ steps.defer.outputs.skip_jobs }}
       unit_skip: ${{ steps.reach.outputs.unit_skip }}
       race_skip: ${{ steps.reach.outputs.race_skip }}
+      unit_defer: ${{ steps.defer.outputs.unit_defer }}
+      unit_exclude: ${{ steps.defer.outputs.unit_exclude }}
     steps:
       - name: Decide whether the heavy lanes run
         id: decide
@@ -108,6 +110,23 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"
+      # Observed race dedup (scripts/ci/observed-race-dedup.sh). On a heavy pull
+      # request the dedicated unit legs 6-9 leave the `unit` matrix and run in
+      # `unit-dedicated`, which waits for the race jobs of the same packages and
+      # starts only the legs those jobs did not fully cover (unit-dedup-plan).
+      # Everywhere else (push, workflow_dispatch, a draft pull request) nothing
+      # is deferred and `unit` runs all nine legs as before. This step also
+      # names `unit` in skip_jobs when reach and defer together leave its matrix
+      # empty. The raw reach list stays in unit_skip; the lists verify trusts
+      # are re-derived there.
+      - name: Defer the dedicated unit legs of a pull request until the race jobs ran
+        id: defer
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAVY: ${{ steps.decide.outputs.heavy }}
+          SKIP_JOBS: ${{ steps.reach.outputs.skip_jobs }}
+          UNIT_SKIP: ${{ steps.reach.outputs.unit_skip }}
+        run: scripts/ci/observed-race-dedup.sh defer --event "$EVENT" --heavy "$HEAVY" --skip-jobs "$SKIP_JOBS" --unit-skip "$UNIT_SKIP" >> "$GITHUB_OUTPUT"
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
   # triggered by the SAME push, with no cross-workflow `needs` (GitHub
   # Actions has none). The introducing PR hit this directly: mirror-images.yml
@@ -286,6 +305,8 @@ jobs:
         run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
         run: scripts/ci/test-unit-split-partition.sh
+      - name: Test the observed race dedup of the dedicated unit legs
+        run: scripts/ci/test-observed-race-dedup.sh
       - name: Test the shard budget guard
         run: scripts/ci/test-shard-budget-guard.sh
       - name: Test the isolated-job budget wrapper
@@ -386,11 +407,15 @@ jobs:
     # On a pull request the plan job excludes every leg whose packages the
     # change does not reach (unit_skip), and skips the job when that is every
     # leg; push and workflow_dispatch exclude nothing.
+    # On a heavy pull request legs 6-9 (the dedicated devhealthfacts and
+    # devhealthsource halves, whose tests the race jobs also run) are excluded
+    # here too (unit_exclude = unit_skip + unit_defer) and run in `unit-dedicated`
+    # below, only for the legs the race jobs' observed results did not cover.
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        exclude: ${{ fromJSON(needs.plan.outputs.unit_skip) }}
+        exclude: ${{ fromJSON(needs.plan.outputs.unit_exclude) }}
     name: unit (shard ${{ matrix.shard }} of 9)
     runs-on: ubuntu-latest
     # mirror-preflight is a single job again (the ARC pool is gone), so a
@@ -402,6 +427,283 @@ jobs:
       - mirror-preflight
       - plan
     if: ${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}
+    env:
+      # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
+      # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
+      # hardcoded reaper) at the ghcr.io/full-chaos mirror. `go test ./...`
+      # here runs testcontainers-backed fixtures with no build tag or skip
+      # guard (chfixture, falkorgraph, the postgres fixtures), so this job
+      # needs both the prefix and the ghcr login below.
+      # CHAOS-4855 R1 (learned the hard way): ghcr.io/full-chaos is NOT a
+      # writable-shared namespace -- GHCR ties package write access to
+      # whichever repo's token created it. Mirroring acr's postgres digest
+      # under ops's existing ghcr.io/full-chaos/postgres package 403'd
+      # ("permission_denied: write_package") the first time this ran. acr
+      # mirrors everything (including its own copy of the reaper) under its
+      # own repo-scoped path instead -- see mirror-images.yml.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
+      # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
+      # grants against a real Postgres. Without this, that test's own
+      # "absent tool means skip, not fail" convention (see its own doc
+      # comment) would let it skip green in CI forever -- the exact
+      # skip-reads-as-ok trap the grant proof exists to close. Both the
+      # unit and race jobs run this suite, so both install the client.
+      - name: Install PostgreSQL client for the compose ACL integration test
+        run: |
+          set -euo pipefail
+          # The runner image already ships the PostgreSQL 16 client binaries;
+          # apt was only fetching the thin `postgresql-client` metapackage on
+          # top of them. Splitting one job into several multiplied that
+          # network call across every job that runs the suite, and a wedged
+          # Ubuntu mirror then stalls each of them (observed: 18+ minutes on
+          # `apt-get update` while every other lane finished). Use what is
+          # already installed, and only reach for apt when it genuinely is
+          # missing -- the step still fails, rather than skipping green, if
+          # the tools cannot be provided either way.
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install --no-install-recommends -y \
+            postgresql-client
+          psql --version
+          pg_isready --version
+      # The plain non-race run and the coverage run used to be two separate
+      # cold `-count=1` runs of the same `./...` suite. They are now one
+      # run: gotestsum emits the JSON stream, the JUnit report, and the
+      # coverage profile from a single execution, so the failure analysis
+      # below, the uploaded reports, and the non-race pass/fail signal all
+      # come from this one run. The artifacts still upload with
+      # `if: always()` so a failing run still leaves reports to inspect.
+      # The shard's package set is computed here rather than baked into the
+      # matrix so it is derived from the real `go list ./...` on the runner,
+      # the same way the race shards below derive theirs. test-shard.sh
+      # refuses to emit a partition at all if that listing fails, so a broken
+      # package can never quietly shrink this shard's suite; and this
+      # assignment runs before the `set +e` bracket below, so that refusal
+      # fails the step instead of being read as a test result.
+      - name: Run Go tests with coverage and JUnit reporting
+        id: go-tests
+        run: |
+          packages="$(scripts/ci/test-shard.sh --with-isolated ${{ matrix.shard }} 4)"
+          printf 'unit leg %s of ${{ strategy.job-total }} packages:\n%s\n' '${{ matrix.shard }}' "$packages"
+          # CHAOS-6220: --with-isolated round-robins scripts/ci/test-shard.sh's
+          # isolated_packages IN like any other package (unlike the race
+          # matrix below, which excludes them), so one of them --
+          # internal/contextfabric/devhealthfacts measured 660-690s wall,
+          # zero margin against go test's bare 600s default -- can land in
+          # any of the 4 shards. `go test`'s -timeout panics per TEST BINARY
+          # (one per listed package), not once for the whole multi-package
+          # invocation, so raising it for a shard that draws an isolated
+          # package costs that shard's other, fast packages nothing, and
+          # leaves the shards that draw none unchanged. `make isolated-timeout`
+          # is the single source both this job and test-split/test-race-isolated
+          # (Makefile) read the per-package budget from.
+          isolated_timeout=""
+          for isolated_pkg in $(scripts/ci/test-shard.sh --print-isolated-packages); do
+            case " $packages " in
+              *" $isolated_pkg "*)
+                pkg_timeout="$(make -s isolated-timeout PKG="$isolated_pkg")"
+                printf 'unit leg %s of ${{ strategy.job-total }} carries isolated package %s -> GOTEST_PLAIN_TIMEOUT=%s\n' \
+                  '${{ matrix.shard }}' "$isolated_pkg" "$pkg_timeout"
+                pkg_secs="${pkg_timeout%s}"
+                cur_secs="${isolated_timeout%s}"
+                if [ -z "$isolated_timeout" ] || [ "$pkg_secs" -gt "$cur_secs" ]; then
+                  isolated_timeout="$pkg_timeout"
+                fi
+                ;;
+            esac
+          done
+          # Legs 5-8 run the two split packages, each in two halves split by
+          # the SAME list the race jobs use (scripts/ci/<package>-heavy-tests.txt):
+          # legs 5 and 6 run the rest half of devhealthfacts and devhealthsource
+          # (-skip), legs 7 and 8 run only their heavy tests (-run). CHAOS-9871: devhealthsource's rest half
+          # lost its three slowest tests to leg 9 (the race-mid list, -run), so leg 6 skips heavy and mid.
+          heavy_half=""
+          case '${{ matrix.shard }}' in
+            5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"; split_pkg=devhealthfacts ;;
+            6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource unit-rest)"; split_pkg=devhealthsource ;;
+            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"; split_pkg=devhealthfacts; heavy_half="heavy half" ;;
+            8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource; heavy_half="heavy half" ;;
+            9) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-mid)"; split_pkg=devhealthsource; heavy_half="mid half" ;;
+          esac
+          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
+          set +e
+          if [ -n "$isolated_timeout" ]; then
+            make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
+          else
+            make test-coverage GOTEST_PKGS="$packages"
+          fi
+          status=$?
+          set -e
+          # gotestsum names the suite after the package, and the reports merge
+          # refuses one suite name in two shards. The heavy half holds
+          # disjoint tests, so its suite is renamed (heavy half / mid half); classnames are untouched.
+          if [ -n "$heavy_half" ]; then
+            sed -E "/^[[:space:]]*<testsuite /s| name=\"([^\"]*/$split_pkg)\"| name=\"\1 ($heavy_half)\"|" .tmp/coverage/junit.xml >.tmp/coverage/junit.renamed.xml
+            renamed="$(grep -cE "^[[:space:]]*<testsuite .* name=\"[^\"]*/$split_pkg \($heavy_half\)\"" .tmp/coverage/junit.renamed.xml || true)"
+            test "$renamed" -eq 1 || { echo "::error::$heavy_half junit.xml: expected 1 $split_pkg suite, renamed $renamed"; exit 1; }
+            mv .tmp/coverage/junit.renamed.xml .tmp/coverage/junit.xml
+          fi
+          failure="$(jq -r '
+            select(.Action == "fail") |
+            if .Test then (.Package + "/" + .Test) else .Package end
+          ' .tmp/coverage/go-test.json | head -n 1)"
+          test -n "$failure" || failure=unknown
+          failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
+          budget="${isolated_timeout:-600s}"
+          printf 'status=%s\nfailure=%s\nbudget=%s\n' "$status" "$failure" "${budget%s}" >>"$GITHUB_OUTPUT"
+      - name: Guard unit shard package budget
+        if: always() && steps.go-tests.outputs.budget != ''
+        run: scripts/ci/shard-budget-guard.sh --json '${{ steps.go-tests.outputs.budget }}' .tmp/coverage/go-test.json
+      - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
+        if: always() && steps.go-tests.outputs.status != '0'
+        run: |
+          jq -r '
+            select(.Action == "output") |
+            select(.Output | test("^(--- FAIL:|FAIL[[:space:]]|panic:|fatal error:|[[:space:]]+.*_test\\.go:[0-9]+:|[[:space:]]+Error Trace:|[[:space:]]+Error:|[[:space:]]+Messages:|[[:space:]]+expected|[[:space:]]+actual)")) |
+            .Output
+          ' .tmp/coverage/go-test.json
+          exit 1
+      # CHAOS-3895: the shard's raw reports go up as ONE intermediate artifact,
+      # go-unit-shard-<i>, for the `reports` job below to merge. They are not the
+      # published reports: the published names `go-coverage` and `go-junit` are
+      # written once, by `reports`, because a matrix job that uploaded under
+      # those names would collide across its own legs. The per-shard Cobertura
+      # the shards used to upload (go-coverage-shard-<i>) is dropped: `reports`
+      # converts the MERGED profile once, so the shard copies had no reader.
+      # cover.out is what gets merged (Cobertura XML cannot be concatenated);
+      # go-test.json feeds the cross-shard failure listing. `if: always()` so a
+      # failing shard still hands `reports` what it produced.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: go-unit-shard-${{ matrix.shard }}
+          path: |
+            .tmp/coverage/cover.out
+            .tmp/coverage/junit.xml
+            .tmp/coverage/go-test.json
+          # The reports live under the dot-directory .tmp/; upload-artifact
+          # drops hidden paths by default (see container-oci-scan below).
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Observed race dedup, step two. Runs after the race jobs of devhealthfacts
+  # and devhealthsource (it needs all seven, whatever their result) and decides
+  # which of the deferred unit legs 6-9 `unit-dedicated` may leave out. A leg is
+  # dropped only when every test it would run shows a PASS, not a SKIP, in the
+  # test2json output of the race jobs that cover it, and every covering job ran
+  # and succeeded (scripts/ci/observed-race-dedup.sh, rules in its header and
+  # proved by scripts/ci/test-observed-race-dedup.sh). The list of each leg's
+  # tests is the compiled non-race `go test -list` of the leg's own selection;
+  # the step builds each test binary and runs it with -test.list only, so no
+  # test body, container or database is touched. Anything it cannot establish
+  # keeps the leg. `verify` re-derives the drops from the same artifacts.
+  unit-dedup-plan:
+    name: unit-dedup-plan
+    needs:
+      - plan
+      - race-devhealthfacts
+      - race-devhealthfacts-heavy
+      - race-devhealthfacts-mid
+      - race-devhealthfacts-fourth
+      - race-devhealthsource
+      - race-devhealthsource-heavy
+      - race-devhealthsource-mid
+    if: ${{ !cancelled() && needs.plan.outputs.unit_defer != '[]' }}
+    runs-on: ubuntu-latest
+    outputs:
+      drop: ${{ steps.decide.outputs.drop }}
+      exclude: ${{ steps.decide.outputs.exclude }}
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: true
+      # actions/download-artifact v8.0.1. One directory per artifact
+      # (merge-multiple stays false): race-json-<job key>/race.json.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: ${{ !cancelled() }}
+        with:
+          pattern: race-json-*
+          path: .tmp/race-json
+      - name: List the tests of each deferred unit leg (compiled, non-race)
+        run: scripts/ci/observed-race-dedup.sh collect --out .tmp/dedup-lists --legs "6 7 8 9" || echo '::warning::collect failed; the legs without a list stay'
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ !cancelled() }}
+        with:
+          name: unit-dedup-lists
+          path: .tmp/dedup-lists
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Decide which deferred unit legs the race jobs already covered
+        id: decide
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          DEFER: ${{ needs.plan.outputs.unit_defer }}
+          UNIT_SKIP: ${{ needs.plan.outputs.unit_skip }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+          printf '%s' "$NEEDS" > .tmp/needs.json
+          if out="$(scripts/ci/observed-race-dedup.sh decide --event "$EVENT" --lists .tmp/dedup-lists --race-dir .tmp/race-json --needs .tmp/needs.json --defer "$DEFER" --unit-skip "$UNIT_SKIP")"; then
+            printf '%s\n' "$out" >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::the dedup decision failed; every deferred leg runs'
+            scripts/ci/observed-race-dedup.sh decide --event push --lists .tmp/dedup-lists --race-dir .tmp/race-json --needs .tmp/needs.json --defer "$DEFER" --unit-skip "$UNIT_SKIP" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The deferred dedicated unit legs. Same job as `unit` (the steps below are
+  # byte-identical to its steps, which scripts/ci/test-workflow-contract.sh
+  # asserts), but it starts only after unit-dedup-plan and leaves out the legs
+  # that job dropped (and the legs the reach step skipped). Its legs upload the
+  # same go-unit-shard-<n> artifacts, so the report merge in `verify` does not
+  # change; verify's -absent list names the dropped legs.
+  unit-dedicated:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [6, 7, 8, 9]
+        exclude: ${{ fromJSON(needs.unit-dedup-plan.outputs.exclude || '[]') }}
+    name: unit (shard ${{ matrix.shard }} of 9)
+    runs-on: ubuntu-latest
+    needs:
+      - mirror-preflight
+      - plan
+      - unit-dedup-plan
+    if: ${{ !cancelled() && needs.mirror-preflight.result == 'success' && needs.unit-dedup-plan.result == 'success' && needs.unit-dedup-plan.outputs.run == 'true' }}
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -808,8 +1110,19 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts race-rest)"
-          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (rest half)' "$packages"
-
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (rest half)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthfacts
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
   race-devhealthfacts-heavy:
     name: race (devhealthfacts heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -846,8 +1159,19 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-heavy)"
-          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (heavy half)' "$packages"
-
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (heavy half)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthfacts-heavy
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
   race-devhealthfacts-mid:
     name: race (devhealthfacts mid, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -884,8 +1208,19 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-mid)"
-          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (mid third)' "$packages"
-
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (mid third)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthfacts-mid
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
   race-devhealthfacts-fourth:
     name: race (devhealthfacts fourth, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -922,7 +1257,19 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-fourth)"
-          GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (fourth quarter)' "$packages"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (fourth quarter)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthfacts-fourth
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   # CHAOS-6342: devhealthsource is the OTHER shared-container HEAVY package
   # (see race-devhealthfacts above) and used to round-robin into race shard 1
@@ -978,8 +1325,19 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource race-rest)"
-          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (rest half)' "$packages"
-
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (rest half)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthsource
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
   race-devhealthsource-heavy:
     name: race (devhealthsource heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1018,8 +1376,19 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource race-heavy)"
-          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (heavy half)' "$packages"
-
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (heavy half)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthsource-heavy
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
   race-devhealthsource-mid:
     name: race (devhealthsource mid, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1056,7 +1425,19 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource race-mid)"
-          GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (mid half)' "$packages"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (mid half)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthsource-mid
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   # The O4 oracle package (factoracle) seeds a ClickHouse store from the venue
   # capture and replays 95 cases; it ran 100s in a shared race shard and was
@@ -1675,6 +2056,8 @@ jobs:
       - docs-mermaid
       - helm
       - unit
+      - unit-dedup-plan
+      - unit-dedicated
       - race
       - race-devhealthschema
       - race-devhealthfacts
@@ -1701,25 +2084,76 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: true
+      # Observed race dedup, the check. unit-dedup-plan names the deferred unit
+      # legs it dropped; this step does NOT take that list on trust. It downloads
+      # the race jobs' test2json artifacts and the per-leg test lists and runs the
+      # same data-only decision again (scripts/ci/observed-race-dedup.sh decide),
+      # with the lane results of THIS job's needs, and fails unless every dropped
+      # leg is dropped again. Its absent output (the reach step's skipped legs
+      # plus the confirmed drops) is what the report merges below expect missing.
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: ${{ !cancelled() && needs.unit-dedup-plan.outputs.drop != '' && needs.unit-dedup-plan.outputs.drop != '[]' }}
+        with:
+          pattern: race-json-*
+          path: .tmp/race-json
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: ${{ !cancelled() && needs.unit-dedup-plan.outputs.drop != '' && needs.unit-dedup-plan.outputs.drop != '[]' }}
+        with:
+          name: unit-dedup-lists
+          path: .tmp/dedup-lists
+      - name: Recheck the dropped unit legs against the race jobs' observed results
+        id: dedup
+        if: ${{ !cancelled() }}
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          DEFER: ${{ needs.plan.outputs.unit_defer }}
+          UNIT_SKIP: ${{ needs.plan.outputs.unit_skip }}
+          DROP: ${{ needs.unit-dedup-plan.outputs.drop }}
+        run: |
+          set -euo pipefail
+          drop="${DROP:-[]}"
+          if ! printf '%s' "$drop" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            printf 'unit-dedup-plan drop is %s, expected a JSON list\n' "$drop" >&2
+            exit 1
+          fi
+          if [ "$drop" = '[]' ]; then
+            printf 'absent=%s\n' "$UNIT_SKIP" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT" != pull_request ]; then
+            printf 'unit-dedup-plan dropped legs %s on a %s event: only a pull_request may drop a unit leg\n' "$drop" "$EVENT" >&2
+            exit 1
+          fi
+          mkdir -p .tmp
+          printf '%s' "$NEEDS" > .tmp/needs.json
+          again="$(scripts/ci/observed-race-dedup.sh decide --event "$EVENT" --lists .tmp/dedup-lists --race-dir .tmp/race-json --needs .tmp/needs.json --defer "$DEFER" --unit-skip "$UNIT_SKIP" | sed -n 's/^drop=//p')"
+          if ! jq -n --argjson planned "$drop" --argjson again "${again:-[]}" '[$planned[].shard] | all(. as $s | $again | any(.shard == $s))' | grep -qx true; then
+            printf 'unit-dedup-plan dropped %s but the recheck from the race artifacts confirms only %s\n' "$drop" "${again:-[]}" >&2
+            exit 1
+          fi
+          printf 'absent=%s\n' "$(jq -nc --argjson a "$UNIT_SKIP" --argjson b "$drop" '$a + $b | unique_by(.shard)')" >> "$GITHUB_OUTPUT"
       # actions/download-artifact v8.0.1. One directory per artifact
       # (merge-multiple is left false), which is the layout the merge tool reads.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
         with:
           pattern: go-unit-shard-*
           path: .tmp/unit-shards
       - name: Merge JUnit reports
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
-        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml -absent '${{ needs.plan.outputs.unit_skip }}'
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
+        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml -absent '${{ steps.dedup.outputs.absent }}'
       - name: Merge coverage profiles and convert to Cobertura once
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
         run: |
           set -euo pipefail
-          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out -absent '${{ needs.plan.outputs.unit_skip }}'
+          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out -absent '${{ steps.dedup.outputs.absent }}'
           make coverage-cobertura
       - name: List every shard's failed tests
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
-        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json -absent '${{ needs.plan.outputs.unit_skip }}'
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json -absent '${{ steps.dedup.outputs.absent }}'
       # The behaviour check. The steps above are text a later edit can disable,
       # gate off, or replace with `true` while this job still reads green;
       # this one recomputes testcase / suite counts from the raw shard files
@@ -1729,11 +2163,11 @@ jobs:
       # than the sum fails HERE. (scripts/ci/test-workflow-contract.sh still
       # greps for every step as a second line, and cannot see any of this.)
       - name: Verify the merged reports against the shards
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
-        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json -absent '${{ needs.plan.outputs.unit_skip }}'
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
+        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json -absent '${{ steps.dedup.outputs.absent }}'
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
         with:
           name: go-coverage
           path: .tmp/coverage/coverage.xml
@@ -1742,7 +2176,7 @@ jobs:
           retention-days: 90
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+        if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
         with:
           name: go-junit
           path: .tmp/coverage/junit.xml
@@ -1802,6 +2236,37 @@ jobs:
           done
           printf 'plan reach_reason=%s\n' "$(printf '%s' "$NEEDS" | jq -r '.plan.outputs.reach_reason // "missing"')"
 
+          # Observed race dedup (scripts/ci/observed-race-dedup.sh). unit_defer
+          # is non-empty only on a heavy pull_request, unit_exclude is exactly
+          # unit_skip plus unit_defer, and the two jobs it adds must end the way
+          # the plan, the dropped-leg list and the recheck above say: a leg left
+          # to run means unit-dedicated ran and succeeded; a plan with no
+          # deferred leg, or one whose every deferred leg was dropped or skipped,
+          # means both jobs are exactly skipped or, for unit-dedup-plan, succeeded.
+          unit_skip_list="$(printf '%s' "$NEEDS" | jq -c '.plan.outputs.unit_skip // "[]" | fromjson? // []')"
+          defer_list="$(printf '%s' "$NEEDS" | jq -c '.plan.outputs.unit_defer // "missing" | fromjson? // "bad"')"
+          exclude_list="$(printf '%s' "$NEEDS" | jq -c '.plan.outputs.unit_exclude // "missing" | fromjson? // "bad"')"
+          drop_list="$(printf '%s' "$NEEDS" | jq -c '.["unit-dedup-plan"].outputs.drop // "[]" | fromjson? // "bad"')"
+          printf 'plan unit_defer=%s unit_exclude=%s unit-dedup-plan drop=%s\n' "$defer_list" "$exclude_list" "$drop_list"
+          for value in "$defer_list" "$exclude_list" "$drop_list"; do
+            printf '%s' "$value" | jq -e 'type == "array"' >/dev/null 2>&1 || {
+              printf 'a unit dedup output is not a JSON list: %s\n' "$value" >&2; failed=1; defer_list='[]'; exclude_list='[]'; drop_list='[]'; }
+          done
+          if [ "$defer_list" != '[]' ] && { [ "$EVENT" != pull_request ] || [ "$heavy" != true ]; }; then
+            printf 'plan unit_defer=%s, but only a heavy pull_request may defer unit legs\n' "$defer_list" >&2
+            failed=1
+          fi
+          if [ "$(jq -nc --argjson a "$unit_skip_list" --argjson b "$defer_list" '$a + $b | unique_by(.shard) | sort_by(.shard)')" \
+               != "$(printf '%s' "$exclude_list" | jq -c 'sort_by(.shard)')" ]; then
+            printf 'plan unit_exclude=%s is not unit_skip %s plus unit_defer %s\n' "$exclude_list" "$unit_skip_list" "$defer_list" >&2
+            failed=1
+          fi
+          if [ "$drop_list" != '[]' ] && [ "$defer_list" = '[]' ]; then
+            printf 'unit-dedup-plan dropped legs %s although the plan deferred none\n' "$drop_list" >&2
+            failed=1
+          fi
+          dedup_leftover="$(jq -nr --argjson d "$defer_list" --argjson s "$unit_skip_list" --argjson x "$drop_list" '[$d[] | select(.shard as $l | ($s + $x) | any(.shard == $l) | not)] | length')"
+
           # A matrix job the plan skips whole ("unit", "race" in skip_jobs) is
           # only legitimate when its leg list excludes every leg of that matrix,
           # read from this commit's ci.yml; otherwise a whole suite could be
@@ -1811,7 +2276,7 @@ jobs:
               printf '%s' "$skip_jobs" | jq -e --arg j "$matrix" 'index($j) != null' >/dev/null 2>&1 || continue
               legs="$(awk -v j="  $matrix:" '$0 == j { g=1; next } g && /^  [A-Za-z0-9_-]+:/ { g=0 } g && /^ {8}shard: \[/ { print; exit }' .github/workflows/ci.yml \
                 | sed -E 's/.*\[([^]]*)\].*/\1/' | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -n | paste -sd, - || true)"
-              excluded="$(printf '%s' "$NEEDS" | jq -r --arg k "${matrix}_skip" '.plan.outputs[$k] // "[]"' \
+              excluded="$(printf '%s' "$NEEDS" | jq -r --arg m "$matrix" 'if $m == "unit" then (.plan.outputs.unit_exclude // "[]") else (.plan.outputs[$m + "_skip"] // "[]") end' \
                 | jq -r '[.[]?.shard] | sort | map(tostring) | join(",")' 2>/dev/null || true)"
               if [ -z "$legs" ] || [ "$legs" != "$excluded" ]; then
                 printf '%s is skipped whole, but %s_skip excludes legs [%s] of the matrix legs [%s]\n' "$matrix" "$matrix" "$excluded" "$legs" >&2
@@ -1827,6 +2292,22 @@ jobs:
           light=" plan mirror-preflight scripts lint docs-mermaid helm unit reports "
           while IFS=$'\t' read -r job result; do
             printf '%s: %s\n' "$job" "$result"
+            case "$job" in
+              unit-dedup-plan | unit-dedicated)
+                want=skipped
+                if [ "$defer_list" != '[]' ]; then
+                  case "$job" in
+                    unit-dedup-plan) want=success ;;
+                    unit-dedicated) [ "$dedup_leftover" -gt 0 ] && want=success ;;
+                  esac
+                fi
+                if [ "$result" != "$want" ]; then
+                  printf '%s: result is %s, expected %s (deferred %s, dropped %s)\n' "$job" "$result" "$want" "$defer_list" "$drop_list" >&2
+                  failed=1
+                fi
+                continue
+                ;;
+            esac
             declared=no
             if [ "$reach" = reached ] && printf '%s' "$skip_jobs" | jq -e --arg j "$job" 'index($j) != null' >/dev/null; then
               declared=yes
