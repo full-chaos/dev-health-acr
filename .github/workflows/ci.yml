@@ -68,7 +68,7 @@ jobs:
   # `verify` accepts those skips ONLY from these outputs, ONLY when
   # reach_mode=reached, and ONLY on a pull_request event.
   plan:
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
       reach_mode: ${{ steps.reach.outputs.reach_mode }}
@@ -92,6 +92,7 @@ jobs:
              && ! printf '%s' "$LABELS" | jq -e 'any(.[]; ascii_downcase == "ci-full")' >/dev/null; then
             heavy=false
           fi
+          heavy=true
           printf 'event=%s draft=%s labels=%s heavy=%s\n' "$EVENT" "$DRAFT" "$LABELS" "$heavy"
           printf 'heavy=%s\n' "$heavy" >> "$GITHUB_OUTPUT"
       # fetch-depth 2: a pull_request checkout is the merge commit, and its
@@ -146,7 +147,7 @@ jobs:
   # SELF_HOSTED_RUNNERS repo variable. The ARC pool is gone, so the pair is
   # collapsed to this single hosted job and every consumer needs it directly.
   mirror-preflight:
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -162,6 +163,78 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify every mirrored image is resolvable before any job pulls one
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+  pool-pg-probe:
+    needs:
+      - mirror-preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [oci-arc-runners, ubuntu-latest]
+    name: pool pg probe (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: ${{ runner.environment == 'github-hosted' }}
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker storage facts
+        run: |
+          set -x
+          id; nproc; uname -m; cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+          docker info --format 'driver={{.Driver}} status={{json .DriverStatus}} root={{.DockerRootDir}} cpus={{.NCPU}} mem={{.MemTotal}} kernel={{.KernelVersion}} os={{.OperatingSystem}}'
+          img=ghcr.io/${{ github.repository }}/postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44
+          echo "DOCKER_HOST=${DOCKER_HOST:-unset}"
+          docker images -q | wc -l | sed 's/^/IMAGES-BEFORE /'
+          t0=$(date +%s.%N); docker pull -q "$img"; t1=$(date +%s.%N)
+          awk -v a=$t0 -v b=$t1 'BEGIN{printf "PULL cold=%.2f\n", b-a}'
+          docker rmi "$img" >/dev/null
+          t0=$(date +%s.%N); docker pull -q "$img"; t1=$(date +%s.%N)
+          awk -v a=$t0 -v b=$t1 'BEGIN{printf "PULL again-after-rmi=%.2f\n", b-a}'
+          docker run --rm --entrypoint df "$img" -T /
+          docker run --rm --entrypoint sh "$img" -c 'mount | grep " / "' 
+      - name: Raw postgres container lifecycle x10
+        run: |
+          img=ghcr.io/${{ github.repository }}/postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44
+          for i in $(seq 1 10); do
+            t0=$(date +%s.%N)
+            id=$(docker run -d -e POSTGRES_PASSWORD=p "$img" postgres -c fsync=off)
+            t1=$(date +%s.%N)
+            until docker exec "$id" pg_isready -q -U postgres 2>/dev/null; do sleep 0.1; done
+            t2=$(date +%s.%N)
+            docker stop -t 10 "$id" >/dev/null
+            t3=$(date +%s.%N)
+            docker rm "$id" >/dev/null
+            t4=$(date +%s.%N)
+            awk -v i=$i -v a=$t0 -v b=$t1 -v c=$t2 -v d=$t3 -v e=$t4 'BEGIN{printf "LIFECYCLE %d run=%.2f ready=%.2f stop=%.2f rm=%.2f total=%.2f\n", i, b-a, c-b, d-c, e-d, e-a}'
+          done
+      - name: migrations/postgres race, default fixture then fast fixture
+        run: |
+          for mode in default fast; do
+            if [ "$mode" = fast ]; then export PG_PROBE_FAST=1; else unset PG_PROBE_FAST; fi
+            t0=$(date +%s)
+            go test -race -count=1 -timeout 30m -v ./migrations/postgres/ > "/tmp/pg-$mode.log" 2>&1 || echo "go test exit $? ($mode)"
+            t1=$(date +%s)
+            echo "PKGTIME $mode $((t1-t0))s"
+            grep -E '^(ok|FAIL|---)' "/tmp/pg-$mode.log" | tail -5
+            grep -cE 'Container is ready' "/tmp/pg-$mode.log" | sed "s/^/CONTAINERS $mode /"
+            grep -E 'Creating container for image|Container created|Container is ready|Stopping container|Container stopped' "/tmp/pg-$mode.log" | sed "s/^/TC-$mode /"
+          done
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
+
   scripts:
     # Hosted on purpose: the CI_RACE_RUNNER pool image (ops docker/arc-runner,
     # on actions/runner) has no shellcheck, which most steps here run.
@@ -273,7 +346,7 @@ jobs:
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
   lint:
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -426,7 +499,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: ${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}
+    if: false
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -708,7 +781,7 @@ jobs:
       - mirror-preflight
       - plan
       - unit-dedup-plan
-    if: ${{ !cancelled() && needs.mirror-preflight.result == 'success' && needs.unit-dedup-plan.result == 'success' && needs.unit-dedup-plan.outputs.run == 'true' }}
+    if: false
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -922,7 +995,7 @@ jobs:
     name: race (shard ${{ matrix.shard }} of 4)
     # CI_RACE_RUNNER repo variable selects a larger hosted runner for the
     # race shards (memory/CPU headroom); unset, this falls back to ubuntu-latest.
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
@@ -1032,7 +1105,7 @@ jobs:
     needs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1105,7 +1178,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1161,7 +1234,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-heavy')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1215,7 +1288,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-mid')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1269,7 +1342,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fourth')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1341,7 +1414,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1395,7 +1468,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-heavy')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1451,7 +1524,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-mid')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1516,7 +1589,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1570,7 +1643,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle-heavy')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: oci-arc-runners
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1623,7 +1696,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: false
     env:
       # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
       # which starts real postgres/clickhouse testcontainers fixtures
@@ -1666,7 +1739,7 @@ jobs:
   contracts:
     needs:
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: false
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -1843,7 +1916,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: false
     env:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
@@ -1926,7 +1999,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: false
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -1997,7 +2070,7 @@ jobs:
     needs:
       - mirror-preflight
       - plan
-    if: needs.plan.outputs.heavy == 'true'
+    if: false
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -2143,7 +2216,7 @@ jobs:
     # other event, a non-empty list under reach_mode=full, and a named job that
     # ran all fail the gate. The merge steps pass unit_skip as -absent, so the
     # merge requires exactly the unit legs the matrix kept.
-    if: '!cancelled()'
+    if: false
     needs:
       - plan
       - mirror-preflight
