@@ -218,7 +218,7 @@ func TestClarificationOnTheClientPathWithoutTheFeatureIsNeverPhrasedOnTheDeploym
 // The mirror: the same turn for an organization with the feature is phrased
 // once on the deployment model.
 func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true}, false)
+	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true, fallback: true}, false)
 	options := kindOptionsOf(t, rig.post(t))
 	if got := rig.phrasing.count(); got != 1 {
 		t.Fatalf("deployment phrasing calls = %d, want 1", got)
@@ -226,8 +226,8 @@ func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel
 	if options[0].Phrasing != phrasedKindLabel {
 		t.Fatalf("kind option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
 	}
-	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "entitlement" {
-		t.Fatalf("decision log bases = %v, want [entitlement]", got)
+	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "platform_model_fallback" {
+		t.Fatalf("decision log bases = %v, want [platform_model_fallback]", got)
 	}
 	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingGenerated) {
 		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingGenerated)
@@ -330,7 +330,7 @@ func TestWindowGateClarificationOnTheOwnModelWithoutTheFeatureIsPhrasedOnTheOwnM
 }
 
 func TestWindowGateClarificationWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, false)
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true, fallback: true}, false)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 1 || rig.byo.count() != 0 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 1 and 0", rig.phrasing.count(), rig.byo.count())
@@ -343,7 +343,7 @@ func TestWindowGateClarificationWithTheFeatureIsPhrasedOnTheDeploymentModel(t *t
 // An organization with the feature and its own model is phrased on its own
 // model: the deployment model is not used while the organization has one.
 func TestWindowGateClarificationWithTheFeatureAndAnOwnModelIsPhrasedOnTheOwnModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, true)
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true, fallback: true}, true)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
@@ -370,7 +370,7 @@ func TestClarificationOnTheClientPathWithAnOwnModelIsPhrasedOnTheOwnModel(t *tes
 // own: the offer is served with its structural labels, the outcome is the
 // withheld class (not a failed call), and nothing is refused.
 func TestClarificationWithNoModelConfiguredIsServedWithStructuralLabelsAsWithheld(t *testing.T) {
-	rig := newPhrasingRouteRigWith(t, &serviceModelGrants{feature: true}, false, true)
+	rig := newPhrasingRouteRigWith(t, &serviceModelGrants{feature: true, fallback: true}, false, true)
 	options := kindOptionsOf(t, rig.post(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())

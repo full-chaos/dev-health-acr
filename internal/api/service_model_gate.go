@@ -65,7 +65,10 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
 	}
 	if request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient {
-		return serviceModelBasisClientModel, granted, nil
+		if granted {
+			return basis, true, nil
+		}
+		return serviceModelBasisClientModel, false, nil
 	}
 	state, err := a.orgOwnModel(ctx, principal)
 	if err != nil {
