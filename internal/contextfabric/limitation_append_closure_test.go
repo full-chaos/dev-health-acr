@@ -52,6 +52,26 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
+	"budgetTrimDisclose#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"apply#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"applyFactRowTruncation#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"dropPathsOf#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
+	"planCandidateNarrowing#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
 	"cutWalkListMembers#DeleteFunc#0": {
 		sameShapedTotal: 1,
 		reason:          "a DELETION, not an addition: it drops the earlier N of M sentence (matched by parse) from a clone, so the list only shrinks, and the restated sentence is added through appendBoundedLimitations",
@@ -59,6 +79,10 @@ var auditedLimitationWrites = map[string]limitationAudit{
 	"withReusedRemovedTeamState#DeleteFunc#0": {
 		sameShapedTotal: 1,
 		reason:          "a DELETION, not an addition: it drops the removed-team sentence from a clone when the fresh recheck no longer proves a committed team removed, so the list only shrinks, and the sentence is added through appendBoundedLimitations",
+	},
+	"vetSynthesisDraft#stripServiceAuthoredLookalikes#0": {
+		sameShapedTotal: 1,
+		reason:          "a FILTER, not an addition: it copies the draft's limitations without the entries the service-authored recognisers accept, so the list only shrinks and every disclosure is added afterwards through appendBoundedLimitations",
 	},
 	"recutFactRows#Delete#0": {
 		sameShapedTotal: 1,
@@ -68,9 +92,9 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
 	},
-	"composeSynthesisResult#cloneSlice#0": {
+	"composeSynthesisResult#DeleteFunc#0": {
 		sameShapedTotal: 1,
-		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list, minus any eviction sentence it forged, entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
 	}, "clientSynthesisDraft#make#0": {
 		sameShapedTotal: 1,
 		reason:          "an EMPTY seed, not an addition: the draft of a turn the caller writes carries no limitation of its own, and it enters composeSynthesisResult like every other draft, so Investigate's bounded appenders add every disclosure after it",

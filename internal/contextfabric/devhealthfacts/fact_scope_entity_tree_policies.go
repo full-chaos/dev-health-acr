@@ -160,21 +160,6 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	return candidates, counts, nil
 }
 
-// projectKeyResolutionSubquery resolves a project id AND a project key to the
-// project, and counts how many projects each join key resolves to, so an
-// ambiguous key is omitted rather than guessed (see projectRepositories for
-// the long account of why the count is taken over the whole organization).
-const projectKeyResolutionSubquery = `(
-  SELECT id, join_key, count() OVER (PARTITION BY join_key) AS key_resolution_count
-  FROM (
-    SELECT DISTINCT id, provider, join_key FROM (
-      SELECT id, provider, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
-      UNION ALL
-      SELECT id, provider, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
-    )
-  )
-)`
-
 // projectLinkedRepositories is project -> issues -> linked pull request rows
 // -> the pull request's repository. The repository is l.repo_id of the link
 // row (the pull request's), never work_items.repo_id.
@@ -186,8 +171,8 @@ const projectKeyResolutionSubquery = `(
 // provenance (native > explicit_text > heuristic); a repository whose links
 // all carry a tier outside that vocabulary is counted, never admitted.
 func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID string, origins []contextfabric.SubjectRef, limit int) ([]repositoryCandidate, contextfabric.FactScopeExpansionCounts, error) {
-	projectIDs := decodeProjectOriginIDs(origins)
-	if len(projectIDs) == 0 {
+	projectKeys := decodeProjectOriginKeys(origins)
+	if len(projectKeys) == 0 {
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
 	limitPlusOne := limit + 1
@@ -195,34 +180,34 @@ func (e *ScopeExpander) projectLinkedRepositories(ctx context.Context, orgID str
 	// links whose pull request does not exist), 2 it has one. Only state 2
 	// names a repository; a stale link is skipped by the canonical link
 	// projection too.
-	workItemIDs := requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate)
+	workItemIDs := requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate)
 	statement := `SELECT multiIf(ifNull(l.work_item_id, '') = '', 0, 2) AS link_state,
        if(link_state = 2, toString(l.pr_repo_id), '') AS repo_id_str,
        if(link_state = 2, ifNull(r.repo, ''), '') AS repo_slug,
-       min(p.id),
+       min(` + projectQualifiedKeySQL + `),
        toUInt8(max(l.link_rank)),
        argMax(ifNull(l.provenance, ''), l.link_rank),
        toInt64(uniqExact(w.work_item_id)),
-       arraySort(groupUniqArray(p.id))
+       arraySort(groupUniqArray(` + projectQualifiedKeySQL + `))
 FROM work_items AS w FINAL
-INNER JOIN ` + projectKeyResolutionSubquery + ` AS p ON p.join_key = w.project_id
+INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 LEFT JOIN ` + issueLinkRowsAmongSQL(workItemIDs) + ` AS l ON l.work_item_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
   AND ` + workItemIsIssueSQL("w") + `
 GROUP BY link_state, repo_id_str, repo_slug
 ORDER BY link_state DESC, repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "project_ids", Value: projectIDs},
+		{Name: "project_ids", Value: projectKeys},
 	})
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	defer rows.Close()
 
-	originsByID := projectOriginsByRawID(origins)
+	originsByKey := projectOriginsByKey(origins)
 	var candidates []repositoryCandidate
 	counts := contextfabric.FactScopeExpansionCounts{}
 	groups := 0
@@ -247,8 +232,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		default:
 			counts.CandidateCount++
 			candidates = append(candidates, repositoryCandidate{
-				repoID: repoID, repoSlug: repoSlug, attributionSource: tier, originRoot: originsByID[originProjectID],
-				originRoots: originRootsOf(originsByID[originProjectID], originProjectIDs, originsByID),
+				repoID: repoID, repoSlug: repoSlug, attributionSource: tier, originRoot: originsByKey[originProjectID],
+				originRoots: originRootsOf(originsByKey[originProjectID], originProjectIDs, originsByKey),
 			})
 		}
 	}

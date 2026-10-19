@@ -63,7 +63,7 @@ func TestChaos7071DefaultApprovalNeverAuthorizesDataRead(t *testing.T) {
 }
 
 func TestChaos7071ApprovalScopeSetIsClosed(t *testing.T) {
-	for _, scopes := range [][]string{nil, {}, {ScopeContextRead}, {ScopeDataRead}, {ScopeContextRead, ScopeEvidenceRead, ScopeContextAdmin}, {ScopeDataRead, ScopeContextRead, ScopeEvidenceRead}} {
+	for _, scopes := range [][]string{nil, {}, {ScopeContextRead}, {ScopeDataRead}, {ScopeContextRead, ScopeEvidenceRead, "context:admin"}, {ScopeDataRead, ScopeContextRead, ScopeEvidenceRead}} {
 		if validApprovalScopes(scopes) {
 			t.Fatalf("approval scope set %v accepted", scopes)
 		}

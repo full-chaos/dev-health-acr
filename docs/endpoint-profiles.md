@@ -14,6 +14,19 @@ ship").
 - Shared schema (owned by ops, reused as-is): `contracts/auth/v1/endpoint-profile.schema.json`
 - Closed credential-class vocabulary (owned by ops): `contracts/auth/v1/credential-classes.json`
 
+## Absent versus null on the advisory fields
+
+On `action`, `resource_resolver`, `current_state_cache_behavior`,
+`entitlement_requirement`, `disclosure_behavior` and `token_shape`, a field is
+absent when code evidence shows it does not apply to the route, and `null` when
+it is undetermined in this pass. Every `null` needs a `gaps` entry that begins
+with `<field>:` and says what was searched. Never write `null` for "not
+applicable", and never infer "absent" from silence. The rule is ops-owned
+(`docs/reference/auth/endpoint-profiles.md` in dev-health-ops). The gate
+(`ci/checkendpointprofiles`) enforces it on every advisory field: a `null` with
+no `gaps` entry beginning `<field>:` fails with `UNSTATED NULL`, and prose that
+only mentions the field name does not count.
+
 ## Coverage
 
 21 route registrations in `internal/api/app.go`. Two are unauthenticated
@@ -278,6 +291,20 @@ may hold two of its sites, and the number of sites in the file must equal the
 number of distinct sites the rows declare for it (rows citing one shared
 definition line are one site; a `func` declaration is always one site). More is
 `AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
+
+### Several registrations on one line
+
+The gate does not require one registration per line. Because a row is matched
+by `source.file` + `method` + `route`, two `mux.Handle*` calls on the same
+physical line are accepted when each has its own row. A registration without a
+row fails as `UNOWNED SURFACE`, whichever line it shares. The discoverer finds
+registrations by the literal text `mux.Handle*(`. A line that holds that text
+but whose registration it cannot parse (for example one wrapped across lines)
+fails as `UNRESOLVED REGISTRATION`. A registration written without the literal
+`mux.Handle*(` text (for example `mux.` and `HandleFunc(` split by a comment)
+is not seen at all: the gate reports nothing for it. Writing one registration
+per line, in the plain `mux.Handle*(` form, is still the readable form, and
+the gate does not depend on the one-per-line part.
 
 ## Wrapper-chain reconciliation
 

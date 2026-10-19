@@ -7,9 +7,11 @@ import (
 	"go/token"
 	"io/fs"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -92,6 +94,11 @@ func TestEventLineBoundsAreTheEngineCallSitesTimesThePasses(t *testing.T) {
 		{eventspec.AnswerReuseContainment, len(callsNamed(t, "recordReuseContainment")) * passes, "recordReuseContainment call sites x passes"},
 		{eventspec.StoredAnswerability, largestGroup(callsNamed(t, "RecordStoredAnswerability"), 2) * passes, "RecordStoredAnswerability call sites per surface x passes"},
 		{eventspec.AnswerReuseServedRequestID, len(callsNamed(t, "RecordAnswerReuseServedRequestID")) * passes, "RecordAnswerReuseServedRequestID call sites x passes"},
+		{eventspec.ReadRequirementPopulation, len(callsNamed(t, "RecordReadRequirementPopulation")) * contractsv1.ContextFabricPlanRequirementOutcomeMaxCount, "one call site, one line per outcome row of the served answer"},
+		{eventspec.ObservationCover, len(callsNamed(t, "RecordReadRequirementObservationCover")) * contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * answerPassConstant(t, "answerPassDecisive"), "one call site, one line per outcome row of each answer pass before the decisive fit (the answerPass constants)"},
+		{eventspec.MembershipCardinality, len(callsNamed(t, "RecordMembershipCardinality")) * passes, "RecordMembershipCardinality call sites x passes"},
+		{eventspec.BudgetAssertion, len(callsNamed(t, "finalizeServed")) * passes, "finalizeServed call sites (the only recording entry; the measure-only path emits nothing) x passes"},
+		{eventspec.ItemAccountingDisagreement, len(callsNamed(t, "RecordItemAccounting")) * passes, "RecordItemAccounting call sites x passes"},
 	}
 	for _, tc := range cases {
 		if tc.want == 0 {
@@ -125,4 +132,63 @@ func TestLinesBeyondTheDeclaredBoundAreRefusedByTheCertifier(t *testing.T) {
 	certifyRequestLine(t, skipped.Bytes(), eventspec.PriorSubjectReceiptsSkipped, nil)
 	sink.RecordPriorSubjectReceiptsSkipped(ctx, principalOrg1, 1)
 	certifyRefused(t, skipped.Bytes(), eventspec.PriorSubjectReceiptsSkipped, "more receipt skip lines than the declared bound")
+}
+
+// answerPassConstant returns the integer value of a package constant declared
+// as a literal, read from the non-test sources.
+func answerPassConstant(t *testing.T, name string) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(info fs.FileInfo) bool { return !strings.HasSuffix(info.Name(), "_test.go") }, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range gen.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, id := range vs.Names {
+						if id.Name != name || i >= len(vs.Values) {
+							continue
+						}
+						lit, ok := vs.Values[i].(*ast.BasicLit)
+						if !ok {
+							t.Fatalf("%s is not a literal", name)
+						}
+						value, err := strconv.Atoi(lit.Value)
+						if err != nil {
+							t.Fatalf("%s: %v", name, err)
+						}
+						return value
+					}
+				}
+			}
+		}
+	}
+	t.Fatalf("constant %s not found", name)
+	return 0
+}
+
+// TestObservationCoverCertifiesEveryPassOfAMaximalFrame writes the declared
+// number of cover lines, which is every outcome row of the first, second and
+// third pass, and requires the next line to be refused.
+func TestObservationCoverCertifiesEveryPassOfAMaximalFrame(t *testing.T) {
+	t.Parallel()
+	events := contextfabric.RequirementLineEventsFromEngineForTest(t)
+	if len(events.Covers) == 0 {
+		t.Fatal("no cover event from the engine scenarios")
+	}
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	for range eventspec.ObservationCover.MaxLinesPerScope {
+		sink.RecordReadRequirementObservationCover(ctx, principalOrg1, events.Covers[0])
+	}
+	certifyRequestLine(t, buf.Bytes(), eventspec.ObservationCover, nil)
+	sink.RecordReadRequirementObservationCover(ctx, principalOrg1, events.Covers[0])
+	certifyRefused(t, buf.Bytes(), eventspec.ObservationCover, "more cover lines than three passes of the outcome limit")
 }

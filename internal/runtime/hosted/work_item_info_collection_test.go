@@ -338,7 +338,7 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 			sizes = append(sizes, len(input.Graph.Cohort.Members))
 		}
 	}
-	investigator, _, _, _, clarification, structure, err := buildContextFabricInvestigator(context.Background(), buildRequest{config: cfg, options: Options{ServiceVersion: "info-proof", Logger: logger, Now: time.Now, ModelRuntimeOverride: model}}, postgresComponents{db: db}, clickHouseComponents{queryClient: client}, nil)
+	investigator, _, clarification, structure, err := buildContextFabricInvestigator(context.Background(), buildRequest{config: cfg, options: Options{ServiceVersion: "info-proof", Logger: logger, Now: time.Now, ModelRuntimeOverride: model}}, postgresComponents{db: db}, clickHouseComponents{queryClient: client}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

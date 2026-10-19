@@ -86,6 +86,11 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		"CeilingFitStep":                        CeilingFitStepVocabulary(),
 		"CohortNarrowingDisclosureOutcome":      CohortNarrowingDisclosureOutcomeVocabulary(),
 		"CohortGroupingRefusal":                 CohortGroupingRefusalLogVocabulary(),
+		"AnswerObligation":                      AnswerObligationLogVocabulary(),
+		"SubjectRole":                           SubjectRoleLogVocabulary(),
+		"BudgetAssertStage":                     BudgetAssertStageLogVocabulary(),
+		"AllocationDisagreement":                AllocationDisagreementLogVocabulary(),
+		"SubjectExpressionKind":                 SubjectExpressionKindLogVocabulary(),
 		// The contract enums the lines declare by hand-listed members.
 		"contracts:ContextFabricWindowProvenance":        WindowProvenanceLogVocabulary(),
 		"contracts:ContextFabricInvestigationStatus":     InvestigationStatusLogVocabulary(),
@@ -101,6 +106,10 @@ func TestLineVocabulariesNameEveryConstantOfTheirType(t *testing.T) {
 		"contracts:ContextFabricAnswerCompletenessState": AnswerCompletenessStateLogVocabulary(),
 		"contracts:ContextFabricSubjectKind":             SubjectKindLogVocabulary(),
 		"contracts:ContextFabricTemporalAxis":            InterpretedTimeBoundAxisLogVocabulary(),
+		"contracts:ContextFabricPlanRequirementOutcome":  PlanRequirementOutcomeLogVocabulary(),
+		"contracts:ContextFabricAnswerImpactKind":        AnswerImpactKindLogVocabulary(),
+		"contracts:ContextFabricCoverageDetailCode":      CoverageDetailCodeLogVocabulary(),
+		"contracts:ContextFabricCapacityVerdict":         CapacityVerdictLogVocabulary(),
 	} {
 		dir, typeName := ".", key
 		if name, ok := strings.CutPrefix(key, "contracts:"); ok {
