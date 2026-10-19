@@ -168,7 +168,8 @@ func TestPlatformModelIsDrawnOnlyWithTheFeatureAndTheFallbackGrant(t *testing.T)
 		deployment int
 	}{
 		{name: "saved config with acr_service_model runs on the own model", ops: opsStandIn{serviceModel: true, llmConfig: "saved"}, status: http.StatusOK, basis: "own_model", own: 2},
-		{name: "saved config with no flag runs on the own model", ops: opsStandIn{llmConfig: "saved"}, status: http.StatusOK, basis: "own_model", own: 2},
+		{name: "saved config with acr_service_model off is refused as turned off", ops: opsStandIn{llmConfig: "saved"}, status: http.StatusForbidden, reason: "ai_features_turned_off", basis: "ai_features_turned_off"},
+		{name: "saved config with acr_service_model off is refused even with the fallback grant", ops: opsStandIn{fallback: boolRef(true), llmConfig: "saved"}, status: http.StatusForbidden, reason: "ai_features_turned_off", basis: "ai_features_turned_off"},
 		{name: "saved config with both flags still runs on the own model", ops: opsStandIn{serviceModel: true, fallback: boolRef(true), llmConfig: "saved"}, status: http.StatusOK, basis: "own_model", own: 2},
 		{name: "acr_service_model alone with no config is refused", ops: opsStandIn{serviceModel: true, fallback: boolRef(false), llmConfig: "none"}, status: http.StatusForbidden, reason: "service_model_not_entitled", basis: "refused"},
 		{name: "acr_service_model alone from an ops build without the field is refused", ops: opsStandIn{serviceModel: true, llmConfig: "none"}, status: http.StatusForbidden, reason: "service_model_not_entitled", basis: "refused"},
