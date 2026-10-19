@@ -850,6 +850,42 @@ func TestDiscoveryReportsBothRegistrationsWrittenOnOneLine(t *testing.T) {
 	mustContain(t, errs, "UNOWNED SURFACE", "GET /unprofiled")
 }
 
+func TestGateAcceptsTwoProfiledRegistrationsOnOneLineAndFailsClosedWhenOneRowIsMissing(t *testing.T) {
+	// Rows address a route by file + method + route, never by line, so two
+	// registrations sharing one physical line are legal while each has a row.
+	// Removing either row must fail closed as UNOWNED SURFACE naming it.
+	source := "package api\n" +
+		"\n" +
+		"import \"net/http\"\n" +
+		"\n" +
+		"func (a *App) Handler() http.Handler {\n" +
+		"\tmux := http.NewServeMux()\n" +
+		"\tmux.HandleFunc(\"GET /healthz\", healthzHandler); mux.HandleFunc(\"GET /second\", healthzHandler)\n" +
+		"\treturn mux\n" +
+		"}\n" +
+		"\n" +
+		"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n"
+	first := minimalValidRow(nil)
+	second := minimalValidRow(map[string]any{
+		"id":    "GET /second [dev-health-acr-api]",
+		"route": "/second",
+	})
+
+	both := minimalValidFixture(t, []map[string]any{first, second})
+	writeFile(t, filepath.Join(both.root, fixtureAppFile), source)
+	if errs := both.check(t); len(errs) != 0 {
+		t.Fatalf("two profiled registrations on one line: expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+
+	onlyFirst := minimalValidFixture(t, []map[string]any{first})
+	writeFile(t, filepath.Join(onlyFirst.root, fixtureAppFile), source)
+	mustContain(t, onlyFirst.check(t), "UNOWNED SURFACE", "GET /second")
+
+	onlySecond := minimalValidFixture(t, []map[string]any{second})
+	writeFile(t, filepath.Join(onlySecond.root, fixtureAppFile), source)
+	mustContain(t, onlySecond.check(t), "UNOWNED SURFACE", "GET /healthz")
+}
+
 func TestGateCatchesAProtectedRowWithNoAcceptedCredentialClasses(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
 		"classification":              "protected",

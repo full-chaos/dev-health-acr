@@ -935,6 +935,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricClaimDepthLimitation(limitation) ||
 		IsContextFabricBudgetTrimLimitation(limitation) ||
 		IsContextFabricPathDropLimitation(limitation) ||
+		IsContextFabricOutcomeEvictionLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricPullRequestStatusLimitation(limitation) ||
 		IsContextFabricMemberStatusLimitation(limitation) ||

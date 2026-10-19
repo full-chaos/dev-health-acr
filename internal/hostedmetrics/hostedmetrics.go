@@ -27,11 +27,12 @@ const (
 	InvestigationLatencyName     = "acr_investigation_latency_seconds"
 	ClickHouseNearMemoryCapName  = "acr_clickhouse_statement_near_memory_cap_total"
 	ClickHousePeakUnobservedName = "acr_clickhouse_statement_peak_unobserved_total"
+	OutcomeRowsEvictedName       = "acr_outcome_rows_evicted_total"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -71,6 +72,7 @@ type Instruments struct {
 	investigationLat   metric.Float64Histogram
 	nearMemoryCap      metric.Int64Counter
 	peakUnobserved     metric.Int64Counter
+	outcomeRowsEvicted metric.Int64Counter
 	vocab              Vocabularies
 }
 
@@ -101,6 +103,7 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		factReadAborts:     counter(FactReadAbortsName, "Investigations aborted in the fact read by cause."),
 		investigationLat:   histogram(InvestigationLatencyName, "Investigation request latency by terminal status."),
 		peakUnobserved:     counter(ClickHousePeakUnobservedName, "ClickHouse statements that finished with no peak memory value from the server."),
+		outcomeRowsEvicted: counter(OutcomeRowsEvictedName, "Served lever applications that evicted an outcome row at the row cap, by lever."),
 		nearMemoryCap:      counter(ClickHouseNearMemoryCapName, "ClickHouse statements that finished above half of their memory cap."),
 		vocab:              vocab,
 	}
@@ -222,3 +225,14 @@ func StatusClass(status int) string {
 // label sets this package owns.
 func AnswerStatusVocabulary() []string       { return slices.Clone(answerStatuses) }
 func FactReadAbortCauseVocabulary() []string { return slices.Clone(factReadAbortCauses) }
+
+var evictionLevers = []string{"claim_depth", "fact_row", "path_drop", "candidate"}
+
+// OutcomeRowEvicted records one served stage-3 lever application whose answer
+// carries an outcome-row eviction.
+func (i *Instruments) OutcomeRowEvicted(ctx context.Context, lever string) {
+	if i == nil {
+		return
+	}
+	i.outcomeRowsEvicted.Add(ctx, 1, metric.WithAttributes(attribute.String("lever", bucket(lever, evictionLevers))))
+}
