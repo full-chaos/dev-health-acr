@@ -14,9 +14,6 @@ import (
 // and its result is the same as over the whole organization. The cost
 // follows the requested scope, not the size of the organization.
 
-// requestedProjectIDsPredicate selects the requested projects by raw id.
-const requestedProjectIDsPredicate = `id IN {project_ids:Array(String)}`
-
 // requestedProjectKeysPredicate selects the requested projects by
 // provider-qualified key (decodeProjectOriginKeys).
 const requestedProjectKeysPredicate = `concat(provider, '` + projectOriginKeySeparator + `', id) IN {project_ids:Array(String)}`

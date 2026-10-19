@@ -1283,7 +1283,15 @@ import (
 // any letter case is labelled with the name alone, where it read "CI CI #run";
 // a name padded or split by Unicode white space is trimmed and split the same
 // way in Go and in SQL. An answer saved under v248 holds the doubled label.
-const QueryVersion = "devhealthfacts.clickhouse.v249"
+//
+// v249 -> v250: a pull request reached from a project carries a link tier only
+// at the strongest tier any issue of any project holds for it (a native link
+// covers every lower-tier link), the tier read is bounded to the target pull
+// requests, and requested projects are matched by provider and id, so two
+// providers sharing a raw project id keep separate roots on the current and
+// the historical axis. An answer saved under v249 holds a lower-tier link a
+// native link covers, or one root where two providers' projects were requested.
+const QueryVersion = "devhealthfacts.clickhouse.v250"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
