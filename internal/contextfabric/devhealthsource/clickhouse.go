@@ -173,7 +173,13 @@ const SourceName = "dev_health_clickhouse"
 // trimmed lower case, and from the BLOCKED_BY and IS_BLOCKED_BY aliases, carry
 // the old id; the rebuild re-projects them under the new one. The RELATES
 // alias already derived "relates_to" and keeps its id.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v18"
+//
+// (v19, removed dependency links of every type are retracted, not only
+// blocks: a relates_to, duplicates or other link whose writing items were read
+// again without it ends by the same relation-current rule. Rows of a raw kind
+// whose writer is not known keep their edge. Links that ended before the roll
+// sit behind every checkpoint; the rebuild leaves their edges out.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v19"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

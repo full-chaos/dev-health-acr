@@ -2,6 +2,7 @@ package relationcurrent
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 )
@@ -84,36 +85,92 @@ func RowsSQL() string {
 	return rowsSQL(`lower(ifNull(de.relationship_type, '')) = '`+RelationshipType+`'`, EndpointIDsSQL)
 }
 
-// projectionTypes holds the canonical relation keys (dependencyrelation.KeySQL)
-// the graph projection treats as the blocks relation: the type in any letter
-// case and both inverse spellings, which converge on one graph edge.
-const projectionTypes = `('blocks:fwd', 'blocks:inv')`
+// unknownWriterKinds are the relationship_type_raw values of non-blocks rows
+// whose writer the stored row does not show and whose item can be read again
+// without the link being written again: a pass can skip the read that writes
+// it (jira_dev_status past the per-run request cap, gitlab_closing_reference
+// on a failed closed_by fetch, github_comment_linear_url when comments are
+// not read), or one item alone writes the row and no writer is stored
+// (linear_attachment, github_closing_reference). The end rule never ends such
+// a row, so its edge stays, and the projection counts the rows it kept. The
+// writer and read-time rule for these kinds belongs to ops (follow-up 10166).
+var unknownWriterKinds = []string{"github_closing_reference", "github_comment_linear_url", "gitlab_closing_reference", "jira_dev_status", "linear_attachment"}
 
-// projectionEndpointIDsSQL is EndpointIDsSQL over the projection's spellings.
-var projectionEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND ` + dependencyrelation.KeySQL("be.relationship_type") + ` IN ` + projectionTypes + `)`
+// projectionWriterCodeSQL is WriterCodeSQL for a blocks row of any spelling.
+// A row of another type ends by its stored relation_writer, by the item whose
+// text names an external key, or else only when BOTH items were read again
+// (WriterUndecided): ops derives writers for the blocks relation only.
+func projectionWriterCodeSQL(d string) string {
+	writer := `ifNull(` + d + `.relation_writer, '')`
+	return `multiIf(` + dependencyrelation.BlockerPredicateSQL(d+".relationship_type") + `, ` + WriterCodeSQL(d) + `,
+    ` + writer + ` = 'source', 1, ` + writer + ` = 'target', 2, ` + writer + ` = 'both', 3,
+    startsWith(` + d + `.target_work_item_id, 'extkey:'), 1,
+    4)`
+}
 
-// ProjectionRowsSQL is RowsSQL over every spelling of the blocks relation, so a
-// twin spelling is judged by the same rule instead of being assumed live.
-func ProjectionRowsSQL() string {
-	return rowsSQL(dependencyrelation.KeySQL("de.relationship_type")+` IN `+projectionTypes, projectionEndpointIDsSQL)
+// projectionKeptSQL is 1 for a non-blocks row of an unknownWriterKinds raw
+// value.
+func projectionKeptSQL(d string) string {
+	kinds := make([]string, 0, len(unknownWriterKinds))
+	for _, kind := range unknownWriterKinds {
+		kinds = append(kinds, "'"+kind+"'")
+	}
+	return `toUInt8(NOT ` + dependencyrelation.BlockerPredicateSQL(d+".relationship_type") + ` AND ifNull(` + d + `.relationship_type_raw, '') IN (` + strings.Join(kinds, ", ") + `))`
+}
+
+// projectionTypeConditionSQL keeps every row the graph projection reads as a
+// dependency edge: any type but the ignored ones (ignoredKeys, as
+// dependencyrelation.KeySQL renders them).
+func projectionTypeConditionSQL(alias string, ignoredKeys []string) string {
+	if len(ignoredKeys) == 0 {
+		return `1`
+	}
+	quoted := make([]string, 0, len(ignoredKeys))
+	for _, key := range ignoredKeys {
+		quoted = append(quoted, "'"+key+"'")
+	}
+	return dependencyrelation.KeySQL(alias+".relationship_type") + ` NOT IN (` + strings.Join(quoted, ", ") + `)`
+}
+
+// ProjectionRowsSQL is RowsSQL over every dependency type the graph projection
+// asserts (all but ignoredTypes), with a kept column: 1 for a row of an
+// unknownWriterKinds raw value, which is never ended. A twin spelling is
+// judged by the same rule instead of being assumed live.
+func ProjectionRowsSQL(ignoredTypes []string) string {
+	ignoredKeys := make([]string, 0, len(ignoredTypes))
+	for _, typ := range ignoredTypes {
+		ignoredKeys = append(ignoredKeys, dependencyrelation.Key(typ))
+	}
+	endpoints := `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND ` + projectionTypeConditionSQL("be", ignoredKeys) + `)`
+	return rowsWith(projectionTypeConditionSQL("de", ignoredKeys), endpoints, projectionWriterCodeSQL("de"), projectionKeptSQL("de"))
 }
 
 func rowsSQL(typeCondition, endpoints string) string {
-	return `(SELECT e.s AS s, e.t AS t, e.rt AS rt, e.code AS code,
+	return rowsWith(typeCondition, endpoints, WriterCodeSQL("de"), "")
+}
+
+// rowsWith is the rule over the rows of typeCondition with writer code code;
+// a non-empty kept expression adds a kept column.
+func rowsWith(typeCondition, endpoints, code, kept string) string {
+	keptOut, keptIn, keptGroup := "", "", ""
+	if kept != "" {
+		keptOut, keptIn, keptGroup = ` e.kept AS kept,`, ` `+kept+` AS kept,`, `, e.kept`
+	}
+	return `(SELECT e.s AS s, e.t AS t, e.rt AS rt, e.code AS code,` + keptOut + `
       multiIf(e.code = 1, sp = 1 AND e.ls < ssync, e.code = 2, tp = 1 AND e.ls < tsync, e.code = 3, (sp = 1 AND e.ls < ssync) OR (tp = 1 AND e.ls < tsync), (sp = 1 AND e.ls < ssync) AND (tp = 1 AND e.ls < tsync)) AS ended,
       multiIf(e.code = 1, ssync, e.code = 2, tsync, e.code = 3, least(if(sp = 1 AND e.ls < ssync, ssync, tsync), if(tp = 1 AND e.ls < tsync, tsync, ssync)), greatest(ssync, tsync)) AS ended_at,
       maxIf(w.synced, e.side = 1) AS ssync, maxIf(w.synced, e.side = 2) AS tsync, sumIf(w.present, e.side = 1) AS sp, sumIf(w.present, e.side = 2) AS tp
-    FROM (SELECT de.source_work_item_id AS s, de.target_work_item_id AS t, de.relationship_type AS rt, de.last_synced AS ls, ` + WriterCodeSQL("de") + ` AS code,
+    FROM (SELECT de.source_work_item_id AS s, de.target_work_item_id AS t, de.relationship_type AS rt, de.last_synced AS ls, ` + code + ` AS code,` + keptIn + `
         arrayJoin([(1, de.source_work_item_id), (2, de.target_work_item_id)]) AS end_pair, end_pair.1 AS side, end_pair.2 AS end_id
       FROM work_item_dependencies AS de FINAL
       WHERE de.org_id = {org_id:String} AND ` + typeCondition + `) AS e
     LEFT JOIN ` + itemReadSQL("w", endpoints) + ` ON w.work_item_id = e.end_id
-    GROUP BY e.s, e.t, e.rt, e.ls, e.code)`
+    GROUP BY e.s, e.t, e.rt, e.ls, e.code` + keptGroup + `)`
 }
 
 // BlockerEndpointIDsSQL is EndpointIDsSQL over every spelling the graph
 // projection maps onto a blocks edge (dependencyrelation.BlockerPredicateSQL:
-// the same set as projectionEndpointIDsSQL, one trim and one lower per row).
+// KeySQL IN (blocks:fwd, blocks:inv), one trim and one lower per row).
 var BlockerEndpointIDsSQL = `(SELECT arrayJoin([be.source_work_item_id, be.target_work_item_id]) FROM work_item_dependencies AS be FINAL WHERE be.org_id = {org_id:String} AND ` + dependencyrelation.BlockerPredicateSQL("be.relationship_type") + `)`
 
 // BlockerRowsSQL is RowsSQL over every spelling of the blocks relation, for the
@@ -148,35 +205,42 @@ func CurrentSQL(d string) string {
 
 // MaxEndedLinks bounds the removed-link set one call carries. The largest
 // organization measured holds 2,103 blocks relations, 229 of them removed; the
-// bound is about 87 times that. A set over it is cut to the NEWEST removals
-// (the most recent end time first, ties by key) and the cut is disclosed
-// (EndedLinksSQL returns the total beside the kept keys). A removed link cut
-// from the set keeps its edge until the bound is raised and the projection
-// rebuilt: removed rows stay in ClickHouse, so the set does not shrink by
-// itself.
+// bound is about 87 times that, and the set now holds removed links of every
+// dependency type. A set over it is cut to the NEWEST removals (the most
+// recent end time first, ties by key) and the cut is disclosed (EndedLinksSQL
+// returns the total beside the kept keys). A removed link cut from the set
+// keeps its edge until the bound is raised and the projection rebuilt: removed
+// rows stay in ClickHouse, so the set does not shrink by itself.
 const MaxEndedLinks = 20000
 
 // A relation the end rule ends is retracted from the graph only when nothing
-// else states it. Two spellings of one relation share one graph edge: a blocks
-// row (a, b) and an inverse-spelling row (b, a) are the same edge, and a row
-// of the same pair under another letter case too. The projection judges every
-// spelling by the same rule (ProjectionRowsSQL) and leaves a row out of the
-// set while any twin of its edge is still reported.
+// else states it. Two spellings of one relation share one graph edge: a row
+// (a, b) and an inverse-spelling row (b, a) of the same type are the same
+// edge, and a row of the same pair under another letter case or an alias of
+// the type too (the edge is the canonical type of dependencyrelation.Key with
+// the endpoints in its direction). The projection judges every spelling by the
+// same rule (ProjectionRowsSQL) and leaves a row out of the set while any twin
+// of its edge is still reported or kept.
 //
 // EndedLinksSQL is, for the organization, ONE row: an array with one element
-// per relation the provider no longer reports (at most bound, newest
-// first), the total number of such relations, and the number of removed rows
-// left out because a twin of their edge is still reported. An element is
-// hex(source), hex(target), hex(relationship_type) and the end time in unix
-// microseconds, dot separated. Hex keeps any work item id inside the client's
-// array binding encoding, and one row keeps the read inside the result-row
-// budget however many links were removed. The first column is aliased
-// ended_links, the marker a statement carries so a test client can route it.
-func EndedLinksSQL(bound int) string {
+// per relation the provider no longer reports (at most bound, newest first),
+// the total number of such relations, the number of removed rows left out
+// because a twin of their edge is still reported, and the number of rows the
+// rule would end but keeps because their writer is not known
+// (unknownWriterKinds). ignoredTypes are the dependency types the projection
+// asserts no edge for; their rows are not read. An element is hex(source),
+// hex(target), hex(relationship_type) and the end time in unix microseconds,
+// dot separated. Hex keeps any work item id inside the client's array binding
+// encoding, and one row keeps the read inside the result-row budget however
+// many links were removed. The first column is aliased ended_links, the marker
+// a statement carries so a test client can route it.
+func EndedLinksSQL(bound int, ignoredTypes []string) string {
 	key := `concat(hex(s), '.', hex(t), '.', hex(rt), '.', toString(toInt64(toUnixTimestamp64Micro(ended_at))))`
-	return fmt.Sprintf(`SELECT arraySlice(arrayMap(x -> x.2, arrayReverseSort(x -> (x.1, x.2), groupArrayIf(tuple(toInt64(toUnixTimestamp64Micro(ended_at)), %s), ended AND live_same_edge = 0))), 1, %d) AS ended_links,
-  countIf(ended AND live_same_edge = 0) AS ended_total, countIf(ended AND live_same_edge > 0) AS ended_twin_live
-FROM (SELECT s, t, rt, ended, ended_at,
-    sum(toUInt8(NOT ended)) OVER (PARTITION BY if(%s = 'blocks:inv', t, s), if(%s = 'blocks:inv', s, t)) AS live_same_edge
-  FROM %s)`, key, bound, dependencyrelation.KeySQL("rt"), dependencyrelation.KeySQL("rt"), ProjectionRowsSQL())
+	return fmt.Sprintf(`SELECT arraySlice(arrayMap(x -> x.2, arrayReverseSort(x -> (x.1, x.2), groupArrayIf(tuple(toInt64(toUnixTimestamp64Micro(ended_at)), %s), gone = 1 AND live_same_edge = 0))), 1, %d) AS ended_links,
+  countIf(gone = 1 AND live_same_edge = 0) AS ended_total, countIf(gone = 1 AND live_same_edge > 0) AS ended_twin_live, countIf(ended AND kept = 1) AS ended_unknown_writer
+FROM (SELECT s, t, rt, ended, kept, gone, ended_at,
+    sum(toUInt8(gone = 0)) OVER (PARTITION BY edge_type, edge_from, edge_to) AS live_same_edge
+  FROM (SELECT s, t, rt, ended, kept, ended_at, toUInt8(ended AND kept = 0) AS gone,
+      substring(k, 1, length(k) - 4) AS edge_type, if(endsWith(k, ':inv'), t, s) AS edge_from, if(endsWith(k, ':inv'), s, t) AS edge_to
+    FROM (SELECT s, t, rt, ended, kept, ended_at, %s AS k FROM %s)))`, key, bound, dependencyrelation.KeySQL("rt"), ProjectionRowsSQL(ignoredTypes))
 }

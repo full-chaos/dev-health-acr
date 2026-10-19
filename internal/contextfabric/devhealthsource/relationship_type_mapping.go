@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
@@ -46,6 +47,16 @@ func orientDependencyEndpoints(from, to contractsv1.ContextFabricSubjectRef, swa
 // external_issue_key is ignored because its target is an unresolved external
 // key, not a work item, and a key prefix alone is not linked-issue inheritance.
 var ignoredDependencyTypes = map[string]struct{}{"external_issue_key": {}}
+
+// ignoredDependencyTypeNames is ignoredDependencyTypes in order.
+func ignoredDependencyTypeNames() []string {
+	names := make([]string, 0, len(ignoredDependencyTypes))
+	for name := range ignoredDependencyTypes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 func ignoredDependencyType(raw string) (string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
