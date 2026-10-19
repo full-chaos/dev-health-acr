@@ -179,7 +179,7 @@ check() {
         printf 'unit leg %s runs %s test(s) of %s that no race job runs: %s\n' "$n" "$(wc -l <<<"$want" | tr -d ' ')" "$pkg" "$(head -n 5 <<<"$want" | tr '\n' ' ')" >&2
         status=1
       fi
-      skipped="$(scripts/ci/race-affected-tests.sh "${pkg#"$module"/}")" || { printf 'race-affected-tests.sh failed for %s\n' "$pkg" >&2; status=1; continue; }
+      skipped="$(scripts/ci/race-affected-tests.sh --seeds-out "$tmp/seeds" "${pkg#"$module"/}")" || { printf 'race-affected-tests.sh failed for %s\n' "$pkg" >&2; status=1; continue; }
       hit="$(LC_ALL=C comm -12 "$tmp/leg" <(printf '%s\n' "$skipped" | grep -v '^$' || true))"
       if [ -n "$hit" ]; then
         printf 'unit leg %s runs test(s) of %s that skip under -race: %s\n' "$n" "$pkg" "$(tr '\n' ' ' <<<"$hit")" >&2
@@ -189,7 +189,8 @@ check() {
         printf '%s has a test that depends on a tool the race jobs may not install\n' "$pkg" >&2
         status=1
       fi
-      [ "$status" -ne 0 ] || printf 'unit leg %s: %s tests of %s, all run by its race jobs, none skipped under -race\n' "$n" "$(wc -l <"$tmp/leg" | tr -d ' ')" "$pkg"
+      [ "$status" -ne 0 ] || printf 'unit leg %s: %s tests of %s, all run by its race jobs (from the -race build), none race-affected; race seed files: %s\n' \
+        "$n" "$(wc -l <"$tmp/leg" | tr -d ' ')" "$pkg" "$(paste -sd' ' "$tmp/seeds" 2>/dev/null || true)"
     done
   done
   return "$status"

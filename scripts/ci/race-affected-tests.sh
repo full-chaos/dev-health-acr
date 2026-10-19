@@ -31,15 +31,20 @@ shopt -s inherit_errexit
 # string literals removed. A scan that cannot list or read its input fails; it
 # never prints an empty set.
 #
-# Usage: race-affected-tests.sh [--root MODULE_DIR] PACKAGE_DIR
+# Usage: race-affected-tests.sh [--root MODULE_DIR] [--seeds-out FILE] PACKAGE_DIR
 #   PACKAGE_DIR may be absolute or relative to MODULE_DIR (default: this repo).
+#   --seeds-out  also write the seed files (module-relative), one per line.
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-if [ "${1:-}" = --root ]; then
-  root="$(cd "$2" && pwd)"
-  shift 2
-fi
-[ "$#" -eq 1 ] || { printf 'usage: %s [--root MODULE_DIR] PACKAGE_DIR\n' "${0##*/}" >&2; exit 2; }
+seeds_out=""
+while [ "$#" -gt 1 ]; do
+  case "$1" in
+    --root) root="$(cd "$2" && pwd)"; shift 2 ;;
+    --seeds-out) seeds_out="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
+[ "$#" -eq 1 ] || { printf 'usage: %s [--root MODULE_DIR] [--seeds-out FILE] PACKAGE_DIR\n' "${0##*/}" >&2; exit 2; }
 case "$1" in /*) pkgdir="$1" ;; *) pkgdir="$root/$1" ;; esac
 pkgdir="$(cd "$pkgdir" && pwd)"
 work="$(mktemp -d)"
@@ -62,6 +67,7 @@ build_files "$plain" >"$work/plain.files"
 build_files "$raced" >"$work/race.files"
 LC_ALL=C comm -3 "$work/plain.files" "$work/race.files" | tr -d '\t' | grep -v '^$' >"$work/seed.files" || true
 LC_ALL=C sort -u "$work/plain.files" "$work/race.files" >"$work/all.files"
+[ -z "$seeds_out" ] || sed "s#^$root/##" "$work/seed.files" >"$seeds_out"
 mapfile -t files <"$work/all.files"
 [ "${#files[@]}" -gt 0 ] || { printf '%s: no Go file in the test binary of %s\n' "${0##*/}" "$pkgdir" >&2; exit 1; }
 for f in "${files[@]}"; do [ -r "$f" ] || { printf '%s: listed file %s is not readable\n' "${0##*/}" "$f" >&2; exit 1; }; done
