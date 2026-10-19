@@ -174,10 +174,12 @@ func dropPathsOf(result InvestigationResult, order []int, cited map[string]bool,
 		result.Drivers = drivers
 	}
 	result.Paths = kept
-	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, pathDropOutcomeRow(len(kept), declared))
+	var evicted int
+	result.Completeness.Outcomes, evicted = appendLeverOutcomeRow(result.Completeness.Outcomes, pathDropOutcomeRow(len(kept), declared))
 	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	composed, evictionDisplaced := withOutcomeEvictionLimitation(composed, evicted)
 	result.Limitations = composed
-	result.LimitationsDisplaced += displaced
+	result.LimitationsDisplaced += displaced + evictionDisplaced
 	result.Coverage.Partial = true
 	if result.Status == InvestigationComplete {
 		result.Status = InvestigationPartial
@@ -345,6 +347,9 @@ func (e *Engine) planPathDrop(
 // PathDropEvent is the operator record of ONE path-drop lever application.
 // Counts and closed values only.
 type PathDropEvent struct {
+	// OutcomeRowsEvicted is how many outcome rows the served document has had
+	// evicted at the row cap to make room for a lever's disclosure row.
+	OutcomeRowsEvicted int
 	Family             QuestionFamily
 	Stage              contractsv1.ContextFabricPlanNarrowingStage
 	Pass               int
@@ -383,6 +388,8 @@ func (e *Engine) recordPathDrop(ctx context.Context, principal storage.Principal
 		DroppedPathIDs:     attempt.DroppedPathIDs,
 		Served:             attempt.Served,
 		Declined:           attempt.Declined,
+
+		OutcomeRowsEvicted: outcomeRowsEvicted(attempt.Result.Limitations),
 	})
 }
 

@@ -153,11 +153,11 @@ func (e *ScopeExpander) ExpandFactScope(ctx context.Context, request contextfabr
 		var targetLinkTier map[string]map[string]string
 		switch request.TimeContext.Axis {
 		case "", contractsv1.ContextFabricTemporalCurrent:
-			tiers, err := e.projectPullRequestLinkTiers(ctx, orgID, decodeProjectOriginIDs(request.Origins), repositoryIDs(authorizedRepos))
+			tiers, err := e.projectPullRequestLinkTiers(ctx, orgID, decodeProjectOriginKeys(request.Origins), targets)
 			if err != nil {
 				return contextfabric.FactScopeExpansionResult{}, err
 			}
-			targetLinkTier = pullRequestLinkTierTargets(targets, tiers, projectOriginsByRawID(request.Origins))
+			targetLinkTier = pullRequestLinkTierTargets(targets, tiers, projectOriginsByKey(request.Origins))
 		}
 		return contextfabric.FactScopeExpansionResult{Targets: targets, TargetBasis: targetBasis, TargetAttributionSource: targetSource, TargetLinkTier: targetLinkTier, TargetRoot: targetRoot.first(), TargetRoots: targetRoot, Counts: prCounts}, nil
 
@@ -404,8 +404,8 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	default:
 		return nil, contextfabric.FactScopeExpansionCounts{}, fmt.Errorf("devhealthfacts: projectRepositories does not support axis %q", timeContext.Axis)
 	}
-	projectIDs := decodeProjectOriginIDs(origins)
-	if len(projectIDs) == 0 {
+	projectKeys := decodeProjectOriginKeys(origins)
+	if len(projectKeys) == 0 {
 		// Every origin failed to decode as a project.v2 id -- an invariant
 		// violation upstream (the resolver only ever calls this policy for
 		// a SubjectProject origin), not a data statement about THIS
@@ -466,26 +466,26 @@ func (e *ScopeExpander) projectRepositories(ctx context.Context, orgID string, o
 	// "first origin in the caller's slice order" because origins order is
 	// not part of any documented contract and SQL has no visibility into it
 	// anyway.
-	workItemIDs := requestedProjectWorkItemIDsSQL(requestedProjectIDsPredicate)
-	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(p.id), argMax(l.provenance, l.link_rank), arraySort(groupUniqArray(p.id))
+	workItemIDs := requestedProjectWorkItemIDsSQL(requestedProjectKeysPredicate)
+	statement := `SELECT toString(l.pr_repo_id), ifNull(r.repo, ''), min(` + projectQualifiedKeySQL + `), argMax(l.provenance, l.link_rank), arraySort(groupUniqArray(` + projectQualifiedKeySQL + `))
 FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 INNER JOIN ` + admittedIssueLinksAmongSQL(workItemIDs) + ` AS l ON l.work_item_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
 GROUP BY toString(l.pr_repo_id), ifNull(r.repo, '')
 ORDER BY toString(l.pr_repo_id)
 LIMIT ` + strconv.Itoa(limitPlusOne)
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "project_ids", Value: projectIDs},
+		{Name: "project_ids", Value: projectKeys},
 	})
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	defer rows.Close()
 
-	originsByID := projectOriginsByRawID(origins)
+	originsByKey := projectOriginsByKey(origins)
 	var candidates []repositoryCandidate
 	counts := contextfabric.FactScopeExpansionCounts{}
 	repositoryRows := 0
@@ -496,13 +496,13 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
-		classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originRootsOf(originsByID[originProjectID], originProjectIDs, originsByID))
+		classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originRootsOf(originsByKey[originProjectID], originProjectIDs, originsByKey))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	counts.Truncated = repositoryRows >= limitPlusOne
-	unlinked, err := e.projectUnlinkedIssueCount(ctx, orgID, projectIDs, nil)
+	unlinked, err := e.projectUnlinkedIssueCount(ctx, orgID, projectKeys)
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
@@ -686,8 +686,8 @@ func membershipTouchesAsOfAmongSQL(candidates string) string {
 // interval arm through the same UNION this function already uses for a
 // filtered one.
 func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID string, origins []contextfabric.SubjectRef, limit int, timeContext contextfabric.TimeContext) ([]repositoryCandidate, contextfabric.FactScopeExpansionCounts, error) {
-	projectIDs := decodeProjectOriginIDs(origins)
-	if len(projectIDs) == 0 {
+	projectKeys := decodeProjectOriginKeys(origins)
+	if len(projectKeys) == 0 {
 		return nil, contextfabric.FactScopeExpansionCounts{}, nil
 	}
 	windowStart, windowEnd, err := asOfWindow(timeContext)
@@ -704,14 +704,14 @@ func (e *ScopeExpander) projectRepositoriesAsOf(ctx context.Context, orgID strin
 	// own identical comment for why "smallest id" is the tiebreak.
 	statement := `SELECT toString(l.pr_repo_id) AS repo_id_str, ifNull(r.repo, '') AS repo_slug, max(a.via_history) AS via_history, min(a.origin_project_id) AS origin_project_id, argMax(l.provenance, l.link_rank) AS tier, arraySort(groupUniqArray(a.origin_project_id)) AS origin_project_ids
 FROM (` + projectIssueArmsAsOfSQL + `) AS a
-INNER JOIN ` + admittedIssueLinksAmongSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)) + ` AS l ON l.work_item_id = a.work_item_id
+INNER JOIN ` + admittedIssueLinksAmongSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectKeysPredicate)) + ` AS l ON l.work_item_id = a.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
 GROUP BY repo_id_str, repo_slug
 ORDER BY repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "project_ids", Value: projectIDs},
+		{Name: "project_ids", Value: projectKeys},
 		{Name: "window_start", Value: windowStart},
 		{Name: "window_end", Value: windowEnd},
 	})
@@ -720,7 +720,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	}
 	defer rows.Close()
 
-	originsByID := projectOriginsByRawID(origins)
+	originsByKey := projectOriginsByKey(origins)
 	var candidates []repositoryCandidate
 	counts := contextfabric.FactScopeExpansionCounts{}
 	repositoryRows := 0
@@ -732,7 +732,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
-		if classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originRootsOf(originsByID[originProjectID], originProjectIDs, originsByID)) && viaHistory == 0 {
+		if classifyLinkedRepository(&counts, &candidates, repoID, repoSlug, tier, originRootsOf(originsByKey[originProjectID], originProjectIDs, originsByKey)) && viaHistory == 0 {
 			counts.UnboundedValidityCount++
 		}
 	}
@@ -740,12 +740,12 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	counts.Truncated = repositoryRows >= limitPlusOne
-	unlinked, err := e.projectUnlinkedIssueCount(ctx, orgID, projectIDs, &asOfBounds{start: windowStart, end: windowEnd})
+	unlinked, err := e.projectUnlinkedIssueCountAsOf(ctx, orgID, projectKeys, &asOfBounds{start: windowStart, end: windowEnd})
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	counts.MissingNextHopCount += unlinked
-	dropped, malformed, duplicateAdd, err := e.historicalDropCount(ctx, orgID, projectIDs, windowStart, windowEnd)
+	dropped, malformed, duplicateAdd, err := e.historicalDropCount(ctx, orgID, projectKeys, windowStart, windowEnd)
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
@@ -797,7 +797,7 @@ const resolvedProjectsSQL = `(
 //     here (NOT excluded) rather than in the ever_matched/window_matched
 //     pair, which both explicitly exclude malformed rows via
 //     `NOT is_malformed` so a malformed touch cannot inflate either.
-func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, projectIDs []string, windowStart, windowEnd time.Time) (dropped, malformed, duplicateAdd int, err error) {
+func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, projectKeys []string, windowStart, windowEnd time.Time) (dropped, malformed, duplicateAdd int, err error) {
 	// The repos JOIN + zero-UUID/empty-slug exclusion (codex xhigh review
 	// R1, LOW, confirmed real) mirrors the main query's own MissingNextHopCount
 	// classification exactly: without it, a repo-less-by-design work item
@@ -816,7 +816,7 @@ func (e *ScopeExpander) historicalDropCount(ctx context.Context, orgID string, p
 	// here would let a redundant touch masquerade as independent evidence
 	// of a match/miss the ORIGINAL (first-add) interval already decides on
 	// its own.
-	candidates := readOnceCandidatesSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate))
+	candidates := readOnceCandidatesSQL(requestedProjectHistoryWorkItemIDsSQL(requestedProjectKeysPredicate))
 	statement := `SELECT uniqExactIf(repo_id_str, NOT is_malformed AND NOT is_duplicate_add) AS ever_matched,
   uniqExactIf(repo_id_str, in_window AND NOT is_malformed AND NOT is_duplicate_add) AS window_matched
 FROM (
@@ -826,12 +826,12 @@ FROM (
   INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
   INNER JOIN ` + admittedIssueLinksAmongSQL(candidates) + ` AS l ON l.work_item_id = iv.subject_id
   LEFT JOIN repos AS r FINAL ON r.id = l.pr_repo_id AND r.org_id = {org_id:String}
-  WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}
+  WHERE p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
     AND toString(l.pr_repo_id) != {zero_repository_id:String} AND ifNull(r.repo, '') != ''
 )`
 	bindings := []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "project_ids", Value: projectIDs},
+		{Name: "project_ids", Value: projectKeys},
 		{Name: "window_start", Value: windowStart},
 		{Name: "window_end", Value: windowEnd},
 		{Name: "zero_repository_id", Value: zeroRepositoryID},
@@ -842,10 +842,10 @@ FROM (
 	touchCountsStatement := `SELECT countIf(iv.is_malformed) AS malformed_touches, countIf(iv.is_duplicate_add) AS duplicate_add_touches
 FROM ` + membershipTouchesAsOfAmongSQL(candidates) + ` AS iv
 INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = iv.provider AND p.join_key = iv.project_id
-WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}`
+WHERE p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}`
 	touchRows, touchErr := e.client.Query(ctx, touchCountsStatement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "project_ids", Value: projectIDs},
+		{Name: "project_ids", Value: projectKeys},
 	})
 	if touchErr != nil {
 		return 0, 0, 0, touchErr
@@ -879,42 +879,6 @@ WHERE p.key_resolution_count = 1 AND p.id IN {project_ids:Array(String)}`
 		return 0, 0, 0, err
 	}
 	return int(everMatched - windowMatched), int(malformedTouches), int(duplicateAddTouches), nil
-}
-
-// decodeProjectOriginIDs recovers the raw projects.id value for every
-// project-kind origin subject, via identity.Segments (the exact inverse of
-// the identity.Derive(identity.KindProject, []string{provider, id}, nil)
-// call devhealthsource/teams_projects_edges.go already uses to MINT a
-// project's canonical id). Deduplicated; a subject whose CanonicalID does
-// not decode is skipped, not errored -- the resolver only ever calls this
-// expander for subjects it already resolved as SubjectProject, so a
-// decode failure here is unreachable in practice, not a data statement
-// about this traversal.
-// decodeProjectOriginIDs renders each project origin as its BARE id.
-//
-// Used by the two CHAOS-4099 repository chains, which bind `p.id IN
-// {project_ids}`. It is deliberately NOT the decoder the work-item chain uses
-// -- see decodeProjectOriginKeys, and the note there about why the difference
-// was not flattened here.
-func decodeProjectOriginIDs(origins []contextfabric.SubjectRef) []string {
-	seen := make(map[string]struct{}, len(origins))
-	ids := make([]string, 0, len(origins))
-	for _, origin := range origins {
-		segments, ok := identity.Segments(identity.KindProject, origin.CanonicalID)
-		if !ok || len(segments) != 2 {
-			continue
-		}
-		id := segments[1]
-		if id == "" {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	return ids
 }
 
 // projectOriginKeySeparator joins a project origin's provider to its id. It is
@@ -998,28 +962,6 @@ func projectOriginsByKey(origins []contextfabric.SubjectRef) map[string]contextf
 		}
 	}
 	return byKey
-}
-
-// projectOriginsByRawID is decodeProjectOriginIDs' own companion (CHAOS-4260):
-// the SAME raw projects.id decode, kept as a map back to the ORIGINAL
-// SubjectRef (Label included) rather than a bare id list, so a per-repo
-// origin id a query returns (projectRepositories/projectRepositoriesAsOf's
-// own `min(p.id)` aggregate) can be resolved back to the exact SubjectRef the
-// resolver passed in as one of origins, with no re-derivation of a canonical
-// id (and no second chance to get that derivation wrong). First origin wins
-// on a duplicate id, matching decodeProjectOriginIDs' own dedup.
-func projectOriginsByRawID(origins []contextfabric.SubjectRef) map[string]contextfabric.SubjectRef {
-	byID := make(map[string]contextfabric.SubjectRef, len(origins))
-	for _, origin := range origins {
-		segments, ok := identity.Segments(identity.KindProject, origin.CanonicalID)
-		if !ok || len(segments) != 2 || segments[1] == "" {
-			continue
-		}
-		if _, exists := byID[segments[1]]; !exists {
-			byID[segments[1]] = origin
-		}
-	}
-	return byID
 }
 
 // authorizeRepositories splits repository candidates by authorization and

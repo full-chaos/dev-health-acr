@@ -2551,6 +2551,7 @@ func planNarrowingFields() []Field {
 		{Key: "outcome_items_served", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_items_declared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_completeness_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerCompletenessStateLogVocabulary()},
+		{Key: "outcome_rows_evicted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_reduction_declined", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.OutcomeReductionDeclinedLogVocabulary()},
 		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.LedgerStatusLogVocabulary()},
 		{Key: "quota_availability", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ItemQuotaAvailabilityLogVocabulary()},

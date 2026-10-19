@@ -32,51 +32,43 @@ func (f *fakeRuntime) SynthesizeAnswer(context.Context, storage.Principal, conte
 // behavior, bit for bit, including the nil case.
 func TestWrapWithOrgModelRuntimeResolver_passesThroughUnchanged_withNoOrgStore(t *testing.T) {
 	deploymentDefault := &fakeRuntime{name: "default"}
-	runtime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefault, nil, envLookup(nil), nil, discardLogger())
+	runtime, resolver, err := wrapWithOrgModelRuntimeResolver(deploymentDefault, nil, envLookup(nil), nil, discardLogger())
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
 	if runtime != contextfabric.ModelRuntime(deploymentDefault) {
 		t.Fatal("wrapWithOrgModelRuntimeResolver() wrapped the runtime despite a nil org store")
 	}
-	if evictor != nil {
-		t.Fatalf("evictor = %#v, want nil when no org store is configured", evictor)
+	if resolver != nil {
+		t.Fatalf("resolver = %#v, want nil when no org store is configured", resolver)
 	}
 
-	nilRuntime, nilEvictor, err := wrapWithOrgModelRuntimeResolver(nil, nil, envLookup(nil), nil, discardLogger())
+	nilRuntime, nilResolver, err := wrapWithOrgModelRuntimeResolver(nil, nil, envLookup(nil), nil, discardLogger())
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
 	if nilRuntime != nil {
 		t.Fatalf("runtime = %#v, want nil unchanged", nilRuntime)
 	}
-	if nilEvictor != nil {
-		t.Fatalf("evictor = %#v, want nil unchanged", nilEvictor)
+	if nilResolver != nil {
+		t.Fatalf("resolver = %#v, want nil unchanged", nilResolver)
 	}
 }
 
-// TestWrapWithOrgModelRuntimeResolver_returnsAUsableEvictor_whenOrgStoreIsConfigured
-// is the composition-level half of Codex round-1 finding F4: when an org
-// config store IS wired, wrapWithOrgModelRuntimeResolver must return a
-// non-nil evictor whose EvictOrgModelRuntime is safe to call -- the exact
-// value open() wires into api.RuntimeDependencies.OrgModelRuntimeEvictor
-// for the DELETE route to use.
-func TestWrapWithOrgModelRuntimeResolver_returnsAUsableEvictor_whenOrgStoreIsConfigured(t *testing.T) {
+// TestWrapWithOrgModelRuntimeResolver_returnsAResolver_whenOrgStoreIsConfigured
+// locks that a wired org config store yields a non-nil resolver, which open()
+// hands to offer phrasing.
+func TestWrapWithOrgModelRuntimeResolver_returnsAResolver_whenOrgStoreIsConfigured(t *testing.T) {
 	orgConfigs := orgModelConfigResolverFunc(func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 		return contextfabric.ResolvedOrgModelConfig{}, false, nil
 	})
-	_, evictor, err := wrapWithOrgModelRuntimeResolver(nil, orgConfigs, envLookup(nil), nil, discardLogger())
+	_, resolver, err := wrapWithOrgModelRuntimeResolver(nil, orgConfigs, envLookup(nil), nil, discardLogger())
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
-	if evictor == nil {
-		t.Fatal("evictor = nil, want a usable OrgModelRuntimeEvictor when an org store is configured")
+	if resolver == nil {
+		t.Fatal("resolver = nil, want a resolver when an org store is configured")
 	}
-	// Must not panic for an organization with nothing cached -- the DELETE
-	// handler calls this unconditionally after every successful delete,
-	// including the common case of an organization that was never cached
-	// in the first place.
-	evictor.EvictOrgModelRuntime("org-never-cached")
 }
 
 // TestContextFabricModelDefaults_fallsBackToPackageDefaults_whenUnconfigured
