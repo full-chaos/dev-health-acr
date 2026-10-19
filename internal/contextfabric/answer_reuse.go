@@ -764,8 +764,17 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	if candidate.EffectiveEvidenceWindow != nil && candidate.EffectiveEvidenceWindow.Provenance == WindowInferredDefault {
+		rejected := false
 		switch candidate.Status {
 		case InvestigationComplete, InvestigationPartial, InvestigationDegraded:
+			rejected = true
+		case InvestigationClarificationRequired:
+			// A window clarification stored for a caller that could be asked
+			// is never served to one that declined: that turn answers against
+			// the inferred window instead.
+			rejected = !request.Options.AllowClarification
+		}
+		if rejected {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}
@@ -793,14 +802,6 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// question the engine can answer by recomputing it. Serving an
 	// unavailable row would serve a clarification this build may refuse on
 	// the fresh path, and nothing on the row can say which.
-	if candidate.Status == InvestigationClarificationRequired && !request.Options.AllowClarification &&
-		candidate.EffectiveEvidenceWindow != nil && candidate.EffectiveEvidenceWindow.Provenance == WindowInferredDefault {
-		// A window-gate clarification stored under a caller that could be
-		// asked is never served to one that declined: that turn answers
-		// against the inferred window instead.
-		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-		return InvestigationResult{}, false, false, storedCountReading{}, nil
-	}
 	if candidate.Status == InvestigationClarificationRequired {
 		answerability := e.storedClarificationAnswerability(ctx, principal, candidate)
 		if answerability.Determination != StoredAnswerabilityAnswerable {
