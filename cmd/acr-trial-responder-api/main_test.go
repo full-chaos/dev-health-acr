@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // fakeChatCompletionsServer is a minimal OpenAI-Chat-Completions-shaped
@@ -82,13 +82,13 @@ func writeExchangeRequest(t *testing.T, dir string, seq int, nonce string) {
 
 func newTestResponder(t *testing.T, dir, baseURL string) *responder {
 	t.Helper()
-	client := openai.NewClient(
-		option.WithAPIKey("test-key-not-a-real-secret"),
-		option.WithBaseURL(baseURL),
-		option.WithMaxRetries(0),
-	)
+	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close() })
 	return &responder{
-		client:                    client,
+		provider:                  provider,
 		model:                     "gpt-5.6-luna",
 		exchangeDir:               dir,
 		poll:                      20 * time.Millisecond,
@@ -236,11 +236,19 @@ func TestClassifyErrorTerminalVsRetryable(t *testing.T) {
 		wantClass    string
 		wantTerminal bool
 	}{
-		{"rate limited", &openai.Error{StatusCode: http.StatusTooManyRequests}, classRateLimited, false},
-		{"server error", &openai.Error{StatusCode: http.StatusInternalServerError}, classServerError, false},
-		{"unauthorized", &openai.Error{StatusCode: http.StatusUnauthorized}, classAuthError, true},
-		{"forbidden", &openai.Error{StatusCode: http.StatusForbidden}, classAuthError, true},
-		{"bad request", &openai.Error{StatusCode: http.StatusBadRequest}, classInvalidRequest, true},
+		{"rate limited", llm.NewError(llm.ClassRateLimit, llm.KindLocal, "m", "x"), classRateLimited, false},
+		{"server error", llm.NewError(llm.ClassServer, llm.KindLocal, "m", "x"), classServerError, false},
+		{"unauthorized or forbidden", llm.NewError(llm.ClassAuth, llm.KindLocal, "m", "x"), classAuthError, true},
+		{"bad request", llm.NewError(llm.ClassInvalidRequest, llm.KindLocal, "m", "x"), classInvalidRequest, true},
+		{"model not found", llm.NewError(llm.ClassModelNotFound, llm.KindLocal, "m", "x"), classInvalidRequest, true},
+		{"context length", llm.NewError(llm.ClassContextLength, llm.KindLocal, "m", "x"), classInvalidRequest, true},
+		{"undecodable or empty 2xx", llm.NewError(llm.ClassOutput, llm.KindLocal, "m", "x"), classInvalidOutput, true},
+		{"generic (llm's decode failure)", llm.NewError(llm.ClassGeneric, llm.KindLocal, "m", "x"), classInvalidOutput, true},
+		{"timeout", llm.NewError(llm.ClassTimeout, llm.KindLocal, "m", "x"), classNetworkError, false},
+		{"transport", llm.NewError(llm.ClassTransport, llm.KindLocal, "m", "x"), classNetworkError, false},
+		{"not an llm error", errors.New("boom"), classNetworkError, false},
+		{"canceled", context.Canceled, classCanceled, true},
+		{"deadline", context.DeadlineExceeded, classNetworkError, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -557,52 +565,27 @@ func TestAnswerOneRejectsOutputNotMatchingSchema(t *testing.T) {
 	}
 }
 
-// TestClassifyErrorJSONDecodeIsTerminalInvalidOutput is the codex xhigh
-// review round 1 (High, confirmed) proof that a malformed-2xx-body decode
-// error is classified as a TERMINAL classInvalidOutput, not the old
-// catch-all classNetworkError (retryable) -- a server that keeps returning
-// unparseable JSON for a given request shape will keep doing so, so
-// retrying only burns attempts toward defaultMaxAnswerAttempts without
-// ever converging. Mirrors embedprovider.IsTransientEmbedError's own
-// identical classification for the identical error shapes.
-func TestClassifyErrorJSONDecodeIsTerminalInvalidOutput(t *testing.T) {
-	var syntaxErr *json.SyntaxError
-	if err := json.Unmarshal([]byte("{not valid json"), &struct{}{}); err != nil {
-		if !errors.As(err, &syntaxErr) {
-			t.Fatalf("test setup invariant broken: json.Unmarshal error is not a *json.SyntaxError: %T", err)
-		}
-	} else {
-		t.Fatal("test setup invariant broken: malformed JSON did not produce an error")
+// TestAnswerOneUndecodable2xxIsTerminalInvalidOutput: a 2xx body the shared
+// client cannot decode fails the same way on every retry, so it is written
+// back at once as invalid_output instead of burning attempts.
+func TestAnswerOneUndecodable2xxIsTerminalInvalidOutput(t *testing.T) {
+	dir := exchangeDirForTest(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{not valid json`))
+	}))
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+	writeExchangeRequest(t, dir, 1, "n1")
+	respPath := filepath.Join(dir, "responses", "000001-interpret.json")
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", "000001-interpret.json"), respPath, filepath.Join(dir, "_responder_logs"))
+	raw, err := os.ReadFile(respPath)
+	if err != nil {
+		t.Fatalf("no terminal response written for an undecodable 2xx: %v", err)
 	}
-
-	cases := []struct {
-		name string
-		err  error
-	}{
-		{"syntax error", syntaxErr},
-		{"unexpected EOF", io.ErrUnexpectedEOF},
-		{"EOF", io.EOF},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotClass, gotTerminal := classifyError(tc.err)
-			if gotClass != classInvalidOutput || !gotTerminal {
-				t.Errorf("classifyError(%v) = (%q, %v), want (%q, true)", tc.err, gotClass, gotTerminal, classInvalidOutput)
-			}
-		})
-	}
-}
-
-// TestClassifyError408IsRetryableNetworkError is the codex xhigh review
-// round 1 (High, confirmed) proof: HTTP 408 (Request Timeout) says the
-// server gave up waiting on THIS request, which says nothing about
-// whether an identical retry would fail the same way -- it must NOT fall
-// into the switch's terminal default branch the way a genuine 4xx
-// request-shape error does.
-func TestClassifyError408IsRetryableNetworkError(t *testing.T) {
-	gotClass, gotTerminal := classifyError(&openai.Error{StatusCode: http.StatusRequestTimeout})
-	if gotClass != classNetworkError || gotTerminal {
-		t.Errorf("classifyError(408) = (%q, %v), want (%q, false)", gotClass, gotTerminal, classNetworkError)
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != classInvalidOutput {
+		t.Fatalf("response = %s (%v), want error %q", raw, err, classInvalidOutput)
 	}
 }
 
@@ -682,24 +665,6 @@ func TestResponseAnswersRequestRejectsNonceMismatch(t *testing.T) {
 	}
 	if !responseAnswersRequest(reqPath, respPath) {
 		t.Fatal("responseAnswersRequest rejected a response whose session_nonce DOES match the request's own")
-	}
-}
-
-// TestClassifyErrorApijsonDecodeIsTerminalInvalidOutput is the codex xhigh
-// review round 2 (High, confirmed) red-first proof: the openai-go SDK's
-// own response-body decoder (internal/apijson) does not use the standard
-// library's *json.SyntaxError/*json.UnmarshalTypeError for a
-// well-formed-JSON-but-wrong-shape 2xx body -- it returns a bare
-// fmt.Errorf("apijson: ...") with nothing to errors.As/errors.Is against,
-// so round 1's decode-error checks never matched it and it fell through to
-// the generic retryable network_error default, exactly the "keeps
-// returning unparseable JSON forever" persistent-failure class those
-// checks exist to catch.
-func TestClassifyErrorApijsonDecodeIsTerminalInvalidOutput(t *testing.T) {
-	err := fmt.Errorf("apijson: could not deserialize to an array")
-	gotClass, gotTerminal := classifyError(err)
-	if gotClass != classInvalidOutput || !gotTerminal {
-		t.Errorf("classifyError(%v) = (%q, %v), want (%q, true)", err, gotClass, gotTerminal, classInvalidOutput)
 	}
 }
 

@@ -192,6 +192,15 @@ func eventHasPassField(fields []eventspec.Field) bool {
 	return false
 }
 
+// passKeyed reports whether ev's "pass" field is the pass key its multiplicity
+// scopes on. A zero_or_many_per_request event may carry a "pass" field that is
+// an ordinary int (the observation cover line writes one row per requirement of
+// each pass): its lines are counted over the whole request against
+// MaxLinesPerScope, and Want selects among them by value like any other field.
+func passKeyed(ev eventspec.Event) bool {
+	return eventHasPassField(ev.Fields) && ev.Multiplicity != eventspec.MultiplicityZeroOrManyPerRequest
+}
+
 // multiplicityRequiresPassField states, for a RECOGNISED Multiplicity,
 // whether it requires (true) or forbids (false) a declared "pass" field --
 // the executable consistency rule round r2's finding 5 asked for (a
@@ -332,7 +341,7 @@ func Certify(log *Log, a Assertion) (Result, error) {
 	if !recognisedMultiplicity {
 		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
 	}
-	hasPassField := eventHasPassField(a.Event.Fields)
+	hasPassField := passKeyed(a.Event)
 	if requiresPass != hasPassField {
 		// Defensive: the SAME consistency rule
 		// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField

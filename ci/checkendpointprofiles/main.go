@@ -355,6 +355,21 @@ func credentialClassVocabulary(credentialClasses map[string]any) (map[string]boo
 	return out, errs
 }
 
+var advisoryFields = []string{
+	"action", "resource_resolver", "current_state_cache_behavior",
+	"entitlement_requirement", "disclosure_behavior", "token_shape",
+}
+
+// gapsNameField reports whether row.gaps has a string entry beginning "<field>:".
+func gapsNameField(row map[string]any, field string) bool {
+	for _, g := range asArray(row["gaps"]) {
+		if s, ok := asString(g); ok && strings.HasPrefix(strings.TrimSpace(s), field+":") {
+			return true
+		}
+	}
+	return false
+}
+
 // gapsMention reports whether row.gaps contains an entry mentioning needle
 // (case-sensitive substring, matching the ops checker's convention).
 func gapsMention(row map[string]any, needle string) bool {
@@ -559,6 +574,15 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 			cls, _ := asString(c)
 			if !classVocab[cls] {
 				errs = append(errs, fmt.Sprintf("UNKNOWN accepted_credential_class: row %q claims %q, not in credential-classes.json's closed vocabulary", id, cls))
+			}
+		}
+
+		// Advisory fields: absent = not applicable, null = undetermined and
+		// needs a gaps entry beginning "<field>:". A substring match would
+		// let prose such as "transaction details" excuse a null action.
+		for _, field := range advisoryFields {
+			if v, present := row[field]; present && v == nil && !gapsNameField(row, field) {
+				errs = append(errs, fmt.Sprintf("UNSTATED NULL: row %q has %s=null (undetermined) with no gaps entry beginning %q; use an absent field when it does not apply", id, field, field+":"))
 			}
 		}
 
