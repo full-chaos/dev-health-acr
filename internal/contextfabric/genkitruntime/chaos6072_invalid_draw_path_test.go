@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -86,8 +87,8 @@ func TestInvalidInterpretDrawTakesOneRejectionPath(t *testing.T) {
 	}{
 		{"out_of_enum_kind", drawOutOfEnumKind, contextfabric.InterpretationRejectionReason("fact_requirement_kind_invalid"), "kind_outside_the_enum"},
 		{"other_schema_violation", drawOtherSchemaViolation, contextfabric.InterpretationRejectionReason("shape_invalid"), ""},
-		{"malformed_json", drawMalformedJSON, contextfabric.InterpretationRejectionUnclassified, ""},
-		{"schema_only_violation", drawUnknownProperty, contextfabric.InterpretationRejectionUnclassified, ""},
+		{"malformed_json", drawMalformedJSON, contractsv1.ContextFabricInterpretationRejectionOutputNotJSON, ""},
+		{"schema_only_violation", drawUnknownProperty, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation, ""},
 	}
 	for _, tc := range kinds {
 		t.Run(tc.name+"/redraw_below_ceiling", func(t *testing.T) {
@@ -224,7 +225,7 @@ func TestRecoveredInterpretSequenceKeepsEveryRejectedDrawOnTheTrace(t *testing.T
 	if first["rejection_reason"] != "fact_requirement_kind_invalid" || first["rejected_fact_kind"] != "kind_outside_the_enum" || attrInt(t, first, "sample") != 0 || attrInt(t, first, "attempt") != 1 {
 		t.Fatalf("first rejected-draw line = %#v", first)
 	}
-	if second["rejection_reason"] != "unclassified" || attrInt(t, second, "sample") != 1 || attrInt(t, second, "attempt") != 2 {
+	if second["rejection_reason"] != "output_schema_violation" || attrInt(t, second, "sample") != 1 || attrInt(t, second, "attempt") != 2 {
 		t.Fatalf("second rejected-draw line = %#v", second)
 	}
 	if _, present := second["rejected_fact_kind"]; present {
@@ -248,16 +249,16 @@ func TestSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection(t *testing.T
 	}
 }
 
-// TestRecoveredMalformedDrawIsLoggedAsUnclassified: a draw that never decoded
+// TestRecoveredMalformedDrawIsLoggedAsNotJSON: a draw that never decoded
 // names no validator rule, on the trace as on the terminal rejection.
-func TestRecoveredMalformedDrawIsLoggedAsUnclassified(t *testing.T) {
+func TestRecoveredMalformedDrawIsLoggedAsNotJSON(t *testing.T) {
 	rt, handler, _, _ := scriptedGenkitRuntime(t, []string{invalidDrawText(t, drawMalformedJSON), validDrawText(t)})
 	if _, _, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
 		t.Fatalf("error = %v, want the redraw to serve", err)
 	}
 	lines := handler.rejectedDrawEvents()
-	if len(lines) != 1 || lines[0].Attrs["rejection_reason"] != "unclassified" {
-		t.Fatalf("rejected-draw lines = %#v, want one unclassified line", lines)
+	if len(lines) != 1 || lines[0].Attrs["rejection_reason"] != "output_not_json" {
+		t.Fatalf("rejected-draw lines = %#v, want one output_not_json line", lines)
 	}
 }
 
