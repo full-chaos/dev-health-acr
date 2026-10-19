@@ -300,13 +300,16 @@ check_main_runs_get_a_verdict() {
 check_go_cache() {
   local file="$1"
   local status=0
-  # A job that CI_RACE_RUNNER can route to the self-hosted pool sets setup-go
+  # A job whose runner is anything but a literal GitHub-hosted label (the
+  # CI_RACE_RUNNER variable, a matrix value, a label list) can land on the
+  # self-hosted pool, so every setup-go step in it sets
   # `cache: ${{ runner.environment == 'github-hosted' }}`. On the pool GOCACHE
   # is a hostPath shared by every concurrent runner and the arm64 cache key
   # never matches the hosted one, so setup-go's post step tarred and uploaded
   # the live shared mount on every job (plan: 17 s of work, 9m55s of post
-  # step). Hosted legs keep setup-go's own cache; a fixed hosted job keeps
-  # the literal `cache: true`.
+  # step). A job on a literal ubuntu-* label keeps the literal `cache: true`.
+  # Every setup-go step must carry its own cache input: setup-go defaults it
+  # to true, so an omitted input is the pool regression with no text to check.
   local job
   while IFS= read -r job; do
     local block
@@ -316,10 +319,17 @@ check_go_cache() {
         "$job" >&2
       status=1
     fi
+    local steps caches
+    steps="$(grep -cE 'uses: *actions/setup-go@' <<<"$block" || true)"
+    [ "$steps" -gt 0 ] || continue
+    caches="$(grep -cE '^ +cache:' <<<"$block" || true)"
+    if [ "$caches" -ne "$steps" ]; then
+      printf 'job "%s" has %s setup-go step(s) but %s cache input(s); setup-go caches by default\n' "$job" "$steps" "$caches" >&2
+      status=1
+    fi
     local cache_lines
     cache_lines="$(grep -E '^ +cache:' <<<"$block" || true)"
-    [ -n "$cache_lines" ] || continue
-    if grep -qE 'runs-on: *\$\{\{ *vars\.CI_RACE_RUNNER' <<<"$block"; then
+    if grep -E '^ +runs-on:' <<<"$block" | grep -qvE '^ +runs-on: ubuntu-[A-Za-z0-9.-]+$'; then
       if grep -vqF "cache: \${{ runner.environment == 'github-hosted' }}" <<<"$cache_lines"; then
         printf 'job "%s" can run on the self-hosted pool, but its setup-go cache is not the runner.environment == github-hosted expression\n' \
           "$job" >&2
@@ -1109,11 +1119,20 @@ awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && ind
   "$workflow" > "$routed_cache_true"
 cmp -s "$workflow" "$routed_cache_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_true did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'put a pool-routable job back on setup-go cache: true' check_go_cache "$routed_cache_true"
-routed_cache_false="$tmpdir/routed-cache-false.yml"
-awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { sub(/cache: .*/, "cache: false"); done=1 } { print }' \
-  "$workflow" > "$routed_cache_false"
-cmp -s "$workflow" "$routed_cache_false" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_false did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'put a pool-routable job on setup-go cache: false' check_go_cache "$routed_cache_false"
+routed_cache_missing="$tmpdir/routed-cache-missing.yml"
+awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { done=1; next } { print }' \
+  "$workflow" > "$routed_cache_missing"
+cmp -s "$workflow" "$routed_cache_missing" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_missing did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the cache input from a pool-routable setup-go step' check_go_cache "$routed_cache_missing"
+matrix_routed="$tmpdir/matrix-routed.yml"
+awk '
+  /^  scripts:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  scripts:$/ { in_job=0 }
+  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ matrix.runner }}"; next }
+  { print }
+' "$workflow" > "$matrix_routed"
+cmp -s "$workflow" "$matrix_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: matrix_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a cache: true job through a matrix runs-on' check_go_cache "$matrix_routed"
 
 # (c2) point a job at the ARC pool again. The pool is gone; a job that targets
 # it would queue forever rather than fail, which is the worst shape of red --
