@@ -1574,6 +1574,12 @@ func fetchTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient,
 		// source neither asserts nor retracts the team's edges, so a read
 		// flags the team instead.
 		setStringProperty(properties, "gone_at", goneAt, 0)
+		if _, set := properties["gone_at"]; !set {
+			// An explicit null: the projector merges properties additively, so
+			// an omitted gone_at would leave the old value on a team that is
+			// listed again at its provider.
+			properties["gone_at"] = contractsv1.ContextFabricScalarValue{Null: true}
+		}
 		// CHAOS-3833 (embed-text spec §2): the team template's
 		// project_keys line, canonicalized at the producer (sorted,
 		// deduplicated, capped, joined) so an unordered source array never

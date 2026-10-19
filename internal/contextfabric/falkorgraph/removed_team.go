@@ -61,5 +61,6 @@ func (a *Adapter) removedCommittedTeams(ctx context.Context, key string, princip
 			}
 		}
 	}
+	slog.Default().InfoContext(ctx, "context_fabric: removed team lookup", "teams", len(teams), "removed", len(removed))
 	return removed, false
 }
