@@ -886,6 +886,50 @@ restart needed (`internal/contextfabric/modelruntimeresolver` caches a
 constructed runtime keyed by the config's `generation` and rebuilds when it
 changes).
 
+### BYO model requirements and provider limits
+
+An organization's own model runs both Context Fabric calls: interpretation
+and synthesis. The organization's own configuration always wins over the
+deployment model, including for an organization that also holds
+`acr_service_model`; the `context fabric service model decision` log line then
+reports `basis=own_model` with the deployment model withheld for the turn: if
+the configuration is gone when the runtime is resolved, the turn fails as
+model-unavailable and never falls back to the deployment model. The gate's
+basis binds the whole turn: a turn admitted on the deployment model
+(`entitlement`, `deployment_open`) is served by it on every call even if an
+own configuration appears mid-turn, and an unreadable configuration at the gate
+fails the turn as unavailable.
+
+The output mode is picked from the provider before the call, never after a
+refusal (a refused call is billed for its input tokens, so there is no
+fallback to another mode):
+
+| Provider | Mode | Enforcement |
+| --- | --- | --- |
+| Anthropic | `output_config` JSON schema when the output schema fits Anthropic's structured-output limits; otherwise one tool call carrying the schema | In schema mode the provider enforces only the subset it accepts: the client drops numeric, string and array bounds before sending, and ACR's local check still enforces them. The tool-call mode is not strict: the model may break the schema. |
+| OpenAI and OpenAI-compatible (local, Qwen) | JSON object, with the schema as text in the system message | Not enforced by the provider. |
+
+Provider limits that decide the Anthropic mode (`dev-health-go/llm`,
+`anthropic_schema_fit.go`): at most 24 optional properties and 16 union-typed
+properties across one request, `additionalProperties` false on every object,
+and no conditional keywords (`if`, `then`, `not`). The interpretation and
+synthesis output schemas are over the optional-property limit and hold open
+maps, so on Anthropic they run in tool-call mode and the `context fabric model
+answer format path` log line reports `format_path=tool` with the first limit
+that was broken. A BYO model must therefore return JSON that follows the schema
+without provider enforcement. Models that refuse a forced tool choice (Opus
+5.5, Sonnet 5.5, Fable 5.1, Mythos 5.1) get tool choice `auto`.
+
+A reply that is not JSON, or that fails the output schema, is a rejected draw.
+It is redrawn within the request deadline, and when the last draw is still
+rejected the interpretation fails with HTTP 422 `interpretation_rejected`. That
+means the model's output was rejected, not that the question is over a limit.
+The rejection names its rule in the receipt and the log (`rejection_reason`):
+`output_not_json`, `output_schema_violation` or `output_decode_failed` for a
+draw that broke the output schema, or the validator rule that refused it. The
+log line `context fabric model reply failed the output schema` lists the
+failing JSON paths and rules, never a value.
+
 ### Answer reuse (CHAOS-3782)
 
 | Variable | Default | Meaning |

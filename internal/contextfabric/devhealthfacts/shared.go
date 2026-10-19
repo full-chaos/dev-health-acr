@@ -1297,7 +1297,12 @@ import (
 // primary model refused was served by the fallback model; it now ends as a
 // model-output failure. An answer saved under v250 holds a fallback model's
 // answer to a question the primary refused.
-const QueryVersion = "devhealthfacts.clickhouse.v251"
+//
+// v251 -> v252: an answer about a committed team the source proved gone at its
+// provider carries one fixed limitation, and a reused answer states it exactly
+// when the fresh graph recheck proves the team gone. An answer saved under
+// v251 holds no such limitation for a team gone at its provider.
+const QueryVersion = "devhealthfacts.clickhouse.v252"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

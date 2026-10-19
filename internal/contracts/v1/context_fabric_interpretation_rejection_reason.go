@@ -81,6 +81,13 @@ const (
 	// internal/contextfabric/fact_registry.go's CHAOS-3854 comment for why
 	// that rejection reuses this taxonomy rather than minting its own.
 	ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed ContextFabricInterpretationRejectionReason = "fact_capability_parameter_not_allowed"
+
+	// The model reply broke the output SCHEMA before any validator rule ran:
+	// nothing in it, or text that is not JSON; JSON that fails the output
+	// schema; JSON that fits the schema but does not decode.
+	ContextFabricInterpretationRejectionOutputNotJSON         ContextFabricInterpretationRejectionReason = "output_not_json"
+	ContextFabricInterpretationRejectionOutputSchemaViolation ContextFabricInterpretationRejectionReason = "output_schema_violation"
+	ContextFabricInterpretationRejectionOutputDecodeFailed    ContextFabricInterpretationRejectionReason = "output_decode_failed"
 )
 
 // canonicalContextFabricInterpretationRejectionReasons maps each vocabulary
@@ -119,6 +126,9 @@ var canonicalContextFabricInterpretationRejectionReasons = map[ContextFabricInte
 	ContextFabricInterpretationRejectionWindowClassInvalid:                ContextFabricInterpretationRejectionWindowClassInvalid,
 	ContextFabricInterpretationRejectionWindowConfidenceInvalid:           ContextFabricInterpretationRejectionWindowConfidenceInvalid,
 	ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed: ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+	ContextFabricInterpretationRejectionOutputNotJSON:                     ContextFabricInterpretationRejectionOutputNotJSON,
+	ContextFabricInterpretationRejectionOutputSchemaViolation:             ContextFabricInterpretationRejectionOutputSchemaViolation,
+	ContextFabricInterpretationRejectionOutputDecodeFailed:                ContextFabricInterpretationRejectionOutputDecodeFailed,
 }
 
 // ValidContextFabricInterpretationRejectionReason reports whether reason is

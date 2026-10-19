@@ -415,6 +415,10 @@ type GraphContext struct {
 	StatusMeasuredZero bool `json:"-"`
 	// OrganizationSubjectRead: the engine read the caller's organization
 	// subject because no subject resolved (organizationSubjectAnswers).
+	// RemovedTeams are the committed team subjects whose node carries gone_at:
+	// the source proved them gone at their provider. Engine bookkeeping,
+	// `json:"-"` like CohortPopulation: the answer states it in a limitation.
+	RemovedTeams            []SubjectRef       `json:"-"`
 	OrganizationSubjectRead bool               `json:"-"`
 	Paths                   []RelationshipPath `json:"paths"`
 	DriverCandidates        []DriverJudgment   `json:"driver_candidates"`

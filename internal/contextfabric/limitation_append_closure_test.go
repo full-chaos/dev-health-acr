@@ -76,6 +76,10 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "a DELETION, not an addition: it drops the earlier N of M sentence (matched by parse) from a clone, so the list only shrinks, and the restated sentence is added through appendBoundedLimitations",
 	},
+	"withReusedRemovedTeamState#DeleteFunc#0": {
+		sameShapedTotal: 1,
+		reason:          "a DELETION, not an addition: it drops the removed-team sentence from a clone when the fresh recheck no longer proves a committed team removed, so the list only shrinks, and the sentence is added through appendBoundedLimitations",
+	},
 	"vetSynthesisDraft#stripServiceAuthoredLookalikes#0": {
 		sameShapedTotal: 1,
 		reason:          "a FILTER, not an addition: it copies the draft's limitations without the entries the service-authored recognisers accept, so the list only shrinks and every disclosure is added afterwards through appendBoundedLimitations",

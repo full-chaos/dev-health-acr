@@ -1276,7 +1276,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// Genkit refused a draw the validator has no rule for (or that
 			// never decoded): typed as a rejection, never as a rule that was
 			// not the one violated.
-			rejection = contextfabric.NewInterpretationRejection(contextfabric.InterpretationRejectionUnclassified, fmt.Errorf("%w: %w: %w", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput, err))
+			rejection = contextfabric.NewInterpretationRejection(schemaRejectionReason(err), fmt.Errorf("%w: %w: %w", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput, err))
 		}
 		// Read the reason back OFF the classified error rather than
 		// deriving it a second time here. One derivation, one source of
@@ -2954,7 +2954,7 @@ func decisionOrgIDHash(orgID string) string {
 func (r *Runtime) logRejectedInterpretDraw(ctx context.Context, orgID, requestID string, sample, attempt int, interpreted contextfabric.InterpretedQuestion, cause error, schemaOnly bool, output interpretationOutput) {
 	rejection := contextfabric.ClassifyInterpretationRejection(interpreted, cause, rawFactRequirementKindsByTrimmedKind(output.FactRequirements))
 	if schemaOnly {
-		rejection = contextfabric.NewInterpretationRejection(contextfabric.InterpretationRejectionUnclassified, cause)
+		rejection = contextfabric.NewInterpretationRejection(schemaRejectionReason(cause), cause)
 	}
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
