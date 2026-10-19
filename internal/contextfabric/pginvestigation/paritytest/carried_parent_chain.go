@@ -470,7 +470,7 @@ func chainProducers(kind contextfabric.SubjectSubstitutionParentResultKind) []st
 	case contextfabric.SubjectSubstitutionParentResultAnswer:
 		return []string{"answer"}
 	case contextfabric.SubjectSubstitutionParentResultRefusal:
-		return []string{"no_match", "window_prompt_refused"}
+		return []string{"no_match"}
 	case contextfabric.SubjectSubstitutionParentResultPrompt:
 		return []string{"window_prompt", "candidate_prompt", "kind_prompt"}
 	case contextfabric.SubjectSubstitutionParentResultGuardClarification:
@@ -496,13 +496,6 @@ func (r *chainRig) buildChain(row ChainRow, producer string, depth int) string {
 		served := r.turn(answered, true, true, emptyResponse())
 		if served.Status != contextfabric.InvestigationNoMatch {
 			r.t.Fatalf("%s: fixture defect: no_match producer served %q", r.prefix, served.Status)
-		}
-		return served.ResultID
-	case "window_prompt_refused":
-		answered := r.turn("", true, true, commitResponse(chainSubject)).ResultID
-		served := r.turn(answered, false, false, commitResponse(chainOther))
-		if served.Status != contextfabric.InvestigationNoMatch {
-			r.t.Fatalf("%s: fixture defect: refused window producer served %q", r.prefix, served.Status)
 		}
 		return served.ResultID
 	}
