@@ -7189,7 +7189,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per read row of each pass, from one call site: the plan requirement outcome limit of rows, over the passes of a request.",
-    "max_lines_per_scope": 400,
+    "max_lines_per_scope": 600,
     "fields": [
       {
         "key": "org_id",

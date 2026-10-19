@@ -1916,8 +1916,10 @@ const (
 
 	// read requirement population: one call site emitting once per served result, one line per outcome row.
 	readRequirementPopulationMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
+	// coverPassesPerRequest is the number of answer passes that publish cover rows: the first synthesis, the second attempt (the budget retry or the candidate narrowing re-finalize), and the candidate narrowing re-finalize after a retry. The decisive fit publishes none; bound_pins_test.go reads this count from the answerPass constants.
+	coverPassesPerRequest = 3
 	// observation cover: one call site, one line per row of each pass.
-	observationCoverMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * passesPerRequest
+	observationCoverMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * coverPassesPerRequest
 	// membership cardinality: 2 call sites (fresh and reused result).
 	membershipCardinalityMaxLines = 2 * passesPerRequest
 	// budget assertion: 10 finalizeServed call sites (one per exit).
