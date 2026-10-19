@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // linkedWideIDProdShape is linkedMemoryProdShape with unit ids as wide as
@@ -51,6 +52,9 @@ func (c readonlyQueryClient) Query(ctx context.Context, statement string, bindin
 	if capBytes, ok := contextpacket.StatementMemoryCapFromContext(ctx); ok {
 		settings["max_memory_usage"] = capBytes
 	}
+	if threads, ok := contextpacket.StatementMaxThreadsFromContext(ctx); ok {
+		settings["max_threads"] = threads
+	}
 	return c.inner.Query(clickhousedriver.Context(ctx, clickhousedriver.WithSettings(settings)), statement, bindings)
 }
 
@@ -75,12 +79,13 @@ func runLinkedForm(t *testing.T, ctx context.Context, client contextpacket.Click
 	if flushErr := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); flushErr != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", flushErr)
 	}
-	var mem, ms uint64
+	var mem, ms, threadless uint64
 	var code int32
-	if qErr := direct.QueryRow(ctx, `SELECT memory_usage, query_duration_ms, exception_code FROM system.query_log
-WHERE type != 'QueryStart' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &ms, &code); qErr != nil {
+	if qErr := direct.QueryRow(ctx, `SELECT memory_usage, query_duration_ms, exception_code, `+statementthreads.Threadless+` FROM system.query_log
+WHERE type != 'QueryStart' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &ms, &code, &threadless); qErr != nil {
 		t.Fatalf("%s: no query_log row for %s (measurement did not happen): %v (run error %v)", name, tag, qErr, err)
 	}
+	statementthreads.RequireThreadBound(t, name, threadless)
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
 		code = exception.Code
@@ -236,16 +241,17 @@ func TestTeamLinkedMixMemoryWithProdWidthUnitIDs(t *testing.T) {
 	}
 	t.Logf("seeded: %d scope ids, average width %.1f characters, scope literal %.2f MiB", len(ids), float64(width)/float64(len(ids)), float64(len(scopeJSON))/(1<<20))
 	bindings := []readers.Binding{{Name: "scope_json", Value: string(scopeJSON)}}
-	capped := contextpacket.NewMemoryCappedQueryClient(readonlyQueryClient{inner: query}, contextpacket.APIStatementMaxMemoryUsage)
+	capped := statementthreads.API(readonlyQueryClient{inner: query})
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 	assertReadonlyInForce(t, ctx, capped, orgID)
 	rev88 := readWideIDForm(t, "team_linked_mix_rev88.sql")
 	inlined := readWideIDForm(t, "team_linked_mix_inline_sets.sql")
 	uncapped := fmt.Sprintf("max_memory_usage = %d, max_result_rows = 0", wideIDUncappedCeiling)
 
-	rev88Runs := linkedFormRuns(t, ctx, query, direct, orgID, "rev88-uncapped", rev88, uncapped, bindings)
+	threaded := statementthreads.API(query)
+	rev88Runs := linkedFormRuns(t, ctx, threaded, direct, orgID, "rev88-uncapped", rev88, uncapped, bindings)
 	inlinedRuns := linkedFormRuns(t, ctx, capped, direct, orgID, "inline-sets", inlined, "", bindings)
-	inlinedFree := runLinkedForm(t, ctx, query, direct, orgID, "inline-sets-uncapped", inlined, uncapped, bindings)
+	inlinedFree := runLinkedForm(t, ctx, threaded, direct, orgID, "inline-sets-uncapped", inlined, uncapped, bindings)
 	served := servedLinkedSetAndMixReads(t, ctx, provider, direct, orgID)
 	var setPeaks, mixPeaks []float64
 	for _, r := range served {

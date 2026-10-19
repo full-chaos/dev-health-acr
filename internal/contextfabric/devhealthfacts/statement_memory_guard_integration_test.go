@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // A statement whose cost must follow its own evidence, not the size of the
@@ -40,7 +41,7 @@ func statementMemorySince(t *testing.T, ctx context.Context, direct clickhousedr
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage) FROM system.query_log
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0
 GROUP BY normalized_query_hash`, markMicros, filter.Table, filter.QueryContains)
@@ -49,16 +50,19 @@ GROUP BY normalized_query_hash`, markMicros, filter.Table, filter.QueryContains)
 	}
 	defer rows.Close()
 	m := statementMemory{}
+	var threadless uint64
 	for rows.Next() {
-		var hash, peak uint64
-		if err := rows.Scan(&hash, &peak); err != nil {
+		var hash, peak, unbound uint64
+		if err := rows.Scan(&hash, &peak, &unbound); err != nil {
 			t.Fatalf("scan query_log: %v", err)
 		}
 		m[hash] = peak
+		threadless += unbound
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
 	}
+	statementthreads.RequireThreadBound(t, filter.Table, threadless)
 	return m
 }
 

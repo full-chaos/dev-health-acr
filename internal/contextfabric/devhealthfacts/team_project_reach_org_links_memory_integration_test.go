@@ -12,7 +12,9 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -48,10 +50,11 @@ func TestTeamProjectReachedStatementMemoryFollowsOwnedProjectsNotOrganizationLin
 		mode := map[bool]string{false: "unmerged", true: "merged"}[merged]
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
-			query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+			rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 				maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 				options.MaxBytesToRead = &maxBytesToRead
 			})
+			query := statementthreads.API(rawQuery)
 			for _, statement := range devhealthschema.DDL(
 				// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 				"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
@@ -138,7 +141,7 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
 // owned project, grows the axis grow names from the smaller to the larger
 // size, and applies the slope guard to every statement the team pull request
 // read runs over team_project_ownership and team_repo_ownership.
-func measureTeamReachAxis(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string, mergedParts bool, wantParts int,
+func measureTeamReachAxis(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org string, mergedParts bool, wantParts int,
 	grow func(exec func(string, ...any), org string, from, count int), axis string, smallSize, largeSize, ceilingSize int, guard axisGuard) {
 	t.Helper()
 	at := ts(2026, 9, 29, 0, 0, 0)

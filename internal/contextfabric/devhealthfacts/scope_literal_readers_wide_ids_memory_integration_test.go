@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // scopeLiteralBound is the frozen bound of one scope-literal reader at
@@ -129,15 +130,16 @@ func runScopeLiteralCase(t *testing.T, ctx context.Context, client contextpacket
 	if flushErr := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); flushErr != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", flushErr)
 	}
-	var logged, mem, readRows uint64
-	if qErr := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), max(read_rows) FROM system.query_log
+	var logged, mem, readRows, threadless uint64
+	if qErr := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), max(read_rows), `+statementthreads.ThreadlessCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_unit_investments'))`, mark).Scan(&logged, &mem, &readRows); qErr != nil {
+  AND has(tables, concat(currentDatabase(), '.work_unit_investments'))`, mark).Scan(&logged, &mem, &readRows, &threadless); qErr != nil {
 		t.Fatalf("%s: read query_log (measurement did not happen): %v (run error %v)", c.Name, qErr, err)
 	}
 	if logged != 1 {
 		t.Fatalf("%s: %d statements on work_unit_investments logged for one run, want 1 (measurement did not happen; run error %v)", c.Name, logged, err)
 	}
+	statementthreads.RequireThreadBound(t, c.Name, threadless)
 	return scopeLiteralRun{mib: float64(mem) / (1 << 20), readRows: readRows, rows: rows, err: err}
 }
 
@@ -152,7 +154,7 @@ func TestScopeLiteralReadersMemoryWithProdWidthUnitIDs(t *testing.T) {
 	const orgID = "org-scope-literal-wide-ids"
 	query, direct, _, scopeIDs := newLinkedProdShapeStore(t, ctx, orgID, linkedWideIDProdShape)
 	scopeIDs = append(scopeIDs, seedRepositoryUnits(t, ctx, direct, orgID, linkedWideIDProdShape)...)
-	capped := contextpacket.NewMemoryCappedQueryClient(readonlyQueryClient{inner: query}, contextpacket.APIStatementMaxMemoryUsage)
+	capped := statementthreads.API(readonlyQueryClient{inner: query})
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 	assertReadonlyInForce(t, ctx, capped, orgID)
 

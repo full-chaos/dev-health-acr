@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // repoScopedSplitMemoryCeiling bounds the repository, team and linked pull
@@ -99,7 +100,8 @@ SELECT '%s', 'issue', concat('n', toString(number)), concat('wu-', toString(numb
 // are measured and logged beside them.
 func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {

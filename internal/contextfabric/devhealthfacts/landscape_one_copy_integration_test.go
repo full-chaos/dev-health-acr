@@ -13,11 +13,13 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL("projects", "team_project_ownership", "ic_landscape_rolling_30d") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -143,7 +145,7 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT max(memory_usage) FROM system.query_log WHERE type = 'QueryFinish' AND (query LIKE '%one_churn%' OR query LIKE '%avg(x_raw)%' OR query LIKE '%avg(il.x_raw)%') AND query NOT LIKE '%system.query_log%'`)
+	rows, err := direct.Query(ctx, `SELECT max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE type = 'QueryFinish' AND (query LIKE '%one_churn%' OR query LIKE '%avg(x_raw)%' OR query LIKE '%avg(il.x_raw)%') AND query NOT LIKE '%system.query_log%'`)
 	if err != nil {
 		t.Fatalf("query_log: %v", err)
 	}
@@ -151,10 +153,11 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if !rows.Next() {
 		t.Fatal("query_log returned no row: the memory peak of the changed statements was not measured")
 	}
-	var peak uint64
-	if err := rows.Scan(&peak); err != nil {
+	var peak, threadless uint64
+	if err := rows.Scan(&peak, &threadless); err != nil {
 		t.Fatalf("scan memory peak: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, "changed landscape statements", threadless)
 	if peak == 0 {
 		t.Fatal("memory peak of the changed statements is 0: the measurement did not happen")
 	}

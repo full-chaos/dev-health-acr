@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // The bounds of the memory row below, measured on the local runner (smallest of
@@ -34,7 +35,8 @@ const (
 // carries the links (a groupUniqArray of them) fails the result bound.
 func TestPullRequestProjectFallbackLinkSetIsBoundedPerGroupOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -87,11 +89,12 @@ SELECT ?, concat(?, toString(number)), 1, 1, 'heuristic', '', ?, ? FROM numbers(
 			if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 				t.Fatalf("flush logs (measurement did not happen): %v", err)
 			}
-			var runPeak, runResult, runs uint64
-			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(result_bytes), count() FROM system.query_log
-WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, pullRequestFallbackSetMarker).Scan(&runPeak, &runResult, &runs); err != nil {
+			var runPeak, runResult, runs, threadless uint64
+			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(result_bytes), count(), `+statementthreads.ThreadlessCount+` FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, pullRequestFallbackSetMarker).Scan(&runPeak, &runResult, &runs, &threadless); err != nil {
 				t.Fatalf("read query_log: %v", err)
 			}
+			statementthreads.RequireThreadBound(t, "pull request fallback set", threadless)
 			if runs != 2 {
 				t.Fatalf("measurement did not happen: %d project links statements logged, want 2 (the links and the fallback decision)", runs)
 			}
@@ -130,7 +133,8 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`
 // statement's native sets would read the link table three more times.
 func TestPullRequestProjectAllNativeGroupStaysUnderTheReadCapOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {

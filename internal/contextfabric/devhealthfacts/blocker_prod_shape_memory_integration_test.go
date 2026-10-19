@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -145,7 +146,7 @@ func blockerProdShapeQueryLog(t *testing.T, ctx context.Context, direct clickhou
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.ThreadlessCount+`
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
 GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
@@ -154,13 +155,17 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	}
 	defer rows.Close()
 	var out []blockerProdShapeStatement
+	var threadless uint64
 	for rows.Next() {
 		var st blockerProdShapeStatement
-		if err := rows.Scan(&st.hash, &st.peak, &st.readRows, &st.head); err != nil {
+		var unbound uint64
+		if err := rows.Scan(&st.hash, &st.peak, &st.readRows, &st.head, &unbound); err != nil {
 			t.Fatal(err)
 		}
 		out = append(out, st)
+		threadless += unbound
 	}
+	statementthreads.RequireThreadBound(t, "blocker statements", threadless)
 	return out
 }
 
@@ -246,7 +251,7 @@ func blockerProdShapePlantedReading(t *testing.T, ctx context.Context, direct cl
 		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 			t.Fatalf("flush logs: %v", err)
 		}
-		rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(exception_code), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110))
+		rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(exception_code), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.ThreadlessCount+`
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
 GROUP BY normalized_query_hash`, mark)
@@ -254,12 +259,13 @@ GROUP BY normalized_query_hash`, mark)
 			t.Fatalf("read query_log: %v", err)
 		}
 		for rows.Next() {
-			var hash, peak uint64
+			var hash, peak, unbound uint64
 			var code int32
 			var head string
-			if err := rows.Scan(&hash, &peak, &code, &head); err != nil {
+			if err := rows.Scan(&hash, &peak, &code, &head, &unbound); err != nil {
 				t.Fatal(err)
 			}
+			statementthreads.RequireThreadBound(t, label, unbound)
 			if code != 0 && code != memoryLimitExceeded {
 				t.Fatalf("%s: statement %q failed with exception code %d, not the memory limit: the control is not measuring what it claims", label, head, code)
 			}
@@ -300,10 +306,11 @@ GROUP BY normalized_query_hash`, mark)
 
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
@@ -583,10 +590,11 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("flush logs: %v", err)
 	}
 	for _, name := range devhealthfacts.BlockerFragmentNames {
-		var peak, readRows uint64
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows) FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, fragmentMark, "'frag-"+name+"'").Scan(&peak, &readRows); err != nil {
+		var peak, readRows, threadless uint64
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, fragmentMark, "'frag-"+name+"'").Scan(&peak, &readRows, &threadless); err != nil {
 			t.Fatalf("fragment %s: %v", name, err)
 		}
+		statementthreads.RequireThreadBound(t, "fragment "+name, threadless)
 		t.Logf("PRODSHAPE fragment %-18s peak %d bytes (%.1f MiB) read_rows %d", name, peak, float64(peak)/(1<<20), readRows)
 	}
 }
