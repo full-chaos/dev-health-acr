@@ -119,9 +119,11 @@ func budgetTrimStripCitations(result InvestigationResult, dropped map[string]boo
 
 func budgetTrimDisclose(result InvestigationResult, served, declared int) (InvestigationResult, bool) {
 	composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricBudgetTrimClaimedFactsLimitation})
+	var evicted int
+	result.Completeness.Outcomes, evicted = appendLeverOutcomeRow(result.Completeness.Outcomes, claimDepthOutcomeRow(served, declared))
+	composed, evictionDisplaced := withOutcomeEvictionLimitation(composed, evicted)
 	result.Limitations = composed
-	result.LimitationsDisplaced += displaced
-	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, claimDepthOutcomeRow(served, declared))
+	result.LimitationsDisplaced += displaced + evictionDisplaced
 	result.Coverage.Partial = true
 	if result.Status == InvestigationComplete {
 		result.Status = InvestigationPartial
