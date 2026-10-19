@@ -152,6 +152,8 @@ jobs:
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
   scripts:
     runs-on: ubuntu-latest
+    needs:
+      - plan
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -259,12 +261,16 @@ jobs:
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
       # The plan job drops a non-race unit leg on a pull request when its race
-      # jobs run the same tests (scripts/ci/reached-shards.sh rule 6). This
-      # proves it by compiled test lists: every test such a leg runs is run by
-      # its race jobs, none skips under -race, and neither side narrows the run.
+      # jobs run the same tests (scripts/ci/reached-shards.sh rule 6). The
+      # check below proves it by compiled test lists: every test such a leg runs
+      # is run by its race jobs, none skips under -race, and neither side
+      # narrows the run. It compiles both packages with -race, so it runs only
+      # when this run's plan drops a leg as a race duplicate (dedup_needs is
+      # not empty); a run that drops none pays nothing for it.
       - name: Test the race-affected test detector on its fixture module
         run: scripts/ci/test-race-affected-tests.sh
       - name: Verify every unit leg dropped as a race duplicate is covered by its race jobs
+        if: needs.plan.outputs.dedup_needs != '[]'
         run: scripts/ci/test-unit-race-dedup.sh
   lint:
     runs-on: ubuntu-latest

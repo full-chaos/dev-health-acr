@@ -919,6 +919,11 @@ check_reach_gating() {
     printf 'verify has no reached-shard skip allowance\n' >&2; status=1; }
   grep -qxF '        run: scripts/ci/test-race-affected-tests.sh' <<<"$(job_block "$file" scripts)" || {
     printf 'the scripts job does not run the race-affected detector fixture\n' >&2; status=1; }
+  if ! grep -qxF "        if: needs.plan.outputs.dedup_needs != '[]'" <<<"$(job_block "$file" scripts)" \
+     || ! list_needs <<<"$(job_block "$file" scripts)" | grep -qx plan; then
+    printf 'the equivalence check is not gated on the plan dropping a leg (dedup_needs)\n' >&2
+    status=1
+  fi
   grep -qxF '        run: scripts/ci/test-unit-race-dedup.sh' <<<"$(job_block "$file" scripts)" || {
     printf 'the scripts job does not run the race-duplicate equivalence check\n' >&2; status=1; }
   grep -qF 'is skipped whole, but %s_skip excludes legs' <<<"$block" || {
@@ -1503,6 +1508,8 @@ assert_check_fails 'verify accepts reach_mode=reached on any event' check_reach_
   "$(mutate_reach verify-any-event 'if [ "$reach" = reached ] && [ "$EVENT" != pull_request ]; then' 'if false; then')"
 assert_check_fails 'the scripts job stopped running the detector fixture' check_reach_gating \
   "$(mutate_reach no-detector-fixture 'run: scripts/ci/test-race-affected-tests.sh' 'run: true')"
+assert_check_fails 'the equivalence check lost its dedup_needs gate' check_reach_gating \
+  "$(mutate_reach no-dedup-gate "if: needs.plan.outputs.dedup_needs != '[]'" "if: true")"
 assert_check_fails 'the scripts job stopped running the equivalence check' check_reach_gating \
   "$(mutate_reach no-equivalence 'run: scripts/ci/test-unit-race-dedup.sh' 'run: true')"
 assert_check_fails 'verify stopped checking whole-matrix skips against their legs' check_reach_gating \
