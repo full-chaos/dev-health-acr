@@ -184,7 +184,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config source: %w", err))
 	}
 	request.sourceHealthOperations = devhealthfacts.NewOperationHolder()
-	investigator, investigationResultStore, _, _, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigResolver)
+	investigator, investigationResultStore, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigResolver)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
@@ -318,7 +318,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // configuration (falling through to this deployment default when the
 // organization has none). When nil (no encryption key configured), the
 // deployment-default runtime is used completely unwrapped, unchanged from
-// pre-CHAOS-3775 behavior, and the returned evictor is nil too.
+// pre-CHAOS-3775 behavior.
 //
 // The second return value is the immutable result store this engine already
 // writes every answer through. open() wires it into
@@ -326,10 +326,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // (CHAOS-3746) reads back exactly what the investigation persisted, rather
 // than composing a second store over the same table that could drift from
 // it.
-//
-// The third return value is that same Resolver, exposed only as
-// contextfabric.OrgModelRuntimeEvictor; open() does not use it now that no
-// route deletes a configuration.
+
 // falkorGraphTelemetry builds the falkorgraph.GraphTelemetry sink this
 // package wires into every graph adapter it constructs. Factored out to a
 // named, directly-testable function (CHAOS-3835 round-4 finding 3) rather
@@ -613,18 +610,18 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	return graphReader, embedRetrievalIdentity, nil
 }
 
-func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigs contextfabric.OrgModelConfigResolver) (contextfabric.Investigator, *pginvestigation.Store, contextfabric.OrgModelRuntimeEvictor, contextfabric.ReuseInvalidator, *pgclarification.Sink, *pgstructureselection.Sink, error) {
+func buildContextFabricInvestigator(ctx context.Context, request buildRequest, postgres postgresComponents, clickhouse clickHouseComponents, orgModelConfigs contextfabric.OrgModelConfigResolver) (contextfabric.Investigator, *pginvestigation.Store, *pgclarification.Sink, *pgstructureselection.Sink, error) {
 	if !request.config.EnableContextFabricInvestigations || !falkorgraph.Configured(os.LookupEnv) {
-		return nil, nil, nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	// An unset request timeout (zero) is defaulted by the route layer to a
 	// value above the reserve; only a set value is checked here.
 	if err := contextfabric.ValidateSynthesisCompositionReserve(request.config.RequestTimeout); request.config.RequestTimeout > 0 && err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	graphReader, embedRetrievalIdentity, err := buildContextFabricGraphReader(request, postgres, clickhouse, true)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// handleVerifier (CHAOS-3900 P1.E) adapts graphrank.VerifyHandle over
 	// the SAME devhealthsource.NewCensusFunc(clickhouse.queryClient)
@@ -704,7 +701,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if request.config.StructurePriorsEnabled {
 		priorStore, err := pgstructurepriors.NewStore(postgres.db)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize structure prior store: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("initialize structure prior store: %w", err)
 		}
 		priorConsultant = contextfabric.NewPriorConsultant(priorStore)
 		// priorHandleGrammarChecker mirrors graphConfig.HandleGrammarChecker
@@ -748,7 +745,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		contextfabric.FactRegistryOptions{Now: request.options.Now, Logger: request.options.Logger, ScopeExpander: devhealthfacts.NewScopeExpander(clickhouse.queryClient)},
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)
 	}
 	// CHAOS-3782: WithAnswerReuse turns on Save's reuse-column bookkeeping
 	// and FindReusable/InvalidateOrganizationReuse. request.config.AnswerReuseMaxAge
@@ -764,17 +761,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	}
 	investigationStore, err := pginvestigation.NewStore(postgres.db, storeOpts...)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize investigation result store: %w", err)
 	}
-	// reuseSnapshotter, reuseEpochSnapshotter, and reuseInvalidator all
+	// reuseSnapshotter and reuseEpochSnapshotter both
 	// stay nil when reuse is disabled -- Engine then never queries
 	// checkpoints for a snapshot it would immediately discard
 	// (reuseColumnsFor short-circuits on !s.reuseEnabled before ever
 	// consulting one).
-	var reuseInvalidator contextfabric.ReuseInvalidator
-	if reuseEnabled {
-		reuseInvalidator = investigationStore
-	}
 	// CHAOS-3782 Codex round-3 finding 1: these two MUST be wired
 	// together, from the same reuseEnabled switch -- the same
 	// *pginvestigation.Store satisfies both SourceWatermarkSnapshotter
@@ -809,16 +802,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if deploymentDefaultRuntime == nil {
 		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv, engineTelemetry, request.options.Logger)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
-	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigs, os.LookupEnv, engineTelemetry, request.options.Logger)
+	modelRuntime, orgResolver, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigs, os.LookupEnv, engineTelemetry, request.options.Logger)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	receiptSink, err := buildModelReceiptSink(postgres)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// Offer phrasing resolves through the same per-organization resolver as
 	// interpretation and synthesis: the organization's own model first, the
@@ -828,7 +821,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// resolver leaves offerPhraser nil, the same "optional dependency
 	// absent" degradation every other EngineDependencies field uses.
 	var offerPhraser contextfabric.OfferPhraser
-	phrasingRuntime := offerPhrasingRuntimeFor(evictor, deploymentDefaultRuntime)
+	phrasingRuntime := offerPhrasingRuntimeFor(orgResolver, deploymentDefaultRuntime)
 	if phrasingRuntime != nil {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
@@ -850,7 +843,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// else in this function.
 	clarificationSink, err := pgclarification.NewSink(postgres.db, pgclarification.SinkOptions{Logger: request.options.Logger})
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize clarification selection sink: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize clarification selection sink: %w", err)
 	}
 	// CHAOS-3927 P4: clarificationSink's own structure-offer twin, SAME
 	// unconditional/reuseEnabled-independent construction reasoning as
@@ -861,7 +854,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = clarificationSink.Close(closeCtx)
 		cancel()
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize structure selection sink: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize structure selection sink: %w", err)
 	}
 	// engineTelemetry was resolved earlier (before either model runtime was
 	// built -- see that declaration's own doc comment) so this and the
@@ -875,7 +868,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			Telemetry: contextfabric.NewSlogWorkItemMembershipTelemetry(request.options.Logger),
 		})
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize work item membership reader: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("initialize work item membership reader: %w", err)
 		}
 		workItemMembership = reader
 		// The status and completion qualifier of a repository's walked
@@ -887,15 +880,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// admission as the project read's census is.
 	treeWorkItemGate, err := contextfabric.NewWorkItemMembershipGate(contextfabric.DefaultWorkItemMembershipMaxInFlight, contextfabric.DefaultWorkItemMembershipQueueCapacity)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize repository work item admission: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize repository work item admission: %w", err)
 	}
 	questionInterpreter, err := newContextFabricQuestionInterpreter(modelRuntime, receiptSink, engineTelemetry, factRegistry, request.options.InterpretationEnsembleSize, request.options.Logger)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	suppliedSynthesizer, err := genkitruntime.NewSuppliedSynthesizer(genkitruntime.SuppliedSynthesizerConfig{})
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	clientSynthesis := synthesisprompt.ClientAssembly()
 	clientSynthesis.ParseDraft = suppliedSynthesizer.Parse
@@ -1148,20 +1141,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		_ = clarificationSink.Close(closeCtx)
 		_ = structureSelectionSink.Close(closeCtx)
 		cancel()
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("initialize context fabric engine: %w", err)
 	}
-	// evictor is a concrete *modelruntimeresolver.Resolver, possibly nil
-	// (when orgModelConfigStore was nil) -- guard the typed-nil-interface
-	// trap here too, same as open()'s conversion, so a nil *Resolver can
-	// never reach the caller wrapped in a non-nil
-	// contextfabric.OrgModelRuntimeEvictor. reuseInvalidator is already
-	// either nil or a concrete *pginvestigation.Store assigned above
-	// through the same interface-typed local, so it needs no separate
-	// guard here.
-	if evictor == nil {
-		return engine, investigationStore, nil, reuseInvalidator, clarificationSink, structureSelectionSink, nil
-	}
-	return engine, investigationStore, evictor, reuseInvalidator, clarificationSink, structureSelectionSink, nil
+	return engine, investigationStore, clarificationSink, structureSelectionSink, nil
 }
 
 // contextFabricSynthesizerOptions is the complete static version identity

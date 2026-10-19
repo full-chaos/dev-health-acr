@@ -17,14 +17,13 @@ import (
 // be nil -- no deployment-default provider configured) with per-organization
 // resolution (CHAOS-3775) when orgConfigs is non-nil. When orgConfigs is
 // nil, it returns deploymentDefault completely unchanged, and a nil
-// evictor: pre-CHAOS-3775 behavior, bit for bit, is what a deployment with
+// resolver: pre-CHAOS-3775 behavior, bit for bit, is what a deployment with
 // no encryption key configured gets.
 //
 // The second return value is the SAME *modelruntimeresolver.Resolver
-// wrapped into the first, exposed as contextfabric.OrgModelRuntimeEvictor --
-// callers must apply the typed-nil-interface guard this package's other
-// optional-dependency wiring already uses (see open.go's orgModelConfigs
-// conversion) before assigning it into an interface-typed field.
+// wrapped into the first -- callers must apply the typed-nil-interface guard
+// this package's other optional-dependency wiring already uses before
+// assigning it into an interface-typed field.
 //
 // telemetry (CHAOS-4355 follow-up) is stamped onto defaults before
 // NewModelProviderBuild closes over it, so every per-organization runtime

@@ -105,21 +105,3 @@ const redactedCredentialPlaceholder = "[REDACTED]"
 type OrgModelConfigResolver interface {
 	ResolveOrgModelConfig(context.Context, string) (ResolvedOrgModelConfig, bool, error)
 }
-
-// OrgModelRuntimeEvictor lets a config-store consumer purge a cached
-// per-organization runtime immediately (Codex round-1 finding F4), rather
-// than waiting for the resolver to notice lazily on some future request
-// that may never come. Deleting an organization's configuration removes
-// the database row, but a resolver's in-memory cache entry for that
-// organization -- which holds a constructed runtime with the DECRYPTED
-// credential baked into its transport -- is a separate object the store
-// has no reference to; without an explicit evict call, that decrypted
-// credential stays resident in process memory for as long as the process
-// runs, even though the organization has revoked it. The Generation
-// monotonic-sequence fix (see ResolvedOrgModelConfig's doc comment) already
-// prevents a resurrected stale credential from being served after a
-// delete-then-recreate, so this exists purely to bound how long a
-// decrypted credential a caller no longer wants stays in memory at all.
-type OrgModelRuntimeEvictor interface {
-	EvictOrgModelRuntime(orgID string)
-}

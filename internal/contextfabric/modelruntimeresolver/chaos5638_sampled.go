@@ -49,8 +49,7 @@ var ErrRuntimeNotSampled = errors.New("modelruntimeresolver: resolved model runt
 // for one indexed interpret sample.
 //
 // Resolution is the SAME runtimeFor every other method here calls -- the
-// cache, the eviction fence and the generation guard all apply unchanged, so
-// an ensemble cannot end up reading a different runtime from the one the
+// cache and the generation guard apply unchanged, so an ensemble cannot end up reading a different runtime from the one the
 // ordinary interpret path would have used for the same request.
 func (r *Resolver) InterpretQuestionForSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	runtime, err := r.runtimeFor(ctx, principal.OrgID)
