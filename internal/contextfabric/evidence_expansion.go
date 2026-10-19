@@ -168,7 +168,11 @@ type EvidenceExpansionDecision struct {
 	Authorization *StoredResultAuthorization
 	// Source is the source-row resolution that ran first (CHAOS-6180).
 	Source SourceRowDecision
-	Err    error
+	// StoredServing is the work-item tuple serving decision of the served
+	// citing result, else of the first withheld one. Nil when no admitted
+	// citing result is a work-item tuple.
+	StoredServing *WorkItemStoredServingEvent
+	Err           error
 }
 
 // PersistedRecordConsulted reports whether the persisted-record path
@@ -299,7 +303,10 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 				continue
 			}
 			decision.AdmittedCount++
-			served, withheld, serveErr := servedStoredResult(stored, principal)
+			served, withheld, tupleEvent, serveErr := servedStoredResult(stored, principal)
+			if tupleEvent != nil && (decision.StoredServing == nil || !withheld) {
+				decision.StoredServing = tupleEvent
+			}
 			if serveErr != nil {
 				decision.UnreadableCount++
 				if readErr == nil {
@@ -355,24 +362,29 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 // repairs it also applies change status and claim subjects only, never an
 // evidence ref, a label or a citing site. withheld reports a result that
 // route would answer as not found; an error is a result it could not serve.
-func servedStoredResult(stored StoredInvestigationResult, principal storage.Principal) (InvestigationResult, bool, error) {
+func servedStoredResult(stored StoredInvestigationResult, principal storage.Principal) (InvestigationResult, bool, *WorkItemStoredServingEvent, error) {
 	result := stored.Result
 	tuple := ServeStoredWorkItemTuple(result, stored.SemanticState, stored.SemanticStateRead, principal)
+	var event *WorkItemStoredServingEvent
+	if tuple.Disposition != WorkItemTupleByIDNotApplicable {
+		tuple.Event.Surface = WorkItemStoredServingSurfaceEvidenceExpansion
+		event = &tuple.Event
+	}
 	if tuple.Err != nil {
-		return InvestigationResult{}, false, tuple.Err
+		return InvestigationResult{}, false, event, tuple.Err
 	}
 	switch tuple.Disposition {
 	case WorkItemTupleByIDNotFound:
-		return InvestigationResult{}, true, nil
+		return InvestigationResult{}, true, event, nil
 	case WorkItemTupleByIDServed, WorkItemTupleByIDStored:
 		result = tuple.Result
 	}
 	result, _ = AccountForRetainedRanking(result)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := AssertServedRequirementEvidence(result); err != nil {
-		return InvestigationResult{}, false, err
+		return InvestigationResult{}, false, event, err
 	}
-	return result, false, nil
+	return result, false, event, nil
 }
 
 // citedEvidenceExpansion builds the expansion from the stored result's own

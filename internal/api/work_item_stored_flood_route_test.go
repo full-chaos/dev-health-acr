@@ -13,7 +13,11 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func storedRouteGapLookalikes(n int) []string {
@@ -108,4 +112,45 @@ func storedServingLogLine(t *testing.T, logs []byte) map[string]any {
 	}
 	t.Fatalf("no %q line in logs:\n%s", contextfabric.WorkItemStoredServingLogMessage, logs)
 	return nil
+}
+
+// Evidence expansion applies the same serving decision to every admitted
+// citing result, and says on the stored-serving line which tuple decided and
+// why, so a flooded row withheld there is identified too.
+func TestStoredTupleFloodedLimitationsEvidenceExpansion(t *testing.T) {
+	principal := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{hostedTestRepository}}
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, "example-org/widget-service:WI-1")
+	for _, tc := range []struct {
+		name        string
+		limitations []string
+		status      int
+		basis       string
+	}{
+		{name: "lookalikes fill the cap", limitations: storedRouteGapLookalikes(contractsv1.ContextFabricLimitationsMaxCount), status: http.StatusNotFound, basis: "limitations_flooded"},
+		{name: "lookalikes under the cap", limitations: storedRouteGapLookalikes(contractsv1.ContextFabricLimitationsMaxCount - 1), status: http.StatusOK, basis: "digest_matched"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := storedWorkItemTupleRouteFixture(t, principal)
+			stored.Result.Limitations = tc.limitations
+			store := &storedTupleEvidenceStore{storedWorkItemTupleRouteStore{stored: stored}}
+			logs := &bytes.Buffer{}
+			app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+			expand := httptest.NewRecorder()
+			app.Handler().ServeHTTP(expand, scopedEvidenceRequest(t, token, ref, stored.Result.ResultID))
+			if expand.Code != tc.status {
+				t.Fatalf("source evidence status %d, want %d: %.400s", expand.Code, tc.status, expand.Body.String())
+			}
+			sum := sha256.Sum256([]byte(stored.Result.ResultID))
+			parsed, err := certify.Parse(logs.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.WorkItemStoredServing, Want: map[string]any{
+				"org_id": callerOrgID, "surface": "evidence_expansion", "basis": tc.basis, "result_id_hash": hex.EncodeToString(sum[:6]),
+			}}); err != nil {
+				t.Fatalf("certify: %v\n%s", err, logs.String())
+			}
+			t.Logf("HTTP=%d surface=evidence_expansion basis=%s limitations=%d", expand.Code, tc.basis, len(tc.limitations))
+		})
+	}
 }

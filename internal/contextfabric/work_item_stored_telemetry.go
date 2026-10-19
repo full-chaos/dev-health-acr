@@ -38,6 +38,11 @@ func validateWorkItemStoredCoverage(result InvestigationResult, event *WorkItemS
 	return nil
 }
 
+// WorkItemStoredServingSurfaceEvidenceExpansion marks a stored tuple decision
+// taken while expanding a cited evidence ref, which applies the result-by-id
+// serving rules to every admitted citing result.
+const WorkItemStoredServingSurfaceEvidenceExpansion StoredAnswerabilitySurface = "evidence_expansion"
+
 const WorkItemStoredServingLogMessage = "context fabric work item stored serving"
 
 func WorkItemStoredServingLogArgs(event WorkItemStoredServingEvent) []any {
