@@ -24,7 +24,7 @@ func exchangeDirForTest(t *testing.T) string {
 	return dir
 }
 
-func answerOnceAgainst(t *testing.T, message map[string]any, effort string) (map[string]any, exchangeResponse) {
+func answerOnceAgainst(t *testing.T, message map[string]any, effort string) (map[string]any, exchangeResponse, string) {
 	t.Helper()
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,13 +54,17 @@ func answerOnceAgainst(t *testing.T, message map[string]any, effort string) (map
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatal(err)
 	}
-	return captured, resp
+	logs, _ := os.ReadFile(filepath.Join(dir, "_responder_logs", "000001-interpret.json.log"))
+	return captured, resp, string(logs)
 }
 
 func TestAnswerOneSendsOneSystemMessageStrictSchemaAndNoSamplingFields(t *testing.T) {
-	body, resp := answerOnceAgainst(t, map[string]any{"role": "assistant", "content": `{"answer":"ok"}`}, "xhigh")
+	body, resp, logs := answerOnceAgainst(t, map[string]any{"role": "assistant", "content": `{"answer":"ok"}`}, "xhigh")
 	if resp.Error != "" {
 		t.Fatalf("response error = %q", resp.Error)
+	}
+	if !strings.Contains(logs, "status=ok") || !strings.Contains(logs, "model=gpt-5.6-luna") {
+		t.Errorf("the ok log line must carry the model: %q", logs)
 	}
 	messages, _ := body["messages"].([]any)
 	if len(messages) != 2 {
@@ -88,7 +92,10 @@ func TestAnswerOneSendsOneSystemMessageStrictSchemaAndNoSamplingFields(t *testin
 }
 
 func TestAnswerOneWritesModelRefusedAndNeverTheRefusalText(t *testing.T) {
-	_, resp := answerOnceAgainst(t, map[string]any{"role": "assistant", "content": nil, "refusal": "secret refusal words"}, "")
+	_, resp, logs := answerOnceAgainst(t, map[string]any{"role": "assistant", "content": nil, "refusal": "secret refusal words"}, "")
+	if !strings.Contains(logs, "class=model_refused") || strings.Contains(logs, "secret refusal words") {
+		t.Errorf("the log must name the class and never the refusal text: %q", logs)
+	}
 	if resp.Error != classModelRefused || len(resp.Output) != 0 {
 		t.Fatalf("response = %+v, want only the %s class", resp, classModelRefused)
 	}
@@ -121,5 +128,30 @@ func TestResponderDoesNotImportOpenAIGo(t *testing.T) {
 	}
 	if checked < 2 {
 		t.Fatalf("checked %d non-test files, want main.go and strictschema.go at least", checked)
+	}
+}
+
+func TestAnswerOneUnlistedClientStatusIsTerminalInvalidRequestAndLogsTheLLMClass(t *testing.T) {
+	dir := exchangeDirForTest(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+	writeExchangeRequest(t, dir, 1, "n1")
+	respPath := filepath.Join(dir, "responses", "000001-interpret.json")
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", "000001-interpret.json"), respPath, filepath.Join(dir, "_responder_logs"))
+	raw, err := os.ReadFile(respPath)
+	if err != nil {
+		t.Fatalf("no terminal response for an unlisted 4xx: %v", err)
+	}
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != classInvalidRequest {
+		t.Fatalf("response = %s (%v), want error %q", raw, err, classInvalidRequest)
+	}
+	logs, _ := os.ReadFile(filepath.Join(dir, "_responder_logs", "000001-interpret.json.log"))
+	if !strings.Contains(string(logs), "class=invalid_request terminal=true llm_class=generic") {
+		t.Errorf("the error line must carry the closed class and the llm class: %q", logs)
 	}
 }
