@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -19,8 +20,35 @@ const maxLoggedRemovedTeams = 10
 
 const removedTeamProperty = propPropertyPrefix + "gone_at"
 
-// removedCommittedTeams returns the committed team subjects whose node carries
-// gone_at and that the caller may read, in commit order. A removed team stays
+// removedCohortTeams are the team members of the served cohort whose node,
+// already read for the cohort, carries gone_at: a team served as a member is as
+// much a team the answer speaks about as a committed one, and its node needs no
+// second read.
+func removedCohortTeams(cohort *contextfabric.Cohort, nodes []graphrank.CandidateNode) []contextfabric.SubjectRef {
+	if cohort == nil || cohort.Kind != contextfabric.SubjectTeam {
+		return nil
+	}
+	served := make(map[contextfabric.SubjectRef]bool, len(cohort.Members))
+	for _, member := range cohort.Members {
+		served[member.Subject] = true
+	}
+	var removed []contextfabric.SubjectRef
+	for _, n := range nodes {
+		subject, ok := graphrank.NodeSubject(n)
+		if !ok || subject.Kind != contextfabric.SubjectTeam || strings.TrimSpace(propStringValue(n.Attributes[removedTeamProperty])) == "" {
+			continue
+		}
+		for member := range served {
+			if member.Kind == subject.Kind && member.CanonicalID == subject.CanonicalID && !slices.Contains(removed, member) {
+				removed = append(removed, member)
+			}
+		}
+	}
+	return removed
+}
+
+// removedCommittedTeams returns the team subjects given whose node carries
+// gone_at and that the caller may read, in the order given. A removed team stays
 // active and its edges stay served, so the answer flags it. The second result
 // is true when the read failed: the flag is then unknown, not absent.
 func (a *Adapter) removedCommittedTeams(ctx context.Context, key string, principal storage.Principal, committed []contextfabric.SubjectRef) ([]contextfabric.SubjectRef, bool) {

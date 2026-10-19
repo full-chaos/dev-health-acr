@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func reuseRemovedTeamCount(result InvestigationResult) int {
@@ -62,5 +63,40 @@ func TestAReusedAnswerWithTheLimitationAlreadyStatedKeepsItOnce(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(result.Limitations, "\n"), contractsv1.ContextFabricRemovedTeamLimitation) {
 		t.Fatal("sentence missing")
+	}
+}
+
+func TestAReusedAnswerWithNoEvidenceRefsStillRechecksTheRemovedTeam(t *testing.T) {
+	t.Parallel()
+	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:tango", Label: "Tango"}
+	stored := validInvestigationResult()
+	stored.ResultID = "result_reused_no_refs"
+	stored.RequestID = "request_original_nr"
+	stored.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{team}}
+	stored.EvidenceRefIDs = []string{}
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+	if refs := reuseEvidenceRefsToRecheck(stored); len(refs) != 0 {
+		t.Fatalf("fixture carries evidence refs %v; this test needs a stored answer with none", refs)
+	}
+	graphContext := GraphContext{Resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{team}}, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, RemovedTeams: []SubjectRef{team}}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{team}},
+			context:    graphContext,
+		},
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return stored, true, nil
+		}),
+	})
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("result.Reused = false, want a reuse hit")
+	}
+	if got := reuseRemovedTeamCount(result); got != 1 {
+		t.Fatalf("reused limitations = %q: removed-team sentence appears %d times, want once even when the stored answer cites no evidence", result.Limitations, got)
 	}
 }

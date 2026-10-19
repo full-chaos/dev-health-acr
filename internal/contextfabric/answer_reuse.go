@@ -1015,7 +1015,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
-	if len(evidenceRefs) == 0 {
+	if len(evidenceRefs) == 0 && !slices.ContainsFunc(subjects, func(s SubjectRef) bool { return s.Kind == SubjectTeam }) {
 		return reuseRecheckVerdict{Outcome: AnswerReuseHit}
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{

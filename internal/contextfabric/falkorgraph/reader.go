@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1765,6 +1766,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	removedTeams, removedLookupFailed := a.removedCommittedTeams(ctx, key, principal, request.Resolution.Committed)
 	if removedLookupFailed {
 		failedLookups++
+	}
+	for _, subject := range removedCohortTeams(cohort, cohortNodes) {
+		if !slices.Contains(removedTeams, subject) {
+			removedTeams = append(removedTeams, subject)
+		}
 	}
 
 	// anchoredCutEmpty: the anchor's read was cut and reached no member, so

@@ -112,3 +112,26 @@ func TestTheRemovedTeamLookupLineNamesWhichTeamWasFlagged(t *testing.T) {
 		t.Fatalf("lookup line = %v, want removed_ids [team:tango]: counts alone cannot say which team was flagged", lines[0])
 	}
 }
+
+func TestAnOwningTeamCohortMemberTheSourceProvedGoneIsFlagged(t *testing.T) {
+	s := seedOwnedRepository()
+	for i := range s.nodes {
+		if s.nodes[i].id == "team:owner" {
+			s.nodes[i].props = map[string]interface{}{propPropertyPrefix + "gone_at": "2026-10-09 17:30:00.000000"}
+		}
+	}
+	answer := askOwningTeams(t, s, storage.Principal{OrgID: "org-1"})
+	if got := answer.members(); strings.Join(got, ",") != "team:owner" {
+		t.Fatalf("served %v, want the one team that owns the repository", got)
+	}
+	if got := countRemovedTeamLimitation(answer); got != 1 {
+		t.Fatalf("limitations = %q: the removed-team sentence appears %d times for a cohort member the source proved gone, want once", answer.result.Limitations, got)
+	}
+}
+
+func TestAnOwningTeamCohortMemberNeverProvedGoneIsNotFlagged(t *testing.T) {
+	answer := askOwningTeams(t, seedOwnedRepository(), storage.Principal{OrgID: "org-1"})
+	if got := countRemovedTeamLimitation(answer); got != 0 {
+		t.Fatalf("limitations = %q: an active cohort member carries the removed-team sentence", answer.result.Limitations)
+	}
+}
