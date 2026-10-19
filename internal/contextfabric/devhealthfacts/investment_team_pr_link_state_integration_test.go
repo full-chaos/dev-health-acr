@@ -273,7 +273,7 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 			if rows == 0 {
 				t.Fatalf("measurement did not happen: no logged link state statement")
 			}
-			statementthreads.RequireThreadBound(t, "pull request link state", threadless)
+			statementthreads.RequireThreadBound(t, ctx, direct, "pull request link state", threadless)
 			if first || rows < lowRows {
 				lowRows = rows
 			}

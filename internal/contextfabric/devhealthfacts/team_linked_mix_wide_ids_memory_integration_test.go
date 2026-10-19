@@ -85,7 +85,7 @@ func runLinkedForm(t *testing.T, ctx context.Context, client contextpacket.Click
 WHERE type != 'QueryStart' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &ms, &code, &threadless); qErr != nil {
 		t.Fatalf("%s: no query_log row for %s (measurement did not happen): %v (run error %v)", name, tag, qErr, err)
 	}
-	statementthreads.RequireThreadBound(t, name, threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, name, threadless)
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
 		code = exception.Code

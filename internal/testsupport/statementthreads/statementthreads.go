@@ -7,8 +7,13 @@
 package statementthreads
 
 import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -32,11 +37,43 @@ const ThreadlessCount = "countIf(Settings['max_threads'] = '')"
 // ran without a max_threads setting.
 const Threadless = "toUInt64(Settings['max_threads'] = '')"
 
-// RequireThreadBound fails the test when any measured statement ran at the
-// server's default thread count.
-func RequireThreadBound(tb testing.TB, label string, threadless uint64) {
-	tb.Helper()
-	if threadless > 0 {
-		tb.Fatalf("%s: %d measured statements ran without max_threads, at the server default that follows the host's cores; the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, threadless)
+// ServerDefaultThreads reads the server's own max_threads default on a
+// connection that sends no statement settings.
+func ServerDefaultThreads(ctx context.Context, direct clickhousedriver.Conn) (uint64, error) {
+	var value string
+	if err := direct.QueryRow(ctx, "SELECT value FROM system.settings WHERE name = 'max_threads'").Scan(&value); err != nil {
+		return 0, err
 	}
+	return ParseThreads(value)
+}
+
+// ParseThreads reads a max_threads setting value: "4" or the server's
+// "auto(4)" default.
+func ParseThreads(value string) (uint64, error) {
+	digits := strings.TrimSuffix(strings.TrimPrefix(value, "auto("), ")")
+	threads, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("max_threads value %q: %w", value, err)
+	}
+	return threads, nil
+}
+
+// RequireThreadBound fails the test when measured statements ran with no
+// max_threads setting on a server whose default is not the statement thread
+// count. query_log lists only settings that differ from the server default,
+// so on a server that already defaults to StatementMaxThreads (a 4-core host)
+// a statement sent with max_threads = 4 logs no setting and ran at 4 anyway.
+func RequireThreadBound(tb testing.TB, ctx context.Context, direct clickhousedriver.Conn, label string, threadless uint64) {
+	tb.Helper()
+	if threadless == 0 {
+		return
+	}
+	serverDefault, err := ServerDefaultThreads(ctx, direct)
+	if err != nil {
+		tb.Fatalf("%s: %d measured statements logged no max_threads and the server default is unreadable: %v", label, threadless, err)
+	}
+	if serverDefault == contextpacket.StatementMaxThreads {
+		return
+	}
+	tb.Fatalf("%s: %d measured statements ran without max_threads, at the server default %d that follows the host's cores; the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, threadless, serverDefault)
 }

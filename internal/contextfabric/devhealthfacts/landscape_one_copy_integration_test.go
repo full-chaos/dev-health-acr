@@ -157,7 +157,7 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if err := rows.Scan(&peak, &threadless); err != nil {
 		t.Fatalf("scan memory peak: %v", err)
 	}
-	statementthreads.RequireThreadBound(t, "changed landscape statements", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "changed landscape statements", threadless)
 	if peak == 0 {
 		t.Fatal("memory peak of the changed statements is 0: the measurement did not happen")
 	}

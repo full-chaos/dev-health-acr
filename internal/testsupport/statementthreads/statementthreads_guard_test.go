@@ -94,3 +94,17 @@ func TestMemoryPeakReaderGuardRejectsAnUnboundReader(t *testing.T) {
 		t.Fatal("a peak reader that checks the threads fails the guard")
 	}
 }
+
+func TestParseThreadsReadsSentAndDefaultValues(t *testing.T) {
+	for value, want := range map[string]uint64{"4": 4, "auto(4)": 4, "auto(64)": 64, "1": 1} {
+		got, err := ParseThreads(value)
+		if err != nil || got != want {
+			t.Errorf("ParseThreads(%q) = %d, %v; want %d", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"", "auto()", "auto(x)", "four"} {
+		if _, err := ParseThreads(value); err == nil {
+			t.Errorf("ParseThreads(%q) accepted a value that is not a thread count", value)
+		}
+	}
+}

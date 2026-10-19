@@ -590,7 +590,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
   AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &scalarMisses, &scalarHits, &code, &threadless); scanErr != nil {
 			t.Fatalf("read query_log: %v", scanErr)
 		}
-		statementthreads.RequireThreadBound(t, "link helper caller", threadless)
+		statementthreads.RequireThreadBound(t, ctx, direct, "link helper caller", threadless)
 		return memory, readBytes, readRows, scalarMisses, scalarHits, code, err
 	}
 	for _, caller := range callers {

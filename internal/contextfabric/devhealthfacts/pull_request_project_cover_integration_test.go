@@ -122,7 +122,7 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, ?) > 0`, mark, marker).Scan(&peak, &readRows, &runs, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
-	statementthreads.RequireThreadBound(t, marker, threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, marker, threadless)
 	return peak, readRows, runs
 }
 

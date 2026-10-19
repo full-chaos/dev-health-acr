@@ -92,7 +92,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
   AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, mark, table, fragment).Scan(&s.memory, &s.readRows, &s.scalarMiss, &threadless); err != nil {
 			t.Fatalf("read query_log: %v", err)
 		}
-		statementthreads.RequireThreadBound(t, fragment, threadless)
+		statementthreads.RequireThreadBound(t, ctx, direct, fragment, threadless)
 		return s
 	}
 	// sample sends a statement once unmeasured and three warm times, and

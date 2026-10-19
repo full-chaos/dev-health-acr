@@ -139,7 +139,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 
 	if logged != 1 {
 		t.Fatalf("%s: %d statements on work_unit_investments logged for one run, want 1 (measurement did not happen; run error %v)", c.Name, logged, err)
 	}
-	statementthreads.RequireThreadBound(t, c.Name, threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, c.Name, threadless)
 	return scopeLiteralRun{mib: float64(mem) / (1 << 20), readRows: readRows, rows: rows, err: err}
 }
 

@@ -96,7 +96,7 @@ WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 
 			start.UTC().Format("2006-01-02 15:04:05.000000"), marker).Scan(&statements, &peak, &threadless); err != nil {
 			t.Fatal(err)
 		}
-		statementthreads.RequireThreadBound(t, marker, threadless)
+		statementthreads.RequireThreadBound(t, ctx, direct, marker, threadless)
 		return statements, peak
 	}
 	setCount, setPeak := peakOf("AS ended_links")

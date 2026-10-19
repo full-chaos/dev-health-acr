@@ -62,7 +62,7 @@ GROUP BY normalized_query_hash`, markMicros, filter.Table, filter.QueryContains)
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
 	}
-	statementthreads.RequireThreadBound(t, filter.Table, threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, filter.Table, threadless)
 	return m
 }
 

@@ -78,7 +78,7 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, 'groupUniqArray(work_item_id)') > 0`, mark).Scan(&peak, &readRows, &runs, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
-	statementthreads.RequireThreadBound(t, "native cover", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "native cover", threadless)
 	chunks := (shape.teams + 99) / 100
 	t.Logf("native cover at the largest org shape: %d link rows (%d fallback, %d covered), %d cover statements for one read of %d teams; peak %.2f MiB (bound %.0f), read_rows %d (bound %.0f)",
 		shape.links, fallback, covered, runs, shape.teams, float64(peak)/(1<<20), nativeCoverPeakBoundMiB, readRows, nativeCoverReadRowsPerLink*float64(shape.links))

@@ -94,7 +94,7 @@ SELECT ?, concat(?, toString(number)), 1, 1, 'heuristic', '', ?, ? FROM numbers(
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, pullRequestFallbackSetMarker).Scan(&runPeak, &runResult, &runs, &threadless); err != nil {
 				t.Fatalf("read query_log: %v", err)
 			}
-			statementthreads.RequireThreadBound(t, "pull request fallback set", threadless)
+			statementthreads.RequireThreadBound(t, ctx, direct, "pull request fallback set", threadless)
 			if runs != 2 {
 				t.Fatalf("measurement did not happen: %d project links statements logged, want 2 (the links and the fallback decision)", runs)
 			}

@@ -285,7 +285,7 @@ func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextp
 WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &readRows, &threadless); err != nil {
 				t.Fatalf("%s %s: no query_log row for %s (measurement did not happen): %v", stage, frag.Name, tag, err)
 			}
-			statementthreads.RequireThreadBound(t, stage+" "+frag.Name, threadless)
+			statementthreads.RequireThreadBound(t, ctx, direct, stage+" "+frag.Name, threadless)
 			if mib := float64(mem) / (1 << 20); best.mib < 0 || mib < best.mib {
 				best = linkedFragmentPeak{name: frag.Name, mib: mib, readRows: readRows}
 			}

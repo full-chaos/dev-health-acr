@@ -2,7 +2,6 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -34,7 +33,16 @@ func TestMeasuredClientRunsAtTheStatementThreadsOnRealClickHouse(t *testing.T) {
 	serverDefault, _ := threads(raw)
 	measured, changed := threads(statementthreads.API(raw))
 	t.Logf("STATEMENT-THREADS server default max_threads %s; measured client %s (changed=%d)", serverDefault, measured, changed)
-	if want := fmt.Sprint(contextpacket.StatementMaxThreads); measured != want || changed != 1 {
-		t.Fatalf("the measured client ran at max_threads %s (changed=%d), want %s sent with the statement", measured, changed, want)
+	got, err := statementthreads.ParseThreads(measured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != contextpacket.StatementMaxThreads {
+		t.Fatalf("the measured client ran at max_threads %s, want %d", measured, contextpacket.StatementMaxThreads)
+	}
+	// A setting equal to the server default reads back unchanged; only a
+	// server whose own default is the statement thread count may show that.
+	if defaultThreads, _ := statementthreads.ParseThreads(serverDefault); changed != 1 && defaultThreads != contextpacket.StatementMaxThreads {
+		t.Fatalf("the measured client's max_threads %s is not marked as sent (changed=%d) on a server defaulting to %s", measured, changed, serverDefault)
 	}
 }

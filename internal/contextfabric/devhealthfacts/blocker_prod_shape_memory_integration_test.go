@@ -165,7 +165,7 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 		out = append(out, st)
 		threadless += unbound
 	}
-	statementthreads.RequireThreadBound(t, "blocker statements", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "blocker statements", threadless)
 	return out
 }
 
@@ -265,7 +265,7 @@ GROUP BY normalized_query_hash`, mark)
 			if err := rows.Scan(&hash, &peak, &code, &head, &unbound); err != nil {
 				t.Fatal(err)
 			}
-			statementthreads.RequireThreadBound(t, label, unbound)
+			statementthreads.RequireThreadBound(t, ctx, direct, label, unbound)
 			if code != 0 && code != memoryLimitExceeded {
 				t.Fatalf("%s: statement %q failed with exception code %d, not the memory limit: the control is not measuring what it claims", label, head, code)
 			}
@@ -594,7 +594,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, fragmentMark, "'frag-"+name+"'").Scan(&peak, &readRows, &threadless); err != nil {
 			t.Fatalf("fragment %s: %v", name, err)
 		}
-		statementthreads.RequireThreadBound(t, "fragment "+name, threadless)
+		statementthreads.RequireThreadBound(t, ctx, direct, "fragment "+name, threadless)
 		t.Logf("PRODSHAPE fragment %-18s peak %d bytes (%.1f MiB) read_rows %d", name, peak, float64(peak)/(1<<20), readRows)
 	}
 }

@@ -246,7 +246,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	if err := row.Scan(&c.memory, &c.memoryHigh, &c.readBytes, &statements, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
-	statementthreads.RequireThreadBound(t, "work_graph.v1", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "work_graph.v1", threadless)
 	if statements < 3 || c.memory == 0 || c.readBytes == 0 {
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 	}
@@ -255,7 +255,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	if err := row.Scan(&c.freshnessMemory, &c.freshnessMemoryHigh, &c.freshnessReadBytes, &freshness, &threadless); err != nil {
 		t.Fatalf("read query_log for the freshness read: %v", err)
 	}
-	statementthreads.RequireThreadBound(t, "work_graph.v1 freshness read", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "work_graph.v1 freshness read", threadless)
 	if freshness < 3 || c.freshnessMemory == 0 {
 		t.Fatalf("freshness measurement did not happen: %d statements, %+v", freshness, c)
 	}
@@ -264,7 +264,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	if err := row.Scan(&c.gateMemory, &c.gateMemoryHigh, &c.gateReadBytes, &gates, &threadless); err != nil {
 		t.Fatalf("read query_log for the gate: %v", err)
 	}
-	statementthreads.RequireThreadBound(t, "work_graph.v1 issue gate", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "work_graph.v1 issue gate", threadless)
 	if gates < 3 || c.gateMemory == 0 || c.gateReadBytes == 0 {
 		t.Fatalf("gate measurement did not happen: %d statements, %+v", gates, c)
 	}

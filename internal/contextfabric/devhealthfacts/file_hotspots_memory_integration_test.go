@@ -44,7 +44,7 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 	if statements == 0 {
 		t.Fatalf("measurement did not happen: no hotspot statement logged; recent:\n%s", recentServerStatements(ctx, direct))
 	}
-	statementthreads.RequireThreadBound(t, "file hotspots", threadless)
+	statementthreads.RequireThreadBound(t, ctx, direct, "file hotspots", threadless)
 	return cost
 }
 

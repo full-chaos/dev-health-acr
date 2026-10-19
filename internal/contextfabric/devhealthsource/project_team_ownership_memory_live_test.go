@@ -150,7 +150,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 				t.Fatal(err)
 			}
 			_ = r.Close()
-			statementthreads.RequireThreadBound(t, stage+" "+frag.Name, threadless)
+			statementthreads.RequireThreadBound(t, f.ctx, f.h.direct, stage+" "+frag.Name, threadless)
 			mib := float64(mem) / (1 << 20)
 			if run < 0 {
 				continue

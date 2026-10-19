@@ -47,7 +47,7 @@ func blockerStatusPeaks(t *testing.T, ctx context.Context, query contextpacket.C
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'blocker_status') > 0`, mark).Scan(&peak, &threadless); err != nil || peak == 0 {
 			t.Fatalf("run %d: statement not found in query_log (measurement did not happen): %v", run, err)
 		}
-		statementthreads.RequireThreadBound(t, "blocker status", threadless)
+		statementthreads.RequireThreadBound(t, ctx, direct, "blocker status", threadless)
 		peaks = append(peaks, peak)
 	}
 	slices.Sort(peaks)
