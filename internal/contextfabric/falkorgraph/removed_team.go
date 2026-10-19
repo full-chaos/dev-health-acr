@@ -14,6 +14,9 @@ import (
 
 // removedTeamProperty is the node property the team projector writes from
 // teams.gone_at: set when a sync proved the team gone at its provider.
+// maxLoggedRemovedTeams bounds the ids named on the lookup line.
+const maxLoggedRemovedTeams = 10
+
 const removedTeamProperty = propPropertyPrefix + "gone_at"
 
 // removedCommittedTeams returns the committed team subjects whose node carries
@@ -61,6 +64,10 @@ func (a *Adapter) removedCommittedTeams(ctx context.Context, key string, princip
 			}
 		}
 	}
-	slog.Default().InfoContext(ctx, "context_fabric: removed team lookup", "teams", len(teams), "removed", len(removed))
+	removedIDs := make([]string, 0, min(len(removed), maxLoggedRemovedTeams))
+	for _, subject := range removed[:min(len(removed), maxLoggedRemovedTeams)] {
+		removedIDs = append(removedIDs, subject.CanonicalID)
+	}
+	slog.Default().InfoContext(ctx, "context_fabric: removed team lookup", "teams", len(teams), "removed", len(removed), "removed_ids", contextfabric.SanitizeLogStrings(removedIDs))
 	return removed, false
 }

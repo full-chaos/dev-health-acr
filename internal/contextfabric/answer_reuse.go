@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
@@ -862,6 +864,9 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// result's own identifier and generation time, not this call's).
 	// Reused is per-serving metadata, set only on this in-memory copy;
 	// nothing about the stored row is touched.
+	if verdict.ContainmentRan {
+		candidate = withReusedRemovedTeamState(candidate, verdict.RemovedTeams)
+	}
 	candidate.Reused = true
 	e.recordReuseOutcome(ctx, principal, reuseOutcome)
 	// CHAOS-3888: telemetry-only -- candidate.RequestID (served to the
@@ -1029,7 +1034,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// be contained in it and containment failed with certainty for any
 	// stored answer carrying candidates. See graphContextEvidenceSurface.
 	partition := partitionMissingRefs(candidate, graphContext)
-	verdict := reuseRecheckVerdict{ContainmentRan: true, Partition: partition, Outcome: AnswerReuseHit}
+	verdict := reuseRecheckVerdict{ContainmentRan: true, Partition: partition, Outcome: AnswerReuseHit, RemovedTeams: graphContext.RemovedTeams}
 	if partition.MissingCitation {
 		// A missing TOP-LEVEL citation is not a narrowing to disclose --
 		// the answer's own cited evidence is gone, which makes it a
@@ -1055,6 +1060,9 @@ type reuseRecheckVerdict struct {
 	// there was nothing to recheck) -- not that containment passed.
 	ContainmentRan bool
 	Partition      reuseContainmentPartition
+	// RemovedTeams are the stored answer's committed teams the fresh recheck
+	// proves removed at their source; meaningful only when ContainmentRan.
+	RemovedTeams []SubjectRef
 }
 
 // recordReuseContainment emits the containment measurement: how many refs
@@ -1169,4 +1177,26 @@ func requestHintsCommittedBy(hints []SubjectHint, committed []SubjectRef) bool {
 		}
 	}
 	return true
+}
+
+// withReusedRemovedTeamState makes the reused copy state the removed-team
+// limitation exactly when the fresh recheck proves a committed team removed:
+// the stored answer was composed under an earlier graph state. Nothing else
+// of the stored answer changes, and a copy that already agrees is returned
+// as stored.
+func withReusedRemovedTeamState(candidate InvestigationResult, removed []SubjectRef) InvestigationResult {
+	sentence := contractsv1.ContextFabricRemovedTeamLimitation
+	has := slices.Contains(candidate.Limitations, sentence)
+	want := len(removed) > 0
+	if has == want {
+		return candidate
+	}
+	if has {
+		candidate.Limitations = slices.DeleteFunc(slices.Clone(candidate.Limitations), func(l string) bool { return l == sentence })
+		return candidate
+	}
+	composed, displaced := appendBoundedLimitations(candidate.Limitations, []string{sentence})
+	candidate.Limitations = composed
+	candidate.LimitationsDisplaced += displaced
+	return candidate
 }
