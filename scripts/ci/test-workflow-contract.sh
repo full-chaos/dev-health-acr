@@ -1677,6 +1677,7 @@ assert_check_fails 'a covering race job stopped keeping its test2json events' ch
   "$(mutate_dedup no-json 'RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh '"'"'devhealthfacts (mid third)'"'"'' 'GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh '"'"'devhealthfacts (mid third)'"'"'')"
 assert_check_fails 'a covering race job stopped uploading its events' check_observed_race_dedup \
   "$(mutate_dedup no-upload 'name: race-json-race-devhealthsource-heavy' 'name: race-json-other')"
+# shellcheck disable=SC2016
 assert_check_fails 'verify stopped rechecking the dropped legs' check_observed_race_dedup \
   "$(mutate_dedup no-recheck 'again="$(scripts/ci/observed-race-dedup.sh decide' 'again="$(true decide')"
 # shellcheck disable=SC2016
