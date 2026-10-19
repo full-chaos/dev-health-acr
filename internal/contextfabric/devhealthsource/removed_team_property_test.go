@@ -10,7 +10,7 @@ func TestARemovedTeamCarriesTheTimeItWasProvedGoneAndStaysActive(t *testing.T) {
 	updated := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
 	const goneAt = "2026-10-09 17:30:00.000000"
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM teams AS tm FINAL", rows: [][]any{
+		{match: "ifNull(toString(tm.gone_at), '')", rows: [][]any{
 			{"gh:gone-team", "Gone Team", "", "github", "gone-team", uint8(1), goneAt, updated, []string(nil), []string(nil)},
 			{"gh:live-team", "Live Team", "", "github", "live-team", uint8(1), "", updated, []string(nil), []string(nil)},
 		}},
@@ -28,7 +28,7 @@ func TestARemovedTeamCarriesTheTimeItWasProvedGoneAndStaysActive(t *testing.T) {
 		t.Fatalf("a removed team's validity window stays open, got ValidTo=%v", gone.ValidTo)
 	}
 	live := entityByCanonicalID(t, batch, "team:gh:live-team")
-	if _, present := live.Properties["gone_at"]; present {
-		t.Fatalf("a team never proved gone carries no gone_at property, got %+v", live.Properties["gone_at"])
+	if !live.Properties["gone_at"].Null {
+		t.Fatalf("a team not proved gone carries an explicit null gone_at so a re-projection clears a stale one, got %+v", live.Properties["gone_at"])
 	}
 }
