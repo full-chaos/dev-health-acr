@@ -29,8 +29,10 @@ type opsStandIn struct {
 	// fallback is the platform_model_fallback field; nil leaves it out of the
 	// body, as an ops build without the field sends it.
 	fallback *bool
-	// llmConfig is "saved", "none" (404 + X-Org-Llm-Config: none) or
-	// "gate_closed" (that 404 plus the byo_llm gate-closed reason header).
+	// llmConfig is "saved", "none" (404 + X-Org-Llm-Config: none),
+	// "gate_closed" (that 404 plus the byo_llm gate-closed reason header) or
+	// "no_investigate" (that 404 plus the reason that the org's saved BYO
+	// keys are for other purposes only).
 	llmConfig string
 }
 
@@ -52,6 +54,11 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "gate_closed":
 			w.Header().Set("X-Org-Llm-Config", "none")
 			w.Header().Set("X-Org-Llm-Config-Reason", "byo_llm_gate_closed")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+		case "no_investigate":
+			w.Header().Set("X-Org-Llm-Config", "none")
+			w.Header().Set("X-Org-Llm-Config-Reason", "byo_no_investigate_config")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
 		default:
@@ -176,6 +183,8 @@ func TestPlatformModelIsDrawnOnlyWithTheFeatureAndTheFallbackGrant(t *testing.T)
 		{name: "acr_service_model and the fallback grant with no config run on the platform model", ops: opsStandIn{serviceModel: true, fallback: boolRef(true), llmConfig: "none"}, status: http.StatusOK, basis: "platform_model_fallback", deployment: 2},
 		{name: "the fallback grant alone with no config is refused", ops: opsStandIn{fallback: boolRef(true), llmConfig: "none"}, status: http.StatusForbidden, reason: "service_model_not_entitled", basis: "refused"},
 		{name: "nothing held and no config is refused", ops: opsStandIn{llmConfig: "none"}, status: http.StatusForbidden, reason: "service_model_not_entitled", basis: "refused"},
+		{name: "BYO keys for other purposes only are refused with their reason", ops: opsStandIn{serviceModel: true, llmConfig: "no_investigate"}, status: http.StatusForbidden, reason: "byo_no_investigate_config", basis: "byo_no_investigate_config"},
+		{name: "BYO keys for other purposes only are refused even with both flags", ops: opsStandIn{serviceModel: true, fallback: boolRef(true), llmConfig: "no_investigate"}, status: http.StatusForbidden, reason: "byo_no_investigate_config", basis: "byo_no_investigate_config"},
 		{name: "saved config behind a closed gate is refused with its reason", ops: opsStandIn{serviceModel: true, llmConfig: "gate_closed"}, status: http.StatusForbidden, reason: "own_model_gate_closed", basis: "own_model_gate_closed"},
 		{name: "saved config behind a closed gate is refused even with the fallback grant", ops: opsStandIn{serviceModel: true, fallback: boolRef(true), llmConfig: "gate_closed"}, status: http.StatusForbidden, reason: "own_model_gate_closed", basis: "own_model_gate_closed"},
 	} {

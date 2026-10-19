@@ -105,3 +105,31 @@ func TestOrgLLMConfigPlainNoConfigStaysNoBYO(t *testing.T) {
 		t.Fatalf("found = %v err = %v, want no BYO and no error", found, err)
 	}
 }
+
+// ops marks the 404 for an org whose saved BYO keys are for other purposes
+// only (none resolves for investigations). It is neither "no BYO" nor
+// "unusable", and it is cached like any other ops answer.
+func TestOrgLLMConfigNoInvestigateConfigIsItsOwnErrorAndCached(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("X-Org-Llm-Config", "none")
+		w.Header().Set("X-Org-Llm-Config-Reason", "byo_no_investigate_config")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+		if found || err == nil || errors.Is(err, entitlements.ErrLLMConfigUnusable) || errors.Is(err, entitlements.ErrLLMConfigGateClosed) {
+			t.Fatalf("read %d: found = %v err = %v, want its own error, not unusable and not gate closed", i, found, err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("ops calls = %d, want 1 (the answer is cached)", got)
+	}
+}
