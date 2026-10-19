@@ -129,7 +129,7 @@ func ItemAccountingStageLogVocabulary() []string {
 	}, BudgetAssertStageLogVocabulary()...)
 }
 
-// LedgerDisagreementPattern is the shape of what an item ledger names: empty for a reconciled ledger, a charged collection with a gap ordinal, a charged collection or an item bucket, an allocator disagreement, or the prefixed token of an invalid debit.
+// LedgerDisagreementPattern is the shape of what an item ledger names: empty for a reconciled ledger, a charged collection with a gap ordinal, a charged collection or an item bucket, an allocator disagreement, or the prefixed value of an invalid debit, which is the forged collection or bucket verbatim and so any non-space text.
 func LedgerDisagreementPattern() string {
 	collections := contractsv1.ContextFabricChargedCollectionVocabulary()
 	buckets := contractsv1.ContextFabricItemBucketVocabulary()
@@ -149,7 +149,7 @@ func LedgerDisagreementPattern() string {
 		}
 	}
 	return "^(|(" + alternation(collectionNames) + ")(#[0-9]+)?|" + alternation(bucketNames) +
-		"|allocation:(" + alternation(allocationNames) + ")|(collection|bucket):[a-z_]*)$"
+		"|allocation:(" + alternation(allocationNames) + ")|(collection|bucket):\\S*)$"
 }
 
 // RequirementOutcomeTransitionCauseLogVocabulary is the closed set of a wire cause on the transition line, or none.
