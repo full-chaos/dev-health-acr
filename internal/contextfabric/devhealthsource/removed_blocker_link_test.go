@@ -81,7 +81,7 @@ func TestRemovedLinkSetOverTheBoundIsDisclosed(t *testing.T) {
 		}
 		tables[index].rows = nil
 	}
-	tables = append([]fakeTable{{match: endedLinksMarker, rows: [][]any{{[]string{"AA.BB.CC.1"}, uint64(relationcurrent.MaxEndedLinks + 5), uint64(3)}}}}, tables...)
+	tables = append([]fakeTable{{match: endedLinksMarker, rows: [][]any{{[]string{"AA.BB.CC.1"}, uint64(relationcurrent.MaxEndedLinks + 5), uint64(3), uint64(0)}}}}, tables...)
 	var logged bytes.Buffer
 	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
 	if err != nil {
@@ -130,7 +130,28 @@ func TestRemovedLinkSetReadUsesTheProductionBoundByDefault(t *testing.T) {
 	if len(recorder.statements) != 1 {
 		t.Fatalf("%d removed-link set reads in one call, want exactly 1", len(recorder.statements))
 	}
-	if want := relationcurrent.EndedLinksSQL(20000); recorder.statements[0] != want {
+	if want := relationcurrent.EndedLinksSQL(20000, []string{"external_issue_key"}); recorder.statements[0] != want {
 		t.Fatalf("the removed-link set was read with a bound other than 20000:\n%s", recorder.statements[0])
+	}
+}
+
+// Removed links of a kind whose writer the row does not show are kept, and
+// the kept count is disclosed.
+func TestRemovedLinksKeptForAnUnknownWriterAreDisclosed(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	tables := append([]fakeTable{{match: endedLinksMarker, rows: [][]any{{[]string{}, uint64(0), uint64(0), uint64(4)}}}}, baseTables(at)...)
+	var logged bytes.Buffer
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName}); err != nil {
+		t.Fatal(err)
+	}
+	line := logged.String()
+	if !strings.Contains(line, "removed-link retraction left out") || !strings.Contains(line, "kept_links=4") || !strings.Contains(line, "writer is not known") {
+		t.Fatalf("the kept links were not disclosed: %q", line)
 	}
 }

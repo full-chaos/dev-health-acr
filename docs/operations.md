@@ -663,6 +663,15 @@ watermark:
   one pair are one edge. An edge projected from an unmapped spelling that is
   not already trimmed lower case, and every edge of a `BLOCKED_BY` or
   `IS_BLOCKED_BY` row, carries the old id until `acr-projector rebuild --org <organization-id>` runs.
+- `ClickHouseSourceVersion` v18 → v19: a removed dependency link of any type
+  (`relates_to`, `duplicates` and the rest, not only `blocks`) is retracted by
+  the relation-current rule. A non-blocks link ends by its stored
+  `relation_writer`, else only when both items were read again after it. Rows
+  of a raw kind whose writer the row does not show (`jira_dev_status`,
+  `linear_attachment`, `github_closing_reference`, `gitlab_closing_reference`,
+  `github_comment_linear_url`) keep their edge and are counted in the
+  `removed-link retraction left out` log line. Edges of links removed before
+  v19 stay until `acr-projector rebuild --org <organization-id>` runs.
 - `TeamsProjectsSourceVersion` v13 → v14: a team owning more than 200
   repositories is no longer quarantined (the entity authorization bound is
   5000), so its `team_repo_ownership` edges project.

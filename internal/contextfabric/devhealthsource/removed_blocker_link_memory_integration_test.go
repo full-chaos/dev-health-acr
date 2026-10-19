@@ -13,10 +13,11 @@ import (
 )
 
 // The projector caps every statement at 192 MiB. The relation-current rule
-// needs the read times of every blocker endpoint of the organization, so it is
+// needs the read times of every dependency endpoint of the organization (half
+// the seeded links are blocks, half relates_to), so it is
 // evaluated by ONE statement per projection call (the removed-link set); the
 // page statements receive only that set. This row drains a seeded organization
-// of blocker links through the production statements under the cap, at two
+// of dependency links through the production statements under the cap, at two
 // sizes, and reports the two statements apart: the set statement's peak and
 // the page statements' peak.
 func TestRemovedBlockerLinkRuleStaysUnderTheProjectorStatementCap(t *testing.T) {
@@ -50,12 +51,15 @@ func measureRuleStatements(t *testing.T, ctx context.Context, query contextpacke
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
 SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? FROM numbers(?)`, repo, org, at, at, uint64(2*links))
 	mustExec(t, ctx, direct, `INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, org_id, last_synced)
-SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY-', toString(2 * number + 1)), 'blocks', 'blocks', ?, ? + toIntervalSecond(1 + number % 3600) FROM numbers(?)`, org, at, uint64(links))
-	// Every tenth blocker syncs again without its link: those links are gone.
+SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY-', toString(2 * number + 1)), if(number % 2 = 0, 'blocks', 'relates_to'), if(number % 2 = 0, 'blocks', 'relates to'), ?, ? + toIntervalSecond(1 + number % 3600) FROM numbers(?)`, org, at, uint64(links))
+	// Both items of every tenth link sync again without it: those links are gone.
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
-SELECT concat('jira:PROJECTKEY-', toString(2 * number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? + toIntervalHour(4) FROM numbers(?) WHERE number % 10 = 0`, repo, org, at, at, uint64(links))
+SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? + toIntervalHour(4) FROM numbers(?) WHERE intDiv(number, 2) % 10 = 0`, repo, org, at, at, uint64(2*links))
 
-	capped := contextpacket.NewMemoryCappedQueryClient(query, cap)
+	// The projector sends max_threads with every statement (cmd/acr-projector
+	// runtime.go); without it the server's own default applies, which follows
+	// the host's cores, and the peak would measure the host, not the statement.
+	capped := contextpacket.NewMemoryCappedQueryClient(query, cap, contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))
 	source, err := devhealthsource.NewClickHouseProjectionSource(capped)
 	if err != nil {
 		t.Fatal(err)

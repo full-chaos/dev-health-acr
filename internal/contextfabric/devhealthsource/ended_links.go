@@ -9,7 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
-// endedLinks is the set of blocks relations the provider no longer reports,
+// endedLinks is the set of dependency links the provider no longer reports,
 // with the time each ended. The rule needs the read times of every blocker
 // endpoint of the organization, so it is evaluated once per projection call
 // and the page statements receive only its result (the removed links), never
@@ -58,15 +58,15 @@ func endedLinksFor(ctx context.Context, client contextpacket.ClickHouseQueryClie
 }
 
 func readEndedLinks(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, bound int) (*endedLinks, error) {
-	rows, err := client.Query(ctx, relationcurrent.EndedLinksSQL(bound), []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	rows, err := client.Query(ctx, relationcurrent.EndedLinksSQL(bound, ignoredDependencyTypeNames()), []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	links := &endedLinks{keys: []string{}}
-	var total, twinLive uint64
+	var total, twinLive, unknownWriter uint64
 	for rows.Next() {
-		if err := rows.Scan(&links.keys, &total, &twinLive); err != nil {
+		if err := rows.Scan(&links.keys, &total, &twinLive, &unknownWriter); err != nil {
 			return nil, err
 		}
 	}
@@ -77,6 +77,11 @@ func readEndedLinks(ctx context.Context, client contextpacket.ClickHouseQueryCli
 		startLogger(ctx).InfoContext(ctx, "devhealthsource removed-link retraction left out",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "left_out_links", twinLive,
 			"reason", "a twin spelling of the same edge is still reported")
+	}
+	if unknownWriter > 0 {
+		startLogger(ctx).InfoContext(ctx, "devhealthsource removed-link retraction left out",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "kept_links", unknownWriter,
+			"reason", "the link kind's writer is not known from the row, so the edge is kept")
 	}
 	if total > uint64(len(links.keys)) {
 		startLogger(ctx).WarnContext(ctx, "devhealthsource removed-link set cut",
