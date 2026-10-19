@@ -17,6 +17,7 @@ const (
 	byoLLMGateResource               = "byo_llm"
 	serviceModelNotEntitledMessage   = "Investigations on the service model are not enabled for this organization"
 	ownModelGateClosedMessage        = "This organization's own model is saved but not enabled for its plan"
+	aiFeaturesTurnedOffMessage       = "ACR AI features are turned off for this organization"
 )
 
 // serviceModelBasis is why a turn may, or may not, use the deployment model.
@@ -27,6 +28,7 @@ const (
 	serviceModelBasisPlatformModelFallback serviceModelBasis = "platform_model_fallback"
 	serviceModelBasisOwnModel              serviceModelBasis = "own_model"
 	serviceModelBasisOwnModelGateClosed    serviceModelBasis = "own_model_gate_closed"
+	serviceModelBasisAIFeaturesTurnedOff   serviceModelBasis = "ai_features_turned_off"
 	serviceModelBasisClientModel           serviceModelBasis = "client_model"
 	serviceModelBasisRefused               serviceModelBasis = "refused"
 )
@@ -48,10 +50,13 @@ const (
 // serviceModelDecision decides which model an investigation may run on, for
 // every caller (credential and web assertion alike):
 //   - the caller's own interpretation and synthesis: no model is decided;
-//   - a saved organization model configuration: the organization's own model,
-//     whatever the flags (the deployment model is withheld);
 //   - a saved configuration behind a closed byo_llm gate: refused with its own
 //     reason, whatever the flags;
+//   - a saved organization model configuration: the organization's own model
+//     when acr_service_model (ops serves the effective value: the org's
+//     override, else ON for a saved configuration) is ON, with the deployment
+//     model withheld; refused as turned off when it is OFF, and answered as
+//     unavailable when it cannot be read;
 //   - no configuration: the deployment model only when the deployment is open
 //     or the organization holds both acr_service_model (AI features on) and
 //     platform_model_fallback (the platform-admin grant); otherwise refused,
@@ -75,10 +80,18 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		return "", false, err
 	}
 	switch {
-	case state == ownModelSaved:
-		return serviceModelBasisOwnModel, false, nil
 	case state == ownModelGateClosed:
 		return serviceModelBasisOwnModelGateClosed, false, nil
+	case state == ownModelSaved:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			return "", false, errServiceModelEntitlementUnavailable
+		case !on:
+			return serviceModelBasisAIFeaturesTurnedOff, false, nil
+		default:
+			return serviceModelBasisOwnModel, false, nil
+		}
 	case granted:
 		return basis, true, nil
 	case featureErr != nil:
@@ -111,6 +124,17 @@ func (a *App) deploymentModelGrant(ctx context.Context, principal storage.Princi
 	return "", false, nil
 }
 
+// serviceModelOn reports whether ACR AI features are on for the organization:
+// the deployment is open, or ops serves acr_service_model ON (the effective
+// value: the org's explicit override, else ON for a saved BYO configuration,
+// else the plan or admin state).
+func (a *App) serviceModelOn(ctx context.Context, principal storage.Principal) (bool, error) {
+	if a.runtime.ServiceModelOpen {
+		return true, nil
+	}
+	return a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+}
+
 // missingPlatformModelGrant names the flag a refused organization lacks, for
 // the audit row: acr_service_model first, then platform_model_fallback.
 func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.Principal) string {
@@ -121,9 +145,9 @@ func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.P
 }
 
 // serviceModelListable reports whether investigate_question can serve this
-// caller: the organization has a saved model configuration (a closed byo_llm
-// gate included, so a call answers its reason), or the deployment model is
-// granted. A read failure keeps the tool listed, because the call itself
+// caller: the organization has a saved model configuration with
+// acr_service_model ON (or behind a closed byo_llm gate, so a call answers its
+// reason), or the deployment model is granted. A read failure keeps the tool listed, because the call itself
 // still answers the typed refusal or unavailability.
 func (a *App) serviceModelListable(ctx context.Context, principal storage.Principal) bool {
 	listed, reason := true, "granted"
@@ -131,10 +155,18 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 	switch {
 	case ownErr != nil:
 		reason = "model_config_unreadable"
-	case state == ownModelSaved:
-		reason = "own_model"
 	case state == ownModelGateClosed:
 		reason = "own_model_gate_closed"
+	case state == ownModelSaved:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			reason = "entitlement_unreadable"
+		case !on:
+			listed, reason = false, "ai_features_turned_off"
+		default:
+			reason = "own_model"
+		}
 	default:
 		if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
 			reason = "entitlement_unreadable"
@@ -197,6 +229,10 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	case serviceModelBasisOwnModelGateClosed:
 		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
 		writeError(w, r, http.StatusForbidden, "feature_not_enabled", ownModelGateClosedMessage, false, map[string]any{"reason": contractsv1.ContextFabricOwnModelGateClosedReason})
+		return nil, false
+	case serviceModelBasisAIFeaturesTurnedOff:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", serviceModelEntitlement, "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", aiFeaturesTurnedOffMessage, false, map[string]any{"reason": contractsv1.ContextFabricAIFeaturesTurnedOffReason})
 		return nil, false
 	}
 	if !allowed {

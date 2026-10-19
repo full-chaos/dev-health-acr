@@ -394,6 +394,8 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 			apiErr.Reason = contractsv1.ContextFabricServiceModelNotEntitledReason
 		case contractsv1.ContextFabricOwnModelGateClosedReason:
 			apiErr.Reason = contractsv1.ContextFabricOwnModelGateClosedReason
+		case contractsv1.ContextFabricAIFeaturesTurnedOffReason:
+			apiErr.Reason = contractsv1.ContextFabricAIFeaturesTurnedOffReason
 		}
 	}
 	if detail.Code == "rate_limited" && status == 429 {

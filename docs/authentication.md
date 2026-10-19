@@ -3,7 +3,7 @@
 ACR product entitlement and ACR API authentication are separate controls.
 
 - `agent_context_runtime` answers whether an organization purchased or was granted the product.
-- `acr_service_model` (AI features on) and `platform_model_fallback` (a platform admin grant) together let an organization with no model configuration of its own run an investigation on the service's own model. An organization with a saved configuration always runs on its own model; the caller can always supply its own interpretation and synthesis (`ACR_MCP_SERVICE_MODEL_DEFAULT`, `docs/service-shell.md`).
+- `acr_service_model` (AI features on) and `platform_model_fallback` (a platform admin grant) together let an organization with no model configuration of its own run an investigation on the service's own model. An organization with a saved configuration runs on its own model while `acr_service_model` is ON (ops serves ON for a saved configuration unless the organization's own override says OFF; OFF refuses with `ai_features_turned_off`); the caller can always supply its own interpretation and synthesis (`ACR_MCP_SERVICE_MODEL_DEFAULT`, `docs/service-shell.md`).
 - An `fcacr_` credential identifies a machine client and grants explicit repository and operation scopes.
 - A Dev Health self-hosted license key is never accepted as an ACR bearer credential.
 

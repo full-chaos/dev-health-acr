@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: d06178cf418fb288c77a72637c3059007add6285f053a8d2dcb6574c54ec6be5
+# canonical-content-sha256: 903f48b284dc5960c706892d9aaeeffdb01d1b1725cc042c58785fa3aea2099b
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1034,10 +1034,11 @@ components:
                             enum:
                               - "service_model_not_entitled"
                               - "own_model_gate_closed"
+                              - "ai_features_turned_off"
                         type: "object"
                     type: "object"
                 type: "object"
-      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. No model call was made and nothing was stored in either case. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Credential and web assertion callers are decided on the same rule."
+      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. feature_not_enabled with details.reason ai_features_turned_off: the organization has a saved model configuration but acr_service_model is OFF (its own override), so ACR AI features are turned off for it. No model call was made and nothing was stored in either case. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Credential and web assertion callers are decided on the same rule."
     ContextFabricInvestigationUnprocessable:
       content:
         application/json:

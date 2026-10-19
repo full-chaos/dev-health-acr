@@ -145,7 +145,7 @@ func TestGateBasisBindsTheTurnAcrossConfigReadSequences(t *testing.T) {
 // before the engine resolves a runtime never falls through to the deployment
 // model: the turn fails as model-unavailable with zero deployment calls.
 func TestOwnModelDeletedAfterTheGateNeverFallsBackToTheDeploymentModel(t *testing.T) {
-	rig := newResolverRouteRig(t, &serviceModelGrants{})
+	rig := newResolverRouteRig(t, &serviceModelGrants{feature: true})
 	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
 	if interprets, synthesizes := rig.model.counts(); interprets != 0 || synthesizes != 0 {
 		t.Fatalf("deployment model calls = interpret %d synthesize %d, want 0 and 0", interprets, synthesizes)

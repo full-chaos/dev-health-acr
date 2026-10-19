@@ -12,3 +12,9 @@ const ContextFabricServiceModelNotEntitledReason = "service_model_not_entitled"
 // saved model configuration is behind a closed byo_llm gate (for example a
 // lapsed plan). The service's own model is never used in its place.
 const ContextFabricOwnModelGateClosedReason = "own_model_gate_closed"
+
+// ContextFabricAIFeaturesTurnedOffReason is details.reason on the 403
+// feature_not_enabled refusal of an investigation for an organization that has
+// a saved model configuration but acr_service_model OFF (its own override):
+// ACR AI features are turned off for it. No model is used.
+const ContextFabricAIFeaturesTurnedOffReason = "ai_features_turned_off"

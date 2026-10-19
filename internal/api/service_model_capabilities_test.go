@@ -27,7 +27,7 @@ func TestCapabilitiesListInvestigateQuestionOnlyWhereTheServiceModelServes(t *te
 		{name: "fallback grant only", grants: &serviceModelGrants{fallback: true}, listed: false},
 		{name: "own model with the feature off", grants: &serviceModelGrants{fallback: true}, configs: ownModelConfigs{found: true}, listed: false},
 		{name: "own model behind a closed gate", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigGateClosed}, listed: true},
-		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, listed: true},
+		{name: "own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, listed: true},
 		{name: "entitlement unreadable", grants: &serviceModelGrants{err: errors.New("down")}, listed: true},
 		{name: "own model unreadable", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: errors.New("down")}, listed: true},
 	} {

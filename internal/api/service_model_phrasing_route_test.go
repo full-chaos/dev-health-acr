@@ -310,10 +310,10 @@ func windowGateCandidateOptions(t *testing.T, envelope contractsv1.ContextFabric
 	return needs.CandidateOptions
 }
 
-// An organization served on its own model without the feature is phrased on
-// its own model, never the deployment's.
-func TestWindowGateClarificationOnTheOwnModelWithoutTheFeatureIsPhrasedOnTheOwnModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{}, true)
+// An organization served on its own model without the fallback grant is
+// phrased on its own model, never the deployment's.
+func TestWindowGateClarificationOnTheOwnModelWithoutTheFallbackGrantIsPhrasedOnTheOwnModel(t *testing.T) {
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, true)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
