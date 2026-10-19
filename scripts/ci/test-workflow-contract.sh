@@ -1024,6 +1024,35 @@ check_observed_race_dedup() {
   return "$status"
 }
 
+# Every race job keeps its test2json events. Without them the per-test cost
+# of a package under -race is unmeasurable (a timed-out package prints no
+# per-test time). Each link, removed, leaves a run green. For EVERY job whose
+# key is `race` or `race-*` (so a new race job is covered the day it is added):
+#   - it must run scripts/ci/run-isolated-budget.sh with
+#     RACE_JSON_OUT=.tmp/race-json/race.json;
+#   - it must upload .tmp/race-json/race.json as race-json-<job key> (the
+#     matrix job `race` as race-json-race-shard-<n>) on if: always().
+check_race_json_all_jobs() {
+  local file="$1" status=0 block job want n=0
+  # shellcheck disable=SC2016
+  while IFS= read -r job; do
+    n=$((n + 1))
+    block="$(job_block "$file" "$job")"
+    want="race-json-$job"
+    [ "$job" = race ] && want='race-json-race-shard-${{ matrix.shard }}'
+    grep -qE '^ {10}RACE_JSON_OUT=\.tmp/race-json/race\.json (GOTEST_TIMEOUT=("[^"]+"|[^ ]+) )?scripts/ci/run-isolated-budget\.sh ' <<<"$block" || {
+      printf '%s does not keep its test2json events (RACE_JSON_OUT)\n' "$job" >&2; status=1; }
+    grep -qF "name: $want" <<<"$block" || {
+      printf '%s does not upload %s\n' "$job" "$want" >&2; status=1; }
+    awk -v n="name: $want" 'function end() { if (index(step, n) && step !~ /\n        if: always\(\)\n/) bad=1; step="" } /^      - / { end() } { step = step "\n" $0 } END { end(); exit bad ? 1 : 0 }' <<<"$block" || {
+      printf '%s uploads its race-json artifact without if: always()\n' "$job" >&2; status=1; }
+    grep -qF 'path: .tmp/race-json/race.json' <<<"$block" || {
+      printf '%s does not upload .tmp/race-json/race.json\n' "$job" >&2; status=1; }
+  done < <(grep -oE '^  race(-[a-z0-9-]+)?:' "$file" | sed -e 's/^  //' -e 's/:$//')
+  [ "$n" -ge 11 ] || { printf 'expected at least 11 race job keys (race + 10 isolated), found %s\n' "$n" >&2; status=1; }
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -1048,6 +1077,7 @@ run_all_checks() {
   check_verify_reads_plan "$file"
   check_reach_gating "$file"
   check_observed_race_dedup "$file"
+  check_race_json_all_jobs "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -1685,6 +1715,22 @@ assert_check_fails 'verify stopped rechecking the dropped legs' check_observed_r
 # shellcheck disable=SC2016
 assert_check_fails 'verify merge expects the plan unit_skip, not the confirmed drops' check_reports_steps \
   "$(mutate_dedup absent "-absent '\${{ steps.dedup.outputs.absent }}'" "-absent '\${{ needs.plan.outputs.unit_skip }}'" all)"
+
+# shellcheck disable=SC2016
+assert_check_fails 'the race shards stopped keeping their test2json events' check_race_json_all_jobs \
+  "$(mutate_dedup shard-no-json 'RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$(make -s print-gotest-timeout)" scripts/ci/run-isolated-budget.sh' 'GOTEST_TIMEOUT="$(make -s print-gotest-timeout)" scripts/ci/run-isolated-budget.sh')"
+# shellcheck disable=SC2016
+assert_check_fails 'the race shards stopped uploading their events' check_race_json_all_jobs \
+  "$(mutate_dedup shard-no-upload 'name: race-json-race-shard-${{ matrix.shard }}' 'name: race-json-other')"
+# shellcheck disable=SC2016
+assert_check_fails 'the race shards keep their events only when they succeed' check_race_json_all_jobs \
+  "$(mutate_dedup shard-upload-success $'        if: always()\n        with:\n          name: race-json-race-shard-${{ matrix.shard }}' $'        if: success()\n        with:\n          name: race-json-race-shard-${{ matrix.shard }}')"
+assert_check_fails 'race-devhealthschema went back to plain make test-race' check_race_json_all_jobs \
+  "$(mutate_dedup schema-plain "RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=900s scripts/ci/run-isolated-budget.sh 'devhealthschema (isolated scope)'" "GOTEST_TIMEOUT=900s scripts/ci/run-isolated-budget.sh 'devhealthschema (isolated scope)'")"
+assert_check_fails 'a factoracle race job stopped uploading its events' check_race_json_all_jobs \
+  "$(mutate_dedup factoracle-no-upload 'name: race-json-race-factoracle-heavy' 'name: race-json-other')"
+assert_check_fails 'a NEW race job without -json capture and upload' check_race_json_all_jobs \
+  "$(mutate_dedup new-race-job $'\n  build:\n    runs-on: ubuntu-latest' $'\n  race-newpkg:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test-race GOTEST_PKGS=./x\n\n  build:\n    runs-on: ubuntu-latest')"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 
