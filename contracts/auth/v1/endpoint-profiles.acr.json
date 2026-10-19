@@ -19,7 +19,7 @@
       "public_rationale": "Liveness probe; no principal, no org context.",
       "accepted_credential_classes": [],
       "primary_validator": {
-        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver and entitlement_requirement are absent (not applicable): internal/api/app.go:132-138: handleHealth ignores its request and writes a constant status, service and version body; no scope check or entitlement call is on the handler.",
+        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver, entitlement_requirement and token_shape are absent (not applicable): internal/api/app.go:132-138: handleHealth ignores its request and writes a constant status, service and version body; no scope check, entitlement call or credential issuance is on the handler.",
         "anchor": {
           "path": "internal/api/app.go",
           "line": 77,
@@ -49,7 +49,7 @@
       "public_rationale": "Readiness probe (postgres/clickhouse/entitlement checks); no principal, no org context.",
       "accepted_credential_classes": [],
       "primary_validator": {
-        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver and entitlement_requirement are absent (not applicable): internal/api/app.go:140-167: handleReady reads only the request context, runs the readiness checks and writes their statuses; no scope check or entitlement call is on the handler.",
+        "description": "No authenticator wrapper -- mux.HandleFunc directly. action, resource_resolver, entitlement_requirement and token_shape are absent (not applicable): internal/api/app.go:140-167: handleReady reads only the request context, runs the readiness checks and writes their statuses; no scope check, entitlement call or credential issuance is on the handler.",
         "anchor": {
           "path": "internal/api/app.go",
           "line": 78,
@@ -698,6 +698,7 @@
           "note": "func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {"
         }
       },
+      "token_shape": null,
       "reachable_validators": [],
       "action": "oauth.device_authorization.start",
       "resource_resolver": "None yet -- issues a device_code/user_code pair.",
@@ -708,7 +709,8 @@
       "disclosure_behavior": "writeDeviceRateLimit()/writeOAuthDeviceError() closed shapes.",
       "gaps": [
         "current_state_cache_behavior: undetermined. Searched internal for Cache-Control writes: shared writers set no-store (internal/api/response.go:81, internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:96 reaches was not traced in this pass.",
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:96 is gated by them was not traced in this pass."
+        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:96 is gated by them was not traced in this pass.",
+        "token_shape: undetermined. The handler registered at internal/api/app.go:96 was not traced for this field in this pass."
       ],
       "issued_credential": [
         {
@@ -1009,13 +1011,15 @@
       "service": "dev-health-acr-api",
       "classification": "public",
       "accepted_credential_classes": [],
+      "token_shape": null,
       "reachable_validators": [],
       "tenant_requirement": "none",
       "current_state_cache_behavior": "stateless",
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:102 is gated by them was not traced in this pass."
+        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:102 is gated by them was not traced in this pass.",
+        "token_shape: undetermined. The handler registered at internal/api/app.go:102 was not traced for this field in this pass."
       ],
       "id": "GET /.well-known/oauth-authorization-server [dev-health-acr-api]",
       "method": "GET",
@@ -1243,13 +1247,15 @@
       "service": "dev-health-acr-api",
       "classification": "public",
       "accepted_credential_classes": [],
+      "token_shape": null,
       "reachable_validators": [],
       "tenant_requirement": "none",
       "current_state_cache_behavior": "stateless",
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:106 is gated by them was not traced in this pass."
+        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:106 is gated by them was not traced in this pass.",
+        "token_shape: undetermined. The handler registered at internal/api/app.go:106 was not traced for this field in this pass."
       ],
       "id": "POST /register [dev-health-acr-api]",
       "method": "POST",
@@ -1278,13 +1284,15 @@
       "service": "dev-health-acr-api",
       "classification": "public",
       "accepted_credential_classes": [],
+      "token_shape": null,
       "reachable_validators": [],
       "tenant_requirement": "none",
       "current_state_cache_behavior": "stateless",
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:107 is gated by them was not traced in this pass."
+        "entitlement_requirement: undetermined. Searched internal for entitlement code: internal/entitlements and internal/config/entitlement.go exist; whether the handler registered at internal/api/app.go:107 is gated by them was not traced in this pass.",
+        "token_shape: undetermined. The handler registered at internal/api/app.go:107 was not traced for this field in this pass."
       ],
       "id": "POST /device_authorization [dev-health-acr-api]",
       "method": "POST",
