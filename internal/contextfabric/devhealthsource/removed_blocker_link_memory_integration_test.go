@@ -56,7 +56,10 @@ SELECT concat('jira:PROJECTKEY-', toString(2 * number)), concat('jira:PROJECTKEY
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
 SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', '', 'jira', '', ?, ? + toIntervalHour(4) FROM numbers(?) WHERE intDiv(number, 2) % 10 = 0`, repo, org, at, at, uint64(2*links))
 
-	capped := contextpacket.NewMemoryCappedQueryClient(query, cap)
+	// The projector sends max_threads with every statement (cmd/acr-projector
+	// runtime.go); without it the server's own default applies, which follows
+	// the host's cores, and the peak would measure the host, not the statement.
+	capped := contextpacket.NewMemoryCappedQueryClient(query, cap, contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))
 	source, err := devhealthsource.NewClickHouseProjectionSource(capped)
 	if err != nil {
 		t.Fatal(err)

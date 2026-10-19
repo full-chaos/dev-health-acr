@@ -1,8 +1,12 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +36,10 @@ func TestRemovedDependencyLinkOfAnyTypeRetractsOrKeepsItsEdge(t *testing.T) {
 		stillReported  bool
 		twin           *struct{ relType, raw string }
 		wantRetracted  bool
+		// wantDisclosed is the log attribute the kept edge is counted under:
+		// kept_links (the writer is not known) or left_out_links (a twin
+		// still states the edge); "" for no disclosure line.
+		wantDisclosed string
 	}{
 		{name: "jira relates_to removed", source: item{"jira:RDL-1", "jira"}, target: item{"jira:RDL-2", "jira"}, relType: "relates_to", raw: "relates to",
 			resync: []string{"jira:RDL-1", "jira:RDL-2"}, wantRetracted: true},
@@ -46,17 +54,17 @@ func TestRemovedDependencyLinkOfAnyTypeRetractsOrKeepsItsEdge(t *testing.T) {
 		{name: "jira relates_to still reported", source: item{"jira:RDL-11", "jira"}, target: item{"jira:RDL-12", "jira"}, relType: "relates_to", raw: "relates to",
 			resync: []string{"jira:RDL-11", "jira:RDL-12"}, stillReported: true, wantRetracted: false},
 		{name: "relates_to removed beside a live RELATES twin", source: item{"jira:RDL-13", "jira"}, target: item{"jira:RDL-14", "jira"}, relType: "relates_to", raw: "relates to",
-			resync: []string{"jira:RDL-13", "jira:RDL-14"}, twin: &struct{ relType, raw string }{"RELATES", "relates to"}, wantRetracted: false},
+			resync: []string{"jira:RDL-13", "jira:RDL-14"}, twin: &struct{ relType, raw string }{"RELATES", "relates to"}, wantRetracted: false, wantDisclosed: "left_out_links=1"},
 		{name: "jira dev status link, writer pass can skip", source: item{"ghpr:acme/rdl#15", "github"}, target: item{"jira:RDL-16", "jira"}, relType: "relates_to", raw: "jira_dev_status",
-			resync: []string{"ghpr:acme/rdl#15", "jira:RDL-16"}, wantRetracted: false},
+			resync: []string{"ghpr:acme/rdl#15", "jira:RDL-16"}, wantRetracted: false, wantDisclosed: "kept_links=1"},
 		{name: "linear attachment link, writer not stored", source: item{"ghpr:acme/rdl#17", "github"}, target: item{"linear:RDL-18", "linear"}, relType: "relates_to", raw: "linear_attachment",
-			resync: []string{"ghpr:acme/rdl#17", "linear:RDL-18"}, wantRetracted: false},
+			resync: []string{"ghpr:acme/rdl#17", "linear:RDL-18"}, wantRetracted: false, wantDisclosed: "kept_links=1"},
 		{name: "github closing reference", source: item{"ghpr:acme/rdl#19", "github"}, target: item{"gh:acme/rdl#20", "github"}, relType: "relates_to", raw: "github_closing_reference",
-			resync: []string{"ghpr:acme/rdl#19", "gh:acme/rdl#20"}, wantRetracted: false},
+			resync: []string{"ghpr:acme/rdl#19", "gh:acme/rdl#20"}, wantRetracted: false, wantDisclosed: "kept_links=1"},
 		{name: "gitlab closing reference", source: item{"gitlab:acme/rdl!21", "gitlab"}, target: item{"gitlab:acme/rdl#22", "gitlab"}, relType: "relates_to", raw: "gitlab_closing_reference",
-			resync: []string{"gitlab:acme/rdl!21", "gitlab:acme/rdl#22"}, wantRetracted: false},
+			resync: []string{"gitlab:acme/rdl!21", "gitlab:acme/rdl#22"}, wantRetracted: false, wantDisclosed: "kept_links=1"},
 		{name: "github comment linear url", source: item{"gh:acme/rdl#23", "github"}, target: item{"gh:acme/rdl#24", "github"}, relType: "relates_to", raw: "github_comment_linear_url",
-			resync: []string{"gh:acme/rdl#23", "gh:acme/rdl#24"}, wantRetracted: false},
+			resync: []string{"gh:acme/rdl#23", "gh:acme/rdl#24"}, wantRetracted: false, wantDisclosed: "kept_links=1"},
 	}
 	for index, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,6 +95,8 @@ func TestRemovedDependencyLinkOfAnyTypeRetractsOrKeepsItsEdge(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			logged := &lockedBuffer{}
+			source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
 			drain := func(cursor string) (string, map[string]bool, map[string]bool) {
 				edges, tombstones := map[string]bool{}, map[string]bool{}
 				for i := 0; i < 60; i++ {
@@ -129,7 +139,19 @@ func TestRemovedDependencyLinkOfAnyTypeRetractsOrKeepsItsEdge(t *testing.T) {
 			if tc.twin != nil {
 				insertRow(tc.twin.relType, tc.twin.raw, resynced)
 			}
+			logged.Reset()
 			_, _, retracted := drain(cursor)
+			lines := logged.String()
+			for _, attribute := range []string{"kept_links=", "left_out_links="} {
+				counted := strings.Contains(lines, attribute)
+				want := tc.wantDisclosed != "" && strings.HasPrefix(tc.wantDisclosed, attribute)
+				if counted != want {
+					t.Fatalf("%s disclosed=%v, want %v: %q", attribute, counted, want, lines)
+				}
+			}
+			if tc.wantDisclosed != "" && !strings.Contains(lines, tc.wantDisclosed) {
+				t.Fatalf("the kept edge was not counted as %s: %q", tc.wantDisclosed, lines)
+			}
 			if retracted[edgeID] != tc.wantRetracted {
 				t.Fatalf("incremental pass: edge retracted=%v, want %v", retracted[edgeID], tc.wantRetracted)
 			}
@@ -139,4 +161,27 @@ func TestRemovedDependencyLinkOfAnyTypeRetractsOrKeepsItsEdge(t *testing.T) {
 			}
 		})
 	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
 }
