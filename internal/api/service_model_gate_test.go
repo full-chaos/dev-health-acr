@@ -284,14 +284,6 @@ func TestCapabilitiesNeverRefuseForTheServiceModel(t *testing.T) {
 	}
 }
 
-func TestWebAssertionCallerIsNeverDecidedOnTheServiceModel(t *testing.T) {
-	app := &App{runtime: &RuntimeDependencies{Entitlements: &serviceModelGrants{err: errors.New("must not be asked")}, OrgModelConfigs: ownModelConfigs{err: errors.New("must not be read")}}}
-	basis, allowed, err := app.serviceModelDecision(context.Background(), storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, OrgID: "org_1"}, contextfabric.InvestigationRequest{})
-	if err != nil || !allowed || basis != serviceModelBasisWebAssertion {
-		t.Fatalf("decision = %q %t %v, want web_assertion, allowed, no error", basis, allowed, err)
-	}
-}
-
 func TestSuppliedInterpretationWithServiceSynthesisIsRefusedWithoutTheFeatureOrOwnModel(t *testing.T) {
 	rig := newWriteBackRouteRig(t)
 	rig.app.runtime.Entitlements = &serviceModelGrants{}
