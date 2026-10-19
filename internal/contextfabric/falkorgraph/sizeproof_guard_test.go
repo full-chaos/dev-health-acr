@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -69,8 +70,9 @@ func readSizeproofSources(t *testing.T, dir string) []sizeproofSource {
 	return out
 }
 
-// sizeproofFileTagged evaluates the file's //go:build line: true only when the
-// constraint holds with the tag sizeproof and fails without it.
+// sizeproofFileTagged is true only when the file's //go:build line is exactly
+// the single tag sizeproof. Any other expression (`sizeproof || race`,
+// `sizeproof || linux`, `!race`) can admit the file to a race build.
 func sizeproofFileTagged(src string) bool {
 	for _, line := range strings.Split(src, "\n") {
 		line = strings.TrimSpace(line)
@@ -84,9 +86,8 @@ func sizeproofFileTagged(src string) bool {
 		if err != nil {
 			return false
 		}
-		with := expr.Eval(func(tag string) bool { return tag == sizeproofTag })
-		without := expr.Eval(func(string) bool { return false })
-		return with && !without
+		tag, ok := expr.(*constraint.TagExpr)
+		return ok && tag.Tag == sizeproofTag
 	}
 	return false
 }
@@ -154,9 +155,11 @@ func TestSizeproofGuardFlagsAnUntaggedProductionSizeTest(t *testing.T) {
 	if len(v) != 1 || !strings.Contains(v[0], "walkMemoryLinks") || !strings.Contains(v[0], "sizeproofSeedSymbols") {
 		t.Fatalf("an untagged test using a seed symbol must fail naming the list, got %v", v)
 	}
-	write("b_test.go", "//go:build !race\n\npackage falkorgraph\n\nfunc TestFifthProof() { _ = edgePageCostItems }\n")
-	if v := sizeproofViolations(readSizeproofSources(t, dir)); len(v) != 1 {
-		t.Fatalf("a tag other than sizeproof must not count, got %v", v)
+	for _, header := range []string{"//go:build !race\n\n", "//go:build sizeproof || race\n\n", "//go:build sizeproof || linux\n\n", "//go:build sizeproof && !race\n\n", ""} {
+		write("b_test.go", header+"package falkorgraph\n\nfunc TestFifthProof() { _ = edgePageCostItems }\n")
+		if v := sizeproofViolations(readSizeproofSources(t, dir)); len(v) != 1 {
+			t.Fatalf("header %q must not count as exactly sizeproof, got %v", header, v)
+		}
 	}
 	if err := os.Remove(filepath.Join(dir, "b_test.go")); err != nil {
 		t.Fatal(err)
@@ -176,18 +179,54 @@ func TestSizeproofTagReachesOnlyThePlainUnitRuns(t *testing.T) {
 	if problems := sizeproofMakefileProblems(string(mk)); len(problems) > 0 {
 		t.Fatalf("Makefile: %s", strings.Join(problems, "; "))
 	}
-	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
-	scripts, _ := filepath.Glob(filepath.Join(root, "scripts", "ci", "*.sh"))
-	for _, p := range append(files, scripts...) {
+	for _, hit := range sizeproofWorkflowHits(t, root) {
+		t.Error(hit)
+	}
+}
+
+func sizeproofWorkflowHits(t *testing.T, root string) []string {
+	t.Helper()
+	var paths []string
+	for _, pattern := range []string{
+		filepath.Join(root, ".github", "workflows", "*.yml"),
+		filepath.Join(root, ".github", "workflows", "*.yaml"),
+		filepath.Join(root, "scripts", "ci", "*.sh"),
+	} {
+		found, _ := filepath.Glob(pattern)
+		paths = append(paths, found...)
+	}
+	var hits []string
+	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for i, line := range strings.Split(string(b), "\n") {
-			if strings.Contains(line, sizeproofTag) && !strings.HasSuffix(p, "sizeproof_guard_test.go") {
-				t.Errorf("%s:%d names %s; only the Makefile plain unit targets pass it (a workflow or script line could reach a race build)", p, i+1, sizeproofTag)
+			if strings.Contains(line, sizeproofTag) {
+				hits = append(hits, p+":"+strconv.Itoa(i+1)+" names "+sizeproofTag+"; only the Makefile plain unit targets pass it (a workflow or script line could reach a race build)")
 			}
 		}
+	}
+	return hits
+}
+
+func TestSizeproofWorkflowScanReadsYamlAndYmlAndScripts(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{".github/workflows", "scripts/ci"} {
+		if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hits := sizeproofWorkflowHits(t, root); len(hits) != 0 {
+		t.Fatalf("an empty tree must pass, got %v", hits)
+	}
+	for _, rel := range []string{".github/workflows/x.yaml", ".github/workflows/x.yml", "scripts/ci/x.sh"} {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte("run: go test -race -tags sizeproof ./...\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hits := sizeproofWorkflowHits(t, root); len(hits) != 3 {
+		t.Fatalf("want one hit per .yaml, .yml and .sh file, got %v", hits)
 	}
 }
 
