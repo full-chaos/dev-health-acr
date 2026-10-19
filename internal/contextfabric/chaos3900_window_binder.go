@@ -87,6 +87,13 @@ var windowGrammarRegistry = []windowGrammarEntry{
 	{name: "trailing_3_months", relativeID: RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+(?:3|three)\s+months\b`)},
 	{name: "trailing_365_days", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+365\s+days\b`)},
 	{name: "trailing_12_months", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+(?:12|twelve)\s+months\b`)},
+	// "this month|quarter|year" names the current calendar period to date.
+	// The RelativeID is only the proposal the inferred path falls back to when
+	// the period is still empty (its first day); the committed window is the
+	// calendar period itself (Calendar), never this trailing width.
+	{name: "calendar_this_month", relativeID: RelativeWindowTrailing30D, pattern: regexp.MustCompile(`(?i)\bthis\s+month\b`)},
+	{name: "calendar_this_quarter", relativeID: RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\bthis\s+quarter\b`)},
+	{name: "calendar_this_year", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\bthis\s+year\b`)},
 }
 
 // BindWindowSpans applies the closed grammar to question (verbatim
@@ -272,6 +279,10 @@ const (
 	CalendarPeriodMonth   CalendarPeriod = "month"
 	CalendarPeriodQuarter CalendarPeriod = "quarter"
 	CalendarPeriodYear    CalendarPeriod = "year"
+	// The current calendar period to date, today excluded.
+	CalendarPeriodThisMonth   CalendarPeriod = "this_month"
+	CalendarPeriodThisQuarter CalendarPeriod = "this_quarter"
+	CalendarPeriodThisYear    CalendarPeriod = "this_year"
 )
 
 // ProposeWindowFromSpans runs the whole W0 binder pipeline over question
@@ -319,6 +330,8 @@ func strippedPrecedingPreposition(lowerBefore string) bool {
 // most work last month" name the previous CALENDAR period.
 func spanStatesTrailingWindow(question string, span BoundWindowSpan) bool {
 	switch span.Grammar {
+	case "calendar_this_month", "calendar_this_quarter", "calendar_this_year":
+		return false
 	case "trailing_month", "trailing_quarter", "trailing_year":
 	default:
 		return true
@@ -386,6 +399,12 @@ func calendarPeriodOfSpan(question string, span BoundWindowSpan, roleOK bool) Ca
 		period = CalendarPeriodQuarter
 	case "trailing_year":
 		period = CalendarPeriodYear
+	case "calendar_this_month":
+		period = CalendarPeriodThisMonth
+	case "calendar_this_quarter":
+		period = CalendarPeriodThisQuarter
+	case "calendar_this_year":
+		period = CalendarPeriodThisYear
 	default:
 		return CalendarPeriodNone
 	}

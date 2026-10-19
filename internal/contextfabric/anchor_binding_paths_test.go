@@ -58,24 +58,19 @@ func TestShadowBindingBindsARedeemedAnchorReceipt(t *testing.T) {
 	}
 }
 
-// TestShadowBindingOnAGateThatResolvesNothing: the window gate fires with
-// clarification off, so no offers-only resolution runs; the line still says
-// the turn was window gated.
-func TestShadowBindingOnAGateThatResolvesNothing(t *testing.T) {
+// TestShadowBindingHasNoWindowGateLineWithClarificationOff: a turn that cannot
+// be asked to confirm its window is not gated, so its line never says it was.
+func TestShadowBindingHasNoWindowGateLineWithClarificationOff(t *testing.T) {
 	rig := newAnchorProbeRig(t, false)
 	rig.interpreter.read("", true)
 	request := needTurnRequest("request_bind_gate_quiet", false)
 	request.Options.AllowClarification = false
 	turn := rig.turn(t, request, identityProvenResponse(probeAlpha))
-	if len(rig.graph.calls) != 0 {
-		t.Fatalf("premise: the gate resolved %d times with clarification off", len(rig.graph.calls))
-	}
 	if len(turn.transitions) != 1 {
 		t.Fatalf("transition lines = %d", len(turn.transitions))
 	}
-	line := turn.transitions[0]
-	if line.Evaluation != AnchorBindingEvaluationWindowGated || line.To.State != AnchorBindingUnbound || line.To.Reason != AnchorBindingReasonNoProof {
-		t.Fatalf("line = %+v, want window_gated, unbound, no_proof", line)
+	if line := turn.transitions[0]; line.Evaluation == AnchorBindingEvaluationWindowGated {
+		t.Fatalf("line = %+v, want no window_gated evaluation when clarification is off", line)
 	}
 }
 

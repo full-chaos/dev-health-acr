@@ -507,9 +507,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	result.LimitationsDisplaced += temporalDisplaced
 	// effectiveWindow: composed ABOVE, before ResolveSubjects (CHAOS-4040
 	// reordering -- see that call site's own comment), reused here
-	// unchanged. By construction it can no longer be Provenance==inferred_default
-	// here (that case already gated and returned above) -- every path
-	// reaching this line carries a confirmed/stated window or none at all.
+	// unchanged. An inferred_default window reaches this line only when the
+	// caller declined clarification (otherwise the gate above returned); the
+	// answer then discloses it with one warning, below.
 	result.EffectiveEvidenceWindow = effectiveWindow
 	conflictLimited, conflictDisplaced := appendBoundedLimitations(result.Limitations, statedPeriodLimitations(windowCanon))
 	result.Limitations = conflictLimited
@@ -529,6 +529,10 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// and matches windowConfirmationRequiredResult's own identical call
 	// for the SAME data, on the gate terminal instead of this one.
 	result.WindowClarification = composeWindowClarification(result.EffectiveEvidenceWindow, result.ResultID, e.now())
+	if windowConfirmationSkipped(request, result.EffectiveEvidenceWindow) {
+		result.WindowClarification = nil
+		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationSkippedWarning(result.EffectiveEvidenceWindow))
+	}
 	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
 	}

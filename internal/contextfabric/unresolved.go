@@ -468,6 +468,10 @@ func (e *Engine) terminalResult(
 	// EXACTLY the case a window nudge (when requested) matters most, an
 	// agent reading a refusal benefits from every disclosure available.
 	windowClarification := composeWindowClarification(effectiveWindow, resultID, e.now())
+	confirmationSkipped := windowConfirmationSkipped(request, effectiveWindow)
+	if confirmationSkipped {
+		windowClarification = nil
+	}
 	// CHAOS-5660: taken ONCE, here, from the SAME gated material the status
 	// and the disclosure are composed from -- and handed to the predicate,
 	// the status decision and the log line below. Deriving it separately at
@@ -610,6 +614,9 @@ func (e *Engine) terminalResult(
 		answer += " " + resolution.ClarificationPrompt
 	}
 	terminalWarnings := []string{}
+	if confirmationSkipped {
+		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationSkippedWarning(effectiveWindow))
+	}
 	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationNudgeSentence)
 	}

@@ -1,0 +1,200 @@
+package contextfabric
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+const (
+	thisMonthPeriod   = CalendarPeriod("this_month")
+	thisQuarterPeriod = CalendarPeriod("this_quarter")
+	thisYearPeriod    = CalendarPeriod("this_year")
+)
+
+func TestCalendarWindow_BinderNamesTheCurrentCalendarPeriod(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		question string
+		want     CalendarPeriod
+	}{
+		{"Which teams need attention this month?", thisMonthPeriod},
+		{"Which teams need attention this month and why?", thisMonthPeriod},
+		{"This month, which teams need attention?", thisMonthPeriod},
+		{"What did the team ship in this month?", thisMonthPeriod},
+		{"What did the team ship during this quarter?", thisQuarterPeriod},
+		{"Which repository carried the most work this quarter?", thisQuarterPeriod},
+		{"Which repository carried the most work this year?", thisYearPeriod},
+		{"Which repository carried the most work last month?", CalendarPeriodMonth},
+		{"Which repository carried the most work in the last month?", CalendarPeriodNone},
+		{"What was the team's state as of the end of this month?", CalendarPeriodNone},
+		{"Compare this month with last month for the team.", CalendarPeriodNone},
+		{"How did this month treat the operational work of each repository?", CalendarPeriodNone},
+		{"Which team owns This Month?", CalendarPeriodNone},
+		{"Which repository carried the most work?", CalendarPeriodNone},
+	}
+	for _, tc := range cases {
+		if got := ProposeWindowFromSpans(tc.question).Calendar; got != tc.want {
+			t.Errorf("%q: Calendar = %q, want %q", tc.question, got, tc.want)
+		}
+	}
+}
+
+func TestCalendarWindow_CurrentPeriodBounds(t *testing.T) {
+	t.Parallel()
+	at := func(y int, m time.Month, d, h int) time.Time { return time.Date(y, m, d, h, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		name       string
+		period     CalendarPeriod
+		now        time.Time
+		start, end time.Time
+		ok         bool
+	}{
+		{"month mid excludes today", thisMonthPeriod, at(2026, 8, 12, 12), at(2026, 8, 1, 0), at(2026, 8, 12, 0), true},
+		{"month second day", thisMonthPeriod, at(2026, 8, 2, 0), at(2026, 8, 1, 0), at(2026, 8, 2, 0), true},
+		{"month first day is empty", thisMonthPeriod, at(2026, 8, 1, 12), time.Time{}, time.Time{}, false},
+		{"quarter mid", thisQuarterPeriod, at(2026, 8, 12, 12), at(2026, 7, 1, 0), at(2026, 8, 12, 0), true},
+		{"quarter first day is empty", thisQuarterPeriod, at(2026, 7, 1, 5), time.Time{}, time.Time{}, false},
+		{"year mid", thisYearPeriod, at(2026, 8, 12, 12), at(2026, 1, 1, 0), at(2026, 8, 12, 0), true},
+		{"year first day is empty", thisYearPeriod, at(2026, 1, 1, 23), time.Time{}, time.Time{}, false},
+		{"previous month unchanged", CalendarPeriodMonth, at(2026, 8, 12, 12), at(2026, 7, 1, 0), at(2026, 8, 1, 0), true},
+	}
+	for _, tc := range cases {
+		start, end, ok := calendarWindowBounds(tc.period, tc.now)
+		if ok != tc.ok || !start.Equal(tc.start) || !end.Equal(tc.end) {
+			t.Errorf("%s: bounds = %v..%v ok=%v, want %v..%v ok=%v", tc.name, start, end, ok, tc.start, tc.end, tc.ok)
+		}
+	}
+}
+
+type calendarServedRun struct {
+	result   InvestigationResult
+	factRead bool
+}
+
+func runServedWindowCase(t *testing.T, now time.Time, question string, allowClarification bool) calendarServedRun {
+	t.Helper()
+	project := acceptanceProject()
+	var run calendarServedRun
+	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		run.factRead = true
+		return bootstrapFactBundle(project), nil
+	})
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    bootstrapGraphContext(project),
+	}
+	runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: bootstrapDraft(project), receipt: acceptanceReceipt()}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: &countingInterpreter{interpretation: bootstrapInterpretation()},
+		Graph:       graph,
+		Facts:       facts,
+		Synthesizer: RuntimeAnswerSynthesizer{Runtime: runtime, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acceptance-test", Backend: "graph"}},
+		Results:     newMapResultStore(),
+	}, EngineOptions{
+		ServiceVersion: "acceptance-test",
+		Now:            func() time.Time { return now },
+		NewResultID:    func() string { return "result_acceptance01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	request := validInvestigationRequest()
+	request.Question = question
+	request.Consumer.Surface = "mcp"
+	request.Options.AllowClarification = allowClarification
+	run.result, err = engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	return run
+}
+
+func TestCalendarWindow_ThisPeriodCommitsTheCalendarPeriodToDateExcludingToday(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	today := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		question string
+		start    time.Time
+	}{
+		{"Which teams need attention this month?", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{"Which teams need attention this quarter?", time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
+		{"Which teams need attention this year?", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, allow := range []bool{true, false} {
+		for _, tc := range cases {
+			run := runServedWindowCase(t, now, tc.question, allow)
+			result := run.result
+			if result.Status == InvestigationClarificationRequired || result.Status == InvestigationNoMatch || result.WindowClarification != nil || !run.factRead {
+				t.Fatalf("%q allow=%v: status=%q window_clarification=%v fact_read=%v, want a served answer", tc.question, allow, result.Status, result.WindowClarification != nil, run.factRead)
+			}
+			assertCalendarWindow(t, tc.question, result.EffectiveEvidenceWindow, tc.start, today)
+			if result.EffectiveEvidenceWindow.Confidence != WindowConfidenceHigh {
+				t.Fatalf("%q: confidence = %q, want high", tc.question, result.EffectiveEvidenceWindow.Confidence)
+			}
+		}
+	}
+}
+
+func TestCalendarWindow_ThisMonthOnTheFirstFallsToTheInferredPath(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	question := "Which teams need attention this month?"
+	gated := runServedWindowCase(t, now, question, true)
+	if gated.result.Status != InvestigationClarificationRequired || gated.result.WindowClarification == nil {
+		t.Fatalf("allow=true: status=%q window_clarification=%v, want the unchanged clarification path", gated.result.Status, gated.result.WindowClarification != nil)
+	}
+	served := runServedWindowCase(t, now, question, false)
+	window := served.result.EffectiveEvidenceWindow
+	if served.result.Status == InvestigationNoMatch || !served.factRead || window == nil || window.Provenance != WindowInferredDefault || window.Confidence == WindowConfidenceHigh {
+		t.Fatalf("allow=false: status=%q fact_read=%v window=%#v, want an answer over a low-confidence inferred_default window", served.result.Status, served.factRead, window)
+	}
+}
+
+func TestWindowGate_AllowClarificationFalseAnswersAgainstTheInferredWindowWithOneWarning(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	run := runServedWindowCase(t, now, validInvestigationRequest().Question, false)
+	result := run.result
+	if result.Status == InvestigationNoMatch || result.Status == InvestigationClarificationRequired || !run.factRead {
+		t.Fatalf("status=%q fact_read=%v, want an answer against the inferred window, never no_match for a window alone", result.Status, run.factRead)
+	}
+	window := result.EffectiveEvidenceWindow
+	if window == nil || window.Provenance != WindowInferredDefault || window.Confidence != WindowConfidenceLow {
+		t.Fatalf("EffectiveEvidenceWindow = %#v, want inferred_default with low confidence", window)
+	}
+	if result.WindowClarification != nil || result.StructureNeeds != nil {
+		t.Fatalf("window_clarification=%v structure_needs=%v, want no offer when clarification is not permitted", result.WindowClarification, result.StructureNeeds)
+	}
+	var skipped []string
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "confirmation was skipped") {
+			skipped = append(skipped, warning)
+		}
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0], string(window.RelativeID)) {
+		t.Fatalf("warnings = %q, want exactly one skipped-confirmation warning naming %q", result.Warnings, window.RelativeID)
+	}
+	if strings.Contains(result.DeterministicAnswer, "clarification was not permitted") || limitationsContain(result.Limitations, "clarification was not permitted") {
+		t.Fatalf("answer=%q limitations=%q, want no refusal prose", result.DeterministicAnswer, result.Limitations)
+	}
+	for _, row := range result.Completeness.Outcomes {
+		if row.CauseCoverage == contractsv1.ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt {
+			t.Fatalf("outcome row %#v is answer_terminated_before_attempt, want every planned requirement attempted", row)
+		}
+	}
+}
+
+func TestWindowGate_AllowClarificationTrueStillGates(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	run := runServedWindowCase(t, now, validInvestigationRequest().Question, true)
+	if run.result.Status != InvestigationClarificationRequired || run.result.WindowClarification == nil || run.factRead {
+		t.Fatalf("status=%q window_clarification=%v fact_read=%v, want the unchanged confirmation gate", run.result.Status, run.result.WindowClarification != nil, run.factRead)
+	}
+}

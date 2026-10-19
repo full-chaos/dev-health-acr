@@ -2929,7 +2929,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			confirmedNeedsForUnevaluatedExit, carriedStructureEntriesUnevaluatedExit = withheldForUnevaluatedExit(confirmedNeedsForCapture, carriedStructureEntries, entry, disposition)
 		}
 	}
-	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
+	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault && request.Options.AllowClarification {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
 		// offers-only resolution whose commit-bearing outputs are discarded

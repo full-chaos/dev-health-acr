@@ -124,14 +124,31 @@ func relativeWindowBounds(id RelativeWindowID, now time.Time) (start, end time.T
 
 // calendarWindowBounds () derives the bounds of the PREVIOUS calendar
 // month, quarter or year relative to now: [first instant of that period, first
-// instant of the period after it). Calendar boundaries are UTC: acr has no
+// instant of the period after it). The current-period values give the period
+// to date instead: [first instant of the period, start of today), today
+// excluded as every window is; ok=false while that is empty (the period's first
+// day). Calendar boundaries are UTC: acr has no
 // per-organization timezone, and every window bound it stores or reports is
 // UTC, so "last month" is the same window for every caller of the same
 // deployment at the same instant. now is the engine's own clock, never a
 // caller-supplied instant.
 func calendarWindowBounds(period CalendarPeriod, now time.Time) (start, end time.Time, ok bool) {
 	now = now.UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	switch period {
+	case CalendarPeriodThisMonth, CalendarPeriodThisQuarter, CalendarPeriodThisYear:
+		switch period {
+		case CalendarPeriodThisMonth:
+			start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		case CalendarPeriodThisQuarter:
+			start = time.Date(now.Year(), time.Month((int(now.Month())-1)/3*3+1), 1, 0, 0, 0, 0, time.UTC)
+		default:
+			start = time.Date(now.Year(), time.January, 1, 0, 0, 0, 0, time.UTC)
+		}
+		if !start.Before(today) {
+			return time.Time{}, time.Time{}, false
+		}
+		return start, today, true
 	case CalendarPeriodMonth:
 		end = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		start = end.AddDate(0, -1, 0)
@@ -272,17 +289,10 @@ const (
 	// inferred window regardless of whether the gate applied, because this
 	// value says the gate WAS the reason nothing decisive happened.
 	WindowCanonicalizationGatedClassDefault WindowCanonicalizationOutcome = "gated_class_default"
-	// WindowCanonicalizationGatedRefusedNoClarification (CHAOS-4040) is
-	// windowConfirmationRequiredResult's own AllowClarification=false
-	// path: the caller declined the only thing a confirmation prompt
-	// could ask for (unresolved.go's own established rule, applied here),
-	// so the wire terminal is the closed vocabulary's no_match -- but
-	// this outcome value keeps that refusal TELEMETRY-DISTINGUISHABLE
-	// from a genuine D0 absence (empty candidate pool): the window was
-	// never proven unconfirmable-because-nothing-exists, only
-	// unconfirmable-because-clarification-was-declined. Never reported as
-	// WindowCanonicalizationNone or folded into any veto value -- a
-	// window WAS in play and WOULD have been offered.
+	// WindowCanonicalizationGatedRefusedNoClarification is a retained member of
+	// the closed window-line vocabulary. No turn reports it: a caller that
+	// declined clarification now gets an answer against the inferred window
+	// (windowConfirmationSkipped), not a refusal.
 	WindowCanonicalizationGatedRefusedNoClarification WindowCanonicalizationOutcome = "gated_refused_no_clarification"
 	// WindowCanonicalizationCarried (CHAOS-4360) is precedence step 2's
 	// OWN carry outcome: no request-side window resolved on THIS turn, but
@@ -490,7 +500,7 @@ func (e *Engine) commitBinderCalendarWindow(request InvestigationRequest, binder
 	if !ok {
 		return plain
 	}
-	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, Provenance: WindowQuestionStated}
+	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, Provenance: WindowQuestionStated, Confidence: WindowConfidenceHigh}
 	return requestWindowCanonicalization{
 		Effective:         &effective,
 		KeyComponent:      windowKeyComponent(effective, windowKeyFrozen),
@@ -1693,20 +1703,11 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	return result, nil
 }
 
-// windowConfirmationRequiredLimitation/windowConfirmationRequiredRefusedLimitation
-// are the fixed, non-interpolated disclosures windowConfirmationRequiredResult
-// uses -- mirroring windowVetoLimitation's own convention (a caller-facing
+// windowConfirmationRequiredLimitation is the fixed, non-interpolated disclosure
+// windowConfirmationRequiredResult uses -- mirroring windowVetoLimitation's own convention (a caller-facing
 // sentence naming no mechanism, provider, or model).
 const (
 	windowConfirmationRequiredLimitation = "This answer requires confirming the evidence window it should read against. Confirm one of the offered options to proceed."
-	// windowConfirmationRequiredRefusedLimitation is DELIBERATELY distinct
-	// prose from an ordinary no_match's own statusSentence output (never
-	// "nothing matched" / absence framing) -- CHAOS-4040 sol-max ruling:
-	// "nonliteral/unattested refusal, never D0 absence". The caller
-	// declined the only mechanism (a clarification prompt) that could
-	// have confirmed the window, so no answer is possible, but that is
-	// NOT the same claim as "no such subject/data exists".
-	windowConfirmationRequiredRefusedLimitation = "This answer requires confirming the evidence window it should read against, and clarification was not permitted for this request."
 )
 
 // windowConfirmationRequiredPlaceholderPrompt is the FIXED, non-interpolated
@@ -1755,11 +1756,11 @@ const windowConfirmationRequiredPlaceholderPrompt = "Confirm the evidence window
 // all), and even though StructureNeeds now carries the window member's own
 // disclosure (CHAOS-4118: Missing=[window]/WindowOptions, composed just
 // below), that field alone still would not catch every non-reusable case
-// here (the AllowClarification=false branch carries neither field, yet
-// must be exactly as reuse-ineligible as the branch that does) -- the
-// explicit nil/nil watermark/epoch is the same simple, local,
+// here -- the explicit nil/nil watermark/epoch is the same simple, local,
 // already-proven pattern windowVetoResult already uses for the identical
-// need, independent of what either disclosure field carries.
+// need, independent of what either disclosure field carries. A caller that
+// declined clarification never reaches this terminal (engine.go answers it
+// against the inferred window instead).
 func (e *Engine) windowConfirmationRequiredResult(
 	ctx context.Context,
 	principal storage.Principal,
@@ -1859,26 +1860,8 @@ func (e *Engine) windowConfirmationRequiredResult(
 		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
 		ClarificationPrompt: windowConfirmationRequiredPlaceholderPrompt,
 	}
-	if !request.Options.AllowClarification {
-		// unresolved.go's own established rule, applied here identically:
-		// a caller that declined clarification declined the only thing a
-		// prompt could ask for -- the closed status vocabulary leaves
-		// no_match as the sole non-decisive terminal, but this is NOT a
-		// genuine D0 absence (windowConfirmationRequiredRefusedLimitation's
-		// own doc comment) and carries no clarification-shaped data at
-		// all, exactly like resolveTerminalStatus's AllowClarification=false
-		// branch.
-		status = InvestigationNoMatch
-		limitation = windowConfirmationRequiredRefusedLimitation
-		subjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-		windowClarification = nil
-		origin = WindowCanonicalizationGatedRefusedNoClarification
-	}
-	// CHAOS-3478/CHAOS-3813: disclosed on BOTH branches above, unlike
-	// ClarificationPrompt/windowClarification -- a caller's PriorSubjectReceipts
-	// disposition is not "clarification-shaped data" the AllowClarification=false
-	// rule strips (that rule is about what this terminal OFFERS the caller
-	// going forward, not about disclosing what the caller's own receipts did).
+	// CHAOS-3478/CHAOS-3813: a caller's PriorSubjectReceipts are disclosed on
+	// this terminal too.
 	subjectResolution.PriorSubjectReceiptDispositions = priorSubjectReceiptDispositions
 
 	// CHAOS-4118: this terminal returns BEFORE ResolveSubjects has run (this
@@ -1892,10 +1875,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// reading StructureNeeds (the CHAOS-3900 W2 unified member surface every
 	// other non-decisive terminal discloses through) saw nothing at all on a
 	// turn-1 window-gated response, even though the identical offer was
-	// sitting right beside it under the old field. nil exactly when
-	// windowClarification is nil (AllowClarification=false declined every
-	// clarification, window included), mirroring composeWindowClarification's
-	// own nil-means-nothing-in-play convention.
+	// sitting right beside it under the old field.
 	// CHAOS-4234: gatedMaterial (the class-default gate's offers-only
 	// resolution; empty for every other origin) composes kind/handle/
 	// candidate offers BESIDE the window offer -- composeGatedStructureNeeds
@@ -1965,10 +1945,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// paths' own ContextFabricWindowConfirmationNudge handling exactly
 	// (engine.go, terminalResult) -- a caller that asked to be nudged must
 	// still see the nudge sentence on THIS terminal, not only on a decisive
-	// one. Guarded the same way those call sites are: nil on the
-	// AllowClarification=false branch (windowClarification already nil
-	// there), so the sentence never appears without the disclosure it
-	// refers to.
+	// one.
 	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
 	}
@@ -1976,10 +1953,8 @@ func (e *Engine) windowConfirmationRequiredResult(
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, origin)
 		e.telemetry.RecordWindowGatedForConfirmation(ctx, principal, request.Consumer.Surface, origin, effective)
 	}
-	// CHAOS-4118: recordStructureNeedsTelemetry's own nil-means-nothing guard
-	// makes this unconditional call a no-op on the AllowClarification=false
-	// branch (structureNeeds is nil there) -- same discipline
-	// terminalResult's own call (unresolved.go) already applies.
+	// CHAOS-4118: same discipline terminalResult's own call (unresolved.go)
+	// applies.
 	recordStructureNeedsTelemetry(ctx, e.telemetry, principal, result.StructureNeeds)
 	// CHAOS-4314: window_gated_offered/window_gated_silent split -- offered
 	// iff this terminal's own StructureNeeds carries a window_expand
@@ -2093,4 +2068,21 @@ func factReadQuestion(interpretation InterpretedQuestion, effective *contractsv1
 		Start: effective.Start, End: effective.End, RelativeID: effective.RelativeID,
 	}
 	return question
+}
+
+// windowConfirmationSkipped reports a turn that carries a window the engine
+// inferred while the caller declined clarification: nothing can confirm it, so
+// the turn answers against that window and says so instead of ending.
+func windowConfirmationSkipped(request InvestigationRequest, effective *contractsv1.ContextFabricEffectiveEvidenceWindow) bool {
+	return !request.Options.AllowClarification && effective != nil && effective.Provenance == WindowInferredDefault
+}
+
+// windowConfirmationSkippedWarning names the window the answer used and that
+// its confirmation was skipped.
+func windowConfirmationSkippedWarning(effective *contractsv1.ContextFabricEffectiveEvidenceWindow) string {
+	used := string(effective.RelativeID)
+	if effective.Start != nil && effective.End != nil {
+		used += " (" + effective.Start.UTC().Format("2006-01-02") + " to " + effective.End.UTC().Format("2006-01-02") + ")"
+	}
+	return "No evidence window was stated and clarification was not permitted, so this answer used the default window " + used + " at low confidence; window confirmation was skipped."
 }
