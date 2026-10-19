@@ -30,6 +30,15 @@ import (
 // can never cut a projection or purge write mid-command. Reads are query(readOnly=true)
 // and listGraphs; everything else is a write. Each client gets PoolSize
 // connections, so one process holds at most 2 x PoolSize.
+//
+// A write is at-least-once on either client. Both keep the driver's default
+// MaxRetries (3): a command whose reply misses the RequestTimeout is sent
+// again, so one slow write call can land up to four times, and the caller's
+// error does not mean the write did not land. A ctx deadline on the read
+// client's options ends the call with an error while the server still commits
+// the write. Every write statement must therefore be replay-idempotent, and a
+// ctx deadline may reach the write path only with a caller that replays on
+// error (write_ctx_cut_live_test.go measures all three on a real FalkorDB).
 type sdkAPI struct {
 	db     *falkordb.FalkorDB
 	read   *falkordb.FalkorDB
