@@ -254,6 +254,9 @@ type PlanNarrowingEvent struct {
 	// the event so that a served answer's completeness can be counted
 	// without joining against the stored result.
 	OutcomeCompletenessState contractsv1.ContextFabricAnswerCompletenessState
+	// OutcomeRowsEvicted is how many outcome rows the served document has had
+	// evicted at the row cap to make room for a lever's disclosure row.
+	OutcomeRowsEvicted int
 	// OutcomeReductionDeclined names WHY the outcome layer's candidate
 	// reduction did not serve this answer, from its own closed vocabulary.
 	//

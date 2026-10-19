@@ -68,7 +68,7 @@ jobs:
   # `verify` accepts those skips ONLY from these outputs, ONLY when
   # reach_mode=reached, and ONLY on a pull_request event.
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
       reach_mode: ${{ steps.reach.outputs.reach_mode }}
@@ -127,7 +127,7 @@ jobs:
   # SELF_HOSTED_RUNNERS repo variable. The ARC pool is gone, so the pair is
   # collapsed to this single hosted job and every consumer needs it directly.
   mirror-preflight:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -144,6 +144,8 @@ jobs:
       - name: Verify every mirrored image is resolvable before any job pulls one
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
   scripts:
+    # Hosted on purpose: the CI_RACE_RUNNER pool image (ops docker/arc-runner,
+    # on actions/runner) has no shellcheck, which most steps here run.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -252,7 +254,7 @@ jobs:
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0

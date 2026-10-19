@@ -389,3 +389,20 @@ func TestCredentialAckRequestAcceptsAnOmittedCredentialID(t *testing.T) {
 		t.Fatalf("an acknowledgement without a credential id must be valid: %v", err)
 	}
 }
+
+func TestClientCredentialStillAcceptsTheRetiredContextAdminScopeForReading(t *testing.T) {
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	expiresAt := createdAt.Add(deviceCredentialLifetime)
+	credential := validDeviceTokenResponse(createdAt, expiresAt).Credential
+	credential.Scopes = []string{"context:read", "context:admin"}
+	if err := validateCredentialMetadata(credential); err != nil {
+		t.Fatalf("v1 validator rejected a credential that carries the retired scope: %v", err)
+	}
+	body, err := json.Marshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contractcheck.ValidateSerialized("", "acr_client_credential.v1.schema.json", body); err != nil {
+		t.Fatalf("v1 schema rejected a credential that carries the retired scope: %v", err)
+	}
+}

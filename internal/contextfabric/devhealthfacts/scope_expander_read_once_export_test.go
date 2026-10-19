@@ -5,6 +5,6 @@ package devhealthfacts
 // subquery per reference) and in the form the statements send (once, one scalar
 // subquery per statement).
 func HistoricalCandidateSetsForTest() (plain, once string) {
-	plain = requestedProjectHistoryWorkItemIDsSQL(requestedProjectIDsPredicate)
+	plain = requestedProjectHistoryWorkItemIDsSQL(requestedProjectKeysPredicate)
 	return plain, readOnceCandidatesSQL(plain)
 }

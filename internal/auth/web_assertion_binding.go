@@ -78,9 +78,7 @@ func validWebPermissions(permissions []string) bool {
 	}
 	seen := make(map[string]struct{}, len(permissions))
 	for _, permission := range permissions {
-		// ScopeContextAdmin stays admissible on a web assertion: no route is
-		// gated by it any more, but credentials already carry it.
-		if permission != ScopeContextRead && permission != ScopeEvidenceRead && permission != WebAssertionPermissionCredentialIssue && permission != ScopeContextAdmin {
+		if permission != ScopeContextRead && permission != ScopeEvidenceRead && permission != WebAssertionPermissionCredentialIssue {
 			return false
 		}
 		if _, duplicate := seen[permission]; duplicate {

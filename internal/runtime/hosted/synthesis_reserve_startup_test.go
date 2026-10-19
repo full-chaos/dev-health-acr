@@ -29,7 +29,7 @@ func TestTheCompositionReserveIsCheckedOnlyWhereInvestigationsRun(t *testing.T) 
 			if !testCase.enabled {
 				t.Setenv("ACR_CONTEXT_FABRIC_FALKOR_ADDR", "")
 			}
-			_, _, _, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgresComponents{}, clickHouseComponents{}, nil)
+			_, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgresComponents{}, clickHouseComponents{}, nil)
 			if testCase.wantErr != (err != nil && strings.Contains(err.Error(), "synthesis composition reserve")) || (!testCase.wantErr && err != nil) {
 				t.Fatalf("err = %v, want the reserve refusal: %v", err, testCase.wantErr)
 			}

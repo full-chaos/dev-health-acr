@@ -37,7 +37,15 @@ var cutStopReasons = map[string]bool{"length": true, "max_tokens": true, "max_ou
 // Genkit's.
 var errOutputSchemaMismatch = errors.New(genkitSchemaMismatchPrefix)
 
+// errModelRefusal marks a reply whose stop reason is a refusal. It is the
+// terminal outcome of its draw: the provider billed the input, and another
+// draw of the same input would only be billed again.
+var errModelRefusal = errors.New("model refused the request")
+
+const llmRefusalStopReason = "refusal"
+
 const (
+	llmRefusedMessage     = "context fabric model refused the request"
 	llmCallFailedMessage  = "context fabric model call failed"
 	llmReplyCutMessage    = "context fabric model reply hit the output cap"
 	llmFormatPathMessage  = "context fabric model answer format path"
@@ -213,6 +221,12 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 			"output_tokens", outputTokens, "max_output_tokens", g.maxOutputTokens)
 	}
 	usage := llmUsage(result.Usage)
+	if result.StopReason == llmRefusalStopReason {
+		g.logger.InfoContext(ctx, llmRefusedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "outcome", "model_refusal",
+			"input_tokens", usage.InputTokens, "output_tokens", usage.OutputTokens)
+		return "", usage, errModelRefusal
+	}
 	if result.Text != "" {
 		return result.Text, usage, nil
 	}
@@ -276,7 +290,7 @@ func schemaViolations(result *gojsonschema.Result) []string {
 func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
 	text, usage, err := g.complete(ctx, "interpret", request, g.interpretation)
 	if err != nil {
-		return interpretationOutput{}, contextfabric.ModelUsage{}, err
+		return interpretationOutput{}, usage, err
 	}
 	candidate, checkErr := g.check(ctx, "interpret", text, g.interpretation)
 	var output interpretationOutput
@@ -297,7 +311,7 @@ func (g llmGenerator) Interpret(ctx context.Context, request generationRequest) 
 func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
 	text, usage, err := g.complete(ctx, "synthesize", request, g.synthesis)
 	if err != nil {
-		return synthesisOutput{}, contextfabric.ModelUsage{}, err
+		return synthesisOutput{}, usage, err
 	}
 	candidate, checkErr := g.check(ctx, "synthesize", text, g.synthesis)
 	var output synthesisOutput
@@ -318,7 +332,7 @@ func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest)
 func (g llmGenerator) Phrase(ctx context.Context, request generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
 	text, usage, err := g.complete(ctx, "phrase", request, g.phrasing)
 	if err != nil {
-		return phrasingOutput{}, contextfabric.ModelUsage{}, err
+		return phrasingOutput{}, usage, err
 	}
 	candidate, checkErr := g.check(ctx, "phrase", text, g.phrasing)
 	if checkErr != nil {
