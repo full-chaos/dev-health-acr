@@ -1913,6 +1913,19 @@ const (
 	storedAnswerabilityMaxLines = 2 * passesPerRequest
 	// answer reuse served request id: 2 call sites.
 	answerReuseServedRequestIDMaxLines = 2 * passesPerRequest
+
+	// read requirement population: one call site emitting once per served result, one line per outcome row.
+	readRequirementPopulationMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount
+	// coverPassesPerRequest is the number of answer passes that publish cover rows: the first synthesis, the second attempt (the budget retry or the candidate narrowing re-finalize), and the candidate narrowing re-finalize after a retry. The decisive fit publishes none; bound_pins_test.go reads this count from the answerPass constants.
+	coverPassesPerRequest = 3
+	// observation cover: one call site, one line per row of each pass.
+	observationCoverMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * coverPassesPerRequest
+	// membership cardinality: 2 call sites (fresh and reused result).
+	membershipCardinalityMaxLines = 2 * passesPerRequest
+	// budget assertion: 10 finalizeServed call sites (one per exit).
+	budgetAssertionMaxLines = 10 * passesPerRequest
+	// item accounting disagreement: 3 call sites.
+	itemAccountingMaxLines = 3 * passesPerRequest
 )
 
 const requestIDApplicability = "written when the request context carries a request ID"
@@ -2608,6 +2621,154 @@ var GroupedCohortCompleteness = Event{
 		{Key: "planned_group_kind", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary(), Applicability: "written on a grouping refusal"},
 		{Key: "ungrouped_members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written on a grouping refusal"},
 		{Key: "source_group_kind", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary(), Applicability: "written on a grouping refusal whose facts named a group axis"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ReadRequirementPopulation is the Info line of one distributive read row of the served answer: the requirement, its scope, outcome and impact, the served and declared counts with their units, the population census and the narrowing that cut it.
+var ReadRequirementPopulation = Event{
+	ID:                       "contextfabric.read_requirement_population",
+	Msg:                      "context fabric read requirement population",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         readRequirementPopulationMaxLines,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per distributive read row of the served answer, emitted once per served result from one call site; the answer carries at most the plan requirement outcome limit of rows.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.QuestionFamilyLogVocabulary()},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.RequirementCoordinatePattern(), PatternExample: contextfabric.RequirementCoordinateExample()},
+		{Key: "scope", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.DistributiveCompletionScopeVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PlanRequirementOutcomeLogVocabulary()},
+		{Key: "impact", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerImpactKindLogVocabulary()},
+		{Key: "cause_coverage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CoverageDetailCodeLogVocabulary()},
+		{Key: "cause_observed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "row_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "row_declared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "count_units", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CountUnitsLogVocabulary()},
+		{Key: "population_census", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PopulationCensusLogVocabulary()},
+		{Key: "cohort_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "cohort_truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "cause_narrowing", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.NarrowingBasisLogVocabulary()},
+		{Key: "cause_overrun", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.BudgetOverrunOrNoneLogVocabulary()},
+		{Key: "refinements", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ObservationCover is the Info line of the observation cover decision for one read row: the kinds and the cover observed and served, the collapsed and tainted observations, the threshold, and whether the row met it.
+var ObservationCover = Event{
+	ID:                       "contextfabric.observation_cover",
+	Msg:                      "context fabric observation cover",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         observationCoverMaxLines,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per read row of each pass, from one call site: the plan requirement outcome limit of rows, over the passes of a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.RequirementCoordinatePattern(), PatternExample: contextfabric.RequirementCoordinateExample()},
+		{Key: "obligation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerObligationLogVocabulary()},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary()},
+		{Key: "threshold", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "observed_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "served_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "observed_cover", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "served_cover", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "collapsed_observations", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "tainted_observations", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "declared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "declared_raised_to_standard", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "meets_threshold", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PlanRequirementOutcomeLogVocabulary()},
+		{Key: "truncated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "failed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "narrowed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evaluated_pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "row_withheld", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RowWithheldReasonLogVocabulary()},
+		{Key: "reused", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "answer_withheld", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "served", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// MembershipCardinality is the Info line of the membership cardinality step's result for the served count: the outcome, the served and declared member counts, the cohort flags, and the narrowing that cut it.
+var MembershipCardinality = Event{
+	ID:                       "contextfabric.membership_cardinality",
+	Msg:                      "context fabric membership cardinality",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         membershipCardinalityMaxLines,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per served document that states a count, from the fresh result and the reused result call sites.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.QuestionFamilyLogVocabulary()},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.RequirementCoordinatePattern(), PatternExample: contextfabric.RequirementCoordinateExample()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.PlanRequirementOutcomeLogVocabulary()},
+		{Key: "served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "declared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cohort_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "cohort_truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.NarrowingBasisLogVocabulary(), Applicability: "written when a narrowing ran"},
+		{Key: "overrun", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.BudgetOverrunLogVocabulary(), Applicability: "written when a budget cut ran"},
+		{Key: "cause_coverage", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.CoverageDetailCodeLogVocabulary(), Applicability: "written when a cut has a coverage cause"},
+		{Key: "claimed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// BudgetAssertion is the Info line of the final budget assertion on a served document: the stage, whether it fits, the overrun, the measured and permitted items and bytes, the item ledger status and the capacity verdict.
+var BudgetAssertion = Event{
+	ID:                       "contextfabric.budget_assertion",
+	Msg:                      "context fabric budget assertion",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         budgetAssertionMaxLines,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per exit through the served document finalizer, over the passes of a request.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "assert_stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.BudgetAssertStageLogVocabulary()},
+		{Key: "fits", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "overrun", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.BudgetOverrunLogVocabulary()},
+		{Key: "measured_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "measured_bytes_post_label", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_serialized_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.LedgerStatusLogVocabulary()},
+		{Key: "ledger_debits", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "capacity", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CapacityVerdictLogVocabulary()},
+		{Key: "certified_fit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ItemAccountingDisagreement is the Error line of an item ledger or allocation that does not reconcile: the stage, the ledger status, the collection or bucket that disagreed, the debits against the budgeted items and the allocation verdict.
+var ItemAccountingDisagreement = Event{
+	ID:                       "contextfabric.item_accounting_disagreement",
+	Msg:                      "context fabric item accounting disagreement",
+	Level:                    LevelError,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         itemAccountingMaxLines,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per accounting failure, from the three call sites that raise it; a failure ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "accounting_stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ItemAccountingStageLogVocabulary()},
+		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.LedgerStatusLogVocabulary()},
+		{Key: "ledger_disagreement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.LedgerDisagreementPattern(), PatternExample: "candidates"},
+		{Key: "ledger_debits", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "budgeted_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "allocation_disagreement", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AllocationDisagreementLogVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -3964,19 +4125,19 @@ var RequirementOutcomeTransition = Event{
 		// Open: the requirement coordinate and its three parts, each drawn from
 		// a vocabulary the contracts package owns (obligation, subject role,
 		// subject kind).
-		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
-		{Key: "obligation", Type: FieldString, Presence: PresenceRequired},
-		{Key: "role", Type: FieldString, Presence: PresenceRequired},
-		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.RequirementCoordinatePattern(), PatternExample: contextfabric.RequirementCoordinateExample()},
+		{Key: "obligation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerObligationLogVocabulary()},
+		{Key: "role", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectRoleLogVocabulary()},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary()},
 		{Key: "predicted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("predicted")},
 		{Key: "predicted_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("predicted_reason")},
 		{Key: "assembled_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("assembled_outcome")},
 		{Key: "cause", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("cause")},
 		// Open: the assembled row's own wire causes, each from the contracts
 		// vocabulary that owns it and validated there, or `none`.
-		{Key: "cause_coverage", Type: FieldString, Presence: PresenceRequired},
-		{Key: "cause_overrun", Type: FieldString, Presence: PresenceRequired},
-		{Key: "cause_narrowing", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cause_coverage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionCauseLogVocabulary("cause_coverage")},
+		{Key: "cause_overrun", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionCauseLogVocabulary("cause_overrun")},
+		{Key: "cause_narrowing", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionCauseLogVocabulary("cause_narrowing")},
 		{Key: "served", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "declared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "served_fact_count", Type: FieldInt, Presence: PresenceRequired},
@@ -5375,6 +5536,11 @@ var All = []Event{
 	CoverageDisclosurePhrasing,
 	CategoryFactComposition,
 	PeriodDeltaComposition,
+	ReadRequirementPopulation,
+	ObservationCover,
+	MembershipCardinality,
+	BudgetAssertion,
+	ItemAccountingDisagreement,
 	PlanNarrowing,
 	CohortNarrowingDisclosure,
 	GroupedCohortCompleteness,
@@ -5422,15 +5588,15 @@ var CountPopulationScope = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		// Open: the frame's subject expression kind and member kind, empty when
 		// no frame records the requested population.
-		{Key: "expression_kind", Type: FieldString, Presence: PresenceRequired},
-		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired},
-		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
+		{Key: "expression_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectExpressionKindLogVocabulary()},
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary()},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired, Pattern: contextfabric.RequirementCoordinatePattern(), PatternExample: contextfabric.RequirementCoordinateExample()},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "committed_anchors", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "committed_unbound", Type: FieldInt, Presence: PresenceRequired},
 		// Open: the reading's anchor kind and the bound anchor's canonical id,
 		// empty when there is none.
-		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary()},
 		{Key: "anchor_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "anchor_candidates", Type: FieldInt, Presence: PresenceRequired},
@@ -5452,7 +5618,7 @@ var CountPopulationScope = Event{
 		// The minted cardinality claim's own subject, read off the served
 		// document -- empty when it carries none. Open: a subject-kind token
 		// drawn from contextfabric.SubjectKind, or a free canonical id.
-		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary()},
 		{Key: "subject_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

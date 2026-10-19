@@ -327,3 +327,96 @@ func GroupedCohortEventsForTest(t *testing.T) []GroupedCohortCompletenessEvent {
 	}
 	return events
 }
+
+// RequirementLineEventsForTest is every read requirement population,
+// observation cover, membership cardinality, count population scope, budget
+// assertion and item accounting event the engine produced across its counting,
+// scope and budget scenarios.
+type RequirementLineEventsForTest struct {
+	Populations   []ReadRequirementPopulationEvent
+	Covers        []ReadRequirementObservationCoverEvent
+	Cardinalities []MembershipCardinalityEvent
+	CountScopes   []CountPopulationScopeEvent
+	Assertions    []BudgetAssertionEvent
+	Accountings   []ItemAccountingEvent
+}
+
+// RequirementLineEventsFromEngineForTest drives the engine through counting
+// investigations (an exact count, a narrowed count, a ceiling), every count
+// population scope cell, and the budget stage scenarios, and returns the events
+// it recorded.
+func RequirementLineEventsFromEngineForTest(t *testing.T) RequirementLineEventsForTest {
+	t.Helper()
+	var out RequirementLineEventsForTest
+	collect := func(rec *recordingTelemetry) {
+		out.Populations = append(out.Populations, rec.readRequirementPopulations...)
+		out.Covers = append(out.Covers, rec.readRequirementObservationCovers...)
+		out.Cardinalities = append(out.Cardinalities, rec.membershipCardinalities...)
+		out.CountScopes = append(out.CountScopes, rec.countPopulationScopes...)
+		out.Assertions = append(out.Assertions, rec.budgetAssertions...)
+		out.Accountings = append(out.Accountings, rec.itemAccountings...)
+	}
+	for _, run := range []struct{ cohort, ceiling int }{{3, 0}, {30, 5}, {12, 4}} {
+		_, rec := runCountingInvestigation(t, run.cohort, run.ceiling)
+		collect(rec)
+	}
+	for _, cell := range scopeCells() {
+		rec := &recordingTelemetry{}
+		engine := newScopeEngine(t, cell, rec)
+		runScopeCell(t, context.Background(), engine)
+		collect(rec)
+	}
+	for _, scenario := range []struct {
+		cohort  *Cohort
+		claims  int
+		options EngineOptions
+	}{
+		{budgetStageCohort(2), 1, budgetStageOptions(40, time.Second)},
+		{budgetStageCohort(6), 2, budgetStageOptions(12, time.Second)},
+		{budgetStageCohort(4), 20, budgetStageOptions(4, 0)},
+	} {
+		calls := 0
+		rec := &recordingTelemetry{}
+		engine := budgetStageEngine(t, scenario.cohort, scenario.claims, scenario.options, &calls, rec)
+		_, _ = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+		collect(rec)
+	}
+	maxItems := chaos6561HeadroomItems(t, 10)
+	claims := -1
+	for c := 0; c < 50; c++ {
+		if 10*(1+c) > maxItems && 5*(1+c) <= maxItems {
+			claims = c
+			break
+		}
+	}
+	for _, run := range []struct{ population, claims, maxItems int }{{11, claims, maxItems}, {11, 0, maxItems}, {3, 0, maxItems}} {
+		rec := &recordingTelemetry{}
+		chaos6561Investigate(t, run.population, run.claims, run.maxItems, rec)
+		collect(rec)
+	}
+	ledger := unreconciledLedger()
+	ledger.Disagreement = string(contractsv1.ContextFabricChargedDrivers)
+	for _, stage := range ItemAccountingStagesForTest() {
+		out.Accountings = append(out.Accountings, itemAccountingEventFor(stage, ledger, 30))
+	}
+	allocation := itemAccountingEventFor("assembled_result", contractsv1.ContextFabricItemLedger{Status: contractsv1.ContextFabricLedgerReconciled}, 30)
+	for _, disagreement := range AllocationDisagreementVocabulary() {
+		allocation.AllocationDisagreement = disagreement
+		out.Accountings = append(out.Accountings, allocation)
+	}
+	return out
+}
+
+// ItemAccountingStagesForTest returns the stage names the engine measures an
+// attempt under: the literals passed to measureAssembledAttempt and the budget
+// assertion stages.
+func ItemAccountingStagesForTest() []string {
+	stages := []string{
+		"budget_trim", "assembled_result", "re_synthesized_result", "facts_only_result", "path_drop", "candidate_narrowing",
+		"claim_depth_narrowing", "walk_list_fit", "fact_row_truncation",
+	}
+	for _, stage := range BudgetAssertStageVocabulary() {
+		stages = append(stages, string(stage))
+	}
+	return stages
+}

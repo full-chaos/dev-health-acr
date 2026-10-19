@@ -167,6 +167,29 @@ func TestEveryClosedValueOnTheRequirementOutcomeTransitionLineCertifies(t *testi
 		"assembled_outcome": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) {
 			e.AssembledOutcome = contractsv1.ContextFabricPlanRequirementOutcome(v)
 		},
+		"obligation": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) { e.Obligation = v },
+		"role":       func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) { e.Role = v },
+		"subject_kind": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) {
+			e.Subject = contextfabric.SubjectKind(v)
+		},
+		"cause_coverage": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) {
+			if v == "none" {
+				v = ""
+			}
+			e.CauseCoverage = contractsv1.ContextFabricCoverageDetailCode(v)
+		},
+		"cause_overrun": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) {
+			if v == "none" {
+				v = ""
+			}
+			e.CauseOverrun = contractsv1.ContextFabricBudgetOverrun(v)
+		},
+		"cause_narrowing": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) {
+			if v == "none" {
+				v = ""
+			}
+			e.CauseNarrowing = contractsv1.ContextFabricNarrowingBasis(v)
+		},
 		"cause": func(e *contextfabric.RequirementOutcomeTransitionEvent, v string) {
 			e.AssemblyReason = contextfabric.RequirementAssemblyReason(v)
 		},
