@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"reflect"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -105,5 +106,13 @@ func withOutcomeEvictionLimitation(limitations []string, evicted int) ([]string,
 	if !ok {
 		return limitations, 0
 	}
-	return appendBoundedLimitations(kept, []string{sentence})
+	composed, displaced := appendBoundedLimitations(kept, []string{sentence})
+	if outcomeRowsEvicted(composed) == total {
+		return composed, displaced
+	}
+	// The bounded appender skips an addition when every entry is a service
+	// disclosure and none can give way. An evicted row must never be served
+	// undisclosed, so the last entry gives way instead.
+	composed = append(slices.Clone(composed[:len(composed)-1]), sentence)
+	return composed, displaced + 1
 }

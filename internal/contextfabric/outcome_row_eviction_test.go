@@ -142,3 +142,19 @@ func TestAModelLimitationCannotInflateTheEvictionCount(t *testing.T) {
 		t.Fatalf("a model-supplied eviction sentence survived composition: %q", result.Limitations)
 	}
 }
+
+func TestOutcomeEvictionLimitationLandsWhenEveryEntryIsAServiceDisclosure(t *testing.T) {
+	t.Parallel()
+	full := make([]string, 0, contractsv1.ContextFabricLimitationsMaxCount)
+	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+		sentence, ok := contractsv1.ContextFabricPathDropLimitation(i, 1000+i)
+		if !ok || !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
+			t.Fatalf("fixture sentence %d is not a service disclosure", i)
+		}
+		full = append(full, sentence)
+	}
+	out, displaced := withOutcomeEvictionLimitation(full, 1)
+	if outcomeRowsEvicted(out) != 1 || len(out) != contractsv1.ContextFabricLimitationsMaxCount || displaced != 1 {
+		t.Fatalf("evicted=%d len=%d displaced=%d, want 1, %d, 1", outcomeRowsEvicted(out), len(out), displaced, contractsv1.ContextFabricLimitationsMaxCount)
+	}
+}
