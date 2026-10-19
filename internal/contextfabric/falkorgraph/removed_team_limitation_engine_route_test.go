@@ -95,3 +95,20 @@ func TestTheRemovedTeamDecisionIsLoggedAtInfoWithCounts(t *testing.T) {
 		t.Fatalf("lookup line = %v, want level INFO, teams=1, removed=1", lines[0])
 	}
 }
+
+func TestTheRemovedTeamLookupLineNamesWhichTeamWasFlagged(t *testing.T) {
+	logs := &capturedLogs{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	askAboutTeamTango(t, map[string]interface{}{propPropertyPrefix + "gone_at": "2026-10-09 17:30:00.000000"})
+	lines := logs.named("context_fabric: removed team lookup")
+	if len(lines) != 1 {
+		t.Fatalf("%d removed team lookup lines at Info, want exactly one", len(lines))
+	}
+	ids, _ := lines[0]["removed_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "team:tango" {
+		t.Fatalf("lookup line = %v, want removed_ids [team:tango]: counts alone cannot say which team was flagged", lines[0])
+	}
+}
