@@ -300,25 +300,43 @@ check_main_runs_get_a_verdict() {
 check_go_cache() {
   local file="$1"
   local status=0
-  # v1.6: self-hosted legs share one GOMODCACHE/GOCACHE hostPath mount
-  # (helm rev 6) across every concurrent pool job -- setup-go's own
-  # cache:true would restore/save a tarball against those same paths and
-  # can race the live mount, corrupting it for every other job on the
-  # pool. So cache:false is now REQUIRED on self-hosted legs and
-  # FORBIDDEN on hosted ones (which have no such shared mount and should
-  # keep using setup-go's own cache).
+  # A job whose runner is anything but a literal GitHub-hosted label (the
+  # CI_RACE_RUNNER variable, a matrix value, a label list) can land on the
+  # self-hosted pool, so every setup-go step in it sets
+  # `cache: ${{ runner.environment == 'github-hosted' }}`. On the pool GOCACHE
+  # is a hostPath shared by every concurrent runner and the arm64 cache key
+  # never matches the hosted one, so setup-go's post step tarred and uploaded
+  # the live shared mount on every job (plan: 17 s of work, 9m55s of post
+  # step). A job on a literal ubuntu-* label keeps the literal `cache: true`.
+  # Every setup-go step must carry its own cache input: setup-go defaults it
+  # to true, so an omitted input is the pool regression with no text to check.
   local job
   while IFS= read -r job; do
     local block
     block="$(job_block "$file" "$job")"
     if grep -qE 'runs-on: *\[self-hosted' <<<"$block"; then
-      printf 'job "%s" targets a self-hosted runner, but every lane is hosted now -- the ARC pool is gone\n' \
+      printf 'job "%s" targets a self-hosted runner by label; route it through vars.CI_RACE_RUNNER instead\n' \
         "$job" >&2
       status=1
     fi
-    if grep -q 'cache: false' <<<"$block"; then
-      printf 'job "%s" has setup-go cache: false -- that existed only for self-hosted legs sharing a GOMODCACHE/GOCACHE hostPath mount; on a hosted runner it just throws the cache away\n' \
-        "$job" >&2
+    local steps caches
+    steps="$(grep -cE 'uses: *actions/setup-go@' <<<"$block" || true)"
+    [ "$steps" -gt 0 ] || continue
+    caches="$(grep -cE '^ +cache:' <<<"$block" || true)"
+    if [ "$caches" -ne "$steps" ]; then
+      printf 'job "%s" has %s setup-go step(s) but %s cache input(s); setup-go caches by default\n' "$job" "$steps" "$caches" >&2
+      status=1
+    fi
+    local cache_lines
+    cache_lines="$(grep -E '^ +cache:' <<<"$block" || true)"
+    if grep -E '^ +runs-on:' <<<"$block" | grep -qvE '^ +runs-on: ubuntu-[A-Za-z0-9.-]+$'; then
+      if grep -vqF "cache: \${{ runner.environment == 'github-hosted' }}" <<<"$cache_lines"; then
+        printf 'job "%s" can run on the self-hosted pool, but its setup-go cache is not the runner.environment == github-hosted expression\n' \
+          "$job" >&2
+        status=1
+      fi
+    elif grep -vqE '^ +cache: true$' <<<"$cache_lines"; then
+      printf 'job "%s" runs hosted only, but its setup-go cache is not true\n' "$job" >&2
       status=1
     fi
   done < <(list_jobs "$file")
@@ -1152,6 +1170,28 @@ assert_check_fails 'verify reverted to if: always()' check_verify_if_always "$ve
 cache_false="$tmpdir/cache-false.yml"
 awk '!done && /cache: true/ { sub(/cache: true/, "cache: false"); done=1 } { print }' "$workflow" > "$cache_false"
 assert_check_fails 'flipped a hosted job'"'"'s cache: true to cache: false' check_go_cache "$cache_false"
+
+# (c1) a pool-routable job back on setup-go's own cache, and one on a plain
+# cache: false (a hosted run of that job would then throw its cache away).
+routed_cache_true="$tmpdir/routed-cache-true.yml"
+awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { sub(/cache: .*/, "cache: true"); done=1 } { print }' \
+  "$workflow" > "$routed_cache_true"
+cmp -s "$workflow" "$routed_cache_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put a pool-routable job back on setup-go cache: true' check_go_cache "$routed_cache_true"
+routed_cache_missing="$tmpdir/routed-cache-missing.yml"
+awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { done=1; next } { print }' \
+  "$workflow" > "$routed_cache_missing"
+cmp -s "$workflow" "$routed_cache_missing" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_missing did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the cache input from a pool-routable setup-go step' check_go_cache "$routed_cache_missing"
+matrix_routed="$tmpdir/matrix-routed.yml"
+awk '
+  /^  scripts:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  scripts:$/ { in_job=0 }
+  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ matrix.runner }}"; next }
+  { print }
+' "$workflow" > "$matrix_routed"
+cmp -s "$workflow" "$matrix_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: matrix_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a cache: true job through a matrix runs-on' check_go_cache "$matrix_routed"
 
 # (c2) point a job at the ARC pool again. The pool is gone; a job that targets
 # it would queue forever rather than fail, which is the worst shape of red --

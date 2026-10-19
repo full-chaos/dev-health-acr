@@ -104,7 +104,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Select the unit and race shards this change reaches
         id: reach
         env:
@@ -289,7 +289,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Verify Go formatting
         run: make fmt-check
       - name: Vet Go packages
@@ -939,7 +939,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
@@ -1040,7 +1040,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Run isolated devhealthschema race suite
         run: |
           set -euo pipefail
@@ -1117,7 +1117,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1173,7 +1173,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1227,7 +1227,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1281,7 +1281,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1353,7 +1353,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1407,7 +1407,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1463,7 +1463,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1528,7 +1528,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1582,7 +1582,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
