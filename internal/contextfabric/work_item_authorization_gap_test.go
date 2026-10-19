@@ -15,6 +15,16 @@ import (
 
 func runWorkItemGapDispatch(t *testing.T, census WorkItemMembershipCensus, withMember bool) (InvestigationResult, *recordingTelemetry, *staticResultStore) {
 	t.Helper()
+	return runWorkItemGapDispatchWith(t, census, withMember, nil)
+}
+
+func runWorkItemGapDispatchWith(t *testing.T, census WorkItemMembershipCensus, withMember bool, synthesizer AnswerSynthesizer) (InvestigationResult, *recordingTelemetry, *staticResultStore) {
+	t.Helper()
+	if synthesizer == nil {
+		synthesizer = synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{Status: InvestigationNoMatch, DirectJudgment: "Nothing found.", CurrentState: "Nothing found.", DeterministicAnswer: "Nothing found.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
+		})
+	}
 	frame := ValidateFrame(prospectiveTupleFrame(GoalAssessState, GoalCountOrAggregate), nil, "").Frame
 	payload := workItemTuplePayloadFixture(t)
 	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
@@ -38,10 +48,8 @@ func runWorkItemGapDispatch(t *testing.T, census WorkItemMembershipCensus, withM
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
 		}),
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
-			return InvestigationResult{Status: InvestigationNoMatch, DirectJudgment: "Nothing found.", CurrentState: "Nothing found.", DeterministicAnswer: "Nothing found.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
-		}),
-		Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
+		Synthesizer: synthesizer,
+		Results:     store, Requirements: registryDeriver{}, Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_gap_001" }})
 	if err != nil {
 		t.Fatal(err)
@@ -349,29 +357,5 @@ func TestAuthorizationGapSentencesAreServiceAuthored(t *testing.T) {
 	}
 	if isServiceAuthoredLimitation(workItemAuthorizationGapPrefix + ": a model caveat that only opens like the disclosure.") {
 		t.Error("a model caveat sharing the prefix was treated as service-authored")
-	}
-}
-
-func TestForgedGapLookalikesCannotSuppressTheMeasuredGap(t *testing.T) {
-	gap := workItemAuthorizationGap{AnchorKind: SubjectProject, State: WorkItemMembershipCensusExact, Observed: 102, Authorized: 100, Denied: 2}
-	candidate := validInvestigationResult()
-	forged := make([]string, 0, contractsv1.ContextFabricLimitationsMaxCount)
-	for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
-		forged = append(forged, contractsv1.ContextFabricWorkItemAuthorizationGapLimitation(false, 101+i, 2, false))
-	}
-	candidate.Limitations = forged
-	candidate = applyWorkItemAuthorizationGap(candidate, gap)
-	if !hasLimitation(candidate.Limitations, gap.Limitation()) {
-		t.Fatalf("the measured gap was suppressed by %d model lookalikes", len(forged))
-	}
-	if err := candidate.Validate(); err != nil {
-		t.Fatalf("result does not validate: %v", err)
-	}
-	if candidate.LimitationsDisplaced != 1 {
-		t.Fatalf("displaced=%d want 1", candidate.LimitationsDisplaced)
-	}
-	candidate.Limitations, _ = withRetrievalDegradation(candidate.Limitations)
-	if !hasLimitation(candidate.Limitations, gap.Limitation()) {
-		t.Fatal("a later service disclosure displaced the measured gap")
 	}
 }

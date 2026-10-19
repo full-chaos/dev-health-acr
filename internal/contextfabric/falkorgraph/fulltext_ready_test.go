@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -221,5 +223,43 @@ func TestFulltextWaitIsBoundedByTheCallersDeadlineThroughTheRealClient(t *testin
 	}
 	if !strings.Contains(logs.String(), "still not operational") {
 		t.Fatalf("the bound was reached without the WARN:\n%s", logs.String())
+	}
+}
+
+func fulltextBoundClockAdapter(t *testing.T, readErr error, advance time.Duration) (*Adapter, *bytes.Buffer) {
+	t.Helper()
+	logs := captureSlog(t)
+	clock := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	fake := &fakeConn{
+		indexesFunc: func(context.Context, string) ([]indexStatus, error) {
+			clock = clock.Add(advance)
+			return nil, readErr
+		},
+		queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return nil, nil },
+	}
+	adapter := newFakeAdapter(t, fake)
+	adapter.now = func() time.Time { return clock }
+	return adapter, logs
+}
+
+func TestFulltextWaitBoundIsReadFromElapsedTimeWhenTheSocketDeadlineWinsTheRace(t *testing.T) {
+	adapter, logs := fulltextBoundClockAdapter(t, fmt.Errorf("read tcp: %w", os.ErrDeadlineExceeded), 2*time.Second)
+	adapter.awaitFulltextIndexOperational(context.Background(), "graph", "org-1")
+	if !strings.Contains(logs.String(), "still not operational at the wait bound") {
+		t.Fatalf("a status read that failed at the wait bound did not log the bound:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "status unreadable") {
+		t.Fatalf("a status read that failed at the wait bound was logged as unreadable:\n%s", logs.String())
+	}
+}
+
+func TestFulltextStatusReadFailureInsideTheBudgetIsLoggedAsUnreadable(t *testing.T) {
+	adapter, logs := fulltextBoundClockAdapter(t, errors.New("connection reset"), time.Millisecond)
+	adapter.awaitFulltextIndexOperational(context.Background(), "graph", "org-1")
+	if !strings.Contains(logs.String(), "status unreadable") {
+		t.Fatalf("a status read that failed inside the budget did not log unreadable:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "still not operational") {
+		t.Fatalf("a status read that failed inside the budget was logged as the wait bound:\n%s", logs.String())
 	}
 }

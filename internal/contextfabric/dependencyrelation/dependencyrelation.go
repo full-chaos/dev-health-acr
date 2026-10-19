@@ -89,17 +89,19 @@ var mapping = map[string]struct {
 
 // Resolve translates one raw relationship_type value: the wire type, whether
 // the endpoints are swapped, and the spelling a relationship id derives from.
-// An unmapped value passes through upper-cased with its raw spelling as the
-// identity, exactly as the projector has always done.
+// The identity spelling is the trimmed ASCII-lower-case form of the type, the
+// same fold Key applies, so case and padding variants of one type for one pair
+// derive one id. A mapped value derives it from its target member (or the
+// alias's declared identity), lower-cased the same way.
 func Resolve(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEndpoints bool, identitySpelling string) {
 	upper := strings.ToUpper(strings.TrimSpace(raw))
 	if m, ok := mapping[upper]; ok {
 		if m.identity != "" {
-			return m.mapped, m.swapEndpoints, m.identity
+			return m.mapped, m.swapEndpoints, asciiLower(m.identity)
 		}
-		return m.mapped, m.swapEndpoints, string(m.mapped)
+		return m.mapped, m.swapEndpoints, asciiLower(string(m.mapped))
 	}
-	return contractsv1.ContextFabricRelationshipType(upper), false, raw
+	return contractsv1.ContextFabricRelationshipType(upper), false, asciiLower(asciiTrim(raw))
 }
 
 // Key is the canonical relation key of a raw spelling: canonical type plus

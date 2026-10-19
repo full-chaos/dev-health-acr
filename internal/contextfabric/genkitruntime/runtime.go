@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/invopop/jsonschema"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
@@ -660,6 +660,7 @@ type Runtime struct {
 	generator generator
 	config    Config
 	now       func() time.Time
+	sleep     func(context.Context, time.Duration) error
 }
 
 type generator interface {
@@ -909,7 +910,7 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	return &Runtime{generator: gen, config: config, now: time.Now}, nil
+	return &Runtime{generator: gen, config: config, now: time.Now, sleep: sleepContext}, nil
 }
 
 // InterpretQuestion is the production entry point: it always samples the
@@ -1729,6 +1730,7 @@ func synthesizeValidateDraw(ctx context.Context, r *Runtime, principal storage.P
 	if stripped > 0 && r.config.Telemetry != nil {
 		r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
 	}
+	draft = contextfabric.DropUngroundedSynthesisItems(input, draft)
 	return draft, draft.ValidateAgainst(input)
 }
 
@@ -2252,7 +2254,7 @@ func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.P
 	var output phrasingOutput
 	var usage contextfabric.ModelUsage
 	var generationErr error
-	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
+	attemptOutcomes, generationErr = r.withRetryFor(ctx, false, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Phrase(callCtx, generationRequest{
 			Model: r.config.PhrasingModelRef, System: phrasingSystemPrompt, Prompt: string(encoded),
@@ -2674,7 +2676,15 @@ func drawLogFields(draws []synthesisDraw) []any {
 }
 
 func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {
+	return r.withRetryFor(ctx, r.config.Fallback != nil, fn)
+}
+
+// withRetryFor is withRetry for a call that is followed by a fallback leg
+// only when fallbackFollows: the deadline a retry needs covers that leg's
+// attempt budget only then.
+func (r *Runtime) withRetryFor(ctx context.Context, fallbackFollows bool, fn func(context.Context) error) ([]attemptOutcome, error) {
 	var last error
+	clientRetried := false
 	outcomes := make([]attemptOutcome, 0, r.config.MaxAttempts)
 	// record appends THIS attempt's outcome before any return, so the
 	// returned slice length always equals the attempt number the caller used
@@ -2730,16 +2740,101 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 			return outcomes, nil
 		}
 		last = err
+		class, isClient := llm.ClassOf(err)
 		// The attempt budget is used when the LAST allowed attempt fails,
 		// whatever its class: the runtime has nothing left to try.
 		if attempt == r.config.MaxAttempts {
+			if isClient {
+				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipAttemptBudget)
+			}
 			return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
 		}
 		if !retryable(err) {
+			if isClient {
+				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipClass)
+			}
 			return outcomes, err
+		}
+		if isClient {
+			if clientRetried {
+				r.logRetryDecision(ctx, class, attempt, 0, false, retrySkipCap)
+				return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
+			}
+			clientRetried = true
+		}
+		if wait, ok := llmRetryWait(err); ok {
+			if wait > maxLLMRetryWait {
+				r.logRetryDecision(ctx, class, attempt, wait, false, retrySkipWaitOverBound)
+				return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
+			}
+			if deadline, ok := ctx.Deadline(); ok {
+				need := wait + r.config.Timeout
+				if fallbackFollows {
+					need += r.config.Timeout
+				}
+				if time.Until(deadline) < need {
+					r.logRetryDecision(ctx, class, attempt, wait, false, retrySkipDeadline)
+					return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelRetriesExhausted, err)
+				}
+			}
+			r.logRetryDecision(ctx, class, attempt, wait, true, retryAfterWait)
+			if sleepErr := r.sleep(ctx, wait); sleepErr != nil {
+				return outcomes, err
+			}
 		}
 	}
 	return outcomes, last
+}
+
+// maxLLMRetryWait bounds the pause before a retried shared-client failure.
+const maxLLMRetryWait = 5 * time.Second
+
+const baseLLMRetryWait = 500 * time.Millisecond
+
+// llmRetryWait is the pause before the next attempt after a retryable
+// shared-client failure: the provider's Retry-After for a rate limit when it
+// sent one, otherwise baseLLMRetryWait. A shared-client failure is retried at
+// most once whatever Config.MaxAttempts is (MaxAttempts still bounds every
+// other retry), so the worst case is the client's own two calls times two
+// runtime attempts. A retry also needs the caller's remaining deadline to
+// cover the wait, one full attempt budget and, when a fallback exists, its
+// attempt budget, so a wait never eats time the draw loops reserved. ok is
+// false for an error that is not the shared client's, which keeps its
+// immediate retry.
+func llmRetryWait(err error) (time.Duration, bool) {
+	var typed *llm.Error
+	if _, isClient := llm.ClassOf(err); !isClient || !errors.As(err, &typed) {
+		return 0, false
+	}
+	if typed.Class == llm.ClassRateLimit && typed.RetryAfter > 0 {
+		return typed.RetryAfter, true
+	}
+	return baseLLMRetryWait, true
+}
+
+const (
+	retryAfterWait         = "wait_then_retry"
+	retrySkipCap           = "client_retry_used"
+	retrySkipAttemptBudget = "attempt_budget_used"
+	retrySkipClass         = "class_not_retried"
+	retrySkipWaitOverBound = "wait_over_bound"
+	retrySkipDeadline      = "deadline_too_short"
+)
+
+func (r *Runtime) logRetryDecision(ctx context.Context, class llm.ErrorClass, attempt int, wait time.Duration, retrying bool, reason string) {
+	r.config.Logger.InfoContext(ctx, "context fabric model call retry decision",
+		"error_class", contextfabric.SanitizeLogAttr(string(class)), "attempt", attempt, "wait_ms", wait.Milliseconds(), "retrying", retrying, "reason", contextfabric.SanitizeLogAttr(reason))
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // fallbackWouldSeeADeadContext reports whether invoking the fallback leg
@@ -3111,14 +3206,15 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 
 // retryable decides whether a generation failure may be retried with the
 // EXACT SAME encoded payload. It classifies ONLY on structured status/code
-// (a Genkit gRPC-style status, or context.DeadlineExceeded) -- never by
+// (a Genkit gRPC-style status, a shared-client error class, or
+// context.DeadlineExceeded) -- never by
 // sniffing an error's message text (CHAOS-3770 F2).
 //
 // That restriction is deliberate, not merely cautious: the OpenAI SDK's own
 // error type (openai-go/internal/apierror.Error, aliased as openai.Error)
 // formats Error() as "%s %q: %d %s %s" with the raw provider response body
 // as the last verbatim component, and compat_oai/generate.go wraps that
-// error with a plain fmt.Errorf rather than a *core.GenkitError. So by the
+// error with a plain fmt.Errorf rather than a modelStatusError. So by the
 // time an error from the real production transport reaches this function,
 // it is routinely UNSTRUCTURED, and its message can legitimately be a
 // non-transient validation failure whose body happens to contain a word
@@ -3134,19 +3230,27 @@ func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
+	if class, ok := llm.ClassOf(err); ok {
+		switch class {
+		case llm.ClassRateLimit, llm.ClassServer, llm.ClassTimeout, llm.ClassTransport:
+			return true
+		default:
+			return false
+		}
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	// Genkit (and well-behaved plugins) surface transport and provider
-	// failures as *core.GenkitError with a gRPC-style status. Prefer that
+	// failures as *modelStatusError with a gRPC-style status. Prefer that
 	// structured signal over string sniffing when it is present -- and once
 	// present, trust it completely: an unmatched status (e.g. INTERNAL, or
 	// anything else Genkit's own validation paths raise) is not retryable
 	// either, never falling through to string matching on its own Message.
-	var genkitErr *core.GenkitError
+	var genkitErr *modelStatusError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {
-		case core.RESOURCE_EXHAUSTED, core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+		case statusResourceExhausted, statusUnavailable, statusDeadlineExceeded, statusAborted:
 			return true
 		default:
 			// Includes INVALID_ARGUMENT (malformed request or
@@ -3212,14 +3316,14 @@ func classifyModelErrorKind(err error) error {
 	if classified, ok := classifyLLMError(err); ok {
 		return classified
 	}
-	var genkitErr *core.GenkitError
+	var genkitErr *modelStatusError
 	if errors.As(err, &genkitErr) {
 		switch genkitErr.Status {
-		case core.RESOURCE_EXHAUSTED:
+		case statusResourceExhausted:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelRateLimited, genkitErr.Status)
-		case core.INVALID_ARGUMENT:
+		case statusInvalidArgument:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
-		case core.INTERNAL:
+		case statusInternal:
 			// Genkit reports its own structured-output/schema mismatch as
 			// INTERNAL (see ai.jsonHandler.ParseMessage), so INTERNAL is
 			// ambiguous between a genuine provider fault and invalid model
@@ -3230,7 +3334,7 @@ func classifyModelErrorKind(err error) error {
 				return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
 			}
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
-		case core.UNAVAILABLE, core.DEADLINE_EXCEEDED, core.ABORTED:
+		case statusUnavailable, statusDeadlineExceeded, statusAborted:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
 		default:
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
@@ -3453,7 +3557,7 @@ type outputTimeContext struct {
 }
 
 // JSONSchema hand-authors outputTimeContext's schema (invopop/jsonschema's
-// Marshaler convention, respected by genkit's own core.InferSchemaMap --
+// Marshaler convention, respected by inferSchemaMap --
 // see InterpretationOutputSchema's doc comment) instead of the
 // struct-tag-derived default, to encode the axis-shape rules no jsonschema
 // struct tag can express: each of the four axes allows a DIFFERENT,

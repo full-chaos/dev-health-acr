@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,8 +146,9 @@ func TestARouteServesAGroundedDerivedClaimWithItsInputsAndOperation(t *testing.T
 	}
 }
 
-// The same draft with a value the inputs do not reproduce is rejected: the
-// route serves the degraded answer, with no derived claim in it.
+// The same draft with a value the inputs do not reproduce has the derived claim
+// left out: the route serves the grounded remainder as partial, with no derived
+// claim in it.
 func TestARouteDoesNotServeADerivedClaimWhoseValueTheInputsDoNotReproduce(t *testing.T) {
 	recorder, syntheses := derivationRoute(t, 11)
 	if syntheses != 1 {
@@ -156,8 +158,11 @@ func TestARouteDoesNotServeADerivedClaimWhoseValueTheInputsDoNotReproduce(t *tes
 	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 		t.Fatalf("status %d: %v", recorder.Code, err)
 	}
-	if result.Status != contractsv1.ContextFabricInvestigationDegraded {
-		t.Fatalf("status = %q, want degraded (the rejected draft is not served)", result.Status)
+	if result.Status != contractsv1.ContextFabricInvestigationPartial {
+		t.Fatalf("status = %q, want partial (the unreproducible derivation is left out)", result.Status)
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricUngroundedItemsDroppedLimitation) {
+		t.Fatalf("limitations = %v, want the dropped-items line", result.Limitations)
 	}
 	// The degraded answer still restates served facts under server-minted
 	// claim ids; none of them is the rejected derivation.

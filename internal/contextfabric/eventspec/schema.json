@@ -861,7 +861,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per containment measurement.",
-    "data_dependent_bound": "one line per reuse attempt that measured containment; the count follows the candidate lookups a request makes.",
+    "max_lines_per_scope": 6,
     "fields": [
       {
         "key": "org_id",
@@ -950,7 +950,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per answer reuse attempt.",
-    "data_dependent_bound": "one line per reuse attempt; a request tries reuse once per candidate lookup it makes and the count follows the lookups.",
+    "max_lines_per_scope": 32,
     "fields": [
       {
         "key": "org_id",
@@ -1001,7 +1001,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per reuse hit.",
-    "data_dependent_bound": "one line per reuse hit; the answer reuse path and the work item reuse path each write one, and the count follows the lookups a request makes.",
+    "max_lines_per_scope": 4,
     "fields": [
       {
         "key": "org_id",
@@ -1394,6 +1394,92 @@
     ]
   },
   {
+    "id": "contextfabric.cohort_narrowing_disclosure",
+    "msg": "context fabric cohort narrowing disclosure",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the decision is published once from the exit of the investigation.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "disclosed",
+          "chain_unreconciled",
+          "work_item_census"
+        ]
+      },
+      {
+        "key": "declared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "steps",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.cohort_ranked",
     "msg": "context fabric cohort ranked",
     "level": "info",
@@ -1549,7 +1635,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per subject the commit gate retracts.",
-    "data_dependent_bound": "one line per retracted subject; the number of subjects an answer names follows the question.",
+    "max_lines_per_scope": 250,
     "fields": [
       {
         "key": "org_id",
@@ -1630,7 +1716,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per subject the commit gate keeps by the none-found row.",
-    "data_dependent_bound": "one line per kept subject; the number of subjects an answer names follows the question.",
+    "max_lines_per_scope": 250,
     "fields": [
       {
         "key": "org_id",
@@ -6255,6 +6341,139 @@
     ]
   },
   {
+    "id": "contextfabric.grouped_cohort_completeness",
+    "msg": "context fabric grouped cohort completeness",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: the grouped answer and the grouping refusal are exclusive branches of one grouping pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "pre_grouping_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "pre_grouping_truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "group_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "groups_marked_incomplete",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "grouping_refusal",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "group_kind_source_mismatch",
+          "no_member_placed",
+          "unclassified"
+        ],
+        "applicability": "written on a grouping refusal"
+      },
+      {
+        "key": "planned_group_kind",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ],
+        "applicability": "written on a grouping refusal"
+      },
+      {
+        "key": "ungrouped_members",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written on a grouping refusal"
+      },
+      {
+        "key": "source_group_kind",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ],
+        "applicability": "written on a grouping refusal whose facts named a group axis"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.interpretation_ensemble_gap",
     "msg": "context fabric interpretation ensemble did not reach quorum",
     "level": "warn",
@@ -7178,6 +7397,341 @@
     ]
   },
   {
+    "id": "contextfabric.plan_narrowing",
+    "msg": "context fabric plan narrowing",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per narrowing decision: the engine records a plan narrowing decision from 20 call sites, each at most once per synthesis pass, and a request makes at most two synthesis passes (the first and one retry); the number of call sites is pinned by a test, so a new site forces this bound to be reviewed.",
+    "max_lines_per_scope": 40,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "family_version",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "question-family.v4"
+        ]
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "cardinality",
+          "synthesis_input",
+          "assembled_result"
+        ]
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "canonical_id_lexical",
+          "largest_group_round_robin",
+          "attention_rank",
+          "overlap_aware_set_cover",
+          "link_strength_then_id"
+        ]
+      },
+      {
+        "key": "basis_observed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "before",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "after",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "groups",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "overrun",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "fits",
+          "items",
+          "bytes",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "measured_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "predicted_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_global",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_member",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_group",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_multi_group",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "measured_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_serialized_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "retry_attempted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "retry_fit",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "retry_failed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "refusal_planned",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "facts_only_attempted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "facts_only_served",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "facts_only_declined",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "compose_failed",
+          "measure_failed",
+          "over_budget"
+        ]
+      },
+      {
+        "key": "deadline_reserved",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "retry_declined",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "no_reserve",
+          "insufficient_deadline",
+          "nothing_to_narrow",
+          "cannot_reduce_axis",
+          "supplied_synthesis"
+        ]
+      },
+      {
+        "key": "narrower_continuation_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "none",
+          "evidence_window",
+          "result_count",
+          "scope_anchor",
+          "group_selection",
+          "comparison_pair"
+        ]
+      },
+      {
+        "key": "outcome_reduction_applied",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_reduction_inner_fit",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_items_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_items_declared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_completeness_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "not_derived",
+          "complete",
+          "partial",
+          "degraded"
+        ]
+      },
+      {
+        "key": "outcome_rows_evicted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_reduction_declined",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "not_items_axis",
+          "no_item_budget",
+          "nothing_reducible",
+          "would_not_reduce",
+          "insufficient",
+          "unmeasurable",
+          "invalid_result"
+        ]
+      },
+      {
+        "key": "ledger_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "reconciled",
+          "collection_count_disagreement",
+          "bucket_split_disagreement",
+          "duplicate_occurrence",
+          "invalid_debit",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "quota_availability",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "bounded",
+          "bounded_zero",
+          "unbounded",
+          "unavailable",
+          "accounting_disagreement",
+          "unclassified"
+        ]
+      },
+      {
+        "key": "quota_group_allowance",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quota_groups_granted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quota_groups_measured",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quota_groups_over_allowance",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_pinned_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ceiling_fit",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "fits_as_measured",
+          "row_truncation",
+          "path_drop",
+          "walk_list_cut",
+          "decisive_fit"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.prior_consulted",
     "msg": "context fabric prior consulted",
     "level": "info",
@@ -7298,7 +7852,7 @@
       "reason"
     ],
     "bounded_aggregation": "one line per skip reason with a non-zero count.",
-    "data_dependent_bound": "at most one line per skip reason (four) per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass.",
+    "max_lines_per_scope": 2,
     "fields": [
       {
         "key": "org_id",
@@ -7344,7 +7898,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per receipt-skip recording, and none when no receipt was skipped.",
-    "data_dependent_bound": "one line per receipt-skip recording; the recorder is called from sibling terminal branches of one investigation pass, so the count follows the branches a request passes, not a fixed number.",
+    "max_lines_per_scope": 2,
     "fields": [
       {
         "key": "org_id",
@@ -9193,6 +9747,40 @@
     ]
   },
   {
+    "id": "contextfabric.service_limitation_lookalikes_dropped",
+    "msg": "context fabric draft limitations matching service disclosures dropped",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_limitation_lookalikes_dropped",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "cf_limitation_lookalike_recognisers",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.stated_window_axis_decision",
     "msg": "context fabric stated window axis decision",
     "level": "info",
@@ -9282,7 +9870,7 @@
       "surface"
     ],
     "bounded_aggregation": "one line per stored clarification determination.",
-    "data_dependent_bound": "one line per stored clarification a surface checks; reuse checks one per candidate lookup and the result by id route one per stored result it serves.",
+    "max_lines_per_scope": 4,
     "fields": [
       {
         "key": "org_id",
@@ -10226,22 +10814,48 @@
       {
         "key": "family",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified"
+        ]
       },
       {
         "key": "family_version",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "question-family.v4"
+        ]
       },
       {
         "key": "stage",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "cardinality",
+          "synthesis_input",
+          "assembled_result"
+        ]
       },
       {
         "key": "basis",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "canonical_id_lexical",
+          "largest_group_round_robin",
+          "attention_rank",
+          "overlap_aware_set_cover",
+          "link_strength_then_id"
+        ]
       },
       {
         "key": "basis_observed",
@@ -10266,7 +10880,13 @@
       {
         "key": "overrun",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "fits",
+          "items",
+          "bytes",
+          "unclassified"
+        ]
       },
       {
         "key": "measured_items",
@@ -10362,12 +10982,29 @@
       {
         "key": "retry_declined",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "no_reserve",
+          "insufficient_deadline",
+          "nothing_to_narrow",
+          "cannot_reduce_axis",
+          "supplied_synthesis"
+        ]
       },
       {
         "key": "narrower_continuation_axis",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "none",
+          "evidence_window",
+          "result_count",
+          "scope_anchor",
+          "group_selection",
+          "comparison_pair"
+        ]
       },
       {
         "key": "outcome_reduction_applied",
@@ -10392,7 +11029,14 @@
       {
         "key": "outcome_completeness_state",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "not_derived",
+          "complete",
+          "partial",
+          "degraded"
+        ]
       },
       {
         "key": "outcome_rows_evicted",
@@ -10402,17 +11046,43 @@
       {
         "key": "outcome_reduction_declined",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "not_items_axis",
+          "no_item_budget",
+          "nothing_reducible",
+          "would_not_reduce",
+          "insufficient",
+          "unmeasurable",
+          "invalid_result"
+        ]
       },
       {
         "key": "ledger_status",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "reconciled",
+          "collection_count_disagreement",
+          "bucket_split_disagreement",
+          "duplicate_occurrence",
+          "invalid_debit",
+          "unclassified"
+        ]
       },
       {
         "key": "quota_availability",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "bounded",
+          "bounded_zero",
+          "unbounded",
+          "unavailable",
+          "accounting_disagreement",
+          "unclassified"
+        ]
       },
       {
         "key": "quota_group_allowance",
@@ -10442,7 +11112,15 @@
       {
         "key": "ceiling_fit",
         "type": "string",
-        "presence": "required"
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "fits_as_measured",
+          "row_truncation",
+          "path_drop",
+          "walk_list_cut",
+          "decisive_fit"
+        ]
       },
       {
         "key": "request_id",
@@ -10831,7 +11509,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per canonicalization recording.",
-    "data_dependent_bound": "one line per canonicalization recording; the recorder is called from the veto, gate and decisive paths of one investigation pass, and a gated pass writes it beside the gated line.",
+    "max_lines_per_scope": 10,
     "fields": [
       {
         "key": "org_id",
@@ -12419,7 +13097,7 @@
       "kind"
     ],
     "bounded_aggregation": "one line per dropped time series of a dual-table fact.",
-    "data_dependent_bound": "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
+    "unbounded_reason": "one line per dual-table fact a producer drops a time series from, so the count follows the facts a read returns; the line carries no request id (the producer helper has no context).",
     "fields": [
       {
         "key": "producer",
@@ -12482,7 +13160,7 @@
       "org_id"
     ],
     "bounded_aggregation": "one line per health read with a cut daily_health table.",
-    "data_dependent_bound": "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
+    "unbounded_reason": "one line per health read that cut a daily_health table, so the count follows the health reads a request makes; the line carries no request id.",
     "fields": [
       {
         "key": "org_id",
@@ -12515,7 +13193,7 @@
       "producer"
     ],
     "bounded_aggregation": "one line per identity read with truncated owning teams.",
-    "data_dependent_bound": "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "unbounded_reason": "one line per identity read that truncates owning teams, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
     "fields": [
       {
         "key": "producer",
@@ -12541,7 +13219,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per pull request project links read.",
-    "data_dependent_bound": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
+    "unbounded_reason": "one line per pull request project links read, so the count follows the project reads a request makes; the line carries the request id when the context has one.",
     "fields": [
       {
         "key": "outcome",
@@ -12595,7 +13273,7 @@
       "org_id"
     ],
     "bounded_aggregation": "one line per fired compounding-risk rule row without a day.",
-    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
+    "unbounded_reason": "one line per fired compounding-risk rule row of a deficiency read whose rationale names no day, so the count follows the teams the read covers; the line carries no request id.",
     "fields": [
       {
         "key": "org_id",
@@ -12618,7 +13296,7 @@
       "org_id"
     ],
     "bounded_aggregation": "one line per fired compounding-risk rule row with an invalid day.",
-    "data_dependent_bound": "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
+    "unbounded_reason": "one line per fired compounding-risk rule row of a deficiency read whose rationale names an impossible day, so the count follows the teams the read covers; the line carries no request id.",
     "fields": [
       {
         "key": "org_id",
@@ -12647,7 +13325,7 @@
       "kind"
     ],
     "bounded_aggregation": "one line per provider read with a positive rejected count.",
-    "data_dependent_bound": "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
+    "unbounded_reason": "one line per provider read that rejects subjects, so the count follows the reads a request makes; the line carries no request id (the producer helper has no context).",
     "fields": [
       {
         "key": "producer",
@@ -12703,7 +13381,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per team chunk of a team linked mix read.",
-    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+    "unbounded_reason": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
     "fields": [
       {
         "key": "outcome",
@@ -12757,7 +13435,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per team chunk of a team linked mix read.",
-    "data_dependent_bound": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
+    "unbounded_reason": "one line per chunk of 100 teams of one mix read, so the count follows the number of teams the request covers.",
     "fields": [
       {
         "key": "outcome",
@@ -12807,7 +13485,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per team pull request link state read.",
-    "data_dependent_bound": "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
+    "unbounded_reason": "one line per link state read: a read batches the repositories of every team in chunks of 500 and writes one line after the loop, so the count follows the number of link state reads a request makes.",
     "fields": [
       {
         "key": "outcome",

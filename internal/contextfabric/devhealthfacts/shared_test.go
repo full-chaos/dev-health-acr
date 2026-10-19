@@ -726,3 +726,39 @@ func TestQueryVersionMovedPastTheCommitmentDueDateTable(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v246 or later -- an answer saved when a commitment fact had no due date table must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+func TestQueryVersionMovedPastTheProjectPopulationRead(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 247 {
+		t.Fatalf("QueryVersion = %q, want v247 or later -- an answer saved when a project past the shared scan budget was omitted must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+func TestQueryVersionMovedPastTheGraphQLQueryPageCut(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 248 {
+		t.Fatalf("QueryVersion = %q, want v248 or later -- an answer saved when an over-budget graphql_query list was refused must not be reused", devhealthfacts.QueryVersion)
+	}
+}
+
+func TestQueryVersionMovedPastTheCIRunLabel(t *testing.T) {
+	t.Parallel()
+	const prefix = "devhealthfacts.clickhouse.v"
+	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
+	if err != nil {
+		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
+	}
+	if number < 249 {
+		t.Fatalf("QueryVersion = %q, want v249 or later -- an answer saved when a CI run label read \"CI CI #run\" must not be reused", devhealthfacts.QueryVersion)
+	}
+}
