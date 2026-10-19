@@ -284,10 +284,14 @@ definition line are one site; a `func` declaration is always one site). More is
 The gate does not require one registration per line. Because a row is matched
 by `source.file` + `method` + `route`, two `mux.Handle*` calls on the same
 physical line are accepted when each has its own row. A registration without a
-row fails as `UNOWNED SURFACE`, whichever line it shares. A registration the
-discoverer cannot parse (wrapped across lines, or an unrecognised shape) is not
-dropped: it fails as `UNRESOLVED REGISTRATION`. Writing one registration per
-line is still the readable form, and the gate does not depend on it.
+row fails as `UNOWNED SURFACE`, whichever line it shares. The discoverer finds
+registrations by the literal text `mux.Handle*(`. A line that holds that text
+but whose registration it cannot parse (for example one wrapped across lines)
+fails as `UNRESOLVED REGISTRATION`. A registration written without the literal
+`mux.Handle*(` text (for example `mux.` and `HandleFunc(` split by a comment)
+is not seen at all: the gate reports nothing for it. Writing one registration
+per line, in the plain `mux.Handle*(` form, is still the readable form, and
+the gate does not depend on the one-per-line part.
 
 ## Wrapper-chain reconciliation
 
