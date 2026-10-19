@@ -240,6 +240,8 @@ race_spread_pins=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun=2"
   "github.com/full-chaos/dev-health-acr/internal/releasebuild=4"
   "github.com/full-chaos/dev-health-acr/migrations/postgres=1"
+  "github.com/full-chaos/dev-health-acr/internal/contracts/v1=4"
+  "github.com/full-chaos/dev-health-acr/internal/mcp=4"
 )
 
 pinned_shard_of() {
