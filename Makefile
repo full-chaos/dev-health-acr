@@ -24,6 +24,12 @@ GOTEST_SHUFFLE_SEED ?= 20260727
 # growing on devhealthschema's account: the next time that walk gets more
 # expensive, only race-devhealthschema's own timeout needs to move.
 GOTEST_TIMEOUT ?= 420s
+
+# GOTEST_JSON=-json makes test-race emit test2json events. The isolated race
+# jobs of the dedicated packages set it (scripts/ci/run-isolated-budget.sh
+# with RACE_JSON_OUT) so verify can read which tests passed or skipped under
+# -race. Empty by default: every other run keeps the plain output.
+GOTEST_JSON ?=
 # CI partitions the module across shard runners by passing an explicit
 # package list; the default is the whole module so local `make test*`
 # invocations are unchanged.
@@ -158,7 +164,7 @@ test-split:
 # is now the coverage-instrumented `test-coverage` run below, while `make
 # test` stays the plain, dependency-free local gate.
 test-race:
-	go test $(GOTEST_EXEC) -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) -count=1 -race $(GOTEST_JSON) -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
 # CHAOS-4567: the split ci.yml already runs (CHAOS-3974) -- the shared
 # packages under GOTEST_TIMEOUT, the isolated packages under their own,
