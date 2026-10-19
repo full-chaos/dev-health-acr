@@ -894,7 +894,11 @@ deployment model, including for an organization that also holds
 `acr_service_model`; the `context fabric service model decision` log line then
 reports `basis=own_model` with the deployment model withheld for the turn: if
 the configuration is gone when the runtime is resolved, the turn fails as
-model-unavailable and never falls back to the deployment model.
+model-unavailable and never falls back to the deployment model. The gate's
+basis binds the whole turn: a turn admitted on the deployment model
+(`entitlement`, `deployment_open`) is served by it on every call even if an
+own configuration appears mid-turn, and an unreadable configuration at the gate
+fails the turn as unavailable.
 
 The output mode is picked from the provider before the call, never after a
 refusal (a refused call is billed for its input tokens, so there is no
