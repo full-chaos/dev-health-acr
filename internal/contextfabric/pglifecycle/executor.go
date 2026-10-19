@@ -2,6 +2,7 @@ package pglifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -84,17 +85,10 @@ func (e *RetireExecutor) DueRetirements(ctx context.Context) ([]contextfabric.Ep
 // every other per-org operation in this repository (see
 // projectionrun.Coordinator.Tick's own per-org failure isolation).
 //
-// KNOWN GAP, left for the follow-up (scheduler-wiring) slice: if
-// DeleteEpochGraph or DeleteEpochCheckpoints fails AFTER the record has
-// already advanced to RetireRecordDeleting, the record is stuck there --
-// DueRetirements only lists RetireRecordDraining records, so nothing
-// automatically retries a stuck 'deleting' record today. This slice ships
-// no scheduler at all (RetireExecutor is not wired into any cron/sweep
-// loop yet), so no automatic-retry policy exists to have this gap in; the
-// slice that wires a real sweep loop (matching
-// projectionrun.Coordinator's own per-pair backoff discipline) must also
-// add a "stuck in deleting past some bound" recovery path, or a
-// deleting -> draining CAS an operator/sweep can use to retry.
+// If DeleteEpochGraph or DeleteEpochCheckpoints fails after the record has
+// advanced to RetireRecordDeleting, the record returns to
+// RetireRecordDraining so the next sweep lists and retries it; both deletes
+// are safe to repeat.
 func (e *RetireExecutor) RunOne(ctx context.Context, orgID string, epoch int64) error {
 	bound, err := e.drainBound()
 	if err != nil {
@@ -126,16 +120,23 @@ func (e *RetireExecutor) RunOne(ctx context.Context, orgID string, epoch int64) 
 	}
 
 	if err := e.Graph.DeleteEpochGraph(ctx, orgID, epoch, activeEpoch); err != nil {
-		return fmt.Errorf("pglifecycle: retire executor: delete epoch graph: %w", err)
+		return e.revertToDraining(ctx, orgID, epoch, fmt.Errorf("pglifecycle: retire executor: delete epoch graph: %w", err))
 	}
 	if err := e.Checkpoints.DeleteEpochCheckpoints(ctx, orgID, epoch); err != nil {
-		return fmt.Errorf("pglifecycle: retire executor: delete epoch checkpoints: %w", err)
+		return e.revertToDraining(ctx, orgID, epoch, fmt.Errorf("pglifecycle: retire executor: delete epoch checkpoints: %w", err))
 	}
 
 	if _, err := e.Store.AdvanceRetirement(ctx, orgID, epoch, contextfabric.RetireRecordDeleting, contextfabric.RetireRecordDeleted, e.now()); err != nil {
 		return fmt.Errorf("pglifecycle: retire executor: advance to deleted: %w", err)
 	}
 	return nil
+}
+
+func (e *RetireExecutor) revertToDraining(ctx context.Context, orgID string, epoch int64, cause error) error {
+	if _, err := e.Store.AdvanceRetirement(context.WithoutCancel(ctx), orgID, epoch, contextfabric.RetireRecordDeleting, contextfabric.RetireRecordDraining, e.now()); err != nil {
+		return errors.Join(cause, fmt.Errorf("pglifecycle: retire executor: return to draining: %w", err))
+	}
+	return cause
 }
 
 // guard evaluates every RetireGuardVerdict condition, in the order design
