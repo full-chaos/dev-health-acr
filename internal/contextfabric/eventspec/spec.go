@@ -2346,6 +2346,24 @@ var ModelRowsStripped = Event{
 	},
 }
 
+// ServiceLimitationLookalikesDropped is the Info line of how many draft limitations matched a service-authored disclosure and were removed before composing; written only when the count is above zero.
+var ServiceLimitationLookalikesDropped = Event{
+	ID:                       "contextfabric.service_limitation_lookalikes_dropped",
+	Msg:                      "context fabric draft limitations matching service disclosures dropped",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per synthesis call that reaches this step; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cf_limitation_lookalikes_dropped", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cf_limitation_lookalike_recognisers", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // DriverSourceStateCorrected is the Info line of how many drivers had a supplied source state corrected from the facts their claims ground to; written only when the count is above zero.
 var DriverSourceStateCorrected = Event{
 	ID:                       "contextfabric.driver_source_state_corrected",
@@ -2520,6 +2538,7 @@ func planNarrowingFields() []Field {
 		{Key: "outcome_items_served", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_items_declared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_completeness_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerCompletenessStateLogVocabulary()},
+		{Key: "outcome_rows_evicted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome_reduction_declined", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.OutcomeReductionDeclinedLogVocabulary()},
 		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.LedgerStatusLogVocabulary()},
 		{Key: "quota_availability", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ItemQuotaAvailabilityLogVocabulary()},
@@ -5349,6 +5368,7 @@ var All = []Event{
 	DualTableFacts,
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
+	ServiceLimitationLookalikesDropped,
 	DriverIdentityCollisions,
 	EvidenceLabelFallback,
 	CoverageEntriesCapped,

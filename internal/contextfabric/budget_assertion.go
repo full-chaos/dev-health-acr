@@ -593,6 +593,7 @@ func (e *Engine) recordServedPathDrop(ctx context.Context, principal storage.Pri
 	drop.Overrun = contractsv1.ContextFabricBudgetOverrunBytes
 	drop.MaxSerializedBytes = budget.MaxSerializedBytes
 	drop.Served = true
+	drop.OutcomeRowsEvicted = outcomeRowsEvicted(served.Limitations)
 	if measured, err := contractsv1.MeasureContextFabricResponse(served); err == nil {
 		drop.BytesAfter = measured.Bytes
 	}

@@ -14,6 +14,17 @@ ship").
 - Shared schema (owned by ops, reused as-is): `contracts/auth/v1/endpoint-profile.schema.json`
 - Closed credential-class vocabulary (owned by ops): `contracts/auth/v1/credential-classes.json`
 
+## Absent versus null on the advisory fields
+
+On `action`, `resource_resolver`, `current_state_cache_behavior`,
+`entitlement_requirement`, `disclosure_behavior` and `token_shape`, a field is
+absent when code evidence shows it does not apply to the route, and `null` when
+it is undetermined in this pass. Every `null` needs a `gaps` entry that begins
+with `<field>:` and says what was searched. Never write `null` for "not
+applicable", and never infer "absent" from silence. The rule is ops-owned
+(`docs/reference/auth/endpoint-profiles.md` in dev-health-ops). The gate change
+that enforces it on every advisory field follows this data change.
+
 ## Coverage
 
 21 route registrations in `internal/api/app.go`. Two are unauthenticated

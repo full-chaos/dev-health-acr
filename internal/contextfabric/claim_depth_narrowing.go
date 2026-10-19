@@ -184,10 +184,12 @@ func (p claimDepthPlan) apply(result InvestigationResult, perMember int) (Invest
 		return result, served, false
 	}
 	result.ClaimedFacts = claims
-	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, claimDepthOutcomeRow(served, p.declared))
+	var evicted int
+	result.Completeness.Outcomes, evicted = appendLeverOutcomeRow(result.Completeness.Outcomes, claimDepthOutcomeRow(served, p.declared))
 	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	composed, evictionDisplaced := withOutcomeEvictionLimitation(composed, evicted)
 	result.Limitations = composed
-	result.LimitationsDisplaced += displaced
+	result.LimitationsDisplaced += displaced + evictionDisplaced
 	result.Coverage.Partial = true
 	if result.Status == InvestigationComplete {
 		result.Status = InvestigationPartial
@@ -313,20 +315,23 @@ func (e *Engine) planClaimDepthNarrowing(
 // ClaimDepthNarrowingEvent is the operator record of ONE claim-depth lever
 // application. Counts and closed values only.
 type ClaimDepthNarrowingEvent struct {
-	Family       QuestionFamily
-	Stage        contractsv1.ContextFabricPlanNarrowingStage
-	Pass         int
-	Overrun      contractsv1.ContextFabricBudgetOverrun
-	MaxItems     int
-	ItemsBefore  int
-	ItemsAfter   int
-	Members      int
-	ClaimsBefore int
-	ClaimsAfter  int
-	ClaimsCited  int
-	PerMemberCap int
-	Served       bool
-	Declined     ClaimDepthDeclined
+	// OutcomeRowsEvicted is how many outcome rows the served document has had
+	// evicted at the row cap to make room for a lever's disclosure row.
+	OutcomeRowsEvicted int
+	Family             QuestionFamily
+	Stage              contractsv1.ContextFabricPlanNarrowingStage
+	Pass               int
+	Overrun            contractsv1.ContextFabricBudgetOverrun
+	MaxItems           int
+	ItemsBefore        int
+	ItemsAfter         int
+	Members            int
+	ClaimsBefore       int
+	ClaimsAfter        int
+	ClaimsCited        int
+	PerMemberCap       int
+	Served             bool
+	Declined           ClaimDepthDeclined
 }
 
 // recordClaimDepthNarrowing emits one lever application. A lever that never
@@ -350,5 +355,7 @@ func (e *Engine) recordClaimDepthNarrowing(ctx context.Context, principal storag
 		PerMemberCap: attempt.PerMember,
 		Served:       attempt.Served,
 		Declined:     attempt.Declined,
+
+		OutcomeRowsEvicted: outcomeRowsEvicted(attempt.Result.Limitations),
 	})
 }

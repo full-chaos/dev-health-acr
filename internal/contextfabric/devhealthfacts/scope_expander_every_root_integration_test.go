@@ -183,7 +183,7 @@ func (f everyRootFixture) cases() []everyRootCase {
 // text carries with or without the origin id arrays.
 // devhealthschema:not-a-production-replica: these names select the guarded statements' query_log rows; they declare no table.
 var everyRootStatementFragments = []struct{ label, table, fragment string }{
-	{"projectRepositories", "work_items", "min(p.id), argMax(l.provenance, l.link_rank)"},
+	{"projectRepositories", "work_items", "min(concat(p.provider, ':', p.id)), argMax(l.provenance, l.link_rank)"},
 	{"projectRepositoriesAsOf", "work_items", "max(a.via_history) AS via_history"},
 	{"teamRepositories", "team_repo_ownership", "argMin(source, source_rank) AS best_source"},
 	{"teamWorkItems", "work_items", "min(a.team_id) AS origin_id"},
