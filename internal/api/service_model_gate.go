@@ -202,5 +202,10 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	if !allowed {
 		ctx = contextfabric.WithPlatformModelWithheldBasis(ctx, string(basis))
 	}
+	if basis == serviceModelBasisPlatformModelFallback || basis == serviceModelBasisDeploymentOpen {
+		// The basis binds the turn: it runs on the deployment model for every
+		// call, whatever the organization configuration says by then.
+		ctx = contextfabric.WithDeploymentModelBound(ctx)
+	}
 	return ctx, true
 }

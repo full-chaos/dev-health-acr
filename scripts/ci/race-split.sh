@@ -72,8 +72,10 @@ both_lists() { LC_ALL=C comm -12 <(mid_names) <(fourth_names); }
 unit_partition_three_way() {
   local wf="$root/.github/workflows/ci.yml" want n all a b skipped c counted bad lost
   for want in "race-split.sh $name unit-rest)" "race-split.sh $name unit-heavy)" "race-split.sh $name unit-mid)"; do
-    n="$(grep -cF -- "$want" "$wf" || true)"
-    [ "$n" -eq 1 ] || { printf 'ci.yml must use "%s" exactly once, found %s\n' "$want" "$n" >&2; return 1; }
+    # The `unit` job only: `unit-dedicated` carries the same steps (a contract
+    # check keeps the two identical), so a count over the whole file would see two.
+    n="$(awk '/^  unit:$/ { g=1; print; next } g && /^  [A-Za-z0-9_-]+:/ { g=0 } g' "$wf" | grep -cF -- "$want" || true)"
+    [ "$n" -eq 1 ] || { printf 'the unit job of ci.yml must use "%s" exactly once, found %s\n' "$want" "$n" >&2; return 1; }
   done
   # -run vs -skip decides whether a part selects or excludes its tests: swapping one
   # keeps the selector text but doubles or drops tests.
