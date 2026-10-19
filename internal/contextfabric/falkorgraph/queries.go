@@ -512,7 +512,6 @@ func (a *Adapter) runFulltextQuery(ctx context.Context, key, orgID, query string
 			"RETURN node, score ORDER BY score DESC, node.%s ASC, node.%s ASC LIMIT %d",
 		labelSubject, propOrgID, kindPredicate, temporal.predicate("node"), activeTeamCypher("node"), propKind, propCanonicalID, limit+1,
 	)
-	a.awaitFulltextIndexOperational(ctx, key, orgID)
 	rows, err := a.api.query(ctx, key, cypher, params, true)
 	if err != nil {
 		return nil, false, safeDependencyError("search context graph", err)
