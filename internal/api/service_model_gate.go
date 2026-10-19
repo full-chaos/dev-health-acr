@@ -46,6 +46,11 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	}
 	basis, granted, featureErr := a.deploymentModelGrant(ctx, principal)
 	if granted {
+		// The model resolver always prefers the organization's own model
+		// configuration, so a grant does not name the model that runs.
+		if own, err := a.orgHasOwnModel(ctx, principal); err == nil && own {
+			return serviceModelBasisOwnModel, true, nil
+		}
 		return basis, true, nil
 	}
 	if errors.Is(featureErr, entitlements.ErrOrganizationUnknown) {

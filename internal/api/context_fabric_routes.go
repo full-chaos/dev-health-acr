@@ -592,7 +592,7 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		return
 	}
 	if errors.Is(err, contextfabric.ErrInterpretationRejected) {
-		a.writeContextFabricRejectionError(w, r, err, contextFabricClassInterpretRejected, "interpretation_rejected", "Context Fabric's interpretation of the question violated a v1 bound")
+		a.writeContextFabricRejectionError(w, r, err, contextFabricClassInterpretRejected, "interpretation_rejected", "The model's output for this question was rejected by Context Fabric's interpretation rules; the question itself is not over a limit")
 		return
 	}
 	if errors.Is(err, contextfabric.ErrSynthesisRejected) {

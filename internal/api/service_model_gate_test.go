@@ -158,6 +158,8 @@ func TestServiceModelTurnIsServedOnTheFeatureOwnModelOrOpenDeployment(t *testing
 		asked   int
 	}{
 		{name: "feature", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{}, basis: "entitlement", asked: 1},
+		{name: "feature and own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
+		{name: "open deployment and own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, open: true, basis: "own_model", asked: 0},
 		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
 		{name: "open deployment", grants: &serviceModelGrants{}, configs: ownModelConfigs{}, open: true, basis: "deployment_open", asked: 0},
 	} {
