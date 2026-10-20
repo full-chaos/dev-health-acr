@@ -93,7 +93,7 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 	}
 	measure := func(runCtx context.Context, marker, statement string, bindings []readers.Binding) measured {
 		t.Helper()
-		tagged := strings.Replace(statement, "SELECT ", "SELECT /* "+marker+" */ ", 1)
+		tagged := strings.Replace(statement, "SELECT ", "SELECT '"+marker+"' AS diag_marker, ", 1)
 		run := func() {
 			if err := readers.QueryOrgScopedNamed(runCtx, query, "DiagLinkRows", tagged, org, []string{teamID}, func(readers.RowScanner) error { return nil }, bindings...); err != nil {
 				t.Errorf("%s: %v: %s", marker, err, readFailureCause(err))
@@ -110,7 +110,7 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 		var m measured
 		if err := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), max(read_bytes),
   toString(argMax(mapFilter((k, v) -> match(k, 'Set|Join|External|Hash|Memory|Arena'), ProfileEvents), event_time_microseconds))
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0 AND position(query, 'system.query_log') = 0`, mark, "/* "+marker+" */").Scan(&m.lowest, &m.highest, &m.readBytes, &m.events); err != nil {
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND position(query, ?) > 0 AND position(query, 'system.query_log') = 0`, mark, "'"+marker+"' AS diag_marker").Scan(&m.lowest, &m.highest, &m.readBytes, &m.events); err != nil {
 			t.Fatalf("%s: read query_log: %v", marker, err)
 		}
 		return m
