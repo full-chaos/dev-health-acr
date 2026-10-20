@@ -690,6 +690,12 @@ check_race_runner_uses_variable() {
   return "$status"
 }
 
+# workflow_files <dir>: every .yml or .yaml file in <dir>, dotfiles and any
+# case of the extension included.
+workflow_files() {
+  find "$1" -maxdepth 1 -type f \( -iname '*.yml' -o -iname '*.yaml' \) | LC_ALL=C sort
+}
+
 # The first-stage jobs (plan, mirror-preflight, lint) gate every
 # race leg: on a hosted runner they wait behind the hosted queue while the
 # CI_RACE_RUNNER pool idles. They read the same variable with the same hosted
@@ -708,15 +714,15 @@ check_routed_jobs_fork_guarded() {
       status=1
     fi
   done < <(grep -iF 'CI_RACE_RUNNER' "$file" | grep -vE '^[[:space:]]*#')
-  for other in "$(dirname "$file")"/*.yml "$(dirname "$file")"/*.yaml; do
-    if [ ! -f "$other" ] || [ "$other" = "$file" ]; then
+  while IFS= read -r other; do
+    if [ "$other" -ef "$file" ]; then
       continue
     fi
     if grep -iF 'CI_RACE_RUNNER' "$other" | grep -vE '^[[:space:]]*#' | grep -q .; then
       printf 'workflow %s names CI_RACE_RUNNER; only %s may route to the pool\n' "$other" "$file" >&2
       status=1
     fi
-  done
+  done < <(workflow_files "$(dirname "$file")")
   if ! grep -qxF "$routed_runs_on" "$file"; then
     printf 'no job reaches the pool through the fork-guarded CI_RACE_RUNNER form\n' >&2
     status=1
@@ -775,7 +781,8 @@ hosted_label() {
 # a job key escape the line-based reads below: a jobs key that is not a bare
 # block map, a job header that is quoted or carries an inline value (a flow
 # map, an alias), a job body not at indent 4, or a job key at indent 4 that is
-# not a bare name (quoted, escaped, a merge key).
+# not a bare name (quoted, escaped, a merge key). After jobs, a column-0 line
+# must be a workflow key.
 workflow_shape_errors() {
   awk '
     function ind(s) { match(s, /^ */); return RLENGTH }
@@ -784,6 +791,7 @@ workflow_shape_errors() {
       i = ind($0)
       if (i == 0) {
         in_jobs = 0
+        if (n && $0 !~ /^(name|run-name|["'"'"']?on["'"'"']?|permissions|env|defaults|concurrency|jobs)[[:space:]]*:/) print NR ": a column-0 line after jobs is not a workflow key (a continued scalar or flow collection would hide the jobs after it)"
         if ($0 ~ /^["'"'"']?jobs["'"'"']?[[:space:]]*:/) {
           if ($0 ~ /^jobs:[[:space:]]*(#.*)?$/) { in_jobs = 1; n++ }
           else print NR ": jobs is not a bare block map"
@@ -808,17 +816,19 @@ workflow_shape_errors() {
 # matrix_values <key>: reads a job strategy block on stdin and prints every
 # value the matrix gives <key>: a block scalar, each item of a flow or block
 # list, each flow-map entry (include and exclude entries too). A shape it
-# cannot read prints <unparsed>, which no hosted label matches.
+# cannot read prints <unparsed>, which no hosted label matches. Keys match in
+# any case, as GitHub expressions do.
 matrix_values() {
   awk -v key="$1" '
     function ind(s) { match(s, /^ */); return RLENGTH }
     function emit(v) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }
     { L[NR] = $0 }
     END {
+      key = tolower(key)
       pat = "(^|[[:space:]{,])(-[[:space:]]+)?[\"'"'"']?" key "[\"'"'"']?[[:space:]]*:"
       for (i = 1; i <= NR; i++) {
         s = L[i]; done = ""
-        while (match(s, pat)) {
+        while (match(tolower(s), pat)) {
           m = substr(s, RSTART, RLENGTH); k = m
           sub(/^[[:space:]{,]?(-[[:space:]]+)?/, "", k)
           kc = length(done) + RSTART - 1 + length(m) - length(k)
@@ -864,8 +874,9 @@ matrix_values() {
 # with check_routed_jobs_fork_guarded this leaves no runs-on that reaches a
 # self-hosted runner without the fork guard.
 check_runner_sources() {
-  local file="$1" wf job block rec deeper line value key strategy shape v n status=0
-  for wf in "$file" "$(dirname "$file")"/*.yml "$(dirname "$file")"/*.yaml; do
+  local file="$1" wf job block rec deeper line value key strategy shape v n status=0 wfs
+  mapfile -t wfs < <(workflow_files "$(dirname "$file")")
+  for wf in "$file" "${wfs[@]}"; do
     if [ ! -f "$wf" ] || { [ "$wf" != "$file" ] && [ "$wf" -ef "$file" ]; }; then
       continue
     fi
@@ -1702,10 +1713,10 @@ side_workflow() {
   side_wf_dir="$tmpdir/side-runner-$side_n"
   mkdir -p "$side_wf_dir"
   cp "$workflow" "$side_wf_dir/ci.yml"
-  printf '%s\n' "$1" > "$side_wf_dir/unsafe-pool.yml"
+  printf '%s\n' "$1" > "$side_wf_dir/${2:-unsafe-pool.yml}"
 }
 assert_side_fails() {
-  side_workflow "$2"
+  side_workflow "$2" "${3:-}"
   assert_check_fails "$1" check_runner_sources "$side_wf_dir/ci.yml"
 }
 pr_head=$'"on":\n  pull_request:\njobs:\n  probe:\n'
@@ -1785,6 +1796,42 @@ assert_side_fails 'wrote the runs-on key with an escape' "${pr_head}    \"runs\\
 $pr_steps"
 assert_side_fails 'put the fork-guarded line in another workflow' "${pr_head}${routed_runs_on}
 $pr_steps"
+# The delta-read shapes: a column-0 line inside jobs that would end the jobs
+# block for a line-based read, a matrix key in another case, and a workflow
+# file the shell glob skips.
+assert_side_fails 'hid a later job behind a quoted scalar continued at column 0' "${pr_head%  probe:*}  first:
+    runs-on: ubuntu-latest
+    steps:
+      - run: \"echo
+x\"
+  probe:
+    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'hid a later job behind a flow sequence closed at column 0' "${pr_head%  probe:*}  first:
+    runs-on: ubuntu-latest
+    steps: [{run: 'true'}
+]
+  probe:
+    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'gave matrix.runner self-hosted through an include key in another case' "${pr_head}    strategy:
+      matrix:
+        runner: [ubuntu-latest]
+        include:
+          - Runner: self-hosted
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'gave matrix.RUNNER self-hosted through an include key in lower case' "${pr_head}    strategy:
+      matrix:
+        RUNNER: [ubuntu-latest]
+        include:
+          - runner: self-hosted
+    runs-on: \${{ matrix.RUNNER }}
+$pr_steps"
+assert_side_fails 'ran a job on self-hosted from a dotfile workflow' "${pr_head}    runs-on: self-hosted
+$pr_steps" .evil.yml
+assert_side_fails 'ran a job on self-hosted from a workflow with an upper-case extension' "${pr_head}    runs-on: self-hosted
+$pr_steps" evil.YML
 side_workflow "${pr_head}    runs-on: ubuntu-latest # hosted
 $pr_steps
   quoted:
