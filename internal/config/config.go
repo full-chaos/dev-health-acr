@@ -427,7 +427,7 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.AnswerReuseMaxAge, err = durationValue(lookup, "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE", 0); err != nil {
 		return Config{}, err
 	}
-	if cfg.ServiceModelOpen, err = serviceModelDefaultValue(lookup); err != nil {
+	if cfg.ServiceModelOpen, err = serviceModelDefaultValue(lookup, environment); err != nil {
 		return Config{}, err
 	}
 	devHealthEntitlementMaxResponseBytes, err := intValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES", 16<<10)
