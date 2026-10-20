@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1762,6 +1763,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
+	removedTeams, removedLookupFailed := a.removedCommittedTeams(ctx, key, principal, request.Resolution.Committed)
+	if removedLookupFailed {
+		failedLookups++
+	}
+	for _, subject := range removedCohortTeams(cohort, cohortNodes) {
+		if !slices.Contains(removedTeams, subject) {
+			removedTeams = append(removedTeams, subject)
+		}
+	}
+
 	// anchoredCutEmpty: the anchor's read was cut and reached no member, so
 	// members may exist past the cut. A restricted caller served the neutral
 	// denied reason is told nothing more: the project walk counts its cut
@@ -1906,6 +1917,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		CohortMemberSource:     cohortMemberSource,
 		MemberStatusOutsideSet: contextfabric.MemberStatusOutsideSet{Kind: memberStatusKind, Count: statusOutsideSet, AtLeast: statusOutsideAtLeast, Filtered: statusFiltered, Reached: statusReached, ReachCut: statusWalk.reachCut},
 		MemberStatusPoolCut:    statusPoolCut,
+		RemovedTeams:           removedTeams,
 		Paths:                  admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{

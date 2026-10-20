@@ -242,11 +242,14 @@ mapfile -t verify_needs < <(job_block "$workflow" verify | awk '
 lane() {
   local name="$1" want="$2" event="$3" outputs="$4" needs rc=0 kv job
   shift 4
-  needs="$(jq -n --argjson o "$outputs" '{plan: {result: "success", outputs: $o}}')"
+  # The plan outputs of a run that defers nothing; a fixture's own keys win.
+  needs="$(jq -n --argjson o "$outputs" '{plan: {result: "success", outputs: ({unit_defer: "[]", unit_exclude: ($o.unit_skip // "[]")} + $o)}}')"
   for job in "${verify_needs[@]}"; do
     [ "$job" = plan ] && continue
     needs="$(jq --arg j "$job" '. + {($j): {result: "success", outputs: {}}}' <<<"$needs")"
   done
+  # unit-dedup-plan and unit-dedicated are skipped unless the plan deferred legs.
+  needs="$(jq --arg d "${dedup_drop:-[]}" '.["unit-dedup-plan"].result = "skipped" | .["unit-dedicated"].result = "skipped" | .["unit-dedup-plan"].outputs.drop = $d' <<<"$needs")"
   for kv in "$@"; do
     needs="$(jq --arg j "${kv%%=*}" --arg r "${kv#*=}" '.[$j].result = $r' <<<"$needs")"
   done
@@ -299,6 +302,43 @@ lane pr-unknown-reach-mode 1 pull_request "$bad_reach"
 draft_skips=()
 for job in "${heavy_lanes[@]}"; do draft_skips+=("$job=skipped"); done
 lane pr-draft-heavy-skipped 0 pull_request "$draft_full" "${draft_skips[@]}"
+
+# ---- 7. observed race dedup: the two jobs the deferral adds ------------------
+
+four='[{"shard":6},{"shard":7},{"shard":8},{"shard":9}]'
+defer_out() { # UNIT_SKIP_JSON DEFER_JSON EXCLUDE_JSON [REACH]
+  jq -nc --arg us "$1" --arg d "$2" --arg e "$3" --arg r "${4:-full}" \
+    '{heavy: "true", reach_mode: $r, skip_jobs: "[]", unit_skip: $us, race_skip: "[]", unit_defer: $d, unit_exclude: $e}'
+}
+defer_ok="$(defer_out '[]' "$four" "$four")"
+dedup_drop='[]'
+lane pr-defer-nothing-dropped 0 pull_request "$defer_ok" unit-dedup-plan=success unit-dedicated=success
+dedup_drop='[{"shard":7},{"shard":9}]'
+lane pr-defer-some-dropped 0 pull_request "$defer_ok" unit-dedup-plan=success unit-dedicated=success
+dedup_drop="$four"
+lane pr-defer-all-dropped 0 pull_request "$defer_ok" unit-dedup-plan=success
+lane pr-defer-all-dropped-but-dedicated-ran 1 pull_request "$defer_ok" unit-dedup-plan=success unit-dedicated=success
+dedup_drop='[]'
+lane pr-defer-kept-but-dedicated-skipped 1 pull_request "$defer_ok" unit-dedup-plan=success
+lane pr-defer-plan-job-failed 1 pull_request "$defer_ok" unit-dedup-plan=failure unit-dedicated=skipped
+lane pr-defer-plan-job-skipped 1 pull_request "$defer_ok" unit-dedicated=success
+lane pr-defer-dedicated-failed 1 pull_request "$defer_ok" unit-dedup-plan=success unit-dedicated=failure
+lane push-with-defer 1 push "$defer_ok" unit-dedup-plan=success unit-dedicated=success
+lane pr-draft-with-defer 1 pull_request "$(jq -c '.heavy = "false"' <<<"$defer_ok")" unit-dedup-plan=success unit-dedicated=success
+dedup_drop='[{"shard":6}]'
+lane pr-drop-without-defer 1 pull_request "$full" unit-dedup-plan=success
+lane pr-nothing-deferred-jobs-ran 1 pull_request "$full" unit-dedup-plan=success unit-dedicated=success
+dedup_drop='[]'
+lane pr-exclude-short 1 pull_request "$(defer_out '[]' "$four" '[{"shard":6},{"shard":7},{"shard":9}]')" unit-dedup-plan=success unit-dedicated=success
+lane pr-defer-not-a-list 1 pull_request "$(defer_out '[]' 'oops' "$four")" unit-dedup-plan=success unit-dedicated=success
+lane pr-reach-skips-and-drops 0 pull_request "$(defer_out '[{"shard":6},{"shard":7}]' "$four" "$four" reached)" unit-dedup-plan=success unit-dedicated=success
+dedup_drop='[{"shard":8},{"shard":9}]'
+lane pr-reach-skips-and-drops-all 0 pull_request "$(defer_out '[{"shard":6},{"shard":7}]' "$four" "$four" reached)" unit-dedup-plan=success
+dedup_drop='[]'
+all_nine='[{"shard":1},{"shard":2},{"shard":3},{"shard":4},{"shard":5},{"shard":6},{"shard":7},{"shard":8},{"shard":9}]'
+whole_unit_defer="$(jq -nc --argjson all "$all_nine" --arg four "$four" '{heavy: "true", reach_mode: "reached", skip_jobs: "[\"unit\"]", unit_skip: ($all[:5] | tostring), race_skip: "[]", unit_defer: $four, unit_exclude: ($all | tostring)}')"
+lane pr-whole-unit-skip-by-reach-and-defer 0 pull_request "$whole_unit_defer" unit=skipped unit-dedup-plan=success unit-dedicated=success
+lane pr-whole-unit-skip-ran-anyway 1 pull_request "$whole_unit_defer" unit-dedup-plan=success unit-dedicated=success
 
 if [ "$fails" -ne 0 ]; then
   printf '%s failure(s)\n' "$fails"

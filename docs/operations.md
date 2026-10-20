@@ -859,7 +859,7 @@ new build.
 | --- | --- | --- |
 | `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
 | `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` for an OpenAI-compatible provider; the provider's own public endpoint for `anthropic`, `gemini` and `qwen` | API root. Set this for BYO. For `anthropic` it is the root without `/v1` (the client posts to `<base>/v1/messages`). |
-| `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Provider namespace, recorded verbatim as `ModelExecutionReceipt.Provider` and in `model_identity`. It also picks the shared dev-health-go `llm` client: `anthropic` uses the native Messages API (it sends `ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS` as its cap, and no interpretation seed); `gemini` uses Google's OpenAI-compatible endpoint without the seed (Gemini answers 400 to one); `qwen` uses Chat Completions (DashScope by default, or any compatible base URL such as Cloudflare Workers AI) with the seed folded into [0, 2^31). Every other name ("openai", a BYO gateway name) uses OpenAI-compatible Chat Completions with the seed. The same names apply to a per-organization config (`PUT /api/v1/context-fabric/model-config`). |
+| `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Provider namespace, recorded verbatim as `ModelExecutionReceipt.Provider` and in `model_identity`. It also picks the shared dev-health-go `llm` client: `anthropic` uses the native Messages API (it sends `ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS` as its cap, and no interpretation seed); `gemini` uses Google's OpenAI-compatible endpoint without the seed (Gemini answers 400 to one); `qwen` uses Chat Completions (DashScope by default, or any compatible base URL such as Cloudflare Workers AI) with the seed folded into [0, 2^31). Every other name ("openai", a BYO gateway name) uses OpenAI-compatible Chat Completions with the seed. The same names apply to a per-organization config, which is read from the ops settings store. |
 | `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` | *(unset = `ops`)* | Override for where per-organization BYO LLM configuration comes from. Default (unset or `ops`): Dev Health's own settings store (written by the web AI Setup > BYO LLM page), read per org from ops' internal `GET /api/v1/internal/acr/orgs/{org_id}/llm-config` with the entitlement credential (`ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`; the credential needs scope `llm_config:read`). acr holds no BYO store and no settings encryption key. The one lenient case is no Dev Health entitlement client (local/dev): unset then means no per-organization source (platform model for every org) and logs one INFO line at startup; an explicit `ops` without the client refuses to start. `off`: no per-organization source. With `ops`: a 404 means no BYO, so the platform model answers; 401, 403 or 409 (BYO configured but unusable: scope missing, stored key unreadable) and a malformed or mismatched body fail that organization's model calls closed, never falling back to the platform model; a 5xx or timeout is unavailable. Answers are reused for 15 s per organization; errors are not cached. ops' `version` (a digest over the org's stored BYO rows) keys the org's built model runtime: a changed version builds a new one. |
 | `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5.6-luna` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. Default changed from `gpt-5-nano` to `gpt-5.6-luna` in CHAOS-3855 — see the measurements below. |
 | `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call). As of CHAOS-3855, no fallback is recommended for the default `gpt-5.6-luna` primary — see the measurements below. |
@@ -885,6 +885,50 @@ A configuration change takes effect on the organization's next request, no
 restart needed (`internal/contextfabric/modelruntimeresolver` caches a
 constructed runtime keyed by the config's `generation` and rebuilds when it
 changes).
+
+### BYO model requirements and provider limits
+
+An organization's own model runs both Context Fabric calls: interpretation
+and synthesis. The organization's own configuration always wins over the
+deployment model, including for an organization that also holds
+`acr_service_model`; the `context fabric service model decision` log line then
+reports `basis=own_model` with the deployment model withheld for the turn: if
+the configuration is gone when the runtime is resolved, the turn fails as
+model-unavailable and never falls back to the deployment model. The gate's
+basis binds the whole turn: a turn admitted on the deployment model
+(`entitlement`, `deployment_open`) is served by it on every call even if an
+own configuration appears mid-turn, and an unreadable configuration at the gate
+fails the turn as unavailable.
+
+The output mode is picked from the provider before the call, never after a
+refusal (a refused call is billed for its input tokens, so there is no
+fallback to another mode):
+
+| Provider | Mode | Enforcement |
+| --- | --- | --- |
+| Anthropic | `output_config` JSON schema when the output schema fits Anthropic's structured-output limits; otherwise one tool call carrying the schema | In schema mode the provider enforces only the subset it accepts: the client drops numeric, string and array bounds before sending, and ACR's local check still enforces them. The tool-call mode is not strict: the model may break the schema. |
+| OpenAI and OpenAI-compatible (local, Qwen) | JSON object, with the schema as text in the system message | Not enforced by the provider. |
+
+Provider limits that decide the Anthropic mode (`dev-health-go/llm`,
+`anthropic_schema_fit.go`): at most 24 optional properties and 16 union-typed
+properties across one request, `additionalProperties` false on every object,
+and no conditional keywords (`if`, `then`, `not`). The interpretation and
+synthesis output schemas are over the optional-property limit and hold open
+maps, so on Anthropic they run in tool-call mode and the `context fabric model
+answer format path` log line reports `format_path=tool` with the first limit
+that was broken. A BYO model must therefore return JSON that follows the schema
+without provider enforcement. Models that refuse a forced tool choice (Opus
+5.5, Sonnet 5.5, Fable 5.1, Mythos 5.1) get tool choice `auto`.
+
+A reply that is not JSON, or that fails the output schema, is a rejected draw.
+It is redrawn within the request deadline, and when the last draw is still
+rejected the interpretation fails with HTTP 422 `interpretation_rejected`. That
+means the model's output was rejected, not that the question is over a limit.
+The rejection names its rule in the receipt and the log (`rejection_reason`):
+`output_not_json`, `output_schema_violation` or `output_decode_failed` for a
+draw that broke the output schema, or the validator rule that refused it. The
+log line `context fabric model reply failed the output schema` lists the
+failing JSON paths and rules, never a value.
 
 ### Answer reuse (CHAOS-3782)
 

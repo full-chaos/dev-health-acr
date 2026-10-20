@@ -20,8 +20,7 @@ func TestTrustedCodeGraphIndexRejectsArbitrarySymlink(t *testing.T) {
 }
 
 func TestTrustedCodeGraphIndexAcceptsManagedSymlink(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	managedRoot := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managedRoot, "acr-test-")
 	require.NoError(t, err)
@@ -33,8 +32,7 @@ func TestTrustedCodeGraphIndexAcceptsManagedSymlink(t *testing.T) {
 }
 
 func TestTrustedCodeGraphIndexAcceptsPrimaryGroupWritableManagedRoot(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	repo, err := os.MkdirTemp(home, "acr-codegraph-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
@@ -49,8 +47,7 @@ func TestTrustedCodeGraphIndexAcceptsPrimaryGroupWritableManagedRoot(t *testing.
 }
 
 func TestTrustedCodeGraphIndexRejectsGroupWritableRootWithoutManagedIndex(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	repo, err := os.MkdirTemp(home, "acr-codegraph-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
@@ -64,8 +61,7 @@ func TestTrustedCodeGraphIndexRejectsExtraACLForGroupWritableRoot(t *testing.T) 
 	previous := codeGraphACLCheck
 	codeGraphACLCheck = func(string) bool { return false }
 	t.Cleanup(func() { codeGraphACLCheck = previous })
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	repo, err := os.MkdirTemp(home, "acr-codegraph-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
@@ -80,8 +76,7 @@ func TestTrustedCodeGraphIndexRejectsExtraACLForGroupWritableRoot(t *testing.T) 
 }
 
 func TestTrustedCodeGraphIndexRejectsWorldWritableRoot(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	repo, err := os.MkdirTemp(home, "acr-codegraph-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(repo) })
@@ -96,8 +91,7 @@ func TestTrustedCodeGraphIndexRejectsWorldWritableRoot(t *testing.T) {
 }
 
 func TestTrustedCodeGraphIndexRejectsManagedDatabaseSymlink(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
@@ -113,8 +107,7 @@ func TestTrustedCodeGraphIndexRejectsManagedDatabaseSymlink(t *testing.T) {
 }
 
 func TestTrustedCodeGraphIndexRejectsWritableManagedTarget(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	managed := managedCodeGraphFixtureRoot(t, home)
 	target, err := os.MkdirTemp(managed, "acr-test-")
 	require.NoError(t, err)
@@ -129,8 +122,7 @@ func TestTrustedCodeGraphIndexRejectsWritableManagedTarget(t *testing.T) {
 }
 
 func TestTrustedCodeGraphIndexRejectsNonDirectManagedTargets(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	managed := managedCodeGraphFixtureRoot(t, home)
 	outside := t.TempDir()
 	direct, err := os.MkdirTemp(managed, "acr-test-")
@@ -185,8 +177,7 @@ func TestVerifyCurrentUserOwnedRejectsForeignManagedObjects(t *testing.T) {
 }
 
 func TestTrustedCodeGraphIndexRejectsWritableAncestor(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	managed := managedCodeGraphFixtureRoot(t, home)
 	for _, mode := range []os.FileMode{0o775, 0o777} {
 		t.Run(mode.String(), func(t *testing.T) {

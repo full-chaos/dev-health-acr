@@ -509,6 +509,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Request.SubjectsRefused = append(response.Request.SubjectsRefused, refused)
 	}
 	record.AdmittedCount = admitted.Len()
+	response.RequestNotes = teamRequestNotes(decision)
 	if admitted.Len() == 0 || len(plan.kinds) == 0 {
 		response.Status = StatusDenied
 		if admitted.Len() > 0 {
@@ -605,7 +606,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Facts = append(response.Facts, served)
 	}
 	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, allFacts, withheldBySubject, derived)
-	response.RequestNotes = requestNotes(plan, bundle)
+	response.RequestNotes = append(response.RequestNotes, requestNotes(plan, bundle)...)
 	response.RequestNotes = append(response.RequestNotes, emptyFactNotes(plan, emptyByKind)...)
 	response.RequestNotes = append(response.RequestNotes, driversKeptNotes(plan, response.Facts)...)
 	if plan.units != nil {
@@ -1130,6 +1131,14 @@ func servedFactKind(kind string) bool {
 		}
 	}
 	return false
+}
+
+func teamRequestNotes(decision Authorization) []RequestNote {
+	var notes []RequestNote
+	for _, note := range teamStatusNotes(decision) {
+		notes = append(notes, RequestNote{Kind: contractsv1.RequestNoteKindTeam, Note: note})
+	}
+	return notes
 }
 
 func requestNotes(plan readPlan, bundle contextfabric.CanonicalFactBundle) []RequestNote {

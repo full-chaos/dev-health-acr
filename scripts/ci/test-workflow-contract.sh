@@ -300,25 +300,43 @@ check_main_runs_get_a_verdict() {
 check_go_cache() {
   local file="$1"
   local status=0
-  # v1.6: self-hosted legs share one GOMODCACHE/GOCACHE hostPath mount
-  # (helm rev 6) across every concurrent pool job -- setup-go's own
-  # cache:true would restore/save a tarball against those same paths and
-  # can race the live mount, corrupting it for every other job on the
-  # pool. So cache:false is now REQUIRED on self-hosted legs and
-  # FORBIDDEN on hosted ones (which have no such shared mount and should
-  # keep using setup-go's own cache).
+  # A job whose runner is anything but a literal GitHub-hosted label (the
+  # CI_RACE_RUNNER variable, a matrix value, a label list) can land on the
+  # self-hosted pool, so every setup-go step in it sets
+  # `cache: ${{ runner.environment == 'github-hosted' }}`. On the pool GOCACHE
+  # is a hostPath shared by every concurrent runner and the arm64 cache key
+  # never matches the hosted one, so setup-go's post step tarred and uploaded
+  # the live shared mount on every job (plan: 17 s of work, 9m55s of post
+  # step). A job on a literal ubuntu-* label keeps the literal `cache: true`.
+  # Every setup-go step must carry its own cache input: setup-go defaults it
+  # to true, so an omitted input is the pool regression with no text to check.
   local job
   while IFS= read -r job; do
     local block
     block="$(job_block "$file" "$job")"
     if grep -qE 'runs-on: *\[self-hosted' <<<"$block"; then
-      printf 'job "%s" targets a self-hosted runner, but every lane is hosted now -- the ARC pool is gone\n' \
+      printf 'job "%s" targets a self-hosted runner by label; route it through vars.CI_RACE_RUNNER instead\n' \
         "$job" >&2
       status=1
     fi
-    if grep -q 'cache: false' <<<"$block"; then
-      printf 'job "%s" has setup-go cache: false -- that existed only for self-hosted legs sharing a GOMODCACHE/GOCACHE hostPath mount; on a hosted runner it just throws the cache away\n' \
-        "$job" >&2
+    local steps caches
+    steps="$(grep -cE 'uses: *actions/setup-go@' <<<"$block" || true)"
+    [ "$steps" -gt 0 ] || continue
+    caches="$(grep -cE '^ +cache:' <<<"$block" || true)"
+    if [ "$caches" -ne "$steps" ]; then
+      printf 'job "%s" has %s setup-go step(s) but %s cache input(s); setup-go caches by default\n' "$job" "$steps" "$caches" >&2
+      status=1
+    fi
+    local cache_lines
+    cache_lines="$(grep -E '^ +cache:' <<<"$block" || true)"
+    if grep -E '^ +runs-on:' <<<"$block" | grep -qvE '^ +runs-on: ubuntu-[A-Za-z0-9.-]+$'; then
+      if grep -vqF "cache: \${{ runner.environment == 'github-hosted' }}" <<<"$cache_lines"; then
+        printf 'job "%s" can run on the self-hosted pool, but its setup-go cache is not the runner.environment == github-hosted expression\n' \
+          "$job" >&2
+        status=1
+      fi
+    elif grep -vqE '^ +cache: true$' <<<"$cache_lines"; then
+      printf 'job "%s" runs hosted only, but its setup-go cache is not true\n' "$job" >&2
       status=1
     fi
   done < <(list_jobs "$file")
@@ -705,6 +723,34 @@ check_testcontainers_needs_mirror_preflight() {
   return "$status"
 }
 
+check_testcontainers_session_reap() {
+  # A job that starts testcontainers runs with the ryuk reaper off and its own
+  # session id, and removes that session's containers by id in a final
+  # always() step (scripts/ci/reap-testcontainers-session.sh).
+  local file="$1" job block status=0
+  while IFS= read -r job; do
+    [ "$job" = "mirror-preflight" ] && continue
+    block="$(job_block "$file" "$job")"
+    grep -qE '^ {6}TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:' <<<"$block" || continue
+    if ! grep -qE "^ {6}TESTCONTAINERS_RYUK_DISABLED: 'true'$" <<<"$block"; then
+      printf 'job "%s" starts testcontainers with the ryuk reaper on\n' "$job" >&2
+      status=1
+    fi
+    # shellcheck disable=SC2016
+    if ! grep -qF 'TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}' <<<"$block"; then
+      printf 'job "%s" has no per-job TESTCONTAINERS_SESSION_ID\n' "$job" >&2
+      status=1
+    fi
+    local last
+    last="$(awk '/^      - (name|uses)/ { buf="" } /^      - (name|uses)/, 0 { buf = buf $0 "\n" } END { printf "%s", buf }' <<<"$block" | sed '/^ *$/d;/^  #/d')"
+    if [ "$last" != "$(printf '%s\n' "      - name: Remove this job's testcontainers by session id" '        if: always()' '        run: scripts/ci/reap-testcontainers-session.sh')" ]; then
+      printf 'job "%s" does not end with the always() testcontainers reap step\n' "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
 # The steps of the reports job are PARSED, not grepped: a step whose text is
 # present but which never runs (a false `if:`, `continue-on-error`, a command
 # replaced by `true` with the old text left in a comment, `|| true` appended)
@@ -789,8 +835,8 @@ check_reports_steps() {
   matrix_line="$(job_block "$file" unit | grep -E 'shard: *\[' | head -n1 || true)"
   n="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
   tool='go run ./ci/mergetestreports'
-  cancelled="\${{ !cancelled() && needs.unit.result != 'skipped' }}"
-  absent="-absent '\${{ needs.plan.outputs.unit_skip }}'"
+  cancelled="\${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}"
+  absent="-absent '\${{ steps.dedup.outputs.absent }}'"
 
   # Job level: only these keys, and this exact condition.
   keys="$(grep -oE '^ {4}[a-z-]+:' <<<"$block" | tr -d ' :' || true)"
@@ -820,8 +866,8 @@ check_reports_steps() {
     printf 'verify lane check is not the last step (last: %s)\n' "$last" >&2
     status=1
   fi
-  if ! grep -qE "^ {8}if: \\\$\{\{ !cancelled\(\) && needs\.unit\.result != 'skipped' \}\}$" <<<"$(printf '%s\n' "$block" | awk '/^ {6}- uses: actions\/download-artifact/ { g=1; print; next } g && /^ {6}(- |#)/ { g=0 } g')"; then
-    printf 'verify download of the shard reports is not gated on the unit-not-skipped expression\n' >&2
+  if ! grep -qxF "        if: \${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}" <<<"$(printf '%s\n' "$block" | awk -v pat='pattern: go-unit-shard-' '/^ {6}(- |#)/ { if (buf ~ pat) printf "%s", buf; buf = "" } { buf = buf $0 "\n" } END { if (buf ~ pat) printf "%s", buf }')"; then
+    printf 'verify download of the shard reports is not gated on the unit-or-unit-dedicated-not-skipped expression\n' >&2
     status=1
   fi
 
@@ -842,7 +888,7 @@ make coverage-cobertura" || status=1
 # must `needs: plan` and carry exactly the plan-output `if:`, so a new job
 # defaults to heavy (skipped on a draft) and cannot quietly run on every draft
 # push; and verify must READ plan.outputs.heavy and reject a missing value.
-light_jobs=' plan mirror-preflight scripts lint docs-mermaid helm unit reports verify '
+light_jobs=' plan mirror-preflight scripts lint docs-mermaid helm unit unit-dedup-plan unit-dedicated reports verify '
 check_heavy_jobs_gated() {
   local file="$1" job block status=0
   while IFS= read -r job; do
@@ -887,12 +933,20 @@ check_verify_reads_plan() {
 # The lane check's behaviour is proven by scripts/ci/test-reached-shards.sh,
 # which runs its text from this file; this check keeps the wiring in place.
 check_reach_gating() {
-  local file="$1" block status=0 job key line
+  local file="$1" block status=0 job key line want_exclude
   block="$(job_block "$file" plan)"
-  for key in reach_mode reach_reason skip_jobs unit_skip race_skip; do
+  for key in reach_mode reach_reason unit_skip race_skip; do
     grep -qxF "      $key: \${{ steps.reach.outputs.$key }}" <<<"$block" || {
       printf 'plan does not output %s from the reach step\n' "$key" >&2; status=1; }
   done
+  for key in skip_jobs unit_defer unit_exclude; do
+    grep -qxF "      $key: \${{ steps.defer.outputs.$key }}" <<<"$block" || {
+      printf 'plan does not output %s from the defer step\n' "$key" >&2; status=1; }
+  done
+  grep -qxF '        id: defer' <<<"$block" || { printf 'plan has no step with id: defer\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '        run: scripts/ci/observed-race-dedup.sh defer --event "$EVENT" --heavy "$HEAVY" --skip-jobs "$SKIP_JOBS" --unit-skip "$UNIT_SKIP" >> "$GITHUB_OUTPUT"' <<<"$block" || {
+    printf 'plan does not run the defer step of scripts/ci/observed-race-dedup.sh into GITHUB_OUTPUT\n' >&2; status=1; }
   grep -qxF '        id: reach' <<<"$block" || { printf 'plan has no step with id: reach\n' >&2; status=1; }
   # shellcheck disable=SC2016
   grep -qxF '        run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"' <<<"$block" || {
@@ -905,8 +959,10 @@ check_reach_gating() {
 
   for job in unit race; do
     block="$(job_block "$file" "$job")"
-    grep -qxF "        exclude: \${{ fromJSON(needs.plan.outputs.${job}_skip) }}" <<<"$block" || {
-      printf '%s matrix does not exclude the plan job'"'"'s %s_skip legs\n' "$job" "$job" >&2; status=1; }
+    want_exclude="${job}_skip"
+    [ "$job" != unit ] || want_exclude=unit_exclude
+    grep -qxF "        exclude: \${{ fromJSON(needs.plan.outputs.$want_exclude) }}" <<<"$block" || {
+      printf '%s matrix does not exclude the plan job'"'"'s %s legs\n' "$job" "$want_exclude" >&2; status=1; }
     list_needs <<<"$block" | grep -qx plan || { printf '%s does not need plan\n' "$job" >&2; status=1; }
   done
   grep -qxF "    if: \${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}" <<<"$(job_block "$file" unit)" || {
@@ -942,6 +998,107 @@ check_reach_gating() {
   return "$status"
 }
 
+# Observed race dedup (scripts/ci/observed-race-dedup.sh). The deferred unit
+# legs, their plan job, and the race jobs' artifacts are wired by text no
+# compiler reads; each link below, removed or crossed, leaves a run green while
+# a unit leg is dropped on evidence nobody collected or a leg that should run
+# never starts:
+#   - unit-dedicated is not the same job as unit (its env and steps differ), or
+#     its matrix is not the dedicated legs the selector names.
+#   - unit-dedup-plan does not wait for every race job that covers the dedicated
+#     packages, or the dedicated job does not wait for it and for the preflight.
+#   - a covering race job that does not keep its test2json events and upload
+#     them as race-json-<job key> on if: always().
+#   - verify not rechecking the dropped legs from the artifacts, or its merge
+#     steps expecting a different absent list than the confirmed drops.
+check_observed_race_dedup() {
+  local file="$1" status=0 unit ded plan_job job pkg legs matrix want step helper="$repo_root/scripts/ci/observed-race-dedup.sh"
+  unit="$(job_block "$file" unit | awk '/^    env:$/ { g=1 } g && !/^  #/' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+  ded="$(job_block "$file" unit-dedicated | awk '/^    env:$/ { g=1 } g && !/^  #/' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+  if [ -z "$unit" ] || [ "$unit" != "$ded" ]; then
+    printf 'unit-dedicated does not carry the same env and steps as unit\n' >&2
+    status=1
+  fi
+  ded="$(job_block "$file" unit-dedicated)"
+  legs="$("$helper" legs --workflow "$file" | awk -F'\t' '{ print $1 }' | paste -sd, - | sed 's/,/, /g')"
+  if ! grep -qxF "        shard: [$legs]" <<<"$ded"; then
+    printf 'unit-dedicated matrix is not the dedicated legs [%s]\n' "$legs" >&2
+    status=1
+  fi
+  # shellcheck disable=SC2016 # the literal GitHub expression text
+  grep -qxF "        exclude: \${{ fromJSON(needs.unit-dedup-plan.outputs.exclude || '[]') }}" <<<"$ded" || {
+    printf 'unit-dedicated matrix does not exclude the legs unit-dedup-plan names\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF "    if: \${{ !cancelled() && needs.mirror-preflight.result == 'success' && needs.unit-dedup-plan.result == 'success' && needs.unit-dedup-plan.outputs.run == 'true' }}" <<<"$ded" || {
+    printf 'unit-dedicated does not run exactly when unit-dedup-plan succeeded and left a leg to run\n' >&2; status=1; }
+  for job in mirror-preflight plan unit-dedup-plan; do
+    list_needs <<<"$ded" | grep -qx "$job" || { printf 'unit-dedicated does not need %s\n' "$job" >&2; status=1; }
+  done
+  # shellcheck disable=SC2016
+  grep -qxF '    name: unit (shard ${{ matrix.shard }} of 9)' <<<"$ded" || {
+    printf 'unit-dedicated is not named like the unit legs\n' >&2; status=1; }
+
+  plan_job="$(job_block "$file" unit-dedup-plan)"
+  # shellcheck disable=SC2016
+  grep -qxF "    if: \${{ !cancelled() && needs.plan.outputs.unit_defer != '[]' }}" <<<"$plan_job" || {
+    printf 'unit-dedup-plan does not run exactly when the plan deferred legs, whatever the race jobs ended as\n' >&2; status=1; }
+  list_needs <<<"$plan_job" | grep -qx plan || { printf 'unit-dedup-plan does not need plan\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qF 'scripts/ci/observed-race-dedup.sh decide --event "$EVENT" --lists .tmp/dedup-lists --race-dir .tmp/race-json --needs .tmp/needs.json --defer "$DEFER" --unit-skip "$UNIT_SKIP"' <<<"$plan_job" || {
+    printf 'unit-dedup-plan does not run the decision\n' >&2; status=1; }
+  for pkg in devhealthfacts devhealthsource; do
+    [ "$("$helper" covering --workflow "$file" "$pkg" | grep -c .)" -gt 0 ] || { printf 'no race job covers %s\n' "$pkg" >&2; status=1; }
+    for job in $("$helper" covering --workflow "$file" "$pkg"); do
+      list_needs <<<"$plan_job" | grep -qx "$job" || { printf 'unit-dedup-plan does not need %s, which covers %s\n' "$job" "$pkg" >&2; status=1; }
+      grep -qE "^ {10}RACE_JSON_OUT=\.tmp/race-json/race\.json (GOTEST_TIMEOUT=[^ ]+ )?scripts/ci/run-isolated-budget\.sh " <<<"$(job_block "$file" "$job")" || {
+        printf '%s does not keep its test2json events (RACE_JSON_OUT)\n' "$job" >&2; status=1; }
+      step="$(job_block "$file" "$job" | awk -v n="name: race-json-$job" 'index($0, n) { found=1 } END { exit found ? 0 : 1 }' && echo yes || echo no)"
+      [ "$step" = yes ] || { printf '%s does not upload race-json-%s\n' "$job" "$job" >&2; status=1; }
+      awk -v n="name: race-json-$job" 'function end() { if (step ~ n && step !~ /\n        if: always\(\)\n/) bad=1; step="" } /^      - / { end() } { step = step "\n" $0 } END { end(); exit bad ? 1 : 0 }' <<<"$(job_block "$file" "$job")" || {
+        printf '%s uploads its race-json artifact without if: always()\n' "$job" >&2; status=1; }
+    done
+  done
+
+  matrix="$(job_block "$file" verify)"
+  # shellcheck disable=SC2016
+  grep -qF 'scripts/ci/observed-race-dedup.sh decide --event "$EVENT" --lists .tmp/dedup-lists --race-dir .tmp/race-json --needs .tmp/needs.json --defer "$DEFER" --unit-skip "$UNIT_SKIP"' <<<"$matrix" || {
+    printf 'verify does not recheck the dropped legs from the race artifacts\n' >&2; status=1; }
+  grep -qxF '        id: dedup' <<<"$matrix" || { printf 'verify has no recheck step with id: dedup\n' >&2; status=1; }
+  for job in unit-dedup-plan unit-dedicated; do
+    list_needs <<<"$matrix" | grep -qx "$job" || { printf 'verify does not need %s\n' "$job" >&2; status=1; }
+  done
+  return "$status"
+}
+
+# Every race job keeps its test2json events. Without them the per-test cost
+# of a package under -race is unmeasurable (a timed-out package prints no
+# per-test time). Each link, removed, leaves a run green. For EVERY job whose
+# key is `race` or `race-*` (so a new race job is covered the day it is added):
+#   - it must run scripts/ci/run-isolated-budget.sh with
+#     RACE_JSON_OUT=.tmp/race-json/race.json;
+#   - it must upload .tmp/race-json/race.json as race-json-<job key> (the
+#     matrix job `race` as race-json-race-shard-<n>) on if: always().
+check_race_json_all_jobs() {
+  local file="$1" status=0 block job want n=0
+  # shellcheck disable=SC2016
+  while IFS= read -r job; do
+    n=$((n + 1))
+    block="$(job_block "$file" "$job")"
+    want="race-json-$job"
+    [ "$job" = race ] && want='race-json-race-shard-${{ matrix.shard }}'
+    grep -qE '^ {10}RACE_JSON_OUT=\.tmp/race-json/race\.json (GOTEST_TIMEOUT=("[^"]+"|[^ ]+) )?scripts/ci/run-isolated-budget\.sh ' <<<"$block" || {
+      printf '%s does not keep its test2json events (RACE_JSON_OUT)\n' "$job" >&2; status=1; }
+    grep -qF "name: $want" <<<"$block" || {
+      printf '%s does not upload %s\n' "$job" "$want" >&2; status=1; }
+    awk -v n="name: $want" 'function end() { if (index(step, n) && step !~ /\n        if: always\(\)\n/) bad=1; step="" } /^      - / { end() } { step = step "\n" $0 } END { end(); exit bad ? 1 : 0 }' <<<"$block" || {
+      printf '%s uploads its race-json artifact without if: always()\n' "$job" >&2; status=1; }
+    grep -qF 'path: .tmp/race-json/race.json' <<<"$block" || {
+      printf '%s does not upload .tmp/race-json/race.json\n' "$job" >&2; status=1; }
+  done < <(grep -oE '^  race(-[a-z0-9-]+)?:' "$file" | sed -e 's/^  //' -e 's/:$//')
+  [ "$n" -ge 11 ] || { printf 'expected at least 11 race job keys (race + 10 isolated), found %s\n' "$n" >&2; status=1; }
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -962,9 +1119,12 @@ run_all_checks() {
   check_race_runner_uses_variable "$file"
   check_first_stage_runner_uses_variable "$file"
   check_testcontainers_needs_mirror_preflight "$file"
+  check_testcontainers_session_reap "$file"
   check_heavy_jobs_gated "$file"
   check_verify_reads_plan "$file"
   check_reach_gating "$file"
+  check_observed_race_dedup "$file"
+  check_race_json_all_jobs "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -1011,6 +1171,28 @@ cache_false="$tmpdir/cache-false.yml"
 awk '!done && /cache: true/ { sub(/cache: true/, "cache: false"); done=1 } { print }' "$workflow" > "$cache_false"
 assert_check_fails 'flipped a hosted job'"'"'s cache: true to cache: false' check_go_cache "$cache_false"
 
+# (c1) a pool-routable job back on setup-go's own cache, and one on a plain
+# cache: false (a hosted run of that job would then throw its cache away).
+routed_cache_true="$tmpdir/routed-cache-true.yml"
+awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { sub(/cache: .*/, "cache: true"); done=1 } { print }' \
+  "$workflow" > "$routed_cache_true"
+cmp -s "$workflow" "$routed_cache_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put a pool-routable job back on setup-go cache: true' check_go_cache "$routed_cache_true"
+routed_cache_missing="$tmpdir/routed-cache-missing.yml"
+awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { done=1; next } { print }' \
+  "$workflow" > "$routed_cache_missing"
+cmp -s "$workflow" "$routed_cache_missing" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_missing did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the cache input from a pool-routable setup-go step' check_go_cache "$routed_cache_missing"
+matrix_routed="$tmpdir/matrix-routed.yml"
+awk '
+  /^  scripts:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  scripts:$/ { in_job=0 }
+  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ matrix.runner }}"; next }
+  { print }
+' "$workflow" > "$matrix_routed"
+cmp -s "$workflow" "$matrix_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: matrix_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a cache: true job through a matrix runs-on' check_go_cache "$matrix_routed"
+
 # (c2) point a job at the ARC pool again. The pool is gone; a job that targets
 # it would queue forever rather than fail, which is the worst shape of red --
 # invisible. This is the control for the self-hosted assertion that replaced
@@ -1020,6 +1202,25 @@ awk '!done && /^    runs-on: ubuntu-latest$/ { sub(/runs-on: ubuntu-latest/, "ru
   "$workflow" > "$pool_job_returns"
 assert_check_fails 'pointed a job back at the removed ARC pool' \
   check_go_cache "$pool_job_returns"
+
+# (c3) testcontainers jobs: reaper back on, session id dropped, reap step
+# gated off or moved before the tests.
+tc_ryuk_on="$tmpdir/tc-ryuk-on.yml"
+awk '!done && /TESTCONTAINERS_RYUK_DISABLED/ { done=1; next } { print }' "$workflow" > "$tc_ryuk_on"
+cmp -s "$workflow" "$tc_ryuk_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_ryuk_on did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped TESTCONTAINERS_RYUK_DISABLED from one testcontainers job' check_testcontainers_session_reap "$tc_ryuk_on"
+tc_no_session="$tmpdir/tc-no-session.yml"
+awk '!done && /TESTCONTAINERS_SESSION_ID: ci-/ { done=1; next } { print }' "$workflow" > "$tc_no_session"
+cmp -s "$workflow" "$tc_no_session" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_no_session did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the per-job TESTCONTAINERS_SESSION_ID' check_testcontainers_session_reap "$tc_no_session"
+tc_reap_gated="$tmpdir/tc-reap-gated.yml"
+awk 'prev ~ /Remove this job.s testcontainers by session id/ && !done { sub(/if: always\(\)/, "if: success()"); done=1 } { print; prev=$0 }' "$workflow" > "$tc_reap_gated"
+cmp -s "$workflow" "$tc_reap_gated" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_gated did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'gated the testcontainers reap step on success()' check_testcontainers_session_reap "$tc_reap_gated"
+tc_reap_dropped="$tmpdir/tc-reap-dropped.yml"
+awk '/Remove this job.s testcontainers by session id/ && !done { skip=3; done=1 } skip > 0 { skip--; next } { print }' "$workflow" > "$tc_reap_dropped"
+cmp -s "$workflow" "$tc_reap_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_dropped did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the testcontainers reap step from one job' check_testcontainers_session_reap "$tc_reap_dropped"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
@@ -1522,7 +1723,7 @@ assert_check_fails 'plan checkout lost fetch-depth 2' check_reach_gating \
   "$(mutate_reach shallow 'fetch-depth: 2' 'fetch-depth: 1')"
 # shellcheck disable=SC2016 # the literal GitHub expression text
 assert_check_fails 'unit matrix excludes the race legs' check_reach_gating \
-  "$(mutate_reach unit-crossed 'exclude: ${{ fromJSON(needs.plan.outputs.unit_skip) }}' 'exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}')"
+  "$(mutate_reach unit-crossed 'exclude: ${{ fromJSON(needs.plan.outputs.unit_exclude) }}' 'exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}')"
 # shellcheck disable=SC2016 # the literal GitHub expression text
 assert_check_fails 'race matrix lost its exclude' check_reach_gating \
   "$(mutate_reach race-no-exclude 'exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}' 'exclude: []')"
@@ -1542,6 +1743,82 @@ assert_check_fails 'verify stopped checking whole-matrix skips against their leg
 # shellcheck disable=SC2016
 assert_check_fails 'verify accepts a skipped job that ran anyway' check_reach_gating \
   "$(mutate_reach verify-ran 'if [ "$declared" = yes ] && [ "$result" != skipped ]; then' 'if false; then')"
+
+# (y) observed race dedup wiring: each link removed or crossed must fail.
+mutate_dedup() { # NAME OLD NEW [all] -> path of a copy with OLD replaced (first occurrence, or all)
+  local out="$tmpdir/dedup-$1.yml"
+  python3 - "$workflow" "$out" "$2" "$3" "${4:-first}" <<'PY'
+import sys
+src, dst, old, new, how = sys.argv[1:6]
+text = open(src).read()
+if old not in text:
+    sys.exit(3)
+open(dst, "w").write(text.replace(old, new) if how == "all" else text.replace(old, new, 1))
+PY
+  cmp -s "$workflow" "$out" && { printf 'NEGATIVE CONTROL SETUP FAILED: dedup mutation %s did not change the workflow\n' "$1" >&2; exit 1; }
+  printf '%s' "$out"
+}
+# shellcheck disable=SC2016
+assert_check_fails 'unit-dedicated drifts from unit: one step command differs' check_observed_race_dedup \
+  "$(python3 - "$workflow" "$tmpdir/dedup-drift.yml" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+a = text.index("\n  unit-dedicated:\n")
+b = text.index("make test-coverage GOTEST_PKGS=\"$packages\" GOTEST_PLAIN_TIMEOUT", a)
+text = text[:b] + "make test-coverage GOTEST_PKGS=\"$packages\" -run=NONE GOTEST_PLAIN_TIMEOUT" + text[b + len("make test-coverage GOTEST_PKGS=\"$packages\" GOTEST_PLAIN_TIMEOUT"):]
+open(sys.argv[2], "w").write(text)
+print(sys.argv[2], end="")
+PY
+)"
+assert_check_fails 'unit-dedicated matrix lost a dedicated leg' check_observed_race_dedup \
+  "$(mutate_dedup matrix 'shard: [6, 7, 8, 9]' 'shard: [6, 7, 8]')"
+# shellcheck disable=SC2016
+assert_check_fails 'unit-dedicated stopped excluding the dropped legs' check_observed_race_dedup \
+  "$(mutate_dedup exclude "fromJSON(needs.unit-dedup-plan.outputs.exclude || '[]')" "fromJSON(needs.plan.outputs.unit_skip)")"
+# shellcheck disable=SC2016
+assert_check_fails 'unit-dedicated runs without unit-dedup-plan having succeeded' check_observed_race_dedup \
+  "$(mutate_dedup ded-if " && needs.unit-dedup-plan.result == 'success' && needs.unit-dedup-plan.outputs.run == 'true' }}" " }}")"
+assert_check_fails 'unit-dedup-plan stopped waiting for a covering race job' check_observed_race_dedup \
+  "$(python3 - "$workflow" "$tmpdir/dedup-plan-needs.yml" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+a = text.index("\n  unit-dedup-plan:\n")
+b = text.index("      - race-devhealthsource-mid\n", a)
+open(sys.argv[2], "w").write(text[:b] + text[b + len("      - race-devhealthsource-mid\n"):])
+print(sys.argv[2], end="")
+PY
+)"
+# shellcheck disable=SC2016
+assert_check_fails 'unit-dedup-plan skipped when a race job failed' check_observed_race_dedup \
+  "$(mutate_dedup plan-if "if: \${{ !cancelled() && needs.plan.outputs.unit_defer != '[]' }}" "if: \${{ success() && needs.plan.outputs.unit_defer != '[]' }}")"
+assert_check_fails 'a covering race job stopped keeping its test2json events' check_observed_race_dedup \
+  "$(mutate_dedup no-json 'RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh '"'"'devhealthfacts (mid third)'"'"'' 'GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh '"'"'devhealthfacts (mid third)'"'"'')"
+assert_check_fails 'a covering race job stopped uploading its events' check_observed_race_dedup \
+  "$(mutate_dedup no-upload 'name: race-json-race-devhealthsource-heavy' 'name: race-json-other')"
+assert_check_fails 'a covering race job keeps its events only when it succeeds' check_observed_race_dedup \
+  "$(mutate_dedup upload-success $'        if: always()\n        with:\n          name: race-json-race-devhealthsource-heavy' $'        if: success()\n        with:\n          name: race-json-race-devhealthsource-heavy')"
+# shellcheck disable=SC2016
+assert_check_fails 'verify stopped rechecking the dropped legs' check_observed_race_dedup \
+  "$(mutate_dedup no-recheck 'again="$(scripts/ci/observed-race-dedup.sh decide' 'again="$(true decide')"
+# shellcheck disable=SC2016
+assert_check_fails 'verify merge expects the plan unit_skip, not the confirmed drops' check_reports_steps \
+  "$(mutate_dedup absent "-absent '\${{ steps.dedup.outputs.absent }}'" "-absent '\${{ needs.plan.outputs.unit_skip }}'" all)"
+
+# shellcheck disable=SC2016
+assert_check_fails 'the race shards stopped keeping their test2json events' check_race_json_all_jobs \
+  "$(mutate_dedup shard-no-json 'RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$(make -s print-gotest-timeout)" scripts/ci/run-isolated-budget.sh' 'GOTEST_TIMEOUT="$(make -s print-gotest-timeout)" scripts/ci/run-isolated-budget.sh')"
+# shellcheck disable=SC2016
+assert_check_fails 'the race shards stopped uploading their events' check_race_json_all_jobs \
+  "$(mutate_dedup shard-no-upload 'name: race-json-race-shard-${{ matrix.shard }}' 'name: race-json-other')"
+# shellcheck disable=SC2016
+assert_check_fails 'the race shards keep their events only when they succeed' check_race_json_all_jobs \
+  "$(mutate_dedup shard-upload-success $'        if: always()\n        with:\n          name: race-json-race-shard-${{ matrix.shard }}' $'        if: success()\n        with:\n          name: race-json-race-shard-${{ matrix.shard }}')"
+assert_check_fails 'race-devhealthschema went back to plain make test-race' check_race_json_all_jobs \
+  "$(mutate_dedup schema-plain "RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=900s scripts/ci/run-isolated-budget.sh 'devhealthschema (isolated scope)'" "GOTEST_TIMEOUT=900s scripts/ci/run-isolated-budget.sh 'devhealthschema (isolated scope)'")"
+assert_check_fails 'a factoracle race job stopped uploading its events' check_race_json_all_jobs \
+  "$(mutate_dedup factoracle-no-upload 'name: race-json-race-factoracle-heavy' 'name: race-json-other')"
+assert_check_fails 'a NEW race job without -json capture and upload' check_race_json_all_jobs \
+  "$(mutate_dedup new-race-job $'\n  build:\n    runs-on: ubuntu-latest' $'\n  race-newpkg:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test-race GOTEST_PKGS=./x\n\n  build:\n    runs-on: ubuntu-latest')"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 

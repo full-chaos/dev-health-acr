@@ -24,6 +24,12 @@ GOTEST_SHUFFLE_SEED ?= 20260727
 # growing on devhealthschema's account: the next time that walk gets more
 # expensive, only race-devhealthschema's own timeout needs to move.
 GOTEST_TIMEOUT ?= 420s
+
+# GOTEST_JSON=-json makes test-race emit test2json events. The isolated race
+# jobs of the dedicated packages set it (scripts/ci/run-isolated-budget.sh
+# with RACE_JSON_OUT) so verify can read which tests passed or skipped under
+# -race. Empty by default: every other run keeps the plain output.
+GOTEST_JSON ?=
 # CI partitions the module across shard runners by passing an explicit
 # package list; the default is the whole module so local `make test*`
 # invocations are unchanged.
@@ -63,6 +69,10 @@ GOTEST_CONTEXTFABRIC_TIMEOUT ?= 750s
 # re-measured from its first hosted run (race-devhealthsource prints it and
 # fails past 85% of this budget) and this number retuned from that evidence.
 GOTEST_DEVHEALTHSOURCE_TIMEOUT ?= 600s
+# internal/mcp's own isolated budget (its own ci.yml job, race-mcp). Hosted
+# shard time was 225-380s over 38 runs (p99 380s); 380s x 1.2 = 456s, rounded
+# to 480s. Retune from the first isolated main runs' race.json.
+GOTEST_MCP_TIMEOUT ?= 480s
 # internal/contextfabric/factoracle's own isolated budget (its own ci.yml job,
 # race-factoracle). The package seeds a ClickHouse store from the venue capture
 # and replays 95 cases; it ran 100s in a shared 420s race shard before the
@@ -142,6 +152,7 @@ test-split:
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
+			*/internal/mcp) timeout="$(GOTEST_MCP_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthfacts) timeout="$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
@@ -158,7 +169,7 @@ test-split:
 # is now the coverage-instrumented `test-coverage` run below, while `make
 # test` stays the plain, dependency-free local gate.
 test-race:
-	go test $(GOTEST_EXEC) -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) -count=1 -race $(GOTEST_JSON) -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
 # CHAOS-4567: the split ci.yml already runs (CHAOS-3974) -- the shared
 # packages under GOTEST_TIMEOUT, the isolated packages under their own,
@@ -194,6 +205,7 @@ test-race-isolated:
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
+			*/internal/mcp) timeout="$(GOTEST_MCP_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-race-isolated: $$pkg (GOTEST_TIMEOUT=$$timeout)"; \
@@ -262,6 +274,7 @@ isolated-timeout:
 		*/internal/contextfabric) echo "$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthsource) echo "$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 		*/internal/contextfabric/factoracle) echo "$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
+		*/internal/mcp) echo "$(GOTEST_MCP_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthfacts) echo "$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac
