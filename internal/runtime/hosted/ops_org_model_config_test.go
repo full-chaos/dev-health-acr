@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-go/llm"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -35,30 +36,30 @@ func TestBuildOrgModelConfigResolverPicksTheOpsSource(t *testing.T) {
 	env := func(value string) func(string) (string, bool) {
 		return envLookup(map[string]string{EnvOrgLLMConfigSource: value})
 	}
-	got, err := buildOrgModelConfigResolver(withOps, env(""), discardLogger())
+	got, err := buildOrgModelConfigResolver(withOps, env(""), discardLogger(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := got.(opsOrgModelConfigs); !ok {
 		t.Fatalf("unset must default to the ops source, got %T", got)
 	}
-	if got, err := buildOrgModelConfigResolver(localEntitlement{}, env(""), discardLogger()); err != nil || got != nil {
+	if got, err := buildOrgModelConfigResolver(localEntitlement{}, env(""), discardLogger(), false); err != nil || got != nil {
 		t.Fatalf("unset without the Dev Health client: %v %v, want a nil interface", got, err)
 	}
-	if got, err := buildOrgModelConfigResolver(withOps, env("off"), discardLogger()); err != nil || got != nil {
-		t.Fatalf("off: %v %v, want a nil interface", got, err)
+	if got, err := buildOrgModelConfigResolver(withOps, env("off"), discardLogger(), true); err != nil || got != nil {
+		t.Fatalf("off on an open deployment: %v %v, want a nil interface", got, err)
 	}
-	got, err = buildOrgModelConfigResolver(withOps, env("ops"), discardLogger())
+	got, err = buildOrgModelConfigResolver(withOps, env("ops"), discardLogger(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := got.(opsOrgModelConfigs); !ok {
 		t.Fatalf("ops source = %T", got)
 	}
-	if _, err := buildOrgModelConfigResolver(localEntitlement{}, env("ops"), discardLogger()); err == nil {
+	if _, err := buildOrgModelConfigResolver(localEntitlement{}, env("ops"), discardLogger(), false); err == nil {
 		t.Fatal("ops source without the Dev Health entitlement client was accepted")
 	}
-	if _, err := buildOrgModelConfigResolver(withOps, env("bogus"), discardLogger()); err == nil {
+	if _, err := buildOrgModelConfigResolver(withOps, env("bogus"), discardLogger(), false); err == nil {
 		t.Fatal("an unknown source was accepted")
 	}
 }
@@ -139,5 +140,27 @@ func TestAnUnusableOpsConfigNeverFallsBackToThePlatformModel(t *testing.T) {
 	resolver = modelruntimeresolver.New(platform, opsOrgModelConfigs{source: none, generations: &versionGenerations{}}, build)
 	if _, _, err := resolver.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_b"}, contextfabric.InvestigationRequest{}); err != nil || platform.calls != 1 {
 		t.Fatalf("no BYO: err = %v platform calls = %d, want the platform model", err, platform.calls)
+	}
+}
+
+// With no per-organization source the gate cannot tell a saved-BYO organization
+// from one with none, and an organization holding both flags would draw the
+// platform model. A deployment that is not open therefore refuses to start with
+// the source off; the local entitlement client (development and test, where it
+// grants every flag) stays the one other nil-source composition.
+func TestOffOrgModelConfigSourceRefusesToStartOnADeploymentThatIsNotOpen(t *testing.T) {
+	withOps := entitlementWithLLMConfig{fakeOrgLLMSource: &fakeOrgLLMSource{}}
+	env := func(value string) func(string) (string, bool) {
+		return envLookup(map[string]string{EnvOrgLLMConfigSource: value})
+	}
+	got, err := buildOrgModelConfigResolver(withOps, env("off"), discardLogger(), false)
+	if err == nil || !strings.Contains(err.Error(), EnvOrgLLMConfigSource) {
+		t.Fatalf("off on a deployment that is not open: %v %v, want a start-up error naming %s", got, err, EnvOrgLLMConfigSource)
+	}
+	if got != nil {
+		t.Fatalf("a refused build returned a resolver: %T", got)
+	}
+	if got, err := buildOrgModelConfigResolver(localEntitlement{}, env(""), discardLogger(), false); err != nil || got != nil {
+		t.Fatalf("unset with the local entitlement client: %v %v, want a nil source and no error", got, err)
 	}
 }

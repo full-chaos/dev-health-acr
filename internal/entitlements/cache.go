@@ -6,8 +6,9 @@ import (
 )
 
 type grants struct {
-	runtime      bool
-	serviceModel bool
+	runtime               bool
+	serviceModel          bool
+	platformModelFallback bool
 }
 
 type cachedEntitlement struct {

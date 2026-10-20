@@ -115,7 +115,7 @@ func TestInvestigationForAnOrganizationPurgedDuringTheModelCallAnswersInvalidTok
 	rig := &clientRouteRig{model: model, logs: &bytes.Buffer{}}
 	rig.app, rig.token = newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, rig.logs)
 	rig.app.config.RequestTimeout = time.Minute
-	rig.app.runtime.Entitlements = &serviceModelGrants{feature: true}
+	rig.app.runtime.Entitlements = &serviceModelGrants{feature: true, fallback: true}
 
 	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
 

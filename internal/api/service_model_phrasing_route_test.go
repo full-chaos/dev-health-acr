@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -169,6 +171,27 @@ func (r *phrasingRouteRig) post(t *testing.T) contractsv1.ContextFabricInvestiga
 	return decodeEnvelope(t, recorder)
 }
 
+// postRaw sends the same caller-model turn and returns the raw response.
+func (r *phrasingRouteRig) postRaw(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	body := investigationRequestBody()
+	body.Question = writeBackQuestion
+	body.SynthesisMode = contractsv1.ContextFabricSynthesisModeClient
+	body.SuppliedInterpretation = writeBackInterpretation(t)
+	body.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, bytes.NewReader(encoded))
+	request.Header.Set("Authorization", "Bearer "+r.token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	r.app.Handler().ServeHTTP(recorder, request)
+	return recorder
+}
+
 func phrasingOutcomes(logs *bytes.Buffer) []string {
 	var outcomes []string
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
@@ -218,7 +241,7 @@ func TestClarificationOnTheClientPathWithoutTheFeatureIsNeverPhrasedOnTheDeploym
 // The mirror: the same turn for an organization with the feature is phrased
 // once on the deployment model.
 func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true}, false)
+	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true, fallback: true}, false)
 	options := kindOptionsOf(t, rig.post(t))
 	if got := rig.phrasing.count(); got != 1 {
 		t.Fatalf("deployment phrasing calls = %d, want 1", got)
@@ -226,8 +249,8 @@ func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel
 	if options[0].Phrasing != phrasedKindLabel {
 		t.Fatalf("kind option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
 	}
-	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "entitlement" {
-		t.Fatalf("decision log bases = %v, want [entitlement]", got)
+	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "platform_model_fallback" {
+		t.Fatalf("decision log bases = %v, want [platform_model_fallback]", got)
 	}
 	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingGenerated) {
 		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingGenerated)
@@ -310,10 +333,10 @@ func windowGateCandidateOptions(t *testing.T, envelope contractsv1.ContextFabric
 	return needs.CandidateOptions
 }
 
-// An organization served on its own model without the feature is phrased on
-// its own model, never the deployment's.
-func TestWindowGateClarificationOnTheOwnModelWithoutTheFeatureIsPhrasedOnTheOwnModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{}, true)
+// An organization served on its own model without the fallback grant is
+// phrased on its own model, never the deployment's.
+func TestWindowGateClarificationOnTheOwnModelWithoutTheFallbackGrantIsPhrasedOnTheOwnModel(t *testing.T) {
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, true)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
@@ -330,7 +353,7 @@ func TestWindowGateClarificationOnTheOwnModelWithoutTheFeatureIsPhrasedOnTheOwnM
 }
 
 func TestWindowGateClarificationWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, false)
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true, fallback: true}, false)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 1 || rig.byo.count() != 0 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 1 and 0", rig.phrasing.count(), rig.byo.count())
@@ -343,7 +366,7 @@ func TestWindowGateClarificationWithTheFeatureIsPhrasedOnTheDeploymentModel(t *t
 // An organization with the feature and its own model is phrased on its own
 // model: the deployment model is not used while the organization has one.
 func TestWindowGateClarificationWithTheFeatureAndAnOwnModelIsPhrasedOnTheOwnModel(t *testing.T) {
-	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true}, true)
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true, fallback: true}, true)
 	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
@@ -353,10 +376,11 @@ func TestWindowGateClarificationWithTheFeatureAndAnOwnModelIsPhrasedOnTheOwnMode
 	}
 }
 
-// A caller-model turn for an organization with its own model, without the
-// feature, is phrased on the organization's own model.
+// A caller-model turn for an organization with its own model and the feature
+// on is phrased on the organization's own model, never the deployment's, even
+// with the fallback grant.
 func TestClarificationOnTheClientPathWithAnOwnModelIsPhrasedOnTheOwnModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{}, true)
+	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true, fallback: true}, true)
 	options := kindOptionsOf(t, rig.post(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
@@ -370,7 +394,7 @@ func TestClarificationOnTheClientPathWithAnOwnModelIsPhrasedOnTheOwnModel(t *tes
 // own: the offer is served with its structural labels, the outcome is the
 // withheld class (not a failed call), and nothing is refused.
 func TestClarificationWithNoModelConfiguredIsServedWithStructuralLabelsAsWithheld(t *testing.T) {
-	rig := newPhrasingRouteRigWith(t, &serviceModelGrants{feature: true}, false, true)
+	rig := newPhrasingRouteRigWith(t, &serviceModelGrants{feature: true, fallback: true}, false, true)
 	options := kindOptionsOf(t, rig.post(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())
@@ -383,5 +407,48 @@ func TestClarificationWithNoModelConfiguredIsServedWithStructuralLabelsAsWithhel
 	}
 	if !strings.Contains(rig.logs.String(), "no_model_configured") {
 		t.Fatal("logs carry no no_model_configured basis line")
+	}
+}
+
+// A caller-model turn passes the same gate as a service-model turn before any
+// model is bound: a saved configuration behind a closed byo_llm gate, one with
+// no investigate config, and one with the feature off are each refused with
+// their own reason, whatever the flags, and neither the deployment model nor
+// the organization's own model phrases anything. A resolver outage is
+// unavailable, never a deployment draw.
+func TestCallerModelTurnIsGatedBeforeAnyModelIsBound(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		grants  *serviceModelGrants
+		configs ownModelConfigs
+		status  int
+		reason  string
+	}{
+		{name: "closed byo_llm gate with both flags", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigGateClosed}, status: http.StatusForbidden, reason: "own_model_gate_closed"},
+		{name: "keys for other purposes only with both flags", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigNoInvestigateConfig}, status: http.StatusForbidden, reason: "byo_no_investigate_config"},
+		{name: "saved config with the feature off", grants: &serviceModelGrants{fallback: true}, configs: ownModelConfigs{found: true}, status: http.StatusForbidden, reason: "ai_features_turned_off"},
+		{name: "saved config with the feature off and no grants", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, status: http.StatusForbidden, reason: "ai_features_turned_off"},
+		{name: "resolver outage with both flags", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: errors.New("ops unreachable")}, status: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newPhrasingRouteRig(t, tc.grants, true)
+			rig.app.runtime.OrgModelConfigs = tc.configs
+			recorder := rig.postRaw(t)
+			if recorder.Code != tc.status {
+				t.Fatalf("status = %d body=%s, want %d", recorder.Code, recorder.Body.String(), tc.status)
+			}
+			if tc.reason != "" {
+				body := decodeServiceModelRefusal(t, recorder, tc.status)
+				if body.Error.Code != "feature_not_enabled" || body.Error.Details["reason"] != tc.reason {
+					t.Fatalf("error = %+v, want feature_not_enabled with reason %s", body.Error, tc.reason)
+				}
+			}
+			if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
+				t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())
+			}
+			if interprets, synthesizes := rig.model.counts(); interprets != 0 || synthesizes != 0 {
+				t.Fatalf("model calls = interpret %d synthesize %d, want 0 and 0", interprets, synthesizes)
+			}
+		})
 	}
 }
