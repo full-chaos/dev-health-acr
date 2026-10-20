@@ -1,0 +1,667 @@
+{
+ "claimed_facts": [
+  {
+   "claim_id": "claim_readiness_ask_dev",
+   "derived_from": [],
+   "fact_id": "",
+   "field": "release_ready",
+   "kind": "readiness",
+   "operation": "",
+   "subject": {
+    "canonical_id": "project_ask_dev",
+    "kind": "project",
+    "label": "Ask Dev"
+   },
+   "value": {
+    "kind": "boolean",
+    "string": "",
+    "integer": 0,
+    "number": 0,
+    "boolean": false
+   },
+   "rows": [
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 0.41,
+       "boolean": false,
+       "key": "coverage_ratio"
+      },
+      {
+       "kind": "string",
+       "string": "2026-08-03",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 9,
+       "boolean": false,
+       "key": "open_requirements"
+      }
+     ]
+    },
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 0.52,
+       "boolean": false,
+       "key": "coverage_ratio"
+      },
+      {
+       "kind": "string",
+       "string": "2026-08-18",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 7,
+       "boolean": false,
+       "key": "open_requirements"
+      }
+     ]
+    },
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 0.6,
+       "boolean": false,
+       "key": "coverage_ratio"
+      },
+      {
+       "kind": "string",
+       "string": "2026-08-30",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 4,
+       "boolean": false,
+       "key": "open_requirements"
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "field": "daily_readiness",
+     "key": [
+      "day"
+     ],
+     "measures": [
+      "coverage_ratio",
+      "open_requirements"
+     ],
+     "observations": [],
+     "order_by": "",
+     "series": "table",
+     "shape": "time_series"
+    }
+   ]
+  },
+  {
+   "claim_id": "claim_cohort_88cad88367c815eae568ce1f979c1471",
+   "derived_from": [],
+   "fact_id": "",
+   "field": "severity",
+   "kind": "operational_deficiencies",
+   "operation": "",
+   "subject": {
+    "canonical_id": "team:CHAOS",
+    "kind": "team",
+    "label": "CHAOS"
+   },
+   "value": {
+    "kind": "string",
+    "string": "critical",
+    "integer": 0,
+    "number": 0,
+    "boolean": false
+   },
+   "rows": [],
+   "tables": []
+  },
+  {
+   "claim_id": "claim_cohort_ff977441fb1cb96f9023dcff28d4a624",
+   "derived_from": [],
+   "fact_id": "",
+   "field": "severity",
+   "kind": "health",
+   "operation": "",
+   "subject": {
+    "canonical_id": "team:CHAOS",
+    "kind": "team",
+    "label": "CHAOS"
+   },
+   "value": {
+    "kind": "string",
+    "string": "elevated",
+    "integer": 0,
+    "number": 0,
+    "boolean": false
+   },
+   "rows": [
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-15",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 0.61,
+       "boolean": false,
+       "key": "compounding_risk"
+      },
+      {
+       "kind": "string",
+       "string": "elevated",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "severity"
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "field": "daily_health",
+     "key": [
+      "day"
+     ],
+     "measures": [
+      "compounding_risk"
+     ],
+     "observations": [
+      "severity"
+     ],
+     "order_by": "",
+     "series": "table",
+     "shape": "time_series"
+    }
+   ]
+  },
+  {
+   "claim_id": "claim_cohort_fbf801c96f78b58f7f50eb3d6c2f57a2",
+   "derived_from": [],
+   "fact_id": "",
+   "field": "estimate_coverage_ratio",
+   "kind": "readiness",
+   "operation": "",
+   "subject": {
+    "canonical_id": "team:CHAOS",
+    "kind": "team",
+    "label": "CHAOS"
+   },
+   "value": {
+    "kind": "number",
+    "string": "",
+    "integer": 0,
+    "number": 0.6,
+    "boolean": false
+   },
+   "rows": [],
+   "tables": []
+  },
+  {
+   "claim_id": "claim_metrics_ask_dev_commits",
+   "derived_from": [],
+   "fact_id": "",
+   "field": "commits_count",
+   "kind": "metrics",
+   "operation": "",
+   "subject": {
+    "canonical_id": "project_ask_dev",
+    "kind": "project",
+    "label": "Ask Dev"
+   },
+   "value": {
+    "kind": "integer",
+    "string": "",
+    "integer": 31,
+    "number": 0,
+    "boolean": false
+   },
+   "rows": [
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-03",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 18,
+       "number": 0,
+       "boolean": false,
+       "key": "commits_count"
+      }
+     ]
+    },
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-18",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 24,
+       "number": 0,
+       "boolean": false,
+       "key": "commits_count"
+      }
+     ]
+    },
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-30",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 31,
+       "number": 0,
+       "boolean": false,
+       "key": "commits_count"
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "field": "daily_metrics",
+     "key": [
+      "day"
+     ],
+     "measures": [
+      "commits_count"
+     ],
+     "observations": [],
+     "order_by": "",
+     "series": "table",
+     "shape": "time_series"
+    }
+   ]
+  },
+  {
+   "claim_id": "claim_workload_ask_dev_backlog",
+   "derived_from": [],
+   "fact_id": "",
+   "field": "backlog_size",
+   "kind": "workload",
+   "operation": "",
+   "subject": {
+    "canonical_id": "project_ask_dev",
+    "kind": "project",
+    "label": "Ask Dev"
+   },
+   "value": {
+    "kind": "integer",
+    "string": "",
+    "integer": 12,
+    "number": 0,
+    "boolean": false
+   },
+   "rows": [
+    {
+     "series": "table",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "team_chaos",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "team_id"
+      },
+      {
+       "kind": "string",
+       "string": "CHAOS",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "team_name"
+      },
+      {
+       "kind": "string",
+       "string": "scope-1",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "work_scope_id"
+      },
+      {
+       "kind": "string",
+       "string": "2026-08-30T00:00:00Z",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "computed_at"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 12,
+       "number": 0,
+       "boolean": false,
+       "key": "backlog_size"
+      },
+      {
+       "kind": "number",
+       "string": "",
+       "integer": 0,
+       "number": 4.2,
+       "boolean": false,
+       "key": "throughput_mean"
+      }
+     ]
+    },
+    {
+     "series": "time_series",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-03",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 9,
+       "number": 0,
+       "boolean": false,
+       "key": "backlog_size"
+      }
+     ]
+    },
+    {
+     "series": "time_series",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-18",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 11,
+       "number": 0,
+       "boolean": false,
+       "key": "backlog_size"
+      }
+     ]
+    },
+    {
+     "series": "time_series",
+     "fields": [
+      {
+       "kind": "string",
+       "string": "2026-08-30",
+       "integer": 0,
+       "number": 0,
+       "boolean": false,
+       "key": "day"
+      },
+      {
+       "kind": "integer",
+       "string": "",
+       "integer": 12,
+       "number": 0,
+       "boolean": false,
+       "key": "backlog_size"
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "field": "team_breakdown",
+     "key": [
+      "team_id",
+      "team_name",
+      "work_scope_id",
+      "computed_at"
+     ],
+     "measures": [
+      "throughput_mean",
+      "throughput_stddev",
+      "backlog_size",
+      "forecast_p50_days"
+     ],
+     "observations": [],
+     "order_by": "",
+     "series": "table",
+     "shape": "breakdown"
+    },
+    {
+     "field": "daily_workload",
+     "key": [
+      "day"
+     ],
+     "measures": [
+      "backlog_size",
+      "throughput_mean",
+      "throughput_stddev"
+     ],
+     "observations": [],
+     "order_by": "",
+     "series": "time_series",
+     "shape": "time_series"
+    }
+   ]
+  }
+ ],
+ "coverage_disclosures": [],
+ "current_state": "Implementation completion and release readiness diverge because required product acceptance remains open.",
+ "deterministic_answer": "Ask Dev is not release-ready. The principal current driver is incomplete release acceptance, despite most tracked implementation work being closed.",
+ "direct_judgment": "Ask Dev is not release-ready even though most tracked implementation work is closed.",
+ "drivers": [
+  {
+   "affected_subjects": [
+    {
+     "canonical_id": "project_ask_dev",
+     "kind": "project",
+     "label": "Ask Dev"
+    }
+   ],
+   "category": "readiness",
+   "claimed_fact_ids": [
+    "claim_readiness_ask_dev"
+   ],
+   "confidence": 0.96,
+   "current": true,
+   "derivation": "rule_inferred",
+   "driver_id": "driver_12345678",
+   "epistemic_status": "inferred",
+   "evidence_ref_ids": [
+    "evidence_release_acceptance"
+   ],
+   "path_ids": [
+    "path_12345678"
+   ],
+   "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
+   "source_state": "",
+   "standing": "principal",
+   "summary": "The project cannot be treated as ready until the required real-product acceptance path succeeds.",
+   "title": "Release acceptance remains incomplete"
+  },
+  {
+   "affected_subjects": [
+    {
+     "canonical_id": "team:CHAOS",
+     "kind": "team",
+     "label": "CHAOS"
+    }
+   ],
+   "category": "operational_deficiency",
+   "claimed_fact_ids": [
+    "claim_cohort_88cad88367c815eae568ce1f979c1471"
+   ],
+   "confidence": 0.95,
+   "current": true,
+   "derivation": "rule_inferred",
+   "driver_id": "cohort-driver-01-1",
+   "epistemic_status": "inferred",
+   "evidence_ref_ids": [
+    "evidence_team_chaos_roster"
+   ],
+   "path_ids": [],
+   "qualification": "",
+   "source_state": "",
+   "standing": "principal",
+   "summary": "operational deficiencies (weight 20, value 1.00) contributed 20.0 points to CHAOS's a 43.5 attention score.",
+   "title": "CHAOS: operational deficiencies"
+  },
+  {
+   "affected_subjects": [
+    {
+     "canonical_id": "team:CHAOS",
+     "kind": "team",
+     "label": "CHAOS"
+    }
+   ],
+   "category": "health",
+   "claimed_fact_ids": [
+    "claim_cohort_ff977441fb1cb96f9023dcff28d4a624"
+   ],
+   "confidence": 0.95,
+   "current": true,
+   "derivation": "rule_inferred",
+   "driver_id": "cohort-driver-01-2",
+   "epistemic_status": "inferred",
+   "evidence_ref_ids": [
+    "evidence_team_chaos_roster"
+   ],
+   "path_ids": [],
+   "qualification": "",
+   "source_state": "",
+   "standing": "contributing",
+   "summary": "health risk (weight 25, value 0.50) contributed 12.5 points to CHAOS's a 43.5 attention score.",
+   "title": "CHAOS: health risk"
+  },
+  {
+   "affected_subjects": [
+    {
+     "canonical_id": "team:CHAOS",
+     "kind": "team",
+     "label": "CHAOS"
+    }
+   ],
+   "category": "readiness",
+   "claimed_fact_ids": [
+    "claim_cohort_fbf801c96f78b58f7f50eb3d6c2f57a2"
+   ],
+   "confidence": 0.95,
+   "current": true,
+   "derivation": "rule_inferred",
+   "driver_id": "cohort-driver-01-3",
+   "epistemic_status": "inferred",
+   "evidence_ref_ids": [
+    "evidence_team_chaos_roster"
+   ],
+   "path_ids": [],
+   "qualification": "",
+   "source_state": "",
+   "standing": "contributing",
+   "summary": "readiness gap (weight 15, value 0.40) contributed 6.0 points to CHAOS's a 43.5 attention score.",
+   "title": "CHAOS: readiness gap"
+  }
+ ],
+ "evidence_ref_ids": [
+  "evidence_project_identity",
+  "evidence_release_acceptance"
+ ],
+ "findings": [
+  {
+   "claimed_fact_ids": [],
+   "evidence_ref_ids": [
+    "evidence_release_acceptance"
+   ],
+   "finding_id": "finding_12345678",
+   "kind": "narrative",
+   "list": "remaining_work",
+   "subjects": [
+    {
+     "canonical_id": "project_ask_dev",
+     "kind": "project",
+     "label": "Ask Dev"
+    },
+    {
+     "canonical_id": "work_release_acceptance",
+     "kind": "work_item",
+     "label": "Release acceptance"
+    }
+   ],
+   "summary": "Complete the real Context Fabric to product acceptance path."
+  }
+ ],
+ "limitations": [
+  "No production user-adoption evidence was available for this investigation."
+ ],
+ "status": "complete",
+ "strongest_pressures": [
+  "Release acceptance remains incomplete."
+ ],
+ "warnings": []
+}

@@ -18,7 +18,7 @@ func strictSchemas(t *testing.T) map[string]outputSchema {
 	t.Helper()
 	out := map[string]outputSchema{}
 	for name, value := range map[string]any{"interpret": interpretationOutput{}, "synthesize": synthesisOutput{}, "phrase": phrasingOutput{}} {
-		schema, err := newOutputSchema(value, name != "synthesize")
+		schema, err := newOutputSchema(value, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,12 +94,11 @@ func hasKey(node any, keys ...string) bool {
 // Prod logged format_path=tool for every anthropic turn: open maps, an
 // optional-property count of 35 and 39 (limit 24), conditional keywords and an
 // untyped property all kept the schemas out of structured outputs. Interpret
-// and phrase now fit. Synthesize is kept on the tool path on purpose: its
-// closed form passes the library's fit check but Anthropic refuses it live
-// (HTTP 400 "The compiled grammar is too large", req_011CgCX1m6FWErtNJADGMY22,
-// a 400 that no fallback may answer), so the operation is decided up front.
+// and phrase fit, and synthesize fits since CHAOS-10311 folded its repeated
+// structures (its first closed form drew HTTP 400 "The compiled grammar is
+// too large", req_011CgCX1m6FWErtNJADGMY22, a 400 that no fallback may answer).
 func TestAnthropicWireModePerOperation(t *testing.T) {
-	want := map[string]string{"interpret": llm.FormatPathSchema, "phrase": llm.FormatPathSchema, "synthesize": llm.FormatPathTool}
+	want := map[string]string{"interpret": llm.FormatPathSchema, "phrase": llm.FormatPathSchema, "synthesize": llm.FormatPathSchema}
 	for name, schema := range strictSchemas(t) {
 		var sentBody map[string]any
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,9 +124,7 @@ func TestAnthropicWireModePerOperation(t *testing.T) {
 	}
 }
 
-// The closed form of every schema stays inside the library's fit check, so
-// moving synthesize onto it later is a one-flag change once it fits the
-// compiled-grammar cap.
+// The closed form of every schema stays inside the library's fit check.
 func TestClosedFormOfEverySchemaFitsTheLibraryCheck(t *testing.T) {
 	for name, schema := range strictSchemas(t) {
 		var sentBody map[string]any
@@ -387,8 +384,7 @@ func TestEveryOptionalPropertyHasAGoKindThatMakesEmptyEqualAbsent(t *testing.T) 
 }
 
 // The Anthropic call of each operation sends the schema chosen for it up
-// front: interpretation closed, synthesis open (tool path), with no retry on
-// the other form.
+// front: interpretation and synthesis closed, with no retry on the other form.
 func TestAnthropicCallsSendTheChosenSchemaPerOperation(t *testing.T) {
 	schemas := strictSchemas(t)
 	cases := map[string]func(*Runtime) error{
@@ -412,10 +408,7 @@ func TestAnthropicCallsSendTheChosenSchemaPerOperation(t *testing.T) {
 		}
 		_ = call(runtime)
 		sent := client.request(0).Format.Schema
-		want := schemas[name].wire
-		if name == "interpret" {
-			want = schemas[name].strict
-		}
+		want := schemas[name].strict
 		if !reflect.DeepEqual(sent, want) {
 			t.Errorf("%s: the Anthropic call sent a different schema than the one chosen for it", name)
 		}
