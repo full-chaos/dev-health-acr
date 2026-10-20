@@ -48,12 +48,13 @@ func TestMeasuredClientRunsAtTheStatementThreadsOnRealClickHouse(t *testing.T) {
 	}
 }
 
-// The thread check counts a measured statement that ran at the server default
-// on a host whose default is not the statement thread count: query_log's
-// Settings map logs no max_threads for it. A statement sent at the statement
-// thread count, at another count, or carrying its own SETTINGS max_threads
-// logs the value and is not counted, also when the statement is longer than
-// query_log keeps and its SETTINGS clause is cut from the logged text.
+// The thread check counts a measured statement that ran above the statement
+// thread count: at the server default on a host whose default is not that
+// count (query_log's Settings map logs no max_threads), or at a logged count
+// above it, sent by a client or set by the statement's own SETTINGS. A
+// statement's own SETTINGS at or under the count is its production choice and
+// is not counted, also when the statement is longer than query_log keeps and
+// its SETTINGS clause is cut from the logged text.
 func TestUnboundThreadsCountsEveryStatementOffTheStatementThreadsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	raw, direct := sharedClickHouseFixture(t)
@@ -94,10 +95,11 @@ func TestUnboundThreadsCountsEveryStatementOffTheStatementThreadsOnRealClickHous
 		logged string
 	}{
 		{"production client", statementthreads.API(raw), "SELECT count() FROM numbers(1000) /* threads-api */", 0, ""},
-		{"client at 8 threads", at8, "SELECT count() FROM numbers(1000) /* threads-at8 */", 0, "8"},
-		{"statement's own SETTINGS", raw, "SELECT count() FROM numbers(1000) /* threads-inline */ SETTINGS max_threads = 8", 0, "8"},
+		{"client at 8 threads", at8, "SELECT count() FROM numbers(1000) /* threads-at8 */", 1, "8"},
+		{"statement's own SETTINGS under the count", raw, "SELECT count() FROM numbers(1000) /* threads-inline */ SETTINGS max_threads = 1", 0, "1"},
+		{"statement's own SETTINGS above the count", raw, "SELECT count() FROM numbers(1000) /* threads-inline-high */ SETTINGS max_threads = 8", 1, "8"},
 		{"raw client at the server default", raw, "SELECT count() FROM numbers(1000) /* threads-raw */", map[bool]uint64{true: 0, false: 1}[serverDefault == contextpacket.StatementMaxThreads], ""},
-		{"cut statement's own SETTINGS", raw, "SELECT /* threads-cut-inline */ count() FROM numbers(1000) WHERE number NOT IN (" + long + ") SETTINGS max_threads = 8", 0, "8"},
+		{"cut statement's own SETTINGS under the count", raw, "SELECT /* threads-cut-inline */ count() FROM numbers(1000) WHERE number NOT IN (" + long + ") SETTINGS max_threads = 1", 0, "1"},
 		{"cut statement at the server default", raw, "SELECT /* threads-cut-raw */ count() FROM numbers(1000) WHERE number NOT IN (" + long + ")", map[bool]uint64{true: 0, false: 1}[serverDefault == contextpacket.StatementMaxThreads], ""},
 	} {
 		tag := c.sql[strings.Index(c.sql, "/* ")+3 : strings.Index(c.sql, " */")]

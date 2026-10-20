@@ -37,15 +37,14 @@ func Unbounded(inner contextpacket.ClickHouseQueryClient) contextpacket.ClickHou
 }
 
 // unboundThreads is the query_log condition of a measured statement that did
-// not run at a thread count of its own choosing: query_log's Settings map
+// not run at or under the statement thread count: query_log's Settings map
 // logs no max_threads for it on a server whose default is not the statement
-// thread count. The map lists every setting that differs from the server
-// default, whether the client sent it or the statement's own SETTINGS set it,
-// so a statement's own SETTINGS (its production choice) logs there even when
-// query_log cuts the text (log_queries_cut_to_length) and drops the clause.
-// The text is not read: a client at another count and a statement's own
-// SETTINGS log the same, so both count as bound.
-var unboundThreads = fmt.Sprintf("Settings['max_threads'] = '' AND (SELECT value FROM system.settings WHERE name = 'max_threads') NOT IN ('%[1]d', 'auto(%[1]d)')", contextpacket.StatementMaxThreads)
+// thread count, or logs a count above it. The map lists every setting that
+// differs from the server default, whether the client sent it or the
+// statement's own SETTINGS set it, so it keeps a statement's own SETTINGS
+// max_threads when query_log cuts a long text (log_queries_cut_to_length) and
+// drops the trailing clause; the text is not read. A logged auto(N) reads as N.
+var unboundThreads = fmt.Sprintf("((Settings['max_threads'] = '' AND (SELECT value FROM system.settings WHERE name = 'max_threads') NOT IN ('%[1]d', 'auto(%[1]d)')) OR toUInt64OrZero(extract(Settings['max_threads'], '[0-9]+')) > %[1]d)", contextpacket.StatementMaxThreads)
 
 // UnboundThreadsCount is a system.query_log aggregate: how many of the
 // selected statements did not run at the statement thread count.

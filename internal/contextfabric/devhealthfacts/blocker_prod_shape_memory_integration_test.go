@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -154,6 +155,10 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 		t.Fatalf("read query_log: %v", err)
 	}
 	defer rows.Close()
+	blockerThreads, err := devhealthfacts.BlockerStatementMaxThreadsForTest(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out []blockerProdShapeStatement
 	var threadless uint64
 	for rows.Next() {
@@ -164,6 +169,12 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 			t.Fatal(err)
 		}
 		t.Logf("STATEMENT-THREADS statement %d logged max_threads [%s], unbound %d: %s", st.hash, threads, unbound, st.head)
+		for _, value := range strings.Split(threads, ",") {
+			logged, err := strconv.ParseUint(value, 10, 64)
+			if err != nil || logged == 0 || logged > blockerThreads {
+				t.Errorf("blocker statement %d logged max_threads %q, want the reader's own %d or fewer: %s", st.hash, value, blockerThreads, st.head)
+			}
+		}
 		out = append(out, st)
 		threadless += unbound
 	}
