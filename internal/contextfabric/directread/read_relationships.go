@@ -709,7 +709,7 @@ func (r *RelationshipsReader) gateEnds(ctx context.Context, principal storage.Pr
 	admitted := make(map[string]bool, len(subjects))
 	for start := 0; start < len(subjects); start += MaxSubjectsPerRequest {
 		end := min(start+MaxSubjectsPerRequest, len(subjects))
-		decision := r.gate.decide(ctx, principal, subjects[start:end])
+		decision := r.gate.decide(ctx, principal, subjects[start:end], false)
 		if decision.Decision == DecisionUnavailable {
 			record.FailureClass = gatevocab.RelationshipsFailureGate
 			return nil, fmt.Errorf("%w: end node gate", ErrRelationshipsUnavailable)

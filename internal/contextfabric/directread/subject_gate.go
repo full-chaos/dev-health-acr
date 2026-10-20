@@ -157,7 +157,7 @@ func NewSubjectGate(graph GraphAuthority, recorder Recorder) *SubjectGate {
 // an unavailable decision is a Decision value, and its AuthorizedSubjects is
 // empty.
 func (g *SubjectGate) Authorize(ctx context.Context, principal storage.Principal, requested []contextfabric.SubjectRef) (AuthorizedSubjects, Authorization) {
-	decision := g.decide(ctx, principal, requested)
+	decision := g.decide(ctx, principal, requested, true)
 	if g != nil && g.recorder != nil {
 		g.recorder.RecordDirectReadAuthorization(ctx, principal, decision)
 	}
@@ -177,7 +177,9 @@ func (g *SubjectGate) Authorize(ctx context.Context, principal storage.Principal
 	return issue(ctx, principal, admitted, now()), decision
 }
 
-func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, requested []contextfabric.SubjectRef) Authorization {
+// decide gates the subjects. lookupRemoved asks the provider which admitted
+// teams are gone; a caller that discards the removal flag passes false.
+func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, requested []contextfabric.SubjectRef, lookupRemoved bool) Authorization {
 	decision := Authorization{
 		PrincipalClass:       ClassifyPrincipal(principal),
 		RepositoryScopeCount: len(principal.RepositoryScopes),
@@ -296,7 +298,9 @@ func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, r
 					}
 				}
 			}
-			g.markRemovedTeams(ctx, principal, binding, &decision, graphIndexes)
+			if lookupRemoved {
+				g.markRemovedTeams(ctx, principal, binding, &decision, graphIndexes)
+			}
 		}
 	}
 	return finish(decision)
