@@ -151,19 +151,22 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // (the work item is an issue, admittedLinkedPullRequestRowsAmongSQL: the
 // linked pull request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
-// with the statement. It is the same chain teamRepositories walks. Every set
-// and join side holds the owned projects' work items, their links and those
-// links' pull requests only; the organization's other link rows stream past
-// them, so the statement's memory follows the owned projects, not the
-// organization's links.
+// with the statement. It is the same chain teamRepositories walks. Work items
+// are read twice, for linked issues of the owned projects only: the link ids
+// prune work_items granules on its primary key, first on the unmerged rows to
+// name the owned projects' candidates, then with FINAL on those candidates, so
+// the statement's cost follows the organization's links, not the size of its
+// work item table. The link rows and pull requests joined to them are read for
+// the candidates only, so no join side holds the organization's other links.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := teamOwnedResolvedProjectsSQL(teamParam, bound)
 	keys := teamOwnedProjectKeyCandidatesSQL(teamParam, bound)
-	// A work item row of any version carrying an owned project key is a
-	// superset of the work items whose latest version does; its link rows of
-	// any version are a superset of the admitted ones.
-	ownedItems := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.project_id IN ` + keys + `)`
-	candidates := `(SELECT cl.work_item_id FROM work_graph_issue_pr AS cl WHERE cl.org_id = {org_id:String} AND cl.work_item_id IN ` + ownedItems + `)`
+	// The linked ids are intersected with the owned projects' work items on
+	// the unmerged rows first (a row of any version carrying an owned project
+	// is a superset of the work items whose latest version does), so the FINAL
+	// read below holds only those candidates, not every linked work item.
+	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND cp.project_id IN ` + keys + `)`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
     WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
       AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`

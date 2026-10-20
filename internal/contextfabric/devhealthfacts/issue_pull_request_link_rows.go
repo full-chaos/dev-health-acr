@@ -83,19 +83,21 @@ var admittedLinkedPullRequestRowsSQL = admittedLinkedPullRequestRowsAmongSQL("")
 
 // admittedLinkedPullRequestRowsAmongSQL is admittedLinkedPullRequestRowsSQL
 // over the link rows of the work item ids candidates names, with the pull
-// request rows read for those ids' links only; "" is every link row of the
-// organization. Every version of a kept link and of a kept pull request is
-// still read, so FINAL keeps the same row of each.
+// request rows kept for those ids' links only; "" is every link row of the
+// organization. The pull request filter names only pull request columns, so it
+// is applied to the join's right side before it is filled. Every version of a
+// kept link and of a kept pull request is still read, so FINAL keeps the same
+// row of each.
 func admittedLinkedPullRequestRowsAmongSQL(candidates string) string {
-	pullRequests, among := `git_pull_requests AS pr FINAL`, ``
+	among := ``
 	if candidates != "" {
-		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
-		among = ` AND l.work_item_id IN ` + candidates
+		among = ` AND l.work_item_id IN ` + candidates + `
+    AND (pr.repo_id, pr.number) IN (SELECT lc.repo_id, lc.pr_number FROM work_graph_issue_pr AS lc WHERE lc.org_id = {org_id:String} AND lc.work_item_id IN ` + candidates + `)`
 	}
 	return `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
-  INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
+  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
   WHERE l.org_id = {org_id:String}` + among + ` AND ` + linkTierRankSQL + ` > 0
 )`
 }
