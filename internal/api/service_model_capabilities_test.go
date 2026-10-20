@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 )
 
 func TestCapabilitiesListInvestigateQuestionOnlyWhereTheServiceModelServes(t *testing.T) {
@@ -21,8 +22,13 @@ func TestCapabilitiesListInvestigateQuestionOnlyWhereTheServiceModelServes(t *te
 	}{
 		{name: "no entitlement, no own model", grants: &serviceModelGrants{}, listed: false},
 		{name: "deployment open", open: true, grants: &serviceModelGrants{}, listed: true},
-		{name: "entitled", grants: &serviceModelGrants{feature: true}, listed: true},
-		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, listed: true},
+		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, listed: true},
+		{name: "feature only", grants: &serviceModelGrants{feature: true}, listed: false},
+		{name: "fallback grant only", grants: &serviceModelGrants{fallback: true}, listed: false},
+		{name: "own model with the feature off", grants: &serviceModelGrants{fallback: true}, configs: ownModelConfigs{found: true}, listed: false},
+		{name: "BYO keys for other purposes only", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigNoInvestigateConfig}, listed: true},
+		{name: "own model behind a closed gate", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigGateClosed}, listed: true},
+		{name: "own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, listed: true},
 		{name: "entitlement unreadable", grants: &serviceModelGrants{err: errors.New("down")}, listed: true},
 		{name: "own model unreadable", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: errors.New("down")}, listed: true},
 	} {

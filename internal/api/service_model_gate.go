@@ -12,20 +12,27 @@ import (
 )
 
 const (
-	serviceModelEntitlement        = "acr_service_model"
-	serviceModelNotEntitledMessage = "Investigations on the service model are not enabled for this organization"
+	serviceModelEntitlement          = "acr_service_model"
+	platformModelFallbackEntitlement = "platform_model_fallback"
+	byoLLMGateResource               = "byo_llm"
+	serviceModelNotEntitledMessage   = "Investigations on the service model are not enabled for this organization"
+	ownModelGateClosedMessage        = "This organization's own model is saved but not enabled for its plan"
+	aiFeaturesTurnedOffMessage       = "ACR AI features are turned off for this organization"
+	noInvestigateConfigMessage       = "This organization's saved model keys are for other uses only; none is set for investigations"
 )
 
 // serviceModelBasis is why a turn may, or may not, use the deployment model.
 type serviceModelBasis string
 
 const (
-	serviceModelBasisWebAssertion   serviceModelBasis = "web_assertion"
-	serviceModelBasisDeploymentOpen serviceModelBasis = "deployment_open"
-	serviceModelBasisEntitlement    serviceModelBasis = "entitlement"
-	serviceModelBasisOwnModel       serviceModelBasis = "own_model"
-	serviceModelBasisClientModel    serviceModelBasis = "client_model"
-	serviceModelBasisRefused        serviceModelBasis = "refused"
+	serviceModelBasisDeploymentOpen        serviceModelBasis = "deployment_open"
+	serviceModelBasisPlatformModelFallback serviceModelBasis = "platform_model_fallback"
+	serviceModelBasisOwnModel              serviceModelBasis = "own_model"
+	serviceModelBasisOwnModelGateClosed    serviceModelBasis = "own_model_gate_closed"
+	serviceModelBasisAIFeaturesTurnedOff   serviceModelBasis = "ai_features_turned_off"
+	serviceModelBasisNoInvestigateConfig   serviceModelBasis = "byo_no_investigate_config"
+	serviceModelBasisClientModel           serviceModelBasis = "client_model"
+	serviceModelBasisRefused               serviceModelBasis = "refused"
 )
 
 var (
@@ -33,89 +40,148 @@ var (
 	errServiceModelOwnModelUnavailable    = errors.New("organization model configuration unavailable")
 )
 
-// serviceModelDecision decides whether an investigation may run on the
-// deployment's own model. Web assertions (Ask Dev) are not decided here. A
-// credential caller may when the deployment is open or the organization holds
-// acr_service_model; otherwise, and also when that entitlement cannot be read,
-// the deployment model is withheld, and a turn that needs a model at all runs
-// only on the organization's own model configuration, or is refused (or, with
-// the entitlement unreadable, answered as unavailable).
+// ownModelState is what the organization model configuration says.
+type ownModelState int
+
+const (
+	ownModelNone ownModelState = iota
+	ownModelSaved
+	ownModelGateClosed
+	ownModelNoInvestigateConfig
+)
+
+// serviceModelDecision decides which model an investigation may run on, for
+// every caller (credential and web assertion alike):
+//   - the caller's own interpretation and synthesis: decided on the same rule
+//     (a saved configuration, a closed gate and the feature switch apply to it
+//     too, because acr's own phrasing still binds a model); with no
+//     configuration and no grant it is served with the deployment model
+//     withheld;
+//   - a saved configuration behind a closed byo_llm gate: refused with its own
+//     reason, whatever the flags;
+//   - saved BYO keys for other purposes only (none resolves for
+//     investigations): a BYO org, refused with its own reason, whatever the
+//     flags; never the platform model;
+//   - a saved organization model configuration: the organization's own model
+//     when acr_service_model (ops serves the effective value: the org's
+//     override, else ON for a saved configuration) is ON, with the deployment
+//     model withheld; refused as turned off when it is OFF, and answered as
+//     unavailable when it cannot be read;
+//   - no configuration: the deployment model only when the deployment is open
+//     or the organization holds both acr_service_model (AI features on) and
+//     platform_model_fallback (the platform-admin grant); otherwise refused,
+//     or answered as unavailable when the entitlement cannot be read.
 func (a *App) serviceModelDecision(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (serviceModelBasis, bool, error) {
-	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential {
-		return serviceModelBasisWebAssertion, true, nil
-	}
 	basis, granted, featureErr := a.deploymentModelGrant(ctx, principal)
-	if granted {
-		// The resolver always prefers the organization's own model
-		// configuration, so a grant does not name the model that runs. An
-		// organization that has one is admitted on it with the deployment
-		// model withheld: a configuration that vanishes before the resolver
-		// reads it fails the turn as unavailable, never as a silent switch to
-		// the deployment model.
-		own, err := a.orgHasOwnModel(ctx, principal)
-		if err != nil {
-			return "", false, err
-		}
-		if own {
-			return serviceModelBasisOwnModel, false, nil
-		}
-		return basis, true, nil
-	}
 	if errors.Is(featureErr, entitlements.ErrOrganizationUnknown) {
 		return "", false, entitlements.ErrOrganizationUnknown
 	}
 	if featureErr != nil {
 		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
 	}
-	if request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient {
-		return serviceModelBasisClientModel, false, nil
-	}
-	own, err := a.orgHasOwnModel(ctx, principal)
+	callerModel := request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient
+	state, err := a.orgOwnModel(ctx, principal)
 	if err != nil {
 		return "", false, err
 	}
-	if own {
-		return serviceModelBasisOwnModel, false, nil
-	}
-	if featureErr != nil {
+	switch {
+	case state == ownModelGateClosed:
+		return serviceModelBasisOwnModelGateClosed, false, nil
+	case state == ownModelNoInvestigateConfig:
+		return serviceModelBasisNoInvestigateConfig, false, nil
+	case state == ownModelSaved:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			return "", false, errServiceModelEntitlementUnavailable
+		case !on:
+			return serviceModelBasisAIFeaturesTurnedOff, false, nil
+		default:
+			return serviceModelBasisOwnModel, false, nil
+		}
+	case granted:
+		return basis, true, nil
+	case callerModel:
+		return serviceModelBasisClientModel, false, nil
+	case featureErr != nil:
 		return "", false, errServiceModelEntitlementUnavailable
+	default:
+		return serviceModelBasisRefused, false, nil
 	}
-	return serviceModelBasisRefused, false, nil
 }
 
-// deploymentModelGrant reports whether a credential caller may use the
-// deployment's own model: the deployment is open, or the organization holds
-// acr_service_model. The error is the entitlement read failure, if any.
+// deploymentModelGrant reports whether the organization may draw the
+// deployment's own model when it has no model configuration of its own: the
+// deployment is open (every organization holds both flags), or the
+// organization holds acr_service_model AND platform_model_fallback. The error
+// is the entitlement read failure, if any.
 func (a *App) deploymentModelGrant(ctx context.Context, principal storage.Principal) (serviceModelBasis, bool, error) {
 	if a.runtime.ServiceModelOpen {
 		return serviceModelBasisDeploymentOpen, true, nil
 	}
-	entitled, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
-	if err == nil && entitled {
-		return serviceModelBasisEntitlement, true, nil
+	featureOn, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+	if err != nil {
+		return "", false, err
 	}
-	return "", false, err
+	fallback, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, platformModelFallbackEntitlement)
+	if err != nil {
+		return "", false, err
+	}
+	if featureOn && fallback {
+		return serviceModelBasisPlatformModelFallback, true, nil
+	}
+	return "", false, nil
+}
+
+// serviceModelOn reports whether ACR AI features are on for the organization:
+// the deployment is open, or ops serves acr_service_model ON (the effective
+// value: the org's explicit override, else ON for a saved BYO configuration,
+// else the plan or admin state).
+func (a *App) serviceModelOn(ctx context.Context, principal storage.Principal) (bool, error) {
+	if a.runtime.ServiceModelOpen {
+		return true, nil
+	}
+	return a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+}
+
+// missingPlatformModelGrant names the flag a refused organization lacks, for
+// the audit row: acr_service_model first, then platform_model_fallback.
+func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.Principal) string {
+	if on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement); err == nil && on {
+		return platformModelFallbackEntitlement
+	}
+	return serviceModelEntitlement
 }
 
 // serviceModelListable reports whether investigate_question can serve this
-// caller: the deployment model is granted, or the organization runs its own
-// model. A read failure keeps the tool listed, because the call itself still
-// answers the typed refusal or unavailability.
+// caller: the organization has a saved model configuration with
+// acr_service_model ON (or behind a closed byo_llm gate, so a call answers its
+// reason), or the deployment model is granted. A read failure keeps the tool listed, because the call itself
+// still answers the typed refusal or unavailability.
 func (a *App) serviceModelListable(ctx context.Context, principal storage.Principal) bool {
-	if principal.AuthenticationMethod != storage.AuthenticationMethodCredential {
-		return true
-	}
 	listed, reason := true, "granted"
-	if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
-		reason = "entitlement_unreadable"
-	} else if !granted {
-		own, ownErr := a.orgHasOwnModel(ctx, principal)
+	state, ownErr := a.orgOwnModel(ctx, principal)
+	switch {
+	case ownErr != nil:
+		reason = "model_config_unreadable"
+	case state == ownModelGateClosed:
+		reason = "own_model_gate_closed"
+	case state == ownModelNoInvestigateConfig:
+		reason = "byo_no_investigate_config"
+	case state == ownModelSaved:
+		on, err := a.serviceModelOn(ctx, principal)
 		switch {
-		case ownErr != nil:
-			reason = "model_config_unreadable"
-		case own:
-			reason = "own_model"
+		case err != nil:
+			reason = "entitlement_unreadable"
+		case !on:
+			listed, reason = false, "ai_features_turned_off"
 		default:
+			reason = "own_model"
+		}
+	default:
+		if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
+			reason = "entitlement_unreadable"
+		} else if !granted {
 			listed, reason = false, "no_service_model"
 		}
 	}
@@ -123,22 +189,28 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 	return listed
 }
 
-// orgHasOwnModel reports whether the organization has a BYO model
-// configuration. A stored configuration counts even when its credential cannot
-// be used: that turn then fails on the organization's own model, never on the
+// orgOwnModel reports what the organization's BYO model configuration says. A
+// stored configuration counts as saved even when its credential cannot be
+// used: that turn then fails on the organization's own model, never on the
 // deployment's.
-func (a *App) orgHasOwnModel(ctx context.Context, principal storage.Principal) (bool, error) {
+func (a *App) orgOwnModel(ctx context.Context, principal storage.Principal) (ownModelState, error) {
 	if a.runtime.OrgModelConfigs == nil {
-		return false, nil
+		return ownModelNone, nil
 	}
 	_, found, err := a.runtime.OrgModelConfigs.ResolveOrgModelConfig(ctx, principal.OrgID)
 	switch {
+	case errors.Is(err, entitlements.ErrLLMConfigGateClosed):
+		return ownModelGateClosed, nil
+	case errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig):
+		return ownModelNoInvestigateConfig, nil
 	case errors.Is(err, entitlements.ErrLLMConfigUnusable):
-		return true, nil
+		return ownModelSaved, nil
 	case err != nil:
-		return false, errServiceModelOwnModelUnavailable
+		return ownModelNone, errServiceModelOwnModelUnavailable
+	case found:
+		return ownModelSaved, nil
 	default:
-		return found, nil
+		return ownModelNone, nil
 	}
 }
 
@@ -162,15 +234,28 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 		return nil, false
 	}
 	a.logger.InfoContext(ctx, "context fabric service model decision", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "basis", string(basis), "deployment_model", allowed)
-	if basis == serviceModelBasisRefused {
-		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", serviceModelEntitlement, "denied", nil)
+	switch basis {
+	case serviceModelBasisRefused:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", a.missingPlatformModelGrant(ctx, principal), "denied", nil)
 		writeError(w, r, http.StatusForbidden, "feature_not_enabled", serviceModelNotEntitledMessage, false, map[string]any{"reason": contractsv1.ContextFabricServiceModelNotEntitledReason})
+		return nil, false
+	case serviceModelBasisOwnModelGateClosed:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", ownModelGateClosedMessage, false, map[string]any{"reason": contractsv1.ContextFabricOwnModelGateClosedReason})
+		return nil, false
+	case serviceModelBasisNoInvestigateConfig:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", noInvestigateConfigMessage, false, map[string]any{"reason": contractsv1.ContextFabricNoInvestigateConfigReason})
+		return nil, false
+	case serviceModelBasisAIFeaturesTurnedOff:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", serviceModelEntitlement, "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", aiFeaturesTurnedOffMessage, false, map[string]any{"reason": contractsv1.ContextFabricAIFeaturesTurnedOffReason})
 		return nil, false
 	}
 	if !allowed {
 		ctx = contextfabric.WithPlatformModelWithheldBasis(ctx, string(basis))
 	}
-	if basis == serviceModelBasisEntitlement || basis == serviceModelBasisDeploymentOpen {
+	if basis == serviceModelBasisPlatformModelFallback || basis == serviceModelBasisDeploymentOpen {
 		// The basis binds the turn: it runs on the deployment model for every
 		// call, whatever the organization configuration says by then.
 		ctx = contextfabric.WithDeploymentModelBound(ctx)
