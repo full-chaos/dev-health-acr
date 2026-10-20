@@ -61,6 +61,18 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Org-Llm-Config-Reason", "byo_no_investigate_config")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+		case "bare_404":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+		case "unknown_reason":
+			w.Header().Set("X-Org-Llm-Config", "none")
+			w.Header().Set("X-Org-Llm-Config-Reason", "some_future_reason")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+		case "reason_without_marker":
+			w.Header().Set("X-Org-Llm-Config-Reason", "byo_llm_gate_closed")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
 		default:
 			w.Header().Set("X-Org-Llm-Config", "none")
 			w.WriteHeader(http.StatusNotFound)
@@ -221,5 +233,29 @@ func TestWebAssertionCallerIsDecidedOnTheSameRule(t *testing.T) {
 	basis, allowed, err := app.serviceModelDecision(context.Background(), storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, OrgID: "org_1"}, contextfabric.InvestigationRequest{})
 	if err != nil || allowed || basis != serviceModelBasisRefused {
 		t.Fatalf("decision = %q %t %v, want refused, not allowed, no error", basis, allowed, err)
+	}
+}
+
+// Only the marked no-config answer (404 with X-Org-Llm-Config: none and no reason)
+// lets the platform model draw. A bare 404 (a stale ops build, a proxy that drops
+// the header) or a reason this build does not know leaves the organization's BYO
+// state unknown: the turn fails closed and neither model is called, even for an
+// organization holding both flags.
+func TestAnUnmarkedOrUnknownOpsNotFoundNeverDrawsThePlatformModel(t *testing.T) {
+	for _, mode := range []string{"bare_404", "unknown_reason", "reason_without_marker"} {
+		t.Run(mode, func(t *testing.T) {
+			rig, sides := opsBackedRouteRig(t, opsStandIn{serviceModel: true, fallback: boolRef(true), llmConfig: mode})
+			recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
+			if recorder.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d body=%s, want 503", recorder.Code, recorder.Body.String())
+			}
+			if got := sides.count("deployment"); got != 0 {
+				t.Fatalf("deployment model calls = %d, want 0", got)
+			}
+			if got := sides.count("own"); got != 0 {
+				t.Fatalf("own model calls = %d, want 0", got)
+			}
+			assertNoModelCallAndNoResult(t, rig)
+		})
 	}
 }

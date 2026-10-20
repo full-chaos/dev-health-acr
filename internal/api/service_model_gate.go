@@ -194,9 +194,6 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 // deployment's.
 func (a *App) orgOwnModel(ctx context.Context, principal storage.Principal) (ownModelState, error) {
 	if a.runtime.OrgModelConfigs == nil {
-		if a.runtime.OrgModelConfigsOff && !a.runtime.ServiceModelOpen {
-			return ownModelNone, errServiceModelOwnModelUnavailable
-		}
 		return ownModelNone, nil
 	}
 	_, found, err := a.runtime.OrgModelConfigs.ResolveOrgModelConfig(ctx, principal.OrgID)

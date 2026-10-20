@@ -33,8 +33,12 @@ type orgLLMConfigSource interface {
 // a nil interface when there is none. One store only: ops. Unset behaves as
 // "ops"; the one lenient case is no Dev Health entitlement client (local/dev),
 // which means no per-org source. An explicit "ops" without the client is an
-// error. "off" means no per-org source.
-func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger) (contextfabric.OrgModelConfigResolver, error) {
+// error. "off" means no per-org source. A nil source cannot tell a saved-BYO
+// organization from one with none, so it is only built where every
+// organization may draw the deployment model anyway (an open deployment, or the
+// local entitlement client that grants every flag); otherwise it is an error
+// and the process does not start.
+func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger, serviceModelOpen bool) (contextfabric.OrgModelConfigResolver, error) {
 	value, _ := lookup(EnvOrgLLMConfigSource)
 	source, hasOps := entitlement.(orgLLMConfigSource)
 	switch strings.TrimSpace(value) {
@@ -54,16 +58,13 @@ func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(str
 		}
 		return opsOrgModelConfigs{source: source, generations: &versionGenerations{}}, nil
 	case orgLLMConfigSourceOff:
+		if _, local := entitlement.(localEntitlement); !serviceModelOpen && !local {
+			return nil, fmt.Errorf("%s=%s needs ACR_MCP_SERVICE_MODEL_DEFAULT=on: with no per-organization source a saved BYO configuration cannot be told from none, so the platform model could answer it", EnvOrgLLMConfigSource, orgLLMConfigSourceOff)
+		}
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("%s must be empty, %q or %q", EnvOrgLLMConfigSource, orgLLMConfigSourceOps, orgLLMConfigSourceOff)
 	}
-}
-
-// orgModelConfigSourceOff reports an explicit ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=off.
-func orgModelConfigSourceOff(lookup func(string) (string, bool)) bool {
-	value, _ := lookup(EnvOrgLLMConfigSource)
-	return strings.TrimSpace(value) == orgLLMConfigSourceOff
 }
 
 // opsOrgModelConfigs serves contextfabric.OrgModelConfigResolver from ops.
