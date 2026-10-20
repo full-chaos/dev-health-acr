@@ -60,6 +60,12 @@ func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(str
 	}
 }
 
+// orgModelConfigSourceOff reports an explicit ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=off.
+func orgModelConfigSourceOff(lookup func(string) (string, bool)) bool {
+	value, _ := lookup(EnvOrgLLMConfigSource)
+	return strings.TrimSpace(value) == orgLLMConfigSourceOff
+}
+
 // opsOrgModelConfigs serves contextfabric.OrgModelConfigResolver from ops.
 // No BYO config (404) is ok=false: the service model gate then decides
 // whether the platform model may answer. Anything else that is not a usable

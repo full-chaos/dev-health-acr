@@ -44,6 +44,8 @@ var ErrLLMConfigNoInvestigateConfig = errors.New("Dev Health BYO LLM configurati
 
 // llmConfigReasonHeader carries why ops answered the marked no-config 404.
 const (
+	llmConfigMarkerHeader        = "X-Org-Llm-Config"
+	llmConfigMarkerNone          = "none"
 	llmConfigReasonHeader        = "X-Org-Llm-Config-Reason"
 	llmConfigGateClosedReason    = "byo_llm_gate_closed"
 	llmConfigNoInvestigateReason = "byo_no_investigate_config"
@@ -167,13 +169,18 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
+		if response.Header.Get(llmConfigMarkerHeader) != llmConfigMarkerNone {
+			return OrgLLMConfig{}, false, errUnavailable
+		}
 		switch response.Header.Get(llmConfigReasonHeader) {
 		case llmConfigGateClosedReason:
 			return OrgLLMConfig{}, false, ErrLLMConfigGateClosed
 		case llmConfigNoInvestigateReason:
 			return OrgLLMConfig{}, false, ErrLLMConfigNoInvestigateConfig
+		case "":
+			return OrgLLMConfig{}, false, nil
 		}
-		return OrgLLMConfig{}, false, nil
+		return OrgLLMConfig{}, false, errUnavailable
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:
 		return OrgLLMConfig{}, false, fmt.Errorf("%w: ops answered %d", ErrLLMConfigUnusable, response.StatusCode)
 	default:

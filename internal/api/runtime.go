@@ -124,6 +124,11 @@ type RuntimeDependencies struct {
 	// OrgModelConfigs resolves an organization's BYO LLM configuration from
 	// the ops settings store. Nil when no per-organization source is wired.
 	OrgModelConfigs contextfabric.OrgModelConfigResolver
+	// OrgModelConfigsOff is true when the per-organization model source is
+	// switched off (ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=off) on a deployment
+	// that is not open: a saved configuration cannot be told from none, so the
+	// platform model is never drawn.
+	OrgModelConfigsOff bool
 	// ServiceModelOpen treats every organization as holding acr_service_model
 	// and platform_model_fallback (ACR_MCP_SERVICE_MODEL_DEFAULT=on;
 	// development and venues only). A saved organization model configuration

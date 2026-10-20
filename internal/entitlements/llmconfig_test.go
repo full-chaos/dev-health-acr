@@ -79,7 +79,7 @@ func TestOrgLLMConfigMapsEachStatus(t *testing.T) {
 		wantUnused bool
 		wantErr    bool
 	}{
-		{"404 is no BYO", http.StatusNotFound, `{"detail":"Not found"}`, false, false, false},
+		{"404 without the no-config marker is unavailable", http.StatusNotFound, `{"detail":"Not found"}`, false, false, true},
 		{"401 is unusable", http.StatusUnauthorized, `{"detail":"Unauthorized"}`, false, true, true},
 		{"403 is unusable", http.StatusForbidden, `{"detail":"Forbidden"}`, false, true, true},
 		{"409 undecryptable is unusable", http.StatusConflict, `{"detail":"stored config unreadable"}`, false, true, true},

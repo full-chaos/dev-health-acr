@@ -133,3 +133,33 @@ func TestOrgLLMConfigNoInvestigateConfigIsItsOwnErrorAndCached(t *testing.T) {
 		t.Fatalf("ops calls = %d, want 1 (the answer is cached)", got)
 	}
 }
+
+// A 404 is "no BYO" only when ops marks it so. A bare 404 (a stale ops build, a
+// proxy that drops the header) or one with a reason this build does not know is
+// an unknown answer: it fails closed and is never read as no configuration.
+func TestOrgLLMConfigUnmarkedOrUnknownNotFoundFailsClosed(t *testing.T) {
+	for name, headers := range map[string]map[string]string{
+		"bare 404":                       {},
+		"reason without the marker":      {"X-Org-Llm-Config-Reason": "byo_llm_gate_closed"},
+		"marker with an unknown reason":  {"X-Org-Llm-Config": "none", "X-Org-Llm-Config-Reason": "some_future_reason"},
+		"a marker value other than none": {"X-Org-Llm-Config": "saved"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				for key, value := range headers {
+					w.Header().Set(key, value)
+				}
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+			}))
+			t.Cleanup(server.Close)
+			client, err := entitlements.New(clientConfig(t, server, entitlements.Config{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := client.OrgLLMConfig(context.Background(), llmOrg); found || err == nil {
+				t.Fatalf("found = %v err = %v, want an error and no config", found, err)
+			}
+		})
+	}
+}

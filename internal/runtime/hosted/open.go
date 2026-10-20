@@ -284,6 +284,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DataSubjects:               dataReads.subjects,
 			DirectRelationships:        directRelationships,
 			OrgModelConfigs:            orgModelConfigResolver,
+			OrgModelConfigsOff:         orgModelConfigSourceOff(os.LookupEnv),
 			ServiceModelOpen:           request.config.ServiceModelOpen,
 			// CHAOS-4013: nil unless ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
 			// and ACR_WORKLOAD_TRUST_DOMAIN are both set -- see

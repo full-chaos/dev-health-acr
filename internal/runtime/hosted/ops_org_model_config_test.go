@@ -141,3 +141,16 @@ func TestAnUnusableOpsConfigNeverFallsBackToThePlatformModel(t *testing.T) {
 		t.Fatalf("no BYO: err = %v platform calls = %d, want the platform model", err, platform.calls)
 	}
 }
+
+func TestOrgModelConfigSourceOffIsDetected(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		set   bool
+		want  bool
+	}{{"off", true, true}, {" off ", true, true}, {"ops", true, false}, {"", true, false}, {"", false, false}} {
+		lookup := func(string) (string, bool) { return tc.value, tc.set }
+		if got := orgModelConfigSourceOff(lookup); got != tc.want {
+			t.Fatalf("orgModelConfigSourceOff(%q set=%t) = %t, want %t", tc.value, tc.set, got, tc.want)
+		}
+	}
+}
