@@ -117,13 +117,13 @@ func TestGateBasisBindsTheTurnAcrossConfigReadSequences(t *testing.T) {
 			status:   http.StatusServiceUnavailable, basis: "own_model", wantOwn: [2]int{1, 0}},
 		{name: "missing at the gate then found mid-turn", gate: ownModelConfigs{},
 			resolver: &sequencedConfigs{steps: []configRead{{found: false}, {found: true}}},
-			status:   http.StatusOK, basis: "entitlement", wantDeploy: [2]int{1, 1}},
+			status:   http.StatusOK, basis: "platform_model_fallback", wantDeploy: [2]int{1, 1}},
 		{name: "missing at the gate then found from the first read", gate: ownModelConfigs{},
 			resolver: &sequencedConfigs{steps: []configRead{{found: true}}},
-			status:   http.StatusOK, basis: "entitlement", wantDeploy: [2]int{1, 1}},
+			status:   http.StatusOK, basis: "platform_model_fallback", wantDeploy: [2]int{1, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rig, own := newSequencedResolverRig(t, &serviceModelGrants{feature: true}, tc.gate, tc.resolver)
+			rig, own := newSequencedResolverRig(t, &serviceModelGrants{feature: true, fallback: true}, tc.gate, tc.resolver)
 			recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
 			if recorder.Code != tc.status {
 				t.Fatalf("status = %d body=%s, want %d", recorder.Code, recorder.Body.String(), tc.status)
@@ -145,7 +145,7 @@ func TestGateBasisBindsTheTurnAcrossConfigReadSequences(t *testing.T) {
 // before the engine resolves a runtime never falls through to the deployment
 // model: the turn fails as model-unavailable with zero deployment calls.
 func TestOwnModelDeletedAfterTheGateNeverFallsBackToTheDeploymentModel(t *testing.T) {
-	rig := newResolverRouteRig(t, &serviceModelGrants{})
+	rig := newResolverRouteRig(t, &serviceModelGrants{feature: true})
 	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
 	if interprets, synthesizes := rig.model.counts(); interprets != 0 || synthesizes != 0 {
 		t.Fatalf("deployment model calls = interpret %d synthesize %d, want 0 and 0", interprets, synthesizes)
@@ -155,6 +155,18 @@ func TestOwnModelDeletedAfterTheGateNeverFallsBackToTheDeploymentModel(t *testin
 	}
 	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "own_model" {
 		t.Fatalf("decision log bases = %v, want [own_model]", got)
+	}
+}
+
+// The mirror: an organization with no model configuration that holds the
+// feature and the fallback grant is served on the deployment model through
+// the same resolver.
+func TestDeploymentModelServesThroughTheResolverWithTheFeatureAndTheFallbackGrant(t *testing.T) {
+	rig := newResolverRouteRig(t, &serviceModelGrants{feature: true, fallback: true})
+	rig.app.runtime.OrgModelConfigs = ownModelConfigs{}
+	decodeEnvelope(t, rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil))
+	if interprets, synthesizes := rig.model.counts(); interprets != 1 || synthesizes != 1 {
+		t.Fatalf("deployment model calls = interpret %d synthesize %d, want 1 and 1", interprets, synthesizes)
 	}
 }
 
