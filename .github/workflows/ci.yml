@@ -111,7 +111,7 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: scripts/ci/reached-shards.sh --event "$EVENT" >> "$GITHUB_OUTPUT"
       # Observed race dedup (scripts/ci/observed-race-dedup.sh). On a heavy pull
-      # request the dedicated unit legs 6-9 leave the `unit` matrix and run in
+      # request the dedicated unit legs 6-10 leave the `unit` matrix and run in
       # `unit-dedicated`, which waits for the race jobs of the same packages and
       # starts only the legs those jobs did not fully cover (unit-dedup-plan).
       # Everywhere else (push, workflow_dispatch, a draft pull request) nothing
@@ -409,16 +409,16 @@ jobs:
     # On a pull request the plan job excludes every leg whose packages the
     # change does not reach (unit_skip), and skips the job when that is every
     # leg; push and workflow_dispatch exclude nothing.
-    # On a heavy pull request legs 6-9 (the dedicated devhealthfacts and
+    # On a heavy pull request legs 6-10 (the dedicated devhealthfacts and
     # devhealthsource halves, whose tests the race jobs also run) are excluded
     # here too (unit_exclude = unit_skip + unit_defer) and run in `unit-dedicated`
     # below, only for the legs the race jobs' observed results did not cover.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         exclude: ${{ fromJSON(needs.plan.outputs.unit_exclude) }}
-    name: unit (shard ${{ matrix.shard }} of 9)
+    name: unit (shard ${{ matrix.shard }} of 10)
     runs-on: ubuntu-latest
     # mirror-preflight is a single job again (the ARC pool is gone), so a
     # plain `needs:` is correct: the default skip-cascade now does the right
@@ -547,13 +547,14 @@ jobs:
           # lost its three slowest tests to leg 9 (the race-mid list, -run), so leg 6 skips heavy and mid.
           heavy_half=""
           case '${{ matrix.shard }}' in
-            5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"; split_pkg=devhealthfacts ;;
+            5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts unit-rest)"; split_pkg=devhealthfacts ;;
             6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource unit-rest)"; split_pkg=devhealthsource ;;
-            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"; split_pkg=devhealthfacts; heavy_half="heavy half" ;;
+            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts unit-heavy)"; split_pkg=devhealthfacts; heavy_half="heavy half" ;;
             8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource; heavy_half="heavy half" ;;
             9) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-mid)"; split_pkg=devhealthsource; heavy_half="mid half" ;;
+            10) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts unit-mid)"; split_pkg=devhealthfacts; heavy_half="mid half" ;;
           esac
-          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
+          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9 | 10) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
           set +e
           if [ -n "$isolated_timeout" ]; then
             make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
@@ -621,7 +622,7 @@ jobs:
 
   # Observed race dedup, step two. Runs after the race jobs of devhealthfacts
   # and devhealthsource (it needs all seven, whatever their result) and decides
-  # which of the deferred unit legs 6-9 `unit-dedicated` may leave out. A leg is
+  # which of the deferred unit legs 6-10 `unit-dedicated` may leave out. A leg is
   # dropped only when every test it would run shows a PASS, not a SKIP, in the
   # test2json output of the race jobs that cover it, and every covering job ran
   # and succeeded (scripts/ci/observed-race-dedup.sh, rules in its header and
@@ -664,7 +665,7 @@ jobs:
           pattern: race-json-*
           path: .tmp/race-json
       - name: List the tests of each deferred unit leg (compiled, non-race)
-        run: scripts/ci/observed-race-dedup.sh collect --out .tmp/dedup-lists --legs "6 7 8 9" || echo '::warning::collect failed; the legs without a list stay'
+        run: scripts/ci/observed-race-dedup.sh collect --out .tmp/dedup-lists --legs "6 7 8 9 10" || echo '::warning::collect failed; the legs without a list stay'
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ !cancelled() }}
@@ -702,9 +703,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [6, 7, 8, 9]
+        shard: [6, 7, 8, 9, 10]
         exclude: ${{ fromJSON(needs.unit-dedup-plan.outputs.exclude || '[]') }}
-    name: unit (shard ${{ matrix.shard }} of 9)
+    name: unit (shard ${{ matrix.shard }} of 10)
     runs-on: ubuntu-latest
     needs:
       - mirror-preflight
@@ -829,13 +830,14 @@ jobs:
           # lost its three slowest tests to leg 9 (the race-mid list, -run), so leg 6 skips heavy and mid.
           heavy_half=""
           case '${{ matrix.shard }}' in
-            5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts rest)"; split_pkg=devhealthfacts ;;
+            5) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts unit-rest)"; split_pkg=devhealthfacts ;;
             6) export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource unit-rest)"; split_pkg=devhealthsource ;;
-            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts heavy)"; split_pkg=devhealthfacts; heavy_half="heavy half" ;;
+            7) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts unit-heavy)"; split_pkg=devhealthfacts; heavy_half="heavy half" ;;
             8) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-heavy)"; split_pkg=devhealthsource; heavy_half="heavy half" ;;
             9) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource unit-mid)"; split_pkg=devhealthsource; heavy_half="mid half" ;;
+            10) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts unit-mid)"; split_pkg=devhealthfacts; heavy_half="mid half" ;;
           esac
-          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
+          case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9 | 10) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
           set +e
           if [ -n "$isolated_timeout" ]; then
             make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
@@ -2301,16 +2303,16 @@ jobs:
           path: .tmp/unit-shards
       - name: Merge JUnit reports
         if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
-        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/junit.xml -absent '${{ steps.dedup.outputs.absent }}'
+        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 10 -out .tmp/coverage/junit.xml -absent '${{ steps.dedup.outputs.absent }}'
       - name: Merge coverage profiles and convert to Cobertura once
         if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
         run: |
           set -euo pipefail
-          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 9 -out .tmp/coverage/cover.out -absent '${{ steps.dedup.outputs.absent }}'
+          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 10 -out .tmp/coverage/cover.out -absent '${{ steps.dedup.outputs.absent }}'
           make coverage-cobertura
       - name: List every shard's failed tests
         if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
-        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 9 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json -absent '${{ steps.dedup.outputs.absent }}'
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 10 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json -absent '${{ steps.dedup.outputs.absent }}'
       # The behaviour check. The steps above are text a later edit can disable,
       # gate off, or replace with `true` while this job still reads green;
       # this one recomputes testcase / suite counts from the raw shard files
@@ -2321,7 +2323,7 @@ jobs:
       # greps for every step as a second line, and cannot see any of this.)
       - name: Verify the merged reports against the shards
         if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
-        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 9 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json -absent '${{ steps.dedup.outputs.absent }}'
+        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 10 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json -absent '${{ steps.dedup.outputs.absent }}'
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
