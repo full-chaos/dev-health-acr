@@ -155,23 +155,29 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, entitlementURL(c.baseURL, orgID), nil)
 	if err != nil {
-		return grants{}, errUnavailable
+		return grants{}, rejected(reasonTransport)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	response, err := c.http.Do(request)
 	if err != nil {
-		return grants{}, errUnavailable
+		return grants{}, rejected(reasonTransport)
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound && isUnknownOrganizationBody(response.Body, c.maxBody) {
 		return grants{}, ErrOrganizationUnknown
 	}
 	if response.StatusCode != http.StatusOK {
-		return grants{}, errUnavailable
+		return grants{}, rejected(reasonStatus)
 	}
 	parsed, err := decodeResponse(response.Body, c.maxBody)
-	if err != nil || parsed.SchemaVersion != entitlementSchemaVersion || parsed.OrgID != orgID {
-		return grants{}, errUnavailable
+	if err != nil {
+		if errors.Is(err, errUnknownField) {
+			return grants{}, rejected(reasonUnknownField)
+		}
+		return grants{}, rejected(reasonDecode)
+	}
+	if parsed.SchemaVersion != entitlementSchemaVersion || parsed.OrgID != orgID {
+		return grants{}, rejected(reasonSchema)
 	}
 	return grants{runtime: parsed.AgentContextRuntime, serviceModel: parsed.ServiceModel, platformModelFallback: parsed.PlatformModelFallback}, nil
 }
