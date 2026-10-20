@@ -51,12 +51,14 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 
 func TestTeamLinkCandidatesReadTheLinkedIdsOfTheOwnedProjectsOnce(t *testing.T) {
 	statement := teamLinkCandidatesStatement(factTimeBound{})
-	for _, want := range []string{"SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "cp.work_item_id IN " + linkedWorkItemIDsSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
+	for _, want := range []string{"SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "cityHash64(cp.work_item_id) IN " + linkedWorkItemIDHashesSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team link candidates lack %q:\n%s", want, statement)
 		}
 	}
-	if strings.Contains(statement, "work_items AS cp FINAL") {
-		t.Fatalf("team link candidates read work_items with FINAL, want the unmerged rows:\n%s", statement)
+	for _, banned := range []string{"work_items AS cp FINAL", "groupUniqArray", linkedWorkItemIDsSQL} {
+		if strings.Contains(statement, banned) {
+			t.Fatalf("team link candidates hold %q, want the unmerged rows as one array over the hashed linked ids:\n%s", banned, statement)
+		}
 	}
 }

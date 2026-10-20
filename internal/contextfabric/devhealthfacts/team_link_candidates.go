@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
@@ -25,17 +26,25 @@ const teamLinkCandidatesSent = `(SELECT work_item_id FROM ` + teamLinkCandidates
 // whose real-id joins drop what a colliding hash lets through.
 const teamLinkCandidateHashesSent = `(SELECT cityHash64(work_item_id) FROM ` + teamLinkCandidatesTable + `)`
 
-// teamLinkCandidatesPredicate keeps every work item id with a link row whose
-// row of any version carries a join key of a project the {ids} teams own under
-// the bound: a superset of the owned projects' linked issues whose latest
-// version does. cp is the unmerged work_items alias.
+// linkedWorkItemIDHashesSQL is the cityHash64 of every work item id with a link
+// row in the organization: a fixed-width superset prune (a colliding hash
+// admits an unlinked id, which the link-row joins drop).
+const linkedWorkItemIDHashesSQL = `(SELECT cityHash64(work_item_id) FROM work_graph_issue_pr WHERE org_id = {org_id:String})`
+
+// teamLinkCandidatesPredicate keeps every work item id whose hash is a link
+// row's and whose row of any version carries a join key of a project the {ids}
+// teams own under the bound: a superset of the owned projects' linked issues
+// whose latest version does. cp is the unmerged work_items alias.
 func teamLinkCandidatesPredicate(bound factTimeBound) string {
-	return `cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
+	return `cp.org_id = {org_id:String} AND cityHash64(cp.work_item_id) IN ` + linkedWorkItemIDHashesSQL + `
       AND cp.project_id IN ` + teamOwnedProjectKeyCandidatesSQL("ids", bound)
 }
 
+// teamLinkCandidatesStatement returns the candidates as one array row, one
+// entry per matching row version (Go dedupes): no set of distinct ids is built
+// on the server, and one row stays within the client's result row cap.
 func teamLinkCandidatesStatement(bound factTimeBound) string {
-	return `SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound)
+	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound)
 }
 
 // withTeamLinkCandidates reads the teams' link candidates once and returns ctx
@@ -70,6 +79,7 @@ func teamLinkCandidatesExternalTable(ids []string) (*ext.Table, error) {
 	if err != nil {
 		return nil, err
 	}
+	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
 	for _, id := range ids {
 		if err := table.Append(id); err != nil {
 			return nil, err
