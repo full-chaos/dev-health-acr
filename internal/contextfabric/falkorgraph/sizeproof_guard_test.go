@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -305,6 +306,97 @@ func TestSizeproofMakefileCheckFlagsATaggedRaceLine(t *testing.T) {
 	} {
 		if p := sizeproofMakefileProblems(bad); len(p) == 0 {
 			t.Errorf("%s: not flagged", name)
+		}
+	}
+}
+
+// sizeproofSelected asks the Go loader which test files a build with the given
+// tags compiles into the package test binary. This applies every constraint
+// Go applies, file-name suffixes (_windows_test.go) included.
+func sizeproofSelected(t *testing.T, dir, tags string) map[string]bool {
+	t.Helper()
+	args := []string{"list"}
+	if tags != "" {
+		args = append(args, "-tags", tags)
+	}
+	args = append(args, "-f", "{{range .TestGoFiles}}{{.}}\n{{end}}", ".")
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	selected := map[string]bool{}
+	for _, f := range strings.Fields(string(out)) {
+		selected[f] = true
+	}
+	return selected
+}
+
+// sizeproofSelectionProblems: every file declaring a named proof must be
+// compiled with the tag sizeproof and left out without it.
+func sizeproofSelectionProblems(t *testing.T, dir string, sources []sizeproofSource) []string {
+	t.Helper()
+	with := sizeproofSelected(t, dir, sizeproofTag)
+	without := sizeproofSelected(t, dir, "")
+	var out []string
+	for _, s := range sources {
+		for _, d := range s.file.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil {
+				continue
+			}
+			for _, want := range sizeproofTests {
+				if fn.Name.Name != want {
+					continue
+				}
+				if !with[s.name] {
+					out = append(out, s.name+": "+want+" is not compiled with -tags "+sizeproofTag+" (go list TestGoFiles; a file-name suffix such as _windows_test.go or a constraint drops it)")
+				}
+				if without[s.name] {
+					out = append(out, s.name+": "+want+" is compiled without -tags "+sizeproofTag)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestSizeproofTestsAreSelectedByGoOnlyWithTheTag(t *testing.T) {
+	if v := sizeproofSelectionProblems(t, ".", readSizeproofSources(t, ".")); len(v) > 0 {
+		t.Fatalf("go test file selection:\n%s", strings.Join(v, "\n"))
+	}
+}
+
+func TestSizeproofSelectionCheckFlagsAFileNameSuffixAndAMissingTag(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module fixture\n\ngo 1.22\n")
+	write("x.go", "package fixture\n")
+	body := func(header string) string {
+		return header + "package fixture\n\nfunc TestEdgePageReadsOnlyTheOriginsEdges() {}\n"
+	}
+	cases := []struct {
+		file, header string
+		problems     int
+	}{
+		{"a_test.go", "//go:build sizeproof\n\n", 0},
+		{"a_windows_test.go", "//go:build sizeproof\n\n", 1},
+		{"a_test.go", "", 1},
+	}
+	for _, c := range cases {
+		for _, f := range []string{"a_test.go", "a_windows_test.go"} {
+			os.Remove(filepath.Join(dir, f))
+		}
+		write(c.file, body(c.header))
+		got := sizeproofSelectionProblems(t, dir, readSizeproofSources(t, dir))
+		if len(got) != c.problems {
+			t.Errorf("%s with header %q: want %d problems, got %v", c.file, c.header, c.problems, got)
 		}
 	}
 }
