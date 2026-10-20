@@ -1,3 +1,5 @@
+//go:build sizeproof
+
 package falkorgraph
 
 import (
@@ -150,7 +152,7 @@ func TestTheScopedCensusCostAtProductionSize(t *testing.T) {
 		population, complete, walkErr = adapter.linkScopedIssues(ctx, key, org, scope, contextfabric.WorkItemMembershipCensusLimit)
 	})
 	walkTime := time.Since(start)
-	t.Logf("scoped census walk, %d repositories, %d issues: %s, allocated %d MiB, peak live heap +%d MiB (race detector %t)", costScopeRepositories, len(population), walkTime, allocated>>20, peak>>20, raceDetectorEnabled)
+	t.Logf("scoped census walk, %d repositories, %d issues: %s, allocated %d MiB, peak live heap +%d MiB", costScopeRepositories, len(population), walkTime, allocated>>20, peak>>20)
 	if walkErr != nil || !complete || len(population) != wantPopulation {
 		t.Fatalf("population %d complete %t err %v, want all %d issues of the 25 repositories", len(population), complete, walkErr, wantPopulation)
 	}
@@ -204,10 +206,7 @@ func TestTheScopedCensusCostAtProductionSize(t *testing.T) {
 
 	t.Run("a scope of 25 repositories is one census inside the round budget", func(t *testing.T) {
 		committed, rounds, took, allocated := resolve(t, "CHAOS-77", []string{"acme/*"})
-		t.Logf("resolution with the scoped census: %s, allocated %d MiB, rounds %s (round budget 3s, race detector %t)", took, allocated>>20, reasons(rounds), raceDetectorEnabled)
-		if raceDetectorEnabled {
-			return
-		}
+		t.Logf("resolution with the scoped census: %s, allocated %d MiB, rounds %s (round budget 3s)", took, allocated>>20, reasons(rounds))
 		want, _, _ := identity.Derive(identity.KindWorkItem, []string{scopedZeroRepo, "linear:CHAOS-77"}, nil)
 		if len(committed) != 1 || committed[0] != want {
 			t.Fatalf("committed %v (rounds %s), want the linked issue: the census did not complete inside its budget", committed, reasons(rounds))

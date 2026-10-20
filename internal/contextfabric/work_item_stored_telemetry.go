@@ -2,7 +2,10 @@ package contextfabric
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -12,13 +15,14 @@ import (
 type WorkItemStoredServingEvent struct {
 	Surface                                                  StoredAnswerabilitySurface
 	Basis                                                    string
+	ResultIDHash                                             string
 	SemanticRead                                             SemanticStateReadStatus
 	CensusRead                                               WorkItemTupleCensusReadStatus
 	DetailsBefore, ReasonsBefore, DetailsAfter, ReasonsAfter int
 }
 
 func newWorkItemStoredServingEvent(surface StoredAnswerabilitySurface, read SemanticStateReadStatus, result InvestigationResult) WorkItemStoredServingEvent {
-	return WorkItemStoredServingEvent{Surface: surface, SemanticRead: read, CensusRead: WorkItemTupleCensusReadAbsent, DetailsBefore: len(result.Coverage.Details), ReasonsBefore: len(result.Coverage.DegradedReasons), DetailsAfter: len(result.Coverage.Details), ReasonsAfter: len(result.Coverage.DegradedReasons)}
+	return WorkItemStoredServingEvent{Surface: surface, ResultIDHash: storedServingResultIDHash(result.ResultID), SemanticRead: read, CensusRead: WorkItemTupleCensusReadAbsent, DetailsBefore: len(result.Coverage.Details), ReasonsBefore: len(result.Coverage.DegradedReasons), DetailsAfter: len(result.Coverage.Details), ReasonsAfter: len(result.Coverage.DegradedReasons)}
 }
 
 // Validate only the coverage changed during tuple serving. Other historical
@@ -34,10 +38,15 @@ func validateWorkItemStoredCoverage(result InvestigationResult, event *WorkItemS
 	return nil
 }
 
+// WorkItemStoredServingSurfaceEvidenceExpansion marks a stored tuple decision
+// taken while expanding a cited evidence ref, which applies the result-by-id
+// serving rules to every admitted citing result.
+const WorkItemStoredServingSurfaceEvidenceExpansion StoredAnswerabilitySurface = "evidence_expansion"
+
 const WorkItemStoredServingLogMessage = "context fabric work item stored serving"
 
 func WorkItemStoredServingLogArgs(event WorkItemStoredServingEvent) []any {
-	return []any{"surface", string(event.Surface), "basis", SanitizeLogAttr(event.Basis), "semantic_read", string(event.SemanticRead), "census_read", string(event.CensusRead), "coverage_details_before", event.DetailsBefore, "coverage_reasons_before", event.ReasonsBefore, "coverage_details_after", event.DetailsAfter, "coverage_reasons_after", event.ReasonsAfter, "coverage_bound", contractsv1.ContextFabricCoverageEntriesMaxCount}
+	return []any{"surface", string(event.Surface), "basis", SanitizeLogAttr(event.Basis), "result_id_hash", SanitizeLogAttr(event.ResultIDHash), "semantic_read", string(event.SemanticRead), "census_read", string(event.CensusRead), "coverage_details_before", event.DetailsBefore, "coverage_reasons_before", event.ReasonsBefore, "coverage_details_after", event.DetailsAfter, "coverage_reasons_after", event.ReasonsAfter, "coverage_bound", contractsv1.ContextFabricCoverageEntriesMaxCount}
 }
 
 func (t SlogEngineTelemetry) RecordWorkItemStoredServing(ctx context.Context, principal storage.Principal, event WorkItemStoredServingEvent) {
@@ -45,4 +54,9 @@ func (t SlogEngineTelemetry) RecordWorkItemStoredServing(ctx context.Context, pr
 	args = append(args, "org_id", SanitizeLogAttr(principal.OrgID))
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, WorkItemStoredServingLogMessage, args...)
+}
+
+func storedServingResultIDHash(resultID string) string {
+	sum := sha256.Sum256([]byte(resultID))
+	return hex.EncodeToString(sum[:6])
 }

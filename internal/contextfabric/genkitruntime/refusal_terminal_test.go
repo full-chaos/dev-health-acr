@@ -96,13 +96,13 @@ func TestRefusalUsageAndInfoLineAcrossEveryStage(t *testing.T) {
 	var logs bytes.Buffer
 	gen := llmGenerator{logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 	var err error
-	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		t.Fatal(err)
 	}
-	if gen.synthesis, err = newOutputSchema(synthesisOutput{}); err != nil {
+	if gen.synthesis, err = newOutputSchema(synthesisOutput{}, false); err != nil {
 		t.Fatal(err)
 	}
-	if gen.phrasing, err = newOutputSchema(phrasingOutput{}); err != nil {
+	if gen.phrasing, err = newOutputSchema(phrasingOutput{}, true); err != nil {
 		t.Fatal(err)
 	}
 	gen.clients = LLMClients{refusalModel: &scriptedLLM{model: refusalModel, replies: []llmReply{refusalReply()}}}

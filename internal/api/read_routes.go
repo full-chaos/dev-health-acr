@@ -160,6 +160,11 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 		args = append(args, "request_id", requestID)
 		a.logger.InfoContext(r.Context(), contextfabric.StoredResultAuthorizationLogMessage, args...)
 	}
+	if decision.StoredServing != nil {
+		tupleArgs := contextfabric.WorkItemStoredServingLogArgs(*decision.StoredServing)
+		tupleArgs = append(tupleArgs, "request_id", requestID, "org_id", contextfabric.SanitizeLogAttr(principal.OrgID))
+		a.logger.InfoContext(r.Context(), contextfabric.WorkItemStoredServingLogMessage, tupleArgs...)
+	}
 	args := contextfabric.EvidenceExpansionLogArgs(principal, decision)
 	args = append(args, "request_id", requestID)
 	a.logger.InfoContext(r.Context(), contextfabric.EvidenceExpansionLogMessage, args...)
