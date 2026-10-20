@@ -3,7 +3,11 @@ package directread
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -144,5 +148,56 @@ func TestReadRelationshipsCarriesTheTeamNotes(t *testing.T) {
 				t.Fatal("a removed team's edges must still be served")
 			}
 		})
+	}
+}
+
+func TestReadRelationshipsLooksUpRemovedTeamsOncePerPage(t *testing.T) {
+	removed := &removedTeams{gone: map[string]bool{teamT.CanonicalID: true}}
+	hub := hubGraph()
+	guard := removedEdgeGraph{hub, removed}
+	reader, err := NewRelationshipsReader(NewSubjectGate(guard, nil), guard, &relRecorder{}, testCursorKeyring())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := RelationshipsRequest{Subject: RelationshipsSubject{Kind: "team", CanonicalID: teamT.CanonicalID}, Direction: "in", Limit: 1}
+	for page := 1; page <= 2; page++ {
+		before := len(removed.asked)
+		response, err := reader.Read(relCtx(fmt.Sprintf("removed-page-%d", page)), unrestricted, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(response.Notes, []string{contractsv1.TeamRemovedNote}) {
+			t.Fatalf("page %d notes = %v, want [team_removed]", page, response.Notes)
+		}
+		if got := len(removed.asked) - before; got != 1 {
+			t.Fatalf("page %d removed-team lookups = %d, want 1", page, got)
+		}
+		if response.Page.NextCursor == "" {
+			t.Fatalf("page %d has no continuation", page)
+		}
+		request.Cursor = response.Page.NextCursor
+	}
+}
+
+func TestGoldenExamplesShowBothTeamNotes(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "contracts", "examples", "v1")
+	for _, route := range []string{"mcp_read_facts", "mcp_read_relationships"} {
+		matches, err := filepath.Glob(filepath.Join(dir, route+"*_response.v1.json"))
+		if err != nil || len(matches) == 0 {
+			t.Fatalf("%s examples: %v %v", route, matches, err)
+		}
+		var text strings.Builder
+		for _, path := range matches {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text.Write(raw)
+		}
+		for _, note := range []string{contractsv1.TeamRemovedNote, contractsv1.TeamStatusUnavailableNote} {
+			if !strings.Contains(text.String(), `"`+note+`"`) {
+				t.Errorf("%s examples never show %q", route, note)
+			}
+		}
 	}
 }
