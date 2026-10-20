@@ -18,9 +18,6 @@ import (
 // linked ids and work items again; sent, it is read once per read.
 const teamLinkCandidatesTable = "_team_link_candidates"
 
-// teamLinkCandidatesSent is the candidate set read back from its external table.
-const teamLinkCandidatesSent = `(SELECT work_item_id FROM ` + teamLinkCandidatesTable + `)`
-
 // teamLinkCandidateHashesSent is the candidate set's cityHash64 values, computed
 // server-side: a fixed-width prune set for the link-row and pull request sites,
 // whose real-id joins drop what a colliding hash lets through.
