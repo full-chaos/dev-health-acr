@@ -141,7 +141,8 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 		"organization unit listing": {}, "organization mix": {}, "team linked pull request mix": {"team-mem"},
 	}
 	repoScoped := map[string]bool{"repository mix": true, "repository unit listing": true, "team linked pull request mix": true}
-	pairs := devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 101)
+	start, end := ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0)
+	pairs := devhealthfacts.InvestmentSplitStatementPairs(start, end, 101)
 	peaks := map[string]map[string]uint64{}
 	record := func(org, name string, peak uint64) {
 		if peaks[name] == nil {
@@ -170,9 +171,17 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 			t.Errorf("%s: served repository mix peaked at %d bytes, want under %d", s.org, served, repoScopedSplitMemoryCeiling)
 		}
 		for _, p := range pairs {
+			runCtx, statement, bindings := ctx, p.New, p.Bindings
+			if p.Name == "team linked pull request mix" {
+				// The row measures the statement the provider sends, not the pair's inlined export form.
+				var err error
+				if runCtx, statement, bindings, err = devhealthfacts.TeamLinkedMixSentForTest(ctx, query, s.org, idsFor[p.Name], start, end); err != nil {
+					t.Fatalf("%s %s: %v: %s", s.org, p.Name, err, readFailureCause(err))
+				}
+			}
 			for i := 0; i < 2; i++ {
 				mark = serverNowMicros(t, ctx, direct)
-				err := readers.QueryOrgScopedNamed(ctx, query, "SplitMemory", p.New, s.org, idsFor[p.Name], func(readers.RowScanner) error { return nil }, p.Bindings...)
+				err := readers.QueryOrgScopedNamed(runCtx, query, "SplitMemory", statement, s.org, idsFor[p.Name], func(readers.RowScanner) error { return nil }, bindings...)
 				if err != nil {
 					t.Fatalf("%s %s: %v: %s", s.org, p.Name, err, readFailureCause(err))
 				}

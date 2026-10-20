@@ -1,11 +1,15 @@
 package devhealthfacts
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -191,6 +195,28 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 		{Name: "team linked pull request mix", Bindings: boundReaderBindings(current), New: linked,
 			Old: legacyLinkedPullRequestMixStatement(current, scope, 1000)},
 	}
+}
+
+// TeamLinkedMixSentForTest is the team linked pull request mix for the range
+// [start, end) under the scope subqueries, in the shape the provider sends it:
+// the linked set read first and sent as the external table the statement
+// reads, so the statement holds no link rows. The pair's New is its inlined
+// export form, for the differential oracle only.
+func TeamLinkedMixSentForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teams []string, start, end time.Time) (context.Context, string, []readers.Binding, error) {
+	current := factTimeBound{active: true, hasStart: true, start: start, end: end}
+	repos, numbers, teamIDs, err := newInvestmentProvider(client).readLinkedPullRequestSet(ctx, orgID, teams, current)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if len(repos) == 0 {
+		return nil, "", nil, fmt.Errorf("the team linked pull request set of %v is empty: the provider would skip the mix", teams)
+	}
+	table, err := linkedPullRequestsExternalTable(repos, numbers, teamIDs)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	sent := clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table))
+	return sent, linkedPullRequestMixStatement(current, subqueryMembershipScope, 1000), boundReaderBindings(current), nil
 }
 
 // ReachDefects are, per statement on the folded split, its reach with one
