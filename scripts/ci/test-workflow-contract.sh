@@ -717,12 +717,21 @@ check_first_stage_runner_uses_variable() {
 # instead of waiting on it. Checked generically over every job, not a hand
 # list of job names, so a future job with this env and no needs is caught
 # the same way this one was.
+# workflow_sets_testcontainers_prefix succeeds when the workflow's own
+# top-level keys (outside jobs:) name the testcontainers mirror prefix outside
+# a whole-line comment: a workflow-level env reaches every job.
+workflow_sets_testcontainers_prefix() {
+  awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^[^[:space:]#]/ { in_jobs=0 } !in_jobs { print }' "$1" \
+    | sed '/^[[:space:]]*#/d' | grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX'
+}
+
 check_testcontainers_needs_mirror_preflight() {
-  local file="$1" job block status=0
+  local file="$1" job block status=0 inherited=no
+  workflow_sets_testcontainers_prefix "$file" && inherited=yes
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
-    grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' <<<"$block" || continue
+    [ "$inherited" = yes ] || grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' <<<"$block" || continue
     if ! grep -qE '^ {4}needs: *mirror-preflight *$' <<<"$block" \
        && ! grep -qE '^ {6}- *mirror-preflight *$' <<<"$block"; then
       printf 'job "%s" sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX but does not declare "needs: mirror-preflight" -- it could start and pull a mirrored image before mirror-preflight confirms every mirrored image is resolvable\n' \
@@ -737,13 +746,15 @@ check_testcontainers_session_reap() {
   # A job that starts testcontainers runs with the ryuk reaper off and its own
   # session id, and removes that session's containers by id in a final
   # always() step (scripts/ci/reap-testcontainers-session.sh).
-  local file="$1" job block status=0
+  local file="$1" job block status=0 inherited=no
+  workflow_sets_testcontainers_prefix "$file" && inherited=yes
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
     # Any spelling outside a whole-line comment counts: a block or flow
-    # mapping, a quoted key, a GITHUB_ENV write.
-    sed '/^[[:space:]]*#/d' <<<"$block" | grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' || continue
+    # mapping, a quoted key, a GITHUB_ENV write, or a workflow-level env that
+    # every job inherits.
+    [ "$inherited" = yes ] || sed '/^[[:space:]]*#/d' <<<"$block" | grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' || continue
     if grep -qE '^ {4}services:' <<<"$block"; then
       printf 'job "%s" starts testcontainers and declares service containers; the post-reap census fails on any container it did not reap\n' "$job" >&2
       status=1
@@ -1321,6 +1332,11 @@ cat >> "$env_file_prefix" <<'YAML'
         run: go test ./internal/runtime/postgres
 YAML
 assert_check_fails 'added a testcontainers job that sets the prefix through GITHUB_ENV and no reap' check_testcontainers_session_reap "$env_file_prefix"
+workflow_env_prefix="$tmpdir/workflow-env-prefix.yml"
+awk '!done && /^env:$/ { print; print "  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/example"; done=1; next } { print }' "$workflow" > "$workflow_env_prefix"
+cmp -s "$workflow" "$workflow_env_prefix" && { printf 'NEGATIVE CONTROL SETUP FAILED: workflow_env_prefix did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'set the testcontainers prefix in the workflow-level env, which every job inherits' check_testcontainers_session_reap "$workflow_env_prefix"
+assert_check_fails 'set the testcontainers prefix in the workflow-level env, which every job inherits' check_testcontainers_needs_mirror_preflight "$workflow_env_prefix"
 step_session="$tmpdir/step-session.yml"
 awk -v line="      TESTCONTAINERS_SESSION_ID: ci-\${{ github.run_id }}-\${{ github.run_attempt }}-\${{ github.job }}-\${{ strategy.job-index }}" '!done && $0 == line { sub(/^      /, "          "); done=1 } { print }' "$workflow" > "$step_session"
 cmp -s "$workflow" "$step_session" && { printf 'NEGATIVE CONTROL SETUP FAILED: step_session did not change the workflow\n' >&2; exit 1; }
