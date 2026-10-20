@@ -123,13 +123,19 @@ func (c *llmConfigCache) put(orgID string, entry llmConfigEntry) {
 	c.entries[orgID] = entry
 }
 
-// OrgLLMConfig returns orgID's BYO LLM configuration from ops. found=false
-// is "no BYO configured" (404). A saved configuration behind a closed byo_llm
-// gate is ErrLLMConfigGateClosed; saved keys for other purposes only are
-// ErrLLMConfigNoInvestigateConfig. An unusable configuration is
-// ErrLLMConfigUnusable; ops being unreachable or answering 5xx is
-// errUnavailable. Answers (found, not found or gate closed) are reused for
-// llmConfigCacheTTL, the two refusals included; other errors are never cached.
+// OrgLLMConfig returns orgID's BYO LLM configuration from ops. found=false with
+// no error is "no BYO configured": a 404 that carries X-Org-Llm-Config: none and
+// no reason header. A 404 with the marker and the reason byo_llm_gate_closed is
+// ErrLLMConfigGateClosed (a saved configuration behind a closed byo_llm gate); with
+// byo_no_investigate_config it is ErrLLMConfigNoInvestigateConfig (saved keys for
+// other purposes only). A 409 (a saved configuration whose stored key is
+// unreadable) is ErrLLMConfigUnusable. Everything else is unavailable (errUnavailable),
+// because the source cannot be read or has broken its contract: ops unreachable, a
+// 5xx, a 401 or 403 (the credential or its scope is refused), a 404 without the
+// marker or with an unknown reason, and a 200 whose body does not decode or names
+// another schema, organization, provider, model or version. Answers (found, not
+// found, gate closed or no investigate config) are reused for llmConfigCacheTTL;
+// errors are never cached.
 func (c *Client) OrgLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, bool, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return OrgLLMConfig{}, false, errors.New("unsupported llm config request")
@@ -196,17 +202,17 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	decoder.DisallowUnknownFields()
 	var parsed llmConfigResponse
 	if err := decoder.Decode(&parsed); err != nil {
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: the body does not decode", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	}
 	switch {
 	case parsed.SchemaVersion != llmConfigSchemaVersion:
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: schema_version is not %s", ErrLLMConfigUnusable, llmConfigSchemaVersion)
+		return OrgLLMConfig{}, false, errUnavailable
 	case parsed.OrgID != orgID:
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: the body names another organization", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	case strings.TrimSpace(parsed.Provider) == "" || strings.TrimSpace(parsed.Model) == "":
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: provider or model is empty", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	case strings.TrimSpace(parsed.Version) == "":
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: version is empty", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	}
 	return OrgLLMConfig{
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),

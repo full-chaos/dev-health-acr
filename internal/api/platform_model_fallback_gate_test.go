@@ -64,6 +64,8 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "scope_refused":
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"detail":"Forbidden"}`))
+		case "malformed_body":
+			_, _ = w.Write([]byte(`not json`))
 		case "credential_refused":
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"detail":"Unauthorized"}`))
@@ -266,12 +268,12 @@ func TestAnUnmarkedOrUnknownOpsNotFoundNeverDrawsThePlatformModel(t *testing.T) 
 	}
 }
 
-// A credential or scope refusal from ops is an outage of the config source, not
-// a saved configuration: the caller sees the runtime-outage answer (503
+// A credential or scope refusal from ops, or a body that breaks the contract, is
+// an outage of the config source, not a saved configuration: the caller sees the runtime-outage answer (503
 // store_unavailable), never a per-org reason such as ai_features_turned_off, and
 // no model is called, even for an organization holding both flags.
 func TestAnOpsCredentialOrScopeRefusalIsUnavailableNotASavedConfiguration(t *testing.T) {
-	for _, mode := range []string{"scope_refused", "credential_refused"} {
+	for _, mode := range []string{"scope_refused", "credential_refused", "malformed_body"} {
 		t.Run(mode, func(t *testing.T) {
 			rig, sides := opsBackedRouteRig(t, opsStandIn{fallback: boolRef(true), llmConfig: mode})
 			recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
