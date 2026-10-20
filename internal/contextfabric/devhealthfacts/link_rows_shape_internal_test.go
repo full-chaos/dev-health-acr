@@ -36,13 +36,13 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 			t.Fatalf("team project link rows hold every link of the organization (%q):\n%s", banned, statement)
 		}
 	}
-	if strings.Contains(statement, "SELECT work_item_id FROM "+teamLinkCandidatesTable) {
-		t.Fatalf("team project link rows read the sent candidate ids as a String set, want only their hashes:\n%s", statement)
+	if got := strings.Count(statement, teamLinkCandidatesSent); got != 1 {
+		t.Fatalf("team project link rows read the sent candidate ids %d times, want 1 (the issue read, by String id):\n%s", got, statement)
 	}
 	if got := strings.Count(statement, teamLinkCandidateHashesSent); got != 2 {
 		t.Fatalf("team project link rows read the sent candidate hashes %d times, want 2 (the link rows, their pull requests):\n%s", got, statement)
 	}
-	for _, want := range []string{"cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "cw.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{"cw.work_item_id IN " + teamLinkCandidatesSent, "cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "cw.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}

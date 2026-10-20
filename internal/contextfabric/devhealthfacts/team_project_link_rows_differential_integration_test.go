@@ -154,7 +154,7 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 	if !reflect.DeepEqual(old, current) {
 		t.Fatalf("link rows differ.\nbefore: %s\nafter:  %s", fmt.Sprint(old), fmt.Sprint(current))
 	}
-	// The candidate prunes only narrow what is read: with both removed the
+	// The candidate prunes only narrow what is read: with all three removed the
 	// rows are the same.
 	if unpruned := rowsOf(ctx, devhealthfacts.TeamProjectLinkRowsUnprunedSQLForTest()); !reflect.DeepEqual(unpruned, current) {
 		t.Fatalf("link rows with the candidate prunes differ from the rows without them.\nwithout: %s\nwith:    %s", fmt.Sprint(unpruned), fmt.Sprint(current))
