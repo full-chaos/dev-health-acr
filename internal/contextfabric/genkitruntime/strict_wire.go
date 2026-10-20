@@ -246,7 +246,7 @@ func restoreNode(schema map[string]any, value any) (any, bool) {
 		object := make(map[string]any, len(entries))
 		for _, entry := range entries {
 			fields, ok := entry.(map[string]any)
-			if !ok {
+			if !ok || len(fields) != 2 {
 				return value, false
 			}
 			key, ok := fields[mapEntryKey].(string)
@@ -328,7 +328,7 @@ func restoreScalar(value any) (any, bool) {
 		return value, false
 	}
 	kind, ok := fields[scalarKind].(string)
-	if !ok {
+	if !ok || len(fields) != len(scalarMembers) {
 		return value, false
 	}
 	if kind == "null" {
