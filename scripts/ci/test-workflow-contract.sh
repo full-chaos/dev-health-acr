@@ -22,6 +22,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 default_workflow="$repo_root/.github/workflows/ci.yml"
 workflow="${1:-$default_workflow}"
 
+# The one runs-on form a job may use to reach the self-hosted pool: the
+# CI_RACE_RUNNER variable only on a push or a pull request from this
+# repository, so a fork pull request or any other event never runs on the pool.
+# shellcheck disable=SC2016
+routed_runs_on='    runs-on: ${{ (github.event_name == '"'"'push'"'"' || (github.event_name == '"'"'pull_request'"'"' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}'
+
 test -r "$workflow" || {
   printf '%s: cannot read workflow file: %s\n' "${0##*/}" "$workflow" >&2
   exit 2
@@ -675,9 +681,8 @@ check_race_runner_uses_variable() {
       fi
       continue
     fi
-    # shellcheck disable=SC2016
-    if ! grep -qxF '    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
-      printf 'job "%s" does not set runs-on from the CI_RACE_RUNNER variable with a '"'"'ubuntu-latest'"'"' fallback -- it would either hardcode a label or silently drop the fallback\n' \
+    if ! grep -qxF "$routed_runs_on" <<<"$block"; then
+      printf 'job "%s" does not set runs-on from the fork-guarded CI_RACE_RUNNER form with a '"'"'ubuntu-latest'"'"' fallback\n' \
         "$job" >&2
       status=1
     fi
@@ -685,11 +690,275 @@ check_race_runner_uses_variable() {
   return "$status"
 }
 
+# workflow_files <dir>: every .yml or .yaml file in <dir>, dotfiles and any
+# case of the extension included.
+workflow_files() {
+  find "$1" -maxdepth 1 -type f \( -iname '*.yml' -o -iname '*.yaml' \) | LC_ALL=C sort
+}
+
 # The first-stage jobs (plan, mirror-preflight, lint) gate every
 # race leg: on a hosted runner they wait behind the hosted queue while the
 # CI_RACE_RUNNER pool idles. They read the same variable with the same hosted
 # fallback, so the variable stays the one kill switch for all of them. The
 # scripts job stays hosted: the pool image carries no shellcheck.
+check_routed_jobs_fork_guarded() {
+  # Every line outside a whole-line comment that names CI_RACE_RUNNER, in any
+  # form (a folded or multi-line runs-on, a matrix value, a job output, any
+  # case), is exactly the fork-guarded runs-on line: the repository is public,
+  # and a fork pull request on the pool runs untrusted code on the self-hosted
+  # host. No other workflow beside this one names the variable.
+  local file="$1" status=0 line other
+  while IFS= read -r line; do
+    if [ "$line" != "$routed_runs_on" ]; then
+      printf 'a line names CI_RACE_RUNNER outside the fork-guarded runs-on form: %s\n' "$line" >&2
+      status=1
+    fi
+  done < <(grep -iF 'CI_RACE_RUNNER' "$file" | grep -vE '^[[:space:]]*#')
+  while IFS= read -r other; do
+    if [ "$other" -ef "$file" ]; then
+      continue
+    fi
+    if grep -iF 'CI_RACE_RUNNER' "$other" | grep -vE '^[[:space:]]*#' | grep -q .; then
+      printf 'workflow %s names CI_RACE_RUNNER; only %s may route to the pool\n' "$other" "$file" >&2
+      status=1
+    fi
+  done < <(workflow_files "$(dirname "$file")")
+  if ! grep -qxF "$routed_runs_on" "$file"; then
+    printf 'no job reaches the pool through the fork-guarded CI_RACE_RUNNER form\n' >&2
+    status=1
+  fi
+  return "$status"
+}
+
+check_routed_workflow_triggers() {
+  # The fork guard trusts every event that is not pull_request. A workflow
+  # that routes to the pool may therefore be triggered only by pull_request
+  # and by a push to main; a new trigger (pull_request_target,
+  # workflow_dispatch, issue_comment, a wider push) needs its own guard first.
+  local file="$1" on events status=0
+  grep -qE '^ *runs-on:.*CI_RACE_RUNNER' "$file" || return 0
+  on="$(awk '/^("on"|on|'"'"'on'"'"'):[[:space:]]*$/ { in_on=1; next } in_on && /^[^[:space:]#]/ { in_on=0 } in_on { print }' "$file" | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d')"
+  if [ -z "$on" ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER but has no block-form "on:" trigger map\n' "$file" >&2
+    return 1
+  fi
+  events="$(grep -E '^  [^[:space:]]' <<<"$on" | sed -E 's/^  ([^:]+):.*/\1/' | sort | tr '\n' ' ')"
+  if [ "$events" != "pull_request push " ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER and is triggered by [%s]; only pull_request and push to main are covered by the fork guard\n' "$file" "$events" >&2
+    status=1
+  fi
+  if [ "$(awk '/^  push:/ { in_push=1; next } in_push && /^  [^[:space:]]/ { in_push=0 } in_push { print }' <<<"$on")" != "    branches: [main]" ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER and its push trigger is not exactly "branches: [main]"\n' "$file" >&2
+    status=1
+  fi
+  # A pull_request filter other than types (branches, paths, paths-ignore)
+  # can stop the workflow, and the contract with it, from running at all.
+  local pr_keys
+  pr_keys="$(awk '/^  pull_request:/ { in_pr=1; next } in_pr && /^  [^[:space:]]/ { in_pr=0 } in_pr && /^    [^[:space:]]/ { print }' <<<"$on" | sed -E 's/^    ([^:]+):.*/\1/' | sort -u | tr '\n' ' ')"
+  if [ -n "$pr_keys" ] && [ "$pr_keys" != "types " ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER and its pull_request trigger carries filters [%s]; only types is allowed\n' "$file" "$pr_keys" >&2
+    status=1
+  fi
+  return "$status"
+}
+
+# GitHub-hosted runner labels. A self-hosted runner always carries the
+# self-hosted label and an ARC scale set its own name; neither matches.
+hosted_label_re='^(ubuntu-(latest|slim|[0-9]{2}\.[0-9]{2})(-arm)?|macos-(latest|[0-9]{2})(-(large|xlarge|intel))?|windows-(latest|[0-9]{4}|11-arm))$'
+
+# hosted_label <scalar>: the scalar, without a trailing comment and one pair
+# of quotes, is a GitHub-hosted label.
+hosted_label() {
+  local v
+  v="$(sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$1")"
+  if [[ "$v" =~ ^\"(.*)\"$ ]] || [[ "$v" =~ ^\'(.*)\'$ ]]; then
+    v="${BASH_REMATCH[1]}"
+  fi
+  [[ "$v" =~ $hosted_label_re ]]
+}
+
+# workflow_shape_errors <file>: prints one line for each shape that would let
+# a job key escape the line-based reads below: a jobs key that is not a bare
+# block map, a job header that is quoted or carries an inline value (a flow
+# map, an alias), a job body not at indent 4, or a job key at indent 4 that is
+# not a bare name (quoted, escaped, a merge key). After jobs, a column-0 line
+# must be a workflow key.
+workflow_shape_errors() {
+  awk '
+    function ind(s) { match(s, /^ */); return RLENGTH }
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      i = ind($0)
+      if (i == 0) {
+        in_jobs = 0
+        if (n && $0 !~ /^(name|run-name|["'"'"']?on["'"'"']?|permissions|env|defaults|concurrency|jobs)[[:space:]]*:/) print NR ": a column-0 line after jobs is not a workflow key (a continued scalar or flow collection would hide the jobs after it)"
+        if ($0 ~ /^["'"'"']?jobs["'"'"']?[[:space:]]*:/) {
+          if ($0 ~ /^jobs:[[:space:]]*(#.*)?$/) { in_jobs = 1; n++ }
+          else print NR ": jobs is not a bare block map"
+        }
+        next
+      }
+      if (!in_jobs) next
+      if (i == 2) {
+        if ($0 !~ /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/) print NR ": job header is not a bare name with a block body"
+        body = 1
+        next
+      }
+      if (body && i != 4) print NR ": job body does not start at indent 4"
+      body = 0
+      if (i < 4) print NR ": line at indent " i " inside jobs"
+      if (i == 4 && $0 !~ /^    - / && $0 !~ /^    [A-Za-z0-9_-]+:([[:space:]]|$)/) print NR ": job key is not a bare name"
+    }
+    END { if (n != 1) print "the file has " n + 0 " bare jobs keys" }
+  ' "$1"
+}
+
+# matrix_values <key>: reads a job strategy block on stdin and prints every
+# value the matrix gives <key>: a block scalar, each item of a flow or block
+# list, each flow-map entry (include and exclude entries too). A shape it
+# cannot read prints <unparsed>, which no hosted label matches. Keys match in
+# any case, as GitHub expressions do.
+matrix_values() {
+  awk -v key="$1" '
+    function ind(s) { match(s, /^ */); return RLENGTH }
+    function emit(v) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }
+    { L[NR] = $0 }
+    END {
+      key = tolower(key)
+      pat = "(^|[[:space:]{,])(-[[:space:]]+)?[\"'"'"']?" key "[\"'"'"']?[[:space:]]*:"
+      for (i = 1; i <= NR; i++) {
+        s = L[i]; done = ""
+        while (match(tolower(s), pat)) {
+          m = substr(s, RSTART, RLENGTH); k = m
+          sub(/^[[:space:]{,]?(-[[:space:]]+)?/, "", k)
+          kc = length(done) + RSTART - 1 + length(m) - length(k)
+          done = done substr(s, 1, RSTART + RLENGTH - 1)
+          rest = substr(s, RSTART + RLENGTH)
+          sub(/^[[:space:]]+/, "", rest)
+          opens = gsub(/\{/, "{", done); closes = gsub(/\}/, "}", done)
+          if (rest ~ /^\[/) {
+            e = index(rest, "]")
+            if (!e) { emit("<unparsed>"); break }
+            n = split(substr(rest, 2, e - 2), items, ",")
+            for (x = 1; x <= n; x++) emit(items[x])
+            done = done substr(rest, 1, e); s = substr(rest, e + 1)
+          } else if (opens > closes) {
+            if (match(rest, /[,}]/)) { emit(substr(rest, 1, RSTART - 1)); done = done substr(rest, 1, RSTART - 1); s = substr(rest, RSTART) }
+            else { emit(rest); break }
+          } else {
+            sub(/[[:space:]]+#.*$/, "", rest)
+            if (rest !~ /^[[:space:]]*$/) { emit(rest); break }
+            for (j = i + 1; j <= NR; j++) {
+              if (L[j] ~ /^[[:space:]]*(#|$)/) continue
+              ij = ind(L[j])
+              if (ij < kc || (ij == kc && L[j] !~ /^ *- /)) break
+              if (L[j] ~ /^ *- /) { v = L[j]; sub(/^ *- */, "", v); sub(/[[:space:]]+#.*$/, "", v); emit(v) }
+              else emit("<unparsed>")
+            }
+            break
+          }
+        }
+      }
+    }
+  '
+}
+
+# check_runner_sources: in this workflow and every workflow beside it,
+# whatever its triggers and whether or not it names CI_RACE_RUNNER, a job
+# runs on one GitHub-hosted label (quoted or not), on the fork-guarded line
+# (this workflow only), or on ${{ matrix.<key> }} where every value the matrix
+# gives <key> is a GitHub-hosted label. A list, a group/labels map, a folded
+# label, any other expression, self-hosted or a pool label fails. A job that
+# calls a reusable workflow calls one in this directory, which this check
+# reads too. The vars context is never indexed by a computed name. Together
+# with check_routed_jobs_fork_guarded this leaves no runs-on that reaches a
+# self-hosted runner without the fork guard.
+check_runner_sources() {
+  local file="$1" wf job block rec deeper line value key strategy shape v n status=0 wfs
+  mapfile -t wfs < <(workflow_files "$(dirname "$file")")
+  for wf in "$file" "${wfs[@]}"; do
+    if [ ! -f "$wf" ] || { [ "$wf" != "$file" ] && [ "$wf" -ef "$file" ]; }; then
+      continue
+    fi
+    if grep -vE '^[[:space:]]*#' "$wf" | grep -qiE 'vars[[:space:]]*\['; then
+      printf 'workflow %s indexes the vars context by a computed name\n' "$wf" >&2
+      status=1
+    fi
+    shape="$(workflow_shape_errors "$wf")"
+    if [ -n "$shape" ]; then
+      printf 'workflow %s has a shape the runner check cannot read:\n%s\n' "$wf" "$shape" >&2
+      status=1
+    fi
+    while IFS= read -r job; do
+      block="$(job_block "$wf" "$job")"
+      while IFS= read -r line; do
+        value="$(sed -E 's/^    uses:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/' <<<"$line")"
+        if [[ "$value" =~ ^\./\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)$ ]] && [ -f "$(dirname "$wf")/${BASH_REMATCH[1]}" ]; then
+          continue
+        fi
+        printf 'job "%s" in %s calls workflow "%s": only a workflow beside it, which this check reads, may be called\n' "$job" "$wf" "$value" >&2
+        status=1
+      done < <(grep -E '^    uses:' <<<"$block")
+      while IFS= read -r rec; do
+        deeper="${rec%%$'\t'*}"
+        line="${rec#*$'\t'}"
+        if [ "$wf" = "$file" ] && [ "$line" = "$routed_runs_on" ] && [ "$deeper" = 0 ]; then
+          continue
+        fi
+        value="$(sed -E 's/^[[:space:]]*runs-on:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//' <<<"$line")"
+        if [ "$deeper" = 1 ] || [ -z "$value" ]; then
+          printf 'job "%s" in %s continues runs-on on the next lines (a list, a group/labels map or a folded label): only one hosted label on the runs-on line is allowed\n' "$job" "$wf" >&2
+          status=1
+        elif [[ "$value" =~ ^\$\{\{\ matrix\.([A-Za-z0-9_-]+)\ \}\}$ ]]; then
+          key="${BASH_REMATCH[1]}"
+          strategy="$(awk '/^    strategy:/ { in_s=1; print; next } in_s && /^    [^[:space:]]/ { in_s=0 } in_s { print }' <<<"$block" | grep -vE '^[[:space:]]*#' || true)"
+          # shellcheck disable=SC2016
+          if grep -qF '${{' <<<"$strategy"; then
+            printf 'job "%s" in %s runs on a matrix value and its matrix holds an expression\n' "$job" "$wf" >&2
+            status=1
+            continue
+          fi
+          if sed -E 's/[[:space:]]+#.*$//' <<<"$strategy" | grep -qE '<<|\\|(^|[[:space:],{}[])[&*!][^[:space:],{}[]|^[[:space:]]*(-[[:space:]]+)?\?([[:space:]]|$)'; then
+            printf 'job "%s" in %s runs on a matrix value and its strategy holds an anchor, alias, merge key, tag, escape or complex key\n' "$job" "$wf" >&2
+            status=1
+            continue
+          fi
+          n=0
+          while IFS= read -r v; do
+            n=$((n + 1))
+            if ! hosted_label "$v"; then
+              printf 'job "%s" in %s runs on matrix.%s and the matrix gives it "%s": only GitHub-hosted labels (ubuntu-*, macos-*, windows-*) are allowed\n' "$job" "$wf" "$key" "$v" >&2
+              status=1
+            fi
+          done < <(matrix_values "$key" <<<"$strategy")
+          if [ "$n" = 0 ]; then
+            printf 'job "%s" in %s runs on matrix.%s and its strategy gives that key no value this check can read\n' "$job" "$wf" "$key" >&2
+            status=1
+          fi
+        elif ! hosted_label "$value"; then
+          printf 'job "%s" in %s runs on "%s": only one GitHub-hosted label (ubuntu-*, macos-*, windows-*), the fork-guarded line or a matrix of hosted labels is allowed\n' "$job" "$wf" "$value" >&2
+          status=1
+        fi
+      done < <(awk '
+        function ind(s) { match(s, /^ */); return RLENGTH }
+        { L[NR] = $0 }
+        END {
+          for (i = 1; i <= NR; i++) {
+            if (L[i] !~ /^[[:space:]]+runs-on:/) continue
+            d = 0
+            for (j = i + 1; j <= NR; j++) {
+              if (L[j] ~ /^[[:space:]]*(#|$)/) continue
+              d = ind(L[j]) > ind(L[i]); break
+            }
+            print d "\t" L[i]
+          }
+        }
+      ' <<<"$block")
+    done < <(list_jobs "$wf")
+  done
+  return "$status"
+}
+
 check_first_stage_runner_uses_variable() {
   local file="$1" job status=0 block
   for job in plan mirror-preflight lint; do
@@ -700,8 +969,8 @@ check_first_stage_runner_uses_variable() {
       continue
     fi
     # shellcheck disable=SC2016
-    if ! grep -qxF '    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
-      printf 'first-stage job "%s" does not run on the CI_RACE_RUNNER variable with a '"'"'ubuntu-latest'"'"' fallback\n' "$job" >&2
+    if ! grep -qxF "$routed_runs_on" <<<"$block"; then
+      printf 'first-stage job "%s" does not run on the fork-guarded CI_RACE_RUNNER form with a '"'"'ubuntu-latest'"'"' fallback\n' "$job" >&2
       status=1
     fi
   done
@@ -1145,6 +1414,9 @@ run_all_checks() {
   check_pin_binds_checkout_ref "$file"
   check_race_runner_uses_variable "$file"
   check_first_stage_runner_uses_variable "$file"
+  check_routed_jobs_fork_guarded "$file"
+  check_routed_workflow_triggers "$file"
+  check_runner_sources "$file"
   check_testcontainers_needs_mirror_preflight "$file"
   check_testcontainers_session_reap "$file"
   check_heavy_jobs_gated "$file"
@@ -1252,10 +1524,10 @@ assert_check_fails 'dropped the testcontainers reap step from one job' check_tes
 # (c4) the race-runner pinning: a pinned heavy leg back on the variable, and
 # another race leg pinned to a hosted label.
 pinned_routed="$tmpdir/pinned-routed.yml"
-awk '
+awk -v routed="$routed_runs_on" '
   /^  race-devhealthfacts-heavy:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthfacts-heavy:$/ { in_job=0 }
-  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; next }
+  in_job && /^    runs-on: ubuntu-latest$/ { print routed; next }
   { print }
 ' "$workflow" > "$pinned_routed"
 cmp -s "$workflow" "$pinned_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: pinned_routed did not change the workflow\n' >&2; exit 1; }
@@ -1264,7 +1536,7 @@ other_pinned="$tmpdir/other-pinned.yml"
 awk '
   /^  race-factoracle:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
-  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  in_job && /runs-on: .*vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
   { print }
 ' "$workflow" > "$other_pinned"
 cmp -s "$workflow" "$other_pinned" && { printf 'NEGATIVE CONTROL SETUP FAILED: other_pinned did not change the workflow\n' >&2; exit 1; }
@@ -1345,6 +1617,242 @@ service_beside="$tmpdir/service-beside.yml"
 awk '!done && /^  race:$/ { print; print "    services:"; print "      redis:"; print "        image: redis"; done=1; next } { print }' "$workflow" > "$service_beside"
 cmp -s "$workflow" "$service_beside" && { printf 'NEGATIVE CONTROL SETUP FAILED: service_beside did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'declared a service container in a job with the post-reap census' check_testcontainers_session_reap "$service_beside"
+
+# (c6) the fork guard: one routed job back on the unguarded variable form.
+unguarded="$tmpdir/unguarded.yml"
+awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+  "$workflow" > "$unguarded"
+cmp -s "$workflow" "$unguarded" && { printf 'NEGATIVE CONTROL SETUP FAILED: unguarded did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job to CI_RACE_RUNNER without the fork guard' check_routed_jobs_fork_guarded "$unguarded"
+guard_dropped="$tmpdir/guard-dropped.yml"
+sed 's/github.event.pull_request.head.repo.full_name == github.repository/true/' "$workflow" > "$guard_dropped"
+cmp -s "$workflow" "$guard_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: guard_dropped did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the same-repository condition with true' check_routed_jobs_fork_guarded "$guard_dropped"
+negated_guard="$tmpdir/negated-guard.yml"
+awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: ${{ (github.event_name != '"'"'pull_request'"'"' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+  "$workflow" > "$negated_guard"
+cmp -s "$workflow" "$negated_guard" && { printf 'NEGATIVE CONTROL SETUP FAILED: negated_guard did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job with the guard that trusts every event other than pull_request' check_routed_jobs_fork_guarded "$negated_guard"
+folded_runs_on="$tmpdir/folded-runs-on.yml"
+awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: >-"; print "      ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+  "$workflow" > "$folded_runs_on"
+cmp -s "$workflow" "$folded_runs_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: folded_runs_on did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job through a folded runs-on without the fork guard' check_routed_jobs_fork_guarded "$folded_runs_on"
+matrix_runner="$tmpdir/matrix-runner.yml"
+cat "$workflow" > "$matrix_runner"
+cat >> "$matrix_runner" <<'YAML'
+  runner-probe:
+    strategy:
+      matrix:
+        runner: ["${{ vars.ci_race_runner }}"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - run: true
+YAML
+assert_check_fails 'routed a job through a matrix value that names the variable in lower case' check_routed_jobs_fork_guarded "$matrix_runner"
+other_dir="$tmpdir/other-workflows"
+mkdir -p "$other_dir"
+cp "$workflow" "$other_dir/ci.yml"
+# shellcheck disable=SC2016
+printf 'jobs:\n  probe:\n    runs-on: ${{ vars.CI_RACE_RUNNER }}\n' > "$other_dir/side.yml"
+assert_check_fails 'routed a job of another workflow file through the variable' check_routed_jobs_fork_guarded "$other_dir/ci.yml"
+for trigger in 'pull_request_target:' 'workflow_dispatch:' 'issue_comment:'; do
+  extra_trigger="$tmpdir/extra-trigger.yml"
+  awk -v t="  $trigger" '!done && /^"on":$/ { print; print t; done=1; next } { print }' "$workflow" > "$extra_trigger"
+  cmp -s "$workflow" "$extra_trigger" && { printf 'NEGATIVE CONTROL SETUP FAILED: extra_trigger did not change the workflow\n' >&2; exit 1; }
+  assert_check_fails "added the $trigger trigger to a workflow that routes to the pool" check_routed_workflow_triggers "$extra_trigger"
+done
+wide_push="$tmpdir/wide-push.yml"
+sed 's/^    branches: \[main\]$/    branches: [main, '"'"'release\/**'"'"']/' "$workflow" > "$wide_push"
+cmp -s "$workflow" "$wide_push" && { printf 'NEGATIVE CONTROL SETUP FAILED: wide_push did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'widened the push trigger past main in a workflow that routes to the pool' check_routed_workflow_triggers "$wide_push"
+flow_on="$tmpdir/flow-on.yml"
+awk '/^"on":$/ { print "\"on\": [push, pull_request, workflow_dispatch]"; skip=1; next } skip && /^[^[:space:]]/ { skip=0 } skip { next } { print }' "$workflow" > "$flow_on"
+cmp -s "$workflow" "$flow_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: flow_on did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the trigger map with a flow list in a workflow that routes to the pool' check_routed_workflow_triggers "$flow_on"
+for filter in "paths-ignore: ['**']" "branches: [main]" "paths: ['docs/**']"; do
+  pr_filter="$tmpdir/pr-filter.yml"
+  awk -v f="    $filter" '!done && /^  pull_request:$/ { print; print f; done=1; next } { print }' "$workflow" > "$pr_filter"
+  cmp -s "$workflow" "$pr_filter" && { printf 'NEGATIVE CONTROL SETUP FAILED: pr_filter did not change the workflow\n' >&2; exit 1; }
+  assert_check_fails "added a pull_request filter ($filter) to a workflow that routes to the pool" check_routed_workflow_triggers "$pr_filter"
+done
+computed_vars="$tmpdir/computed-vars.yml"
+awk '/^  docs-mermaid:$/ { in_job=1 } in_job && /^  [A-Za-z0-9_-]+:/ && !/^  docs-mermaid:$/ { in_job=0 } in_job && /^    runs-on: / && !done { print "    runs-on: ${{ vars[format('"'"'CI_{0}'"'"', '"'"'RACE_RUNNER'"'"')] || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' "$workflow" > "$computed_vars"
+cmp -s "$workflow" "$computed_vars" && { printf 'NEGATIVE CONTROL SETUP FAILED: computed_vars did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job through a computed vars index' check_runner_sources "$computed_vars"
+expr_runner="$tmpdir/expr-runner.yml"
+awk '/^  docs-mermaid:$/ { in_job=1 } in_job && /^  [A-Za-z0-9_-]+:/ && !/^  docs-mermaid:$/ { in_job=0 } in_job && /^    runs-on: / && !done { print "    runs-on: ${{ needs.plan.outputs.runner }}"; done=1; next } { print }' "$workflow" > "$expr_runner"
+cmp -s "$workflow" "$expr_runner" && { printf 'NEGATIVE CONTROL SETUP FAILED: expr_runner did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job through a job output' check_runner_sources "$expr_runner"
+matrix_expr="$tmpdir/matrix-expr.yml"
+cat "$workflow" > "$matrix_expr"
+cat >> "$matrix_expr" <<'YAML'
+  matrix-probe:
+    strategy:
+      matrix:
+        runner: ["${{ vars.OTHER_RUNNER }}"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - run: true
+YAML
+assert_check_fails 'ran a job on a matrix value that holds an expression' check_runner_sources "$matrix_expr"
+side_dir="$tmpdir/side-workflows"
+mkdir -p "$side_dir"
+cp "$workflow" "$side_dir/ci.yml"
+# shellcheck disable=SC2016
+printf 'jobs:\n  probe:\n    runs-on: ${{ vars[format('"'"'CI_{0}'"'"', '"'"'RACE_RUNNER'"'"')] }}\n' > "$side_dir/side.yml"
+assert_check_fails 'routed a job of another workflow file through a computed vars index' check_runner_sources "$side_dir/ci.yml"
+
+# (c8) the review r3 shapes: a sibling pull_request workflow that never names
+# CI_RACE_RUNNER and reaches a self-hosted runner through a literal label, a
+# literal matrix value, or any other runs-on form. Each must fail
+# check_runner_sources on its own; the hosted shapes after them must pass.
+side_n=0
+side_workflow() {
+  side_n=$((side_n + 1))
+  side_wf_dir="$tmpdir/side-runner-$side_n"
+  mkdir -p "$side_wf_dir"
+  cp "$workflow" "$side_wf_dir/ci.yml"
+  printf '%s\n' "$1" > "$side_wf_dir/${2:-unsafe-pool.yml}"
+}
+assert_side_fails() {
+  side_workflow "$2" "${3:-}"
+  assert_check_fails "$1" check_runner_sources "$side_wf_dir/ci.yml"
+}
+pr_head=$'"on":\n  pull_request:\njobs:\n  probe:\n'
+pr_steps=$'    steps:\n      - run: true'
+assert_side_fails 'ran a pull_request job on the literal self-hosted label' "${pr_head}    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'ran a pull_request job on a literal matrix value [self-hosted]' "${pr_head}    strategy:
+      matrix:
+        runner: [self-hosted]
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a pull_request_target job on the self-hosted label' "\"on\":
+  pull_request_target:
+jobs:
+  probe:
+    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'ran a job on a quoted self-hosted label' "${pr_head}    runs-on: 'self-hosted'
+$pr_steps"
+assert_side_fails 'ran a job on an ARC pool label' "${pr_head}    runs-on: \"oci-arc-runners\"
+$pr_steps"
+assert_side_fails 'ran a job on a label that only starts like a hosted one' "${pr_head}    runs-on: ubuntu-latest-arc
+$pr_steps"
+assert_side_fails 'ran a job on a flow list of labels' "${pr_head}    runs-on: [ubuntu-latest, self-hosted]
+$pr_steps"
+assert_side_fails 'ran a job on a block list of labels' "${pr_head}    runs-on:
+      - self-hosted
+$pr_steps"
+assert_side_fails 'ran a job on a runner group map' "${pr_head}    runs-on:
+      group: arc
+$pr_steps"
+assert_side_fails 'ran a job on a flow runner group map' "${pr_head}    runs-on: {group: arc}
+$pr_steps"
+assert_side_fails 'ran a job on a folded label' "${pr_head}    runs-on: >-
+      self-hosted
+$pr_steps"
+assert_side_fails 'ran a job on an expression with a literal self-hosted branch' "${pr_head}    runs-on: \${{ github.event_name == 'push' && 'self-hosted' || 'ubuntu-latest' }}
+$pr_steps"
+assert_side_fails 'ran a job on an alias' "${pr_head}    runs-on: *pool
+$pr_steps"
+assert_side_fails 'ran a job on a matrix block list that holds self-hosted' "${pr_head}    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - 'self-hosted'
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix include flow entry that holds self-hosted' "${pr_head}    strategy:
+      matrix:
+        include:
+          - {leg: a, runner: ubuntu-24.04}
+          - {leg: b, \"runner\": self-hosted}
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix include block entry that holds self-hosted' "${pr_head}    strategy:
+      matrix:
+        include:
+          - leg: a
+            runner: self-hosted
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix key the strategy never sets' "${pr_head}    strategy:
+      matrix:
+        leg: [a]
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix entry with an escaped key' "${pr_head}    strategy:
+      matrix:
+        runner: [ubuntu-latest]
+        include:
+          - {\"runn\\u0065r\": self-hosted}
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'called a reusable workflow of another repository' "${pr_head}    uses: some-org/some-repo/.github/workflows/pool.yml@main"
+assert_side_fails 'wrote a job as a flow map' "${pr_head%  probe:*}  probe: {runs-on: self-hosted, steps: [{run: 'true'}]}"
+assert_side_fails 'wrote the runs-on key with an escape' "${pr_head}    \"runs\\u002Don\": self-hosted
+$pr_steps"
+assert_side_fails 'put the fork-guarded line in another workflow' "${pr_head}${routed_runs_on}
+$pr_steps"
+# The delta-read shapes: a column-0 line inside jobs that would end the jobs
+# block for a line-based read, a matrix key in another case, and a workflow
+# file the shell glob skips.
+assert_side_fails 'hid a later job behind a quoted scalar continued at column 0' "${pr_head%  probe:*}  first:
+    runs-on: ubuntu-latest
+    steps:
+      - run: \"echo
+x\"
+  probe:
+    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'hid a later job behind a flow sequence closed at column 0' "${pr_head%  probe:*}  first:
+    runs-on: ubuntu-latest
+    steps: [{run: 'true'}
+]
+  probe:
+    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'gave matrix.runner self-hosted through an include key in another case' "${pr_head}    strategy:
+      matrix:
+        runner: [ubuntu-latest]
+        include:
+          - Runner: self-hosted
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'gave matrix.RUNNER self-hosted through an include key in lower case' "${pr_head}    strategy:
+      matrix:
+        RUNNER: [ubuntu-latest]
+        include:
+          - runner: self-hosted
+    runs-on: \${{ matrix.RUNNER }}
+$pr_steps"
+assert_side_fails 'ran a job on self-hosted from a dotfile workflow' "${pr_head}    runs-on: self-hosted
+$pr_steps" .evil.yml
+assert_side_fails 'ran a job on self-hosted from a workflow with an upper-case extension' "${pr_head}    runs-on: self-hosted
+$pr_steps" evil.YML
+side_workflow "${pr_head}    runs-on: ubuntu-latest # hosted
+$pr_steps
+  quoted:
+    runs-on: \"ubuntu-24.04\"
+$pr_steps
+  matrixed:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, 'ubuntu-24.04-arm']
+        include:
+          - {leg: a, runner: macos-15}
+          - leg: b
+            runner: windows-2025
+    runs-on: \${{ matrix.runner }}
+$pr_steps
+  called:
+    uses: ./.github/workflows/ci.yml"
+if ! check_runner_sources "$side_wf_dir/ci.yml"; then
+  printf 'POSITIVE CONTROL FAILED: check_runner_sources rejected hosted labels, a hosted matrix and a local reusable workflow\n' >&2
+  exit 1
+fi
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
@@ -1755,7 +2263,7 @@ race_runner_hardcoded="$tmpdir/race-runner-hardcoded.yml"
 awk '
   /^  race:$/ { in_race=1 }
   in_race && /^  [A-Za-z0-9_-]+:/ && !/^  race:$/ { in_race=0 }
-  in_race && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ {
+  in_race && /runs-on: .*vars\.CI_RACE_RUNNER/ {
     print "    runs-on: ubuntu-latest"
     next
   }
@@ -1770,7 +2278,7 @@ isolated_runner_hardcoded="$tmpdir/isolated-runner-hardcoded.yml"
 awk '
   /^  race-devhealthschema:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema:$/ { in_job=0 }
-  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ {
+  in_job && /runs-on: .*vars\.CI_RACE_RUNNER/ {
     print "    runs-on: ubuntu-latest"
     next
   }
@@ -1809,7 +2317,7 @@ first_stage_hardcoded="$tmpdir/first-stage-hardcoded.yml"
 awk '
   /^  plan:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  plan:$/ { in_job=0 }
-  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  in_job && /runs-on: .*vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
   { print }
 ' "$workflow" > "$first_stage_hardcoded"
 cmp -s "$workflow" "$first_stage_hardcoded" && { printf 'NEGATIVE CONTROL SETUP FAILED: first_stage_hardcoded did not change the workflow\n' >&2; exit 1; }
