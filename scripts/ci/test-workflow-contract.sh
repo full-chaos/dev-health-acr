@@ -756,14 +756,115 @@ check_routed_workflow_triggers() {
   return "$status"
 }
 
-# check_runner_sources: in this workflow and every workflow beside it, a job's
-# runs-on is a literal label, the fork-guarded line (this workflow only), or
-# ${{ matrix.<key> }} over a matrix with no expressions. The vars context is
-# never indexed by a computed name. Together with
-# check_routed_jobs_fork_guarded this leaves no expression that can name the
-# pool runner without the fork guard.
+# GitHub-hosted runner labels. A self-hosted runner always carries the
+# self-hosted label and an ARC scale set its own name; neither matches.
+hosted_label_re='^(ubuntu-(latest|slim|[0-9]{2}\.[0-9]{2})(-arm)?|macos-(latest|[0-9]{2})(-(large|xlarge|intel))?|windows-(latest|[0-9]{4}|11-arm))$'
+
+# hosted_label <scalar>: the scalar, without a trailing comment and one pair
+# of quotes, is a GitHub-hosted label.
+hosted_label() {
+  local v
+  v="$(sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$1")"
+  if [[ "$v" =~ ^\"(.*)\"$ ]] || [[ "$v" =~ ^\'(.*)\'$ ]]; then
+    v="${BASH_REMATCH[1]}"
+  fi
+  [[ "$v" =~ $hosted_label_re ]]
+}
+
+# workflow_shape_errors <file>: prints one line for each shape that would let
+# a job key escape the line-based reads below: a jobs key that is not a bare
+# block map, a job header that is quoted or carries an inline value (a flow
+# map, an alias), a job body not at indent 4, or a job key at indent 4 that is
+# not a bare name (quoted, escaped, a merge key).
+workflow_shape_errors() {
+  awk '
+    function ind(s) { match(s, /^ */); return RLENGTH }
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      i = ind($0)
+      if (i == 0) {
+        in_jobs = 0
+        if ($0 ~ /^["'"'"']?jobs["'"'"']?[[:space:]]*:/) {
+          if ($0 ~ /^jobs:[[:space:]]*(#.*)?$/) { in_jobs = 1; n++ }
+          else print NR ": jobs is not a bare block map"
+        }
+        next
+      }
+      if (!in_jobs) next
+      if (i == 2) {
+        if ($0 !~ /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/) print NR ": job header is not a bare name with a block body"
+        body = 1
+        next
+      }
+      if (body && i != 4) print NR ": job body does not start at indent 4"
+      body = 0
+      if (i < 4) print NR ": line at indent " i " inside jobs"
+      if (i == 4 && $0 !~ /^    - / && $0 !~ /^    [A-Za-z0-9_-]+:([[:space:]]|$)/) print NR ": job key is not a bare name"
+    }
+    END { if (n != 1) print "the file has " n + 0 " bare jobs keys" }
+  ' "$1"
+}
+
+# matrix_values <key>: reads a job strategy block on stdin and prints every
+# value the matrix gives <key>: a block scalar, each item of a flow or block
+# list, each flow-map entry (include and exclude entries too). A shape it
+# cannot read prints <unparsed>, which no hosted label matches.
+matrix_values() {
+  awk -v key="$1" '
+    function ind(s) { match(s, /^ */); return RLENGTH }
+    function emit(v) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }
+    { L[NR] = $0 }
+    END {
+      pat = "(^|[[:space:]{,])(-[[:space:]]+)?[\"'"'"']?" key "[\"'"'"']?[[:space:]]*:"
+      for (i = 1; i <= NR; i++) {
+        s = L[i]; done = ""
+        while (match(s, pat)) {
+          m = substr(s, RSTART, RLENGTH); k = m
+          sub(/^[[:space:]{,]?(-[[:space:]]+)?/, "", k)
+          kc = length(done) + RSTART - 1 + length(m) - length(k)
+          done = done substr(s, 1, RSTART + RLENGTH - 1)
+          rest = substr(s, RSTART + RLENGTH)
+          sub(/^[[:space:]]+/, "", rest)
+          opens = gsub(/\{/, "{", done); closes = gsub(/\}/, "}", done)
+          if (rest ~ /^\[/) {
+            e = index(rest, "]")
+            if (!e) { emit("<unparsed>"); break }
+            n = split(substr(rest, 2, e - 2), items, ",")
+            for (x = 1; x <= n; x++) emit(items[x])
+            done = done substr(rest, 1, e); s = substr(rest, e + 1)
+          } else if (opens > closes) {
+            if (match(rest, /[,}]/)) { emit(substr(rest, 1, RSTART - 1)); done = done substr(rest, 1, RSTART - 1); s = substr(rest, RSTART) }
+            else { emit(rest); break }
+          } else {
+            sub(/[[:space:]]+#.*$/, "", rest)
+            if (rest !~ /^[[:space:]]*$/) { emit(rest); break }
+            for (j = i + 1; j <= NR; j++) {
+              if (L[j] ~ /^[[:space:]]*(#|$)/) continue
+              ij = ind(L[j])
+              if (ij < kc || (ij == kc && L[j] !~ /^ *- /)) break
+              if (L[j] ~ /^ *- /) { v = L[j]; sub(/^ *- */, "", v); sub(/[[:space:]]+#.*$/, "", v); emit(v) }
+              else emit("<unparsed>")
+            }
+            break
+          }
+        }
+      }
+    }
+  '
+}
+
+# check_runner_sources: in this workflow and every workflow beside it,
+# whatever its triggers and whether or not it names CI_RACE_RUNNER, a job
+# runs on one GitHub-hosted label (quoted or not), on the fork-guarded line
+# (this workflow only), or on ${{ matrix.<key> }} where every value the matrix
+# gives <key> is a GitHub-hosted label. A list, a group/labels map, a folded
+# label, any other expression, self-hosted or a pool label fails. A job that
+# calls a reusable workflow calls one in this directory, which this check
+# reads too. The vars context is never indexed by a computed name. Together
+# with check_routed_jobs_fork_guarded this leaves no runs-on that reaches a
+# self-hosted runner without the fork guard.
 check_runner_sources() {
-  local file="$1" wf job block line value status=0
+  local file="$1" wf job block rec deeper line value key strategy shape v n status=0
   for wf in "$file" "$(dirname "$file")"/*.yml "$(dirname "$file")"/*.yaml; do
     if [ ! -f "$wf" ] || { [ "$wf" != "$file" ] && [ "$wf" -ef "$file" ]; }; then
       continue
@@ -772,25 +873,76 @@ check_runner_sources() {
       printf 'workflow %s indexes the vars context by a computed name\n' "$wf" >&2
       status=1
     fi
+    shape="$(workflow_shape_errors "$wf")"
+    if [ -n "$shape" ]; then
+      printf 'workflow %s has a shape the runner check cannot read:\n%s\n' "$wf" "$shape" >&2
+      status=1
+    fi
     while IFS= read -r job; do
       block="$(job_block "$wf" "$job")"
       while IFS= read -r line; do
-        value="$(sed -E 's/^[[:space:]]*runs-on:[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
-        if [ "$wf" = "$file" ] && [ "$line" = "$routed_runs_on" ]; then
+        value="$(sed -E 's/^    uses:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/' <<<"$line")"
+        if [[ "$value" =~ ^\./\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)$ ]] && [ -f "$(dirname "$wf")/${BASH_REMATCH[1]}" ]; then
           continue
-        elif [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        fi
+        printf 'job "%s" in %s calls workflow "%s": only a workflow beside it, which this check reads, may be called\n' "$job" "$wf" "$value" >&2
+        status=1
+      done < <(grep -E '^    uses:' <<<"$block")
+      while IFS= read -r rec; do
+        deeper="${rec%%$'\t'*}"
+        line="${rec#*$'\t'}"
+        if [ "$wf" = "$file" ] && [ "$line" = "$routed_runs_on" ] && [ "$deeper" = 0 ]; then
           continue
-        elif [[ "$value" =~ ^\$\{\{\ matrix\.[A-Za-z0-9_-]+\ \}\}$ ]]; then
+        fi
+        value="$(sed -E 's/^[[:space:]]*runs-on:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//' <<<"$line")"
+        if [ "$deeper" = 1 ] || [ -z "$value" ]; then
+          printf 'job "%s" in %s continues runs-on on the next lines (a list, a group/labels map or a folded label): only one hosted label on the runs-on line is allowed\n' "$job" "$wf" >&2
+          status=1
+        elif [[ "$value" =~ ^\$\{\{\ matrix\.([A-Za-z0-9_-]+)\ \}\}$ ]]; then
+          key="${BASH_REMATCH[1]}"
+          strategy="$(awk '/^    strategy:/ { in_s=1; print; next } in_s && /^    [^[:space:]]/ { in_s=0 } in_s { print }' <<<"$block" | grep -vE '^[[:space:]]*#' || true)"
           # shellcheck disable=SC2016
-          if awk '/^    strategy:/ { in_s=1; next } in_s && /^    [^[:space:]]/ { in_s=0 } in_s { print }' <<<"$block" | grep -vE '^[[:space:]]*#' | grep -qF '${{'; then
+          if grep -qF '${{' <<<"$strategy"; then
             printf 'job "%s" in %s runs on a matrix value and its matrix holds an expression\n' "$job" "$wf" >&2
             status=1
+            continue
           fi
-        else
-          printf 'job "%s" in %s runs on "%s": only a literal label, the fork-guarded line or a literal matrix value is allowed\n' "$job" "$wf" "$value" >&2
+          if sed -E 's/[[:space:]]+#.*$//' <<<"$strategy" | grep -qE '<<|\\|(^|[[:space:],{}[])[&*!][^[:space:],{}[]|^[[:space:]]*(-[[:space:]]+)?\?([[:space:]]|$)'; then
+            printf 'job "%s" in %s runs on a matrix value and its strategy holds an anchor, alias, merge key, tag, escape or complex key\n' "$job" "$wf" >&2
+            status=1
+            continue
+          fi
+          n=0
+          while IFS= read -r v; do
+            n=$((n + 1))
+            if ! hosted_label "$v"; then
+              printf 'job "%s" in %s runs on matrix.%s and the matrix gives it "%s": only GitHub-hosted labels (ubuntu-*, macos-*, windows-*) are allowed\n' "$job" "$wf" "$key" "$v" >&2
+              status=1
+            fi
+          done < <(matrix_values "$key" <<<"$strategy")
+          if [ "$n" = 0 ]; then
+            printf 'job "%s" in %s runs on matrix.%s and its strategy gives that key no value this check can read\n' "$job" "$wf" "$key" >&2
+            status=1
+          fi
+        elif ! hosted_label "$value"; then
+          printf 'job "%s" in %s runs on "%s": only one GitHub-hosted label (ubuntu-*, macos-*, windows-*), the fork-guarded line or a matrix of hosted labels is allowed\n' "$job" "$wf" "$value" >&2
           status=1
         fi
-      done < <(grep -E '^[[:space:]]+runs-on:' <<<"$block")
+      done < <(awk '
+        function ind(s) { match(s, /^ */); return RLENGTH }
+        { L[NR] = $0 }
+        END {
+          for (i = 1; i <= NR; i++) {
+            if (L[i] !~ /^[[:space:]]+runs-on:/) continue
+            d = 0
+            for (j = i + 1; j <= NR; j++) {
+              if (L[j] ~ /^[[:space:]]*(#|$)/) continue
+              d = ind(L[j]) > ind(L[i]); break
+            }
+            print d "\t" L[i]
+          }
+        }
+      ' <<<"$block")
     done < <(list_jobs "$wf")
   done
   return "$status"
@@ -1539,6 +1691,121 @@ cp "$workflow" "$side_dir/ci.yml"
 # shellcheck disable=SC2016
 printf 'jobs:\n  probe:\n    runs-on: ${{ vars[format('"'"'CI_{0}'"'"', '"'"'RACE_RUNNER'"'"')] }}\n' > "$side_dir/side.yml"
 assert_check_fails 'routed a job of another workflow file through a computed vars index' check_runner_sources "$side_dir/ci.yml"
+
+# (c8) the review r3 shapes: a sibling pull_request workflow that never names
+# CI_RACE_RUNNER and reaches a self-hosted runner through a literal label, a
+# literal matrix value, or any other runs-on form. Each must fail
+# check_runner_sources on its own; the hosted shapes after them must pass.
+side_n=0
+side_workflow() {
+  side_n=$((side_n + 1))
+  side_wf_dir="$tmpdir/side-runner-$side_n"
+  mkdir -p "$side_wf_dir"
+  cp "$workflow" "$side_wf_dir/ci.yml"
+  printf '%s\n' "$1" > "$side_wf_dir/unsafe-pool.yml"
+}
+assert_side_fails() {
+  side_workflow "$2"
+  assert_check_fails "$1" check_runner_sources "$side_wf_dir/ci.yml"
+}
+pr_head=$'"on":\n  pull_request:\njobs:\n  probe:\n'
+pr_steps=$'    steps:\n      - run: true'
+assert_side_fails 'ran a pull_request job on the literal self-hosted label' "${pr_head}    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'ran a pull_request job on a literal matrix value [self-hosted]' "${pr_head}    strategy:
+      matrix:
+        runner: [self-hosted]
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a pull_request_target job on the self-hosted label' "\"on\":
+  pull_request_target:
+jobs:
+  probe:
+    runs-on: self-hosted
+$pr_steps"
+assert_side_fails 'ran a job on a quoted self-hosted label' "${pr_head}    runs-on: 'self-hosted'
+$pr_steps"
+assert_side_fails 'ran a job on an ARC pool label' "${pr_head}    runs-on: \"oci-arc-runners\"
+$pr_steps"
+assert_side_fails 'ran a job on a label that only starts like a hosted one' "${pr_head}    runs-on: ubuntu-latest-arc
+$pr_steps"
+assert_side_fails 'ran a job on a flow list of labels' "${pr_head}    runs-on: [ubuntu-latest, self-hosted]
+$pr_steps"
+assert_side_fails 'ran a job on a block list of labels' "${pr_head}    runs-on:
+      - self-hosted
+$pr_steps"
+assert_side_fails 'ran a job on a runner group map' "${pr_head}    runs-on:
+      group: arc
+$pr_steps"
+assert_side_fails 'ran a job on a flow runner group map' "${pr_head}    runs-on: {group: arc}
+$pr_steps"
+assert_side_fails 'ran a job on a folded label' "${pr_head}    runs-on: >-
+      self-hosted
+$pr_steps"
+assert_side_fails 'ran a job on an expression with a literal self-hosted branch' "${pr_head}    runs-on: \${{ github.event_name == 'push' && 'self-hosted' || 'ubuntu-latest' }}
+$pr_steps"
+assert_side_fails 'ran a job on an alias' "${pr_head}    runs-on: *pool
+$pr_steps"
+assert_side_fails 'ran a job on a matrix block list that holds self-hosted' "${pr_head}    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - 'self-hosted'
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix include flow entry that holds self-hosted' "${pr_head}    strategy:
+      matrix:
+        include:
+          - {leg: a, runner: ubuntu-24.04}
+          - {leg: b, \"runner\": self-hosted}
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix include block entry that holds self-hosted' "${pr_head}    strategy:
+      matrix:
+        include:
+          - leg: a
+            runner: self-hosted
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix key the strategy never sets' "${pr_head}    strategy:
+      matrix:
+        leg: [a]
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'ran a job on a matrix entry with an escaped key' "${pr_head}    strategy:
+      matrix:
+        runner: [ubuntu-latest]
+        include:
+          - {\"runn\\u0065r\": self-hosted}
+    runs-on: \${{ matrix.runner }}
+$pr_steps"
+assert_side_fails 'called a reusable workflow of another repository' "${pr_head}    uses: some-org/some-repo/.github/workflows/pool.yml@main"
+assert_side_fails 'wrote a job as a flow map' "${pr_head%  probe:*}  probe: {runs-on: self-hosted, steps: [{run: 'true'}]}"
+assert_side_fails 'wrote the runs-on key with an escape' "${pr_head}    \"runs\\u002Don\": self-hosted
+$pr_steps"
+assert_side_fails 'put the fork-guarded line in another workflow' "${pr_head}${routed_runs_on}
+$pr_steps"
+side_workflow "${pr_head}    runs-on: ubuntu-latest # hosted
+$pr_steps
+  quoted:
+    runs-on: \"ubuntu-24.04\"
+$pr_steps
+  matrixed:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, 'ubuntu-24.04-arm']
+        include:
+          - {leg: a, runner: macos-15}
+          - leg: b
+            runner: windows-2025
+    runs-on: \${{ matrix.runner }}
+$pr_steps
+  called:
+    uses: ./.github/workflows/ci.yml"
+if ! check_runner_sources "$side_wf_dir/ci.yml"; then
+  printf 'POSITIVE CONTROL FAILED: check_runner_sources rejected hosted labels, a hosted matrix and a local reusable workflow\n' >&2
+  exit 1
+fi
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
