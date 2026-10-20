@@ -657,21 +657,31 @@ check_pin_binds_checkout_ref() {
 # variable, with the documented `vars.X || 'default'` fallback form, never a
 # bare literal.
 check_race_runner_uses_variable() {
+  # Every race-family job reads the CI_RACE_RUNNER variable with a hosted
+  # fallback, except the legs measured over budget on the self-hosted pool,
+  # which are pinned to ubuntu-latest.
   local file="$1" job status=0 block
-  for job in race race-devhealthschema; do
+  local pinned=" race-devhealthfacts race-devhealthfacts-heavy race-devhealthsource-heavy "
+  for job in race race-devhealthschema race-devhealthfacts race-devhealthfacts-heavy race-devhealthsource-heavy; do
+    [ -n "$(job_block "$file" "$job")" ] || { printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2; status=1; }
+  done
+  while IFS= read -r job; do
+    case "$job" in race|race-*) ;; *) continue ;; esac
     block="$(job_block "$file" "$job")"
-    if [ -z "$block" ]; then
-      printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2
-      status=1
+    if [[ "$pinned" == *" $job "* ]]; then
+      if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block" || grep -qE '^ +runs-on:.*CI_RACE_RUNNER' <<<"$block"; then
+        printf 'job "%s" must stay on ubuntu-latest: it exceeds its budget on the self-hosted pool\n' "$job" >&2
+        status=1
+      fi
       continue
     fi
     # shellcheck disable=SC2016
-    if ! grep -qF 'runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
+    if ! grep -qxF '    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
       printf 'job "%s" does not set runs-on from the CI_RACE_RUNNER variable with a '"'"'ubuntu-latest'"'"' fallback -- it would either hardcode a label or silently drop the fallback\n' \
         "$job" >&2
       status=1
     fi
-  done
+  done < <(list_jobs "$file")
   return "$status"
 }
 
@@ -707,12 +717,21 @@ check_first_stage_runner_uses_variable() {
 # instead of waiting on it. Checked generically over every job, not a hand
 # list of job names, so a future job with this env and no needs is caught
 # the same way this one was.
+# workflow_sets_testcontainers_prefix succeeds when the workflow's own
+# top-level keys (outside jobs:) name the testcontainers mirror prefix outside
+# a whole-line comment: a workflow-level env reaches every job.
+workflow_sets_testcontainers_prefix() {
+  awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^[^[:space:]#]/ { in_jobs=0 } !in_jobs { print }' "$1" \
+    | sed '/^[[:space:]]*#/d' | grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX'
+}
+
 check_testcontainers_needs_mirror_preflight() {
-  local file="$1" job block status=0
+  local file="$1" job block status=0 inherited=no
+  workflow_sets_testcontainers_prefix "$file" && inherited=yes
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
-    grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' <<<"$block" || continue
+    [ "$inherited" = yes ] || grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' <<<"$block" || continue
     if ! grep -qE '^ {4}needs: *mirror-preflight *$' <<<"$block" \
        && ! grep -qE '^ {6}- *mirror-preflight *$' <<<"$block"; then
       printf 'job "%s" sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX but does not declare "needs: mirror-preflight" -- it could start and pull a mirrored image before mirror-preflight confirms every mirrored image is resolvable\n' \
@@ -727,18 +746,26 @@ check_testcontainers_session_reap() {
   # A job that starts testcontainers runs with the ryuk reaper off and its own
   # session id, and removes that session's containers by id in a final
   # always() step (scripts/ci/reap-testcontainers-session.sh).
-  local file="$1" job block status=0
+  local file="$1" job block status=0 inherited=no
+  workflow_sets_testcontainers_prefix "$file" && inherited=yes
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
-    grep -qE '^ {6}TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:' <<<"$block" || continue
-    if ! grep -qE "^ {6}TESTCONTAINERS_RYUK_DISABLED: 'true'$" <<<"$block"; then
-      printf 'job "%s" starts testcontainers with the ryuk reaper on\n' "$job" >&2
+    # Any spelling outside a whole-line comment counts: a block or flow
+    # mapping, a quoted key, a GITHUB_ENV write, or a workflow-level env that
+    # every job inherits.
+    [ "$inherited" = yes ] || sed '/^[[:space:]]*#/d' <<<"$block" | grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' || continue
+    if grep -qE '^ {4}services:' <<<"$block"; then
+      printf 'job "%s" starts testcontainers and declares service containers; the post-reap census fails on any container it did not reap\n' "$job" >&2
+      status=1
+    fi
+    if ! grep -qxF "      TESTCONTAINERS_RYUK_DISABLED: 'true'" <<<"$block"; then
+      printf 'job "%s" starts testcontainers without a job-level TESTCONTAINERS_RYUK_DISABLED: '"'"'true'"'"' (the reap step reads the job env)\n' "$job" >&2
       status=1
     fi
     # shellcheck disable=SC2016
-    if ! grep -qF 'TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}' <<<"$block"; then
-      printf 'job "%s" has no per-job TESTCONTAINERS_SESSION_ID\n' "$job" >&2
+    if ! grep -qxF '      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}' <<<"$block"; then
+      printf 'job "%s" has no job-level TESTCONTAINERS_SESSION_ID (the reap step reads the job env)\n' "$job" >&2
       status=1
     fi
     local last
@@ -1221,6 +1248,103 @@ tc_reap_dropped="$tmpdir/tc-reap-dropped.yml"
 awk '/Remove this job.s testcontainers by session id/ && !done { skip=3; done=1 } skip > 0 { skip--; next } { print }' "$workflow" > "$tc_reap_dropped"
 cmp -s "$workflow" "$tc_reap_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_dropped did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'dropped the testcontainers reap step from one job' check_testcontainers_session_reap "$tc_reap_dropped"
+
+# (c4) the race-runner pinning: a pinned heavy leg back on the variable, and
+# another race leg pinned to a hosted label.
+pinned_routed="$tmpdir/pinned-routed.yml"
+awk '
+  /^  race-devhealthfacts-heavy:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthfacts-heavy:$/ { in_job=0 }
+  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; next }
+  { print }
+' "$workflow" > "$pinned_routed"
+cmp -s "$workflow" "$pinned_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: pinned_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a pinned heavy race leg back through CI_RACE_RUNNER' check_race_runner_uses_variable "$pinned_routed"
+other_pinned="$tmpdir/other-pinned.yml"
+awk '
+  /^  race-factoracle:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
+  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  { print }
+' "$workflow" > "$other_pinned"
+cmp -s "$workflow" "$other_pinned" && { printf 'NEGATIVE CONTROL SETUP FAILED: other_pinned did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'pinned a race leg that fits the pool to ubuntu-latest' check_race_runner_uses_variable "$other_pinned"
+# (c5) a testcontainers job whose image prefix is set in a step-level env
+# and that carries no ryuk override, session id or reap step.
+step_env_tc="$tmpdir/step-env-tc.yml"
+cat "$workflow" > "$step_env_tc"
+cat >> "$step_env_tc" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        env:
+          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/example
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job with the prefix in a step-level env and no reap' check_testcontainers_session_reap "$step_env_tc"
+
+# (c7) the review r1 shapes: a fitting race leg hardcoded hosted with the
+# expected expression left in a comment; a quoted step-level prefix with no
+# reap; the session id only in a step env; a service container beside the
+# census.
+comment_routed="$tmpdir/comment-routed.yml"
+awk '
+  /^  race-factoracle:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
+  in_job && /^    runs-on: / { print "    # runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; print "    runs-on: ubuntu-latest"; next }
+  { print }
+' "$workflow" > "$comment_routed"
+cmp -s "$workflow" "$comment_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: comment_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'hardcoded a fitting race leg hosted and left the routed form in a comment' check_race_runner_uses_variable "$comment_routed"
+quoted_step_env="$tmpdir/quoted-step-env.yml"
+cat "$workflow" > "$quoted_step_env"
+cat >> "$quoted_step_env" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        env:
+          "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX": ghcr.io/example
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job with a quoted step-level prefix and no reap' check_testcontainers_session_reap "$quoted_step_env"
+flow_env="$tmpdir/flow-env.yml"
+cat "$workflow" > "$flow_env"
+cat >> "$flow_env" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    env: { TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/example }
+    steps:
+      - name: probe
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job with a flow-style env mapping and no reap' check_testcontainers_session_reap "$flow_env"
+env_file_prefix="$tmpdir/env-file-prefix.yml"
+cat "$workflow" > "$env_file_prefix"
+cat >> "$env_file_prefix" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: export the mirror prefix
+        run: echo "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=ghcr.io/example" >> "$GITHUB_ENV"
+      - name: probe
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job that sets the prefix through GITHUB_ENV and no reap' check_testcontainers_session_reap "$env_file_prefix"
+workflow_env_prefix="$tmpdir/workflow-env-prefix.yml"
+awk '!done && /^env:$/ { print; print "  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/example"; done=1; next } { print }' "$workflow" > "$workflow_env_prefix"
+cmp -s "$workflow" "$workflow_env_prefix" && { printf 'NEGATIVE CONTROL SETUP FAILED: workflow_env_prefix did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'set the testcontainers prefix in the workflow-level env, which every job inherits' check_testcontainers_session_reap "$workflow_env_prefix"
+assert_check_fails 'set the testcontainers prefix in the workflow-level env, which every job inherits' check_testcontainers_needs_mirror_preflight "$workflow_env_prefix"
+step_session="$tmpdir/step-session.yml"
+awk -v line="      TESTCONTAINERS_SESSION_ID: ci-\${{ github.run_id }}-\${{ github.run_attempt }}-\${{ github.job }}-\${{ strategy.job-index }}" '!done && $0 == line { sub(/^      /, "          "); done=1 } { print }' "$workflow" > "$step_session"
+cmp -s "$workflow" "$step_session" && { printf 'NEGATIVE CONTROL SETUP FAILED: step_session did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'moved a job session id into a step env' check_testcontainers_session_reap "$step_session"
+service_beside="$tmpdir/service-beside.yml"
+awk '!done && /^  race:$/ { print; print "    services:"; print "      redis:"; print "        image: redis"; done=1; next } { print }' "$workflow" > "$service_beside"
+cmp -s "$workflow" "$service_beside" && { printf 'NEGATIVE CONTROL SETUP FAILED: service_beside did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'declared a service container in a job with the post-reap census' check_testcontainers_session_reap "$service_beside"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
