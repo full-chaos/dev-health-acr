@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -48,25 +49,24 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(rel, ".go") {
+		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, paritytestDir+"/") {
 			return nil
 		}
 		source, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
+		if !mentionsPlatformModelPathName(source) {
+			return nil
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), rel, source, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-		isTest := strings.HasSuffix(rel, "_test.go")
 		for _, spec := range file.Imports {
-			if importPath, _ := strconv.Unquote(spec.Path.Value); strings.HasSuffix(importPath, "/"+paritytestDir) && !isTest {
+			if importPath, _ := strconv.Unquote(spec.Path.Value); strings.HasSuffix(importPath, "/"+paritytestDir) {
 				sites.paritytestImporters = append(sites.paritytestImporters, rel)
 			}
-		}
-		if isTest || strings.HasPrefix(rel, paritytestDir+"/") {
-			return nil
 		}
 		inResolverPackage := strings.HasPrefix(rel, "internal/contextfabric/modelruntimeresolver/")
 		inContextFabric := strings.HasPrefix(rel, "internal/contextfabric/")
@@ -109,6 +109,22 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 		t.Fatal(err)
 	}
 	return sites
+}
+
+// platformModelPathNames is every name a site needs in its text to be found:
+// a file with none of them cannot hold a site, so it is not parsed.
+var platformModelPathNames = [][]byte{
+	[]byte("modelruntimeresolver"), []byte("NewEngine"), []byte("Investigate"),
+	[]byte("InterpretQuestion"), []byte("SynthesizeAnswer"), []byte("PhraseStructureOffers"), []byte(paritytestDir),
+}
+
+func mentionsPlatformModelPathName(source []byte) bool {
+	for _, name := range platformModelPathNames {
+		if bytes.Contains(source, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSelector(expr ast.Expr, pkg, name string) bool {
