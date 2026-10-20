@@ -126,6 +126,11 @@ func runStatusFilterTupleCensus(t *testing.T, frame QuestionFrame, census WorkIt
 
 func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest) statusFilterRun {
 	t.Helper()
+	return runTupleFilterCaseWithClass(t, frame, census, investigation, "")
+}
+
+func runTupleFilterCaseWithClass(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest, windowClass WindowClass) statusFilterRun {
+	t.Helper()
 	population := census.AuthorizedPopulation
 	var run statusFilterRun
 	frame = ValidateFrame(frame, nil, "").Frame
@@ -136,7 +141,7 @@ func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMember
 	gate, _ := NewWorkItemMembershipGate(1, 0)
 	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent}), WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"}}
 	engine, err := NewEngine(EngineDependencies{
-		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}}}, outcome: outcome},
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}}, WindowClass: windowClass}, outcome: outcome},
 		Graph:       run.graph,
 		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
 			return true, ""

@@ -291,3 +291,35 @@ func TestCalendarWindow_AComparisonKeepsTheBoundsTheBinderFroze(t *testing.T) {
 		t.Fatalf("period = %+v, want the frozen %v..%v, not the interpreter range", period, frozenStart, frozenEnd)
 	}
 }
+
+func TestWorkItemWindowBasisCommitsThePeriodANamedWhenClarificationIsDeclined(t *testing.T) {
+	t.Parallel()
+	question := "Which work items in Project Alpha were created this month?"
+	canon := requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans(question)}
+	if b := deriveWorkItemTupleWindowBasisFor(question, canon, false, true); !b.Committed || b.Role != MemberTimeRoleCreated {
+		t.Fatalf("declined clarification: basis = %+v, want committed on the created field", b)
+	}
+	if b := deriveWorkItemTupleWindowBasisFor(question, canon, false, false); b.Committed {
+		t.Fatalf("clarification allowed: basis = %+v, want unchanged (not committed)", b)
+	}
+	asOf := "Which work items were created as of the end of this month?"
+	if b := deriveWorkItemTupleWindowBasisFor(asOf, requestWindowCanonicalization{BinderProposal: ProposeWindowFromSpans(asOf)}, false, true); b.Committed {
+		t.Fatalf("point in time: basis = %+v, want not committed", b)
+	}
+}
+
+func TestWorkItemPeriodQuestionIsAnsweredAgainstTheInferredWindowWhenClarificationIsDeclined(t *testing.T) {
+	census := WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}
+	declined := statedPeriodRequest("Which work items in Project Alpha were created this month?")
+	declined.Options.AllowClarification = false
+	run := runTupleFilterCaseWithClass(t, periodTupleFrame(), census, declined, WindowClassTrendAssessment)
+	if run.invokedErr != nil || run.result.Status == InvestigationNoMatch || run.reads != 1 {
+		t.Fatalf("declined: err=%v status=%q membership reads=%d lim=%q adm=%+v win=%+v", run.invokedErr, run.result.Status, run.reads, run.result.Limitations, run.admissions, run.result.EffectiveEvidenceWindow)
+	}
+	control := statedPeriodRequest("Which work items in Project Alpha were created in the last 30 days?")
+	control.Options.AllowClarification = false
+	run = runTupleFilterCaseWithClass(t, periodTupleFrame(), census, control, WindowClassTrendAssessment)
+	if run.invokedErr != nil || run.result.Status == InvestigationNoMatch || run.reads != 1 {
+		t.Fatalf("stated trailing control: err=%v status=%q membership reads=%d, want unchanged", run.invokedErr, run.result.Status, run.reads)
+	}
+}
