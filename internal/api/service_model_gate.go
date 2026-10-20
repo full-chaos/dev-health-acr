@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -77,7 +78,7 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		return "", false, entitlements.ErrOrganizationUnknown
 	}
 	if featureErr != nil {
-		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
+		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "reason", entitlements.RejectionReason(featureErr))
 	}
 	callerModel := request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient
 	state, err := a.orgOwnModel(ctx, principal)
@@ -93,7 +94,7 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
 		case err != nil:
-			return "", false, errServiceModelEntitlementUnavailable
+			return "", false, fmt.Errorf("%w: %w", errServiceModelEntitlementUnavailable, err)
 		case !on:
 			return serviceModelBasisAIFeaturesTurnedOff, false, nil
 		default:
@@ -104,7 +105,7 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	case callerModel:
 		return serviceModelBasisClientModel, false, nil
 	case featureErr != nil:
-		return "", false, errServiceModelEntitlementUnavailable
+		return "", false, fmt.Errorf("%w: %w", errServiceModelEntitlementUnavailable, featureErr)
 	default:
 		return serviceModelBasisRefused, false, nil
 	}
@@ -147,7 +148,12 @@ func (a *App) serviceModelOn(ctx context.Context, principal storage.Principal) (
 // missingPlatformModelGrant names the flag a refused organization lacks, for
 // the audit row: acr_service_model first, then platform_model_fallback.
 func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.Principal) string {
-	if on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement); err == nil && on {
+	on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+	if err != nil {
+		a.logger.WarnContext(ctx, "context fabric service model audit label unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "reason", entitlements.RejectionReason(err))
+		return serviceModelEntitlement
+	}
+	if on {
 		return platformModelFallbackEntitlement
 	}
 	return serviceModelEntitlement
@@ -160,6 +166,7 @@ func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.P
 // still answers the typed refusal or unavailability.
 func (a *App) serviceModelListable(ctx context.Context, principal storage.Principal) bool {
 	listed, reason := true, "granted"
+	var entitlementReason string
 	state, ownErr := a.orgOwnModel(ctx, principal)
 	switch {
 	case ownErr != nil:
@@ -172,7 +179,7 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
 		case err != nil:
-			reason = "entitlement_unreadable"
+			reason, entitlementReason = "entitlement_unreadable", entitlements.RejectionReason(err)
 		case !on:
 			listed, reason = false, "ai_features_turned_off"
 		default:
@@ -180,12 +187,16 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 		}
 	default:
 		if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
-			reason = "entitlement_unreadable"
+			reason, entitlementReason = "entitlement_unreadable", entitlements.RejectionReason(err)
 		} else if !granted {
 			listed, reason = false, "no_service_model"
 		}
 	}
-	a.logger.InfoContext(ctx, "context fabric service model listing decision", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "investigate_question_listed", listed, "reason", reason)
+	attrs := []any{"request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "investigate_question_listed", listed, "reason", reason}
+	if entitlementReason != "" {
+		attrs = append(attrs, "entitlement_reason", entitlementReason)
+	}
+	a.logger.InfoContext(ctx, "context fabric service model listing decision", attrs...)
 	return listed
 }
 
@@ -225,7 +236,7 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 		a.writeEntitlementLookupError(w, r, err)
 		return nil, false
 	case errors.Is(err, errServiceModelEntitlementUnavailable):
-		a.logger.WarnContext(ctx, "context fabric service model decision unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "dependency", "entitlement")
+		a.logger.WarnContext(ctx, "context fabric service model decision unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "dependency", "entitlement", "reason", entitlements.RejectionReason(err))
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)
 		return nil, false
 	case err != nil:

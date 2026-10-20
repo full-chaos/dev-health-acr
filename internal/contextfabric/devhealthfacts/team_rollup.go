@@ -368,6 +368,7 @@ func repoKeysOf(owned map[string][]teamOwnedRepo) []string {
 // (unbounded), else the platform default trailing width.
 type rollupWindow struct {
 	hasStart, hasEnd bool
+	endExclusive     bool
 	start, end       time.Time
 	basis            string
 }
@@ -383,10 +384,11 @@ func resolveRollupWindow(bound factTimeBound, evidence *contractsv1.ContextFabri
 	case evidence != nil && evidence.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime:
 		return rollupWindow{basis: "all_time"}
 	case evidence != nil && evidence.Start != nil && evidence.End != nil:
-		return rollupWindow{hasStart: true, hasEnd: true, start: evidence.Start.UTC(), end: evidence.End.UTC(), basis: "evidence_window"}
+		return rollupWindow{hasStart: true, hasEnd: true, endExclusive: true, start: evidence.Start.UTC(), end: evidence.End.UTC(), basis: "evidence_window"}
 	default:
 		now = now.UTC()
-		return rollupWindow{hasStart: true, hasEnd: true, start: now.Add(-metricsSeriesDefaultWindow), end: now, basis: "default_trailing"}
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		return rollupWindow{hasStart: true, hasEnd: true, endExclusive: true, start: today.Add(-metricsSeriesDefaultWindow), end: today, basis: "default_trailing"}
 	}
 }
 
@@ -402,6 +404,13 @@ func (w rollupWindow) bindings() []readers.Binding {
 	return out
 }
 
+func (w rollupWindow) endOp() string {
+	if w.endExclusive {
+		return " < "
+	}
+	return " <= "
+}
+
 // dayExpr is true when a Date column falls inside the window, at day grain.
 func (w rollupWindow) dayExpr(column string) string {
 	parts := []string{"1"}
@@ -409,7 +418,7 @@ func (w rollupWindow) dayExpr(column string) string {
 		parts = append(parts, column+" >= toDate({"+rollupStartParam+":DateTime64(6,'UTC')})")
 	}
 	if w.hasEnd {
-		parts = append(parts, column+" <= toDate({"+rollupEndParam+":DateTime64(6,'UTC')})")
+		parts = append(parts, column+w.endOp()+"toDate({"+rollupEndParam+":DateTime64(6,'UTC')})")
 	}
 	return "(" + strings.Join(parts, " AND ") + ")"
 }
@@ -421,17 +430,18 @@ func (w rollupWindow) timestampExpr(column string) string {
 		parts = append(parts, column+" >= {"+rollupStartParam+":DateTime64(6,'UTC')}")
 	}
 	if w.hasEnd {
-		parts = append(parts, column+" <= {"+rollupEndParam+":DateTime64(6,'UTC')}")
+		parts = append(parts, column+w.endOp()+"{"+rollupEndParam+":DateTime64(6,'UTC')}")
 	}
 	return "(" + strings.Join(parts, " AND ") + ")"
 }
 
-// upperExpr is true when a DateTime64 column is at or before the window end.
+// upperExpr is true when a DateTime64 column is at or before the window end,
+// or before it when the window end is exclusive.
 func (w rollupWindow) upperExpr(column string) string {
 	if !w.hasEnd {
 		return "1"
 	}
-	return "(" + column + " <= {" + rollupEndParam + ":DateTime64(6,'UTC')})"
+	return "(" + column + w.endOp() + "{" + rollupEndParam + ":DateTime64(6,'UTC')})"
 }
 
 func (w rollupWindow) startValue() (contextfabric.FactValue, bool) {

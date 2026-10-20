@@ -266,7 +266,7 @@ func TestCHAOS6557_OtherSurfacesKeepTheAxisConflictVeto(t *testing.T) {
 }
 
 // chris 2026-09-25: "in the last month" is a TRAILING window (30 days back
-// from now), even when the interpreter samples it as the previous calendar
+// from today 00:00 UTC, excluding today), even when the interpreter samples it as the previous calendar
 // month. The committed window is the trailing one -- exact bounds asserted --
 // executed on the current axis, and reported as question_stated.
 func TestCHAOS6557_TrailingPhraseCommitsTheTrailingBoundsOnMCP(t *testing.T) {
@@ -278,10 +278,10 @@ func TestCHAOS6557_TrailingPhraseCommitsTheTrailingBoundsOnMCP(t *testing.T) {
 		run := runExplicitWindowCaseWith(t, "mcp", question, nil, driftedInterpretation(contractsv1.ContextFabricTemporalRange))
 		assertCommittedWindow(t, run, RelativeWindowTrailing30D)
 		assertResolvedOnCurrentAxis(t, run)
-		now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+		end := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 		window := run.result.EffectiveEvidenceWindow
-		if !window.End.Equal(now) || !window.Start.Equal(now.AddDate(0, 0, -30)) {
-			t.Fatalf("%q: window = %v..%v, want the trailing %v..%v", question, window.Start, window.End, now.AddDate(0, 0, -30), now)
+		if !window.End.Equal(end) || !window.Start.Equal(end.AddDate(0, 0, -30)) {
+			t.Fatalf("%q: window = %v..%v, want the trailing %v..%v", question, window.Start, window.End, end.AddDate(0, 0, -30), end)
 		}
 	}
 }
