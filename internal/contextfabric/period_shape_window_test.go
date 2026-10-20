@@ -153,7 +153,8 @@ var burdenComposite = []FactKind{FactFlow, FactHealth, FactIncidents, FactInvest
 func TestSeriesFrameWithAStatedPeriodReadsTheStatedRange(t *testing.T) {
 	day := 24 * time.Hour
 	now := suppliedRangeRigNow
-	start := now.Add(-30 * day)
+	end := now.Truncate(day)
+	start := end.Add(-30 * day)
 	week := now.Add(-7 * day)
 	for _, tc := range []struct {
 		name     string
@@ -162,15 +163,15 @@ func TestSeriesFrameWithAStatedPeriodReadsTheStatedRange(t *testing.T) {
 		conflict bool
 	}{
 		{"client, current axis as the prompt copies it", suppliedInterpretedPath, TimeContext{Axis: TemporalCurrent}, false},
-		{"client, a 30-day range", suppliedInterpretedPath, TimeContext{Axis: TemporalRange, Start: &start, End: &now}, false},
+		{"client, a 30-day range", suppliedInterpretedPath, TimeContext{Axis: TemporalRange, Start: &start, End: &end}, false},
 		{"client, a 7-day range against the stated 30 days", suppliedInterpretedPath, TimeContext{Axis: TemporalRange, Start: &week, End: &now}, true},
 		{"server interpreter, current axis", serverInterpretedPath, TimeContext{Axis: TemporalCurrent}, false},
 	} {
 		interpreted, frame := periodShapeInterpreted([]InvestigationGoal{GoalDescribeTrend}, TemporalIntentTimeSeries, []FactKind{FactFlow}, tc.time)
 		run := runPeriodShapeTurn(t, tc.path, seriesQuestion, interpreted, frame)
 		read := run.primaryFactTime(t)
-		if read.Axis != TemporalRange || !sameInstant(read.Start, start) || !sameInstant(read.End, now) {
-			t.Errorf("%s: fact read %s %v..%v, want the range axis over the stated 30 days %s..%s", tc.name, read.Axis, read.Start, read.End, start, now)
+		if read.Axis != TemporalRange || !sameInstant(read.Start, start) || !sameInstant(read.End, end) {
+			t.Errorf("%s: fact read %s %v..%v, want the range axis over the stated 30 days %s..%s", tc.name, read.Axis, read.Start, read.End, start, end)
 		}
 		if axis := run.result.Interpretation.TimeContext.Axis; axis != TemporalRange {
 			t.Errorf("%s: served axis %s, want range", tc.name, axis)
@@ -193,8 +194,9 @@ func TestSeriesFrameWithAStatedPeriodReadsTheStatedRange(t *testing.T) {
 func TestPeriodComparisonFrameReadsTheStatedPeriodAndNamesTheUnreadOne(t *testing.T) {
 	day := 24 * time.Hour
 	now := suppliedRangeRigNow
-	start := now.Add(-30 * day)
-	wantUnread := comparisonPeriodUnreadLimitation(start, now)
+	end := now.Truncate(day)
+	start := end.Add(-30 * day)
+	wantUnread := comparisonPeriodUnreadLimitation(start, end)
 	for _, tc := range []struct {
 		name     string
 		path     interpreterPath
@@ -202,16 +204,16 @@ func TestPeriodComparisonFrameReadsTheStatedPeriodAndNamesTheUnreadOne(t *testin
 		facts    []FactKind
 		time     TimeContext
 	}{
-		{"client range, the period read from the client's range", suppliedInterpretedPath, comparisonQuestion, burdenComposite, TimeContext{Axis: TemporalRange, Start: &start, End: &now}},
+		{"client range, the period read from the client's range", suppliedInterpretedPath, comparisonQuestion, burdenComposite, TimeContext{Axis: TemporalRange, Start: &start, End: &end}},
 		{"client current axis, the stated trailing phrase", suppliedInterpretedPath, measureComparisonQuestion, []FactKind{FactFlow}, TimeContext{Axis: TemporalCurrent}},
-		{"client range, the stated trailing phrase", suppliedInterpretedPath, measureComparisonQuestion, []FactKind{FactFlow}, TimeContext{Axis: TemporalRange, Start: &start, End: &now}},
+		{"client range, the stated trailing phrase", suppliedInterpretedPath, measureComparisonQuestion, []FactKind{FactFlow}, TimeContext{Axis: TemporalRange, Start: &start, End: &end}},
 		{"server interpreter, the stated trailing phrase", serverInterpretedPath, measureComparisonQuestion, []FactKind{FactFlow}, TimeContext{Axis: TemporalCurrent}},
 	} {
 		interpreted, frame := periodShapeInterpreted([]InvestigationGoal{GoalAssessState}, TemporalIntentPeriodComparison, tc.facts, tc.time)
 		run := runPeriodShapeTurn(t, tc.path, tc.question, interpreted, frame)
 		read := run.primaryFactTime(t)
-		if read.Axis != TemporalRange || !sameInstant(read.Start, start) || !sameInstant(read.End, now) {
-			t.Errorf("%s: fact read %s %v..%v, want the range axis over the stated period %s..%s", tc.name, read.Axis, read.Start, read.End, start, now)
+		if read.Axis != TemporalRange || !sameInstant(read.Start, start) || !sameInstant(read.End, end) {
+			t.Errorf("%s: fact read %s %v..%v, want the range axis over the stated period %s..%s", tc.name, read.Axis, read.Start, read.End, start, end)
 		}
 		if run.result.EffectiveEvidenceWindow != nil {
 			t.Errorf("%s: a comparison answer carries one current-state window %+v", tc.name, run.result.EffectiveEvidenceWindow)
@@ -238,11 +240,12 @@ func TestPeriodComparisonWithNoReadablePeriodKeepsTheWindowGate(t *testing.T) {
 func TestPeriodComparisonDisclosuresSurviveAFullLimitationList(t *testing.T) {
 	day := 24 * time.Hour
 	now := suppliedRangeRigNow
-	start := now.Add(-30 * day)
+	end := now.Truncate(day)
+	start := end.Add(-30 * day)
 	week := now.Add(-7 * day)
 	interpreted, frame := periodShapeInterpreted([]InvestigationGoal{GoalAssessState}, TemporalIntentPeriodComparison, []FactKind{FactFlow}, TimeContext{Axis: TemporalRange, Start: &week, End: &now})
 	run := runPeriodShapeTurnWith(t, suppliedInterpretedPath, measureComparisonQuestion, interpreted, frame, periodShapeTurnOptions{caveats: contractsv1.ContextFabricLimitationsMaxCount})
-	if !limitationsContain(run.result.Limitations, comparisonPeriodUnreadLimitation(start, now)) || !limitationsContain(run.result.Limitations, "which is not the period the question states") {
+	if !limitationsContain(run.result.Limitations, comparisonPeriodUnreadLimitation(start, end)) || !limitationsContain(run.result.Limitations, "which is not the period the question states") {
 		t.Errorf("limitations %q, want the comparison and the range-conflict disclosures kept", run.result.Limitations)
 	}
 	if run.result.LimitationsDisplaced == 0 {

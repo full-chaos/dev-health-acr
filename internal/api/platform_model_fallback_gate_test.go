@@ -30,9 +30,10 @@ type opsStandIn struct {
 	// body, as an ops build without the field sends it.
 	fallback *bool
 	// llmConfig is "saved", "none" (404 + X-Org-Llm-Config: none),
-	// "gate_closed" (that 404 plus the byo_llm gate-closed reason header) or
+	// "gate_closed" (that 404 plus the byo_llm gate-closed reason header),
 	// "no_investigate" (that 404 plus the reason that the org's saved BYO
-	// keys are for other purposes only).
+	// keys are for other purposes only) or "turned_off" (that 404 plus the
+	// reason that an org admin turned the saved configuration off).
 	llmConfig string
 }
 
@@ -59,6 +60,11 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "no_investigate":
 			w.Header().Set("X-Org-Llm-Config", "none")
 			w.Header().Set("X-Org-Llm-Config-Reason", "byo_no_investigate_config")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+		case "turned_off":
+			w.Header().Set("X-Org-Llm-Config", "none")
+			w.Header().Set("X-Org-Llm-Config-Reason", "byo_llm_turned_off")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
 		case "scope_refused":

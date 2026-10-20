@@ -166,11 +166,11 @@ func TestCalendarWindow_BareLastQuarterAndYearCommitTheCalendarPeriodOnEverySamp
 // Control (pinned by #679): a trailing phrase commits trailing bounds on every sample.
 func TestCalendarWindow_TrailingPhraseStaysTrailingOnEverySample(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 	for i, result := range runFiveIdenticalCalls(t, "mcp", "Which repository carried the most operational/support work in the last month?") {
 		window := result.EffectiveEvidenceWindow
 		if result.Status == InvestigationClarificationRequired || window == nil || window.Provenance != WindowQuestionStated || window.RelativeID != RelativeWindowTrailing30D ||
-			!window.End.Equal(now) || !window.Start.Equal(now.AddDate(0, 0, -30)) {
+			!window.End.Equal(end) || !window.Start.Equal(end.AddDate(0, 0, -30)) {
 			t.Fatalf("call %d: status=%q window=%#v, want the trailing_30d window", i, result.Status, window)
 		}
 	}

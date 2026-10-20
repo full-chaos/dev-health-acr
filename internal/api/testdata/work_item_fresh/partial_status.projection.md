@@ -47,4 +47,4 @@
 > Members are the work items as of now; the period supplied with this request was not applied to the membership. Ask for work items created, completed or updated in that period to filter by one of those.
 > ```
 
-- Evidence window: 2026-06-16T12:00:00Z to 2026-09-14T12:00:00Z (question\_stated)
+- Evidence window: 2026-06-16T00:00:00Z to 2026-09-14T00:00:00Z (question\_stated)

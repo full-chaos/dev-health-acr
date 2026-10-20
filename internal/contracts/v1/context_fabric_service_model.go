@@ -26,3 +26,10 @@ const ContextFabricAIFeaturesTurnedOffReason = "ai_features_turned_off"
 // never used in its place; an organization admin saves an investigate-capable
 // key or turns investigations off.
 const ContextFabricNoInvestigateConfigReason = "byo_no_investigate_config"
+
+// ContextFabricOwnModelTurnedOffReason is details.reason on the 403
+// feature_not_enabled refusal of an investigation for an organization whose
+// admin turned its saved model configuration off (kept, not deleted) and that
+// does not hold platform_model_fallback. The organization has no usable own
+// model; an organization admin turns its own model back on.
+const ContextFabricOwnModelTurnedOffReason = "own_model_turned_off"

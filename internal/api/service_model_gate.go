@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -19,6 +20,7 @@ const (
 	ownModelGateClosedMessage        = "This organization's own model is saved but not enabled for its plan"
 	aiFeaturesTurnedOffMessage       = "ACR AI features are turned off for this organization"
 	noInvestigateConfigMessage       = "This organization's saved model keys are for other uses only; none is set for investigations"
+	ownModelTurnedOffMessage         = "This organization's own model is turned off by an organization admin"
 )
 
 // serviceModelBasis is why a turn may, or may not, use the deployment model.
@@ -31,6 +33,7 @@ const (
 	serviceModelBasisOwnModelGateClosed    serviceModelBasis = "own_model_gate_closed"
 	serviceModelBasisAIFeaturesTurnedOff   serviceModelBasis = "ai_features_turned_off"
 	serviceModelBasisNoInvestigateConfig   serviceModelBasis = "byo_no_investigate_config"
+	serviceModelBasisOwnModelTurnedOff     serviceModelBasis = "own_model_turned_off"
 	serviceModelBasisClientModel           serviceModelBasis = "client_model"
 	serviceModelBasisRefused               serviceModelBasis = "refused"
 )
@@ -48,6 +51,7 @@ const (
 	ownModelSaved
 	ownModelGateClosed
 	ownModelNoInvestigateConfig
+	ownModelTurnedOff
 )
 
 // serviceModelDecision decides which model an investigation may run on, for
@@ -62,6 +66,10 @@ const (
 //   - saved BYO keys for other purposes only (none resolves for
 //     investigations): a BYO org, refused with its own reason, whatever the
 //     flags; never the platform model;
+//   - a saved configuration an organization admin turned off: no usable own
+//     model. Refused as turned off when acr_service_model is OFF; the
+//     deployment model when the deployment is open or both flags are held;
+//     otherwise refused with its own reason, on the caller-model path too;
 //   - a saved organization model configuration: the organization's own model
 //     when acr_service_model (ops serves the effective value: the org's
 //     override, else ON for a saved configuration) is ON, with the deployment
@@ -77,7 +85,7 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		return "", false, entitlements.ErrOrganizationUnknown
 	}
 	if featureErr != nil {
-		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
+		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "reason", entitlements.RejectionReason(featureErr))
 	}
 	callerModel := request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient
 	state, err := a.orgOwnModel(ctx, principal)
@@ -89,11 +97,25 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		return serviceModelBasisOwnModelGateClosed, false, nil
 	case state == ownModelNoInvestigateConfig:
 		return serviceModelBasisNoInvestigateConfig, false, nil
-	case state == ownModelSaved:
+	case state == ownModelTurnedOff:
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
 		case err != nil:
 			return "", false, errServiceModelEntitlementUnavailable
+		case !on:
+			return serviceModelBasisAIFeaturesTurnedOff, false, nil
+		case granted:
+			return basis, true, nil
+		case featureErr != nil:
+			return "", false, errServiceModelEntitlementUnavailable
+		default:
+			return serviceModelBasisOwnModelTurnedOff, false, nil
+		}
+	case state == ownModelSaved:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			return "", false, fmt.Errorf("%w: %w", errServiceModelEntitlementUnavailable, err)
 		case !on:
 			return serviceModelBasisAIFeaturesTurnedOff, false, nil
 		default:
@@ -104,7 +126,7 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	case callerModel:
 		return serviceModelBasisClientModel, false, nil
 	case featureErr != nil:
-		return "", false, errServiceModelEntitlementUnavailable
+		return "", false, fmt.Errorf("%w: %w", errServiceModelEntitlementUnavailable, featureErr)
 	default:
 		return serviceModelBasisRefused, false, nil
 	}
@@ -147,7 +169,12 @@ func (a *App) serviceModelOn(ctx context.Context, principal storage.Principal) (
 // missingPlatformModelGrant names the flag a refused organization lacks, for
 // the audit row: acr_service_model first, then platform_model_fallback.
 func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.Principal) string {
-	if on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement); err == nil && on {
+	on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+	if err != nil {
+		a.logger.WarnContext(ctx, "context fabric service model audit label unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "reason", entitlements.RejectionReason(err))
+		return serviceModelEntitlement
+	}
+	if on {
 		return platformModelFallbackEntitlement
 	}
 	return serviceModelEntitlement
@@ -160,6 +187,7 @@ func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.P
 // still answers the typed refusal or unavailability.
 func (a *App) serviceModelListable(ctx context.Context, principal storage.Principal) bool {
 	listed, reason := true, "granted"
+	var entitlementReason string
 	state, ownErr := a.orgOwnModel(ctx, principal)
 	switch {
 	case ownErr != nil:
@@ -168,7 +196,7 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 		reason = "own_model_gate_closed"
 	case state == ownModelNoInvestigateConfig:
 		reason = "byo_no_investigate_config"
-	case state == ownModelSaved:
+	case state == ownModelTurnedOff:
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
 		case err != nil:
@@ -176,16 +204,34 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 		case !on:
 			listed, reason = false, "ai_features_turned_off"
 		default:
+			if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
+				reason = "entitlement_unreadable"
+			} else if !granted {
+				reason = "own_model_turned_off"
+			}
+		}
+	case state == ownModelSaved:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			reason, entitlementReason = "entitlement_unreadable", entitlements.RejectionReason(err)
+		case !on:
+			listed, reason = false, "ai_features_turned_off"
+		default:
 			reason = "own_model"
 		}
 	default:
 		if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
-			reason = "entitlement_unreadable"
+			reason, entitlementReason = "entitlement_unreadable", entitlements.RejectionReason(err)
 		} else if !granted {
 			listed, reason = false, "no_service_model"
 		}
 	}
-	a.logger.InfoContext(ctx, "context fabric service model listing decision", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "investigate_question_listed", listed, "reason", reason)
+	attrs := []any{"request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "investigate_question_listed", listed, "reason", reason}
+	if entitlementReason != "" {
+		attrs = append(attrs, "entitlement_reason", entitlementReason)
+	}
+	a.logger.InfoContext(ctx, "context fabric service model listing decision", attrs...)
 	return listed
 }
 
@@ -203,6 +249,8 @@ func (a *App) orgOwnModel(ctx context.Context, principal storage.Principal) (own
 		return ownModelGateClosed, nil
 	case errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig):
 		return ownModelNoInvestigateConfig, nil
+	case errors.Is(err, entitlements.ErrLLMConfigTurnedOff):
+		return ownModelTurnedOff, nil
 	case errors.Is(err, entitlements.ErrLLMConfigUnusable):
 		return ownModelSaved, nil
 	case err != nil:
@@ -225,7 +273,7 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 		a.writeEntitlementLookupError(w, r, err)
 		return nil, false
 	case errors.Is(err, errServiceModelEntitlementUnavailable):
-		a.logger.WarnContext(ctx, "context fabric service model decision unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "dependency", "entitlement")
+		a.logger.WarnContext(ctx, "context fabric service model decision unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "dependency", "entitlement", "reason", entitlements.RejectionReason(err))
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Entitlement service is temporarily unavailable", true, nil)
 		return nil, false
 	case err != nil:
@@ -246,6 +294,10 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	case serviceModelBasisNoInvestigateConfig:
 		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
 		writeError(w, r, http.StatusForbidden, "feature_not_enabled", noInvestigateConfigMessage, false, map[string]any{"reason": contractsv1.ContextFabricNoInvestigateConfigReason})
+		return nil, false
+	case serviceModelBasisOwnModelTurnedOff:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", ownModelTurnedOffMessage, false, map[string]any{"reason": contractsv1.ContextFabricOwnModelTurnedOffReason})
 		return nil, false
 	case serviceModelBasisAIFeaturesTurnedOff:
 		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", serviceModelEntitlement, "denied", nil)

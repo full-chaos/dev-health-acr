@@ -1302,7 +1302,11 @@ import (
 // provider carries one fixed limitation, and a reused answer states it exactly
 // when the fresh graph recheck proves the team gone. An answer saved under
 // v251 holds no such limitation for a team gone at its provider.
-const QueryVersion = "devhealthfacts.clickhouse.v252"
+//
+// v252 -> v253: a trailing window ends at 00:00 UTC of today, exclusive, and the
+// series read takes the days before its end, so today's partial day is not read.
+// An answer saved under v252 holds today's rows.
+const QueryVersion = "devhealthfacts.clickhouse.v253"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
