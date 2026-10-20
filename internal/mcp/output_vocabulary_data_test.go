@@ -280,6 +280,15 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			name:           "notes",
+			kind:           vocabAdditive,
+			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
+			sites:          []string{"read_relationships:notes.items"},
+			// schema: "team_removed", "team_status_unavailable"
+			goSet:      strs(contractsv1.TeamRemovedNote, contractsv1.TeamStatusUnavailableNote),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:  "status#4",
 			kind:  vocabFrozen,
 			why:   "state-machine",

@@ -31,8 +31,6 @@ var AllSchemaVersions = []string{
 	ContextFabricInvestigationResultSchemaV2,
 	ContextFabricAnswerProjectionSchema,
 	ContextFabricProjectionBatchSchema,
-	ContextFabricOrgModelConfigSchema,
-	ContextFabricOrgModelConfigWriteRequestSchema,
 	MCPContextForTaskRequestSchema,
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,

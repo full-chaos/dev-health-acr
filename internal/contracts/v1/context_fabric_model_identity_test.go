@@ -28,7 +28,7 @@ func TestContextFabricVersionSet_ModelIdentityOptional_LegacyPayloadValidates(t 
 // TestContextFabricVersionSet_ModelIdentityAcceptsFullWidthProviderModel is
 // the probe for Codex round-2 finding #8: model_identity is
 // "<provider>/<model>", and each half is independently bounded at 256 bytes
-// by modelprovider.Config and ContextFabricOrgModelConfig -- so the true
+// by modelprovider.Config and BYO org model config -- so the true
 // worst case a valid, already-billed model call can produce is
 // 256 + 1 + 256 = 513 bytes. validVersion's shared 256-byte bound (correct
 // for every OTHER VersionSet field) would reject that value even though it

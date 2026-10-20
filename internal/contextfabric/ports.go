@@ -1316,9 +1316,8 @@ type RebuildEpochSnapshotter interface {
 // investigation saved after the cutover captures the CURRENT (bumped)
 // epoch as its own invalidation_epoch, so it is unaffected going forward.
 // An operator who additionally wants to invalidate a SPECIFIC
-// organization at any later point (e.g. after a configuration change --
-// see internal/api/context_fabric_model_config_routes.go's PUT/DELETE
-// handlers, which already do this automatically on every write) can call
+// organization at any later point (e.g. after a configuration change in
+// the ops settings store, which acr does not observe) can call
 // ReuseInvalidator.InvalidateOrganizationReuse directly.
 //
 // Implementations MUST resolve the same organization-effective chain that
