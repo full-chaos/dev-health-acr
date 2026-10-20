@@ -335,6 +335,9 @@ func TestContextFabricInterpretationRejectionReasonVocabularyIsClosed(t *testing
 		ContextFabricInterpretationRejectionWindowClassInvalid,
 		ContextFabricInterpretationRejectionWindowConfidenceInvalid,
 		ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+		ContextFabricInterpretationRejectionOutputNotJSON,
+		ContextFabricInterpretationRejectionOutputSchemaViolation,
+		ContextFabricInterpretationRejectionOutputDecodeFailed,
 	}
 	for _, reason := range declared {
 		if !ValidContextFabricInterpretationRejectionReason(reason) {

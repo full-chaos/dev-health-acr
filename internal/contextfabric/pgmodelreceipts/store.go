@@ -90,14 +90,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 }
 
 // sanitizeError classifies a raw database error into the sentinel the
-// CONSUMING seam actually checks. Unlike pgmodelconfig (whose errors reach
-// internal/api/context_fabric_model_config_routes.go, which classifies on
-// storage.Err*), a ModelReceiptSink failure reaches
+// CONSUMING seam actually checks. A ModelReceiptSink failure reaches
 // RuntimeQuestionInterpreter/RuntimeAnswerSynthesizer
 // (internal/contextfabric/model_runtime.go) and from there
 // internal/api/context_fabric_routes.go's writeContextFabricError, which
 // classifies ONLY on contextfabric.Err*/context.*. Wrapping storage.ErrUnavailable
-// here (as pgmodelconfig does) would have been invisible to that classifier:
+// here would have been invisible to that classifier:
 // errors.Is(err, contextfabric.ErrUnavailable) is false for a
 // storage.ErrUnavailable-wrapped error, so a transient sink outage would
 // fall through to the route's generic 500 internal_error branch instead of

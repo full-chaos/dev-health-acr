@@ -158,6 +158,8 @@ func TestServiceModelTurnIsServedOnTheFeatureOwnModelOrOpenDeployment(t *testing
 		asked   int
 	}{
 		{name: "feature", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{}, basis: "entitlement", asked: 1},
+		{name: "feature and own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
+		{name: "open deployment and own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, open: true, basis: "own_model", asked: 0},
 		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
 		{name: "open deployment", grants: &serviceModelGrants{}, configs: ownModelConfigs{}, open: true, basis: "deployment_open", asked: 0},
 	} {
@@ -190,6 +192,7 @@ func TestServiceModelDecisionThatCannotBeMadeFailsClosedBeforeAnyModelCall(t *te
 	}{
 		{name: "entitlement service down and no own model", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{}, code: "upstream_unavailable"},
 		{name: "model configuration store down", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: errors.New("store down")}, code: "store_unavailable"},
+		{name: "service model granted and model configuration store down", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{err: errors.New("store down")}, code: "store_unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := gatedClientRouteRig(t, tc.grants, tc.configs)

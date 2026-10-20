@@ -300,7 +300,6 @@ var forbiddenImports = []string{
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime",
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider",
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver",
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgmodelconfigfake",
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelreceipts",
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider",
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache",

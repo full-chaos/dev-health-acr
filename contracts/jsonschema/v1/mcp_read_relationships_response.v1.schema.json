@@ -409,6 +409,18 @@
       },
       "description": "Relation kinds no source writes for this subject kind. Present only when the subject has such a kind. An empty edges list does not show that the relation is absent."
     },
+    "notes": {
+      "type": "array",
+      "items": {
+        "description": "A note about the root subject. Open vocabulary; documented values: team_removed (the provider proved the root team gone at its source; its edges are kept and may be out of date), team_status_unavailable (the removed-team check failed, so the root team was not checked; it says nothing about the team). A client must tolerate values it does not know.",
+        "type": "string",
+        "x-documented-values": [
+          "team_removed",
+          "team_status_unavailable"
+        ]
+      },
+      "description": "Notes about the root subject. Absent when there is none. Absence does not prove a team is live unless the read was a team read that completed the check."
+    },
     "consistency": {
       "const": "best_effort",
       "description": "Consistency of the read."

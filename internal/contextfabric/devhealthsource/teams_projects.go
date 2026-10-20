@@ -285,7 +285,11 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // relationship tombstone when its attribution stops qualifying (the row leaves
 // is_primary 1/2). A deactivated team still leaves its edges open (v20). Edges
 // that went stale before v22 are only cleared by the rebuild.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v22"
+//
+// v22 -> v23: a team the source proved gone at its provider (teams.gone_at)
+// carries a gone_at property, so a read of the team can flag it. Only the
+// rebuild gives the teams already projected the property.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v23"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -1508,7 +1512,7 @@ func teamsQuery(ledger *teamAuthorizationLedger) func(context.Context, contextpa
 
 func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, teamAuth *teamAuthorizationLedger) ([]candidate, bool, error) {
 	const rowKey = "tm.id"
-	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, []), ` + queryTeamsIngestExpr + `
+	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ifNull(toString(tm.gone_at), ''), ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, []), ` + queryTeamsIngestExpr + `
 FROM teams AS tm FINAL
 ` + ownedRepositoriesJoinSQL + `
 WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsIngestExpr, rowKey) + orderBy(queryTeamsIngestExpr, rowKey)
@@ -1522,7 +1526,7 @@ WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsIngestExpr
 // without its slug even though no watermark moved.
 func teamsReconcileQuery(ledger *teamAuthorizationLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, string, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error) {
-		statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, []), ` + queryTeamsIngestExpr + `
+		statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ifNull(toString(tm.gone_at), ''), ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, []), ` + queryTeamsIngestExpr + `
 FROM teams AS tm FINAL
 ` + ownedRepositoriesJoinSQL + `
 WHERE tm.org_id = {org_id:String} AND toString(tm.id) > {after:String}
@@ -1533,11 +1537,11 @@ ORDER BY toString(tm.id) ASC LIMIT {row_limit:UInt32}`
 
 func fetchTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, limit int, teamAuth *teamAuthorizationLedger) ([]candidate, bool, error) {
 	return fetchIngest(ctx, client, statement, bindings, limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var id, name, description, provider, nativeKey string
+		var id, name, description, provider, nativeKey, goneAt string
 		var projectKeys, ownedRepos []string
 		var isActive uint8
 		var observedAt time.Time
-		if err := r.Scan(&id, &name, &description, &provider, &nativeKey, &isActive, &observedAt, &projectKeys, &ownedRepos); err != nil {
+		if err := r.Scan(&id, &name, &description, &provider, &nativeKey, &isActive, &goneAt, &observedAt, &projectKeys, &ownedRepos); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -1564,6 +1568,17 @@ func fetchTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient,
 		properties := map[string]contractsv1.ContextFabricScalarValue{"is_active": boolScalar(isActive != 0)}
 		if description != "" && description != name {
 			properties["description"] = stringScalar(description)
+		}
+		// gone_at: the time a sync proved the team gone at its provider.
+		// is_active stays true and the validity window stays open: the
+		// source neither asserts nor retracts the team's edges, so a read
+		// flags the team instead.
+		setStringProperty(properties, "gone_at", goneAt, 0)
+		if _, set := properties["gone_at"]; !set {
+			// An explicit null: the projector merges properties additively, so
+			// an omitted gone_at would leave the old value on a team that is
+			// listed again at its provider.
+			properties["gone_at"] = contractsv1.ContextFabricScalarValue{Null: true}
 		}
 		// CHAOS-3833 (embed-text spec §2): the team template's
 		// project_keys line, canonicalized at the producer (sorted,
