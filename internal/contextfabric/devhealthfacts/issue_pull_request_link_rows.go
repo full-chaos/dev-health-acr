@@ -79,30 +79,12 @@ const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHER
 // without reading work_items: a caller that has already restricted the work
 // items to issues joins it on work_item_id, and so reads the work item table
 // once.
-var admittedLinkedPullRequestRowsSQL = admittedLinkedPullRequestRowsAmongSQL("")
-
-// admittedLinkedPullRequestRowsAmongSQL is admittedLinkedPullRequestRowsSQL
-// pruned to the link rows whose work item id hashes into candidateHashes (a
-// UInt64 subquery), with the pull request rows kept for those links only; ""
-// is every link row of the organization. A hash prune is a superset: a caller
-// joins the rows to its own work items on the real id, which drops a row a
-// colliding hash let through. The pull request filter names only pull request
-// columns, so it is applied to the join's right side before it is filled.
-// Every version of a kept link and of a kept pull request is still read, so
-// FINAL keeps the same row of each.
-func admittedLinkedPullRequestRowsAmongSQL(candidateHashes string) string {
-	among := ``
-	if candidateHashes != "" {
-		among = ` AND cityHash64(l.work_item_id) IN ` + candidateHashes + `
-    AND (pr.repo_id, pr.number) IN (SELECT lc.repo_id, lc.pr_number FROM work_graph_issue_pr AS lc WHERE lc.org_id = {org_id:String} AND cityHash64(lc.work_item_id) IN ` + candidateHashes + `)`
-	}
-	return `(
+const admittedLinkedPullRequestRowsSQL = `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String}` + among + ` AND ` + linkTierRankSQL + ` > 0
+  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
 )`
-}
 
 // strongestLinkTierOfPullRequestsSQL is, for each pull request named by
 // {pull_request_keys} ("<repo id>:<number>"), the strongest admitted link tier

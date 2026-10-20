@@ -17,48 +17,39 @@ func TestAdmittedLinkedPullRequestRowsReadNoWorkItems(t *testing.T) {
 	}
 }
 
-func TestAdmittedLinkedPullRequestRowsAmongCandidatesReadOnlyTheCandidatesLinks(t *testing.T) {
-	fragment := admittedLinkedPullRequestRowsAmongSQL("(SELECT 7)")
-	for _, want := range []string{"work_graph_issue_pr AS l FINAL", "git_pull_requests AS pr FINAL ON " + linkedPullRequestOnSQL, "cityHash64(l.work_item_id) IN (SELECT 7)", "(pr.repo_id, pr.number) IN (SELECT lc.repo_id, lc.pr_number FROM work_graph_issue_pr AS lc WHERE lc.org_id = {org_id:String} AND cityHash64(lc.work_item_id) IN (SELECT 7))", linkTierRankSQL + " > 0"} {
-		if !strings.Contains(fragment, want) {
-			t.Fatalf("the candidate link-row fragment lacks %q:\n%s", want, fragment)
-		}
-	}
-}
-
-func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
+func TestTeamProjectLinkRowsReadWorkItemsForTheOwnedProjectsInTwoPasses(t *testing.T) {
 	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
-	if got := strings.Count(statement, "FROM work_items"); got != 1 || !strings.Contains(statement, "FROM work_items AS cw FINAL") {
-		t.Fatalf("team project link rows read work_items %d times, want once, with FINAL, for the sent candidates:\n%s", got, statement)
+	if got := strings.Count(statement, "FROM work_items"); got != 2 {
+		t.Fatalf("team project link rows read work_items %d times, want 2 (unmerged candidates, then FINAL):\n%s", got, statement)
 	}
-	for _, banned := range []string{admittedLinkedPullRequestRowsSQL, linkedWorkItemIDsSQL} {
-		if strings.Contains(statement, banned) {
-			t.Fatalf("team project link rows hold every link of the organization (%q):\n%s", banned, statement)
-		}
-	}
-	if strings.Contains(statement, "SELECT work_item_id FROM "+teamLinkCandidatesTable) {
-		t.Fatalf("team project link rows read the sent candidate ids as a String set, want only their hashes:\n%s", statement)
-	}
-	if got := strings.Count(statement, teamLinkCandidateHashesSent); got != 2 {
-		t.Fatalf("team project link rows read the sent candidate hashes %d times, want 2 (the link rows, their pull requests):\n%s", got, statement)
-	}
-	for _, want := range []string{"cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "cw.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{"cp.work_item_id IN " + linkedWorkItemIDsSQL, "cw.work_item_id IN (", "cw.project_id IN (SELECT v FROM", "cp.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}
 	}
 }
 
-func TestTeamLinkCandidatesReadTheLinkedIdsOfTheOwnedProjectsOnce(t *testing.T) {
-	statement := teamLinkCandidatesStatement(factTimeBound{})
-	for _, want := range []string{"SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "cityHash64(cp.work_item_id) IN " + linkedWorkItemIDHashesSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
-		if !strings.Contains(statement, want) {
-			t.Fatalf("team link candidates lack %q:\n%s", want, statement)
-		}
+// The join order holds only the owned side in memory: the organization's pull
+// requests stream on the left of the outer join, its link rows on the left of
+// the inner one, and the planner may not swap the sides.
+func TestTeamProjectLinkRowsStreamTheOrganizationPastTheOwnedSide(t *testing.T) {
+	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
+	order := []string{
+		"FROM git_pull_requests AS pr FINAL\n  INNER JOIN (",
+		"FROM work_graph_issue_pr AS l FINAL\n    INNER JOIN (SELECT o.team_id AS team_id, w.work_item_id AS work_item_id FROM ",
+		") AS ow ON l.work_item_id = ow.work_item_id\n    WHERE l.org_id = {org_id:String} AND " + linkTierRankSQL + " > 0",
+		") AS lw ON pr.org_id = lw.org_id AND pr.repo_id = lw.pr_repo_id AND pr.number = lw.pr_number",
+		"SETTINGS query_plan_join_swap_table = 0",
 	}
-	for _, banned := range []string{"work_items AS cp FINAL", "groupUniqArray", linkedWorkItemIDsSQL} {
-		if strings.Contains(statement, banned) {
-			t.Fatalf("team link candidates hold %q, want the unmerged rows as one array over the hashed linked ids:\n%s", banned, statement)
+	at := 0
+	for _, want := range order {
+		i := strings.Index(statement[at:], want)
+		if i < 0 {
+			t.Fatalf("team project link rows lack, in order, %q:\n%s", want, statement)
 		}
+		at += i + len(want)
+	}
+	if strings.Contains(statement, admittedLinkedPullRequestRowsSQL) {
+		t.Fatalf("team project link rows join every admitted link row of the organization as a right side:\n%s", statement)
 	}
 }

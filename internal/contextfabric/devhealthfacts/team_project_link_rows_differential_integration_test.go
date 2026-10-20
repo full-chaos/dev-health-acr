@@ -119,7 +119,7 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoUUID("repo-y"), link.item, uint32(3), float32(1), link.tier, "", link.lastSynced, org)
 	}
-	rowsOf := func(ctx context.Context, statement string) [][5]string {
+	rowsOf := func(statement string) [][5]string {
 		t.Helper()
 		rows, err := direct.Query(ctx, `SELECT toString(team_id), work_item_id, toString(pr_repo_id), toString(pr_number), toString(link_rank) FROM `+statement+` ORDER BY 1, 2, 3, 4, 5`,
 			clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner", "team-other"}))
@@ -137,32 +137,15 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		}
 		return out
 	}
-	var candidates []string
-	if err := direct.QueryRow(ctx, devhealthfacts.TeamLinkCandidatesStatementForTest(),
-		clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner", "team-other"})).Scan(&candidates); err != nil {
-		t.Fatalf("team link candidates: %v", err)
-	}
-	table, err := devhealthfacts.TeamLinkCandidatesTableForTest(candidates)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sent := clickhouse.Context(ctx, clickhouse.WithExternalTable(table))
-	old, current := rowsOf(ctx, devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest()), rowsOf(sent, devhealthfacts.TeamProjectLinkRowsSQLForTest())
+	old, mainRows, current := rowsOf(devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest()), rowsOf(devhealthfacts.TeamProjectLinkRowsMainSQLForTest()), rowsOf(devhealthfacts.TeamProjectLinkRowsSQLForTest())
 	if len(old) < 7 {
 		t.Fatalf("the seed reached %d link rows before the change, want at least 6: %v", len(old), old)
 	}
 	if !reflect.DeepEqual(old, current) {
 		t.Fatalf("link rows differ.\nbefore: %s\nafter:  %s", fmt.Sprint(old), fmt.Sprint(current))
 	}
-	// The candidate prunes only narrow what is read: with both removed the
-	// rows are the same.
-	if unpruned := rowsOf(ctx, devhealthfacts.TeamProjectLinkRowsUnprunedSQLForTest()); !reflect.DeepEqual(unpruned, current) {
-		t.Fatalf("link rows with the candidate prunes differ from the rows without them.\nwithout: %s\nwith:    %s", fmt.Sprint(unpruned), fmt.Sprint(current))
-	}
-	// Planted collisions: every link hash of the organization passes the hash
-	// prunes, and the real-id joins still keep exactly the candidates' rows.
-	if collided := rowsOf(sent, devhealthfacts.TeamProjectLinkRowsEveryHashSQLForTest()); !reflect.DeepEqual(collided, current) {
-		t.Fatalf("link rows with every link hash admitted differ from the pruned rows.\nevery hash: %s\npruned:     %s", fmt.Sprint(collided), fmt.Sprint(current))
+	if !reflect.DeepEqual(mainRows, current) {
+		t.Fatalf("link rows differ from the statement they replace.\nreplaced: %s\nnow:      %s", fmt.Sprint(mainRows), fmt.Sprint(current))
 	}
 	var movedIn, movedAway bool
 	for _, row := range current {

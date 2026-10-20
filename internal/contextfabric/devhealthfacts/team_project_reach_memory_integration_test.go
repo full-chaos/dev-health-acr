@@ -24,22 +24,11 @@ const (
 	projectReachMemoryOrg            = "b7a41c9e-2d63-4f85-a1e0-6c93d8f20b47"
 	projectReachInterleavedMemoryOrg = "3e9d17b2-5a48-4c06-9f1d-8b27c4e6a053"
 	projectReachReadBytesSlope       = 1.15
-	// The narrowed link rows statement's lowest warm read must be at least 2%
-	// under the lowest of the statement it replaced. Lowest-of-3 reads of one
-	// statement differ by under 1% between runs; the narrowing saves 5 to 7%.
-	linkRowsNarrowedMargin = 0.98
-	// teamLinkCandidatesInterleavedBound is the team link candidate statement's
-	// absolute bound at the large interleaved organization. The statement holds
-	// the organization's linked ids as fixed-width hashes and returns the few
-	// candidates as one array, so its peak is the scan of the unmerged work
-	// items; a set that grew with the organization would break the bound.
-	teamLinkCandidatesInterleavedBound = uint64(8 << 20)
+	// The link rows statement's lowest warm read may not exceed the lowest of
+	// the statement it replaces (1.00x): its join order keeps the same owned
+	// side in memory, so any growth is a defect.
+	linkRowsNarrowedMargin = 1.00
 )
-
-// teamLinkCandidatesWithinBound is the candidate statement's absolute row.
-func teamLinkCandidatesWithinBound(peak uint64) bool {
-	return peak <= teamLinkCandidatesInterleavedBound
-}
 
 var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
 
@@ -161,23 +150,12 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	}
 	small, smallResult, smallErr := read()
 	smallBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
-	smallCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, small)
 	addFiller("more-", blockerMemoryMoreFillerItems)
 	large, largeResult, largeErr := read()
 	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
-	largeCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, large)
 	t.Logf("read_bytes of the project-reached statements: %d at %d filler work items, %d at %d", smallBytes, blockerMemoryFillerItems, largeBytes, blockerMemoryFillerItems+blockerMemoryMoreFillerItems)
 	// The reach read and the linked pull request read run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)
-	t.Logf("CANDIDATES team link candidate statement peak %d bytes at %d filler work items, %d at %d (interleaved %v, bound %d)", smallCandidates, blockerMemoryFillerItems, largeCandidates, blockerMemoryFillerItems+blockerMemoryMoreFillerItems, interleaved, teamLinkCandidatesInterleavedBound)
-	if interleaved {
-		if !teamLinkCandidatesWithinBound(largeCandidates) {
-			t.Errorf("team link candidate statement peaked at %d bytes at the large interleaved organization, want at most %d", largeCandidates, teamLinkCandidatesInterleavedBound)
-		}
-		if teamLinkCandidatesWithinBound(teamLinkCandidatesInterleavedBound + 1) {
-			t.Errorf("control: a peak 1 byte over the %d-byte bound passed the team link candidate row", teamLinkCandidatesInterleavedBound)
-		}
-	}
 	if smallBytes == 0 {
 		t.Fatalf("read_bytes measurement did not happen: no project-reached statement logged at the smaller size")
 	}
@@ -225,38 +203,43 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 	return peak
 }
 
-// teamProjectLinkRowsSQL resolves the owned projects once and prunes the work
-// item read from the named teams' ownership rows. The rows are the rows of the
-// statement it replaced, and the statement's peak memory is lower. A single
-// read of either form can peak a few MiB high, so each form is read three
-// times warm, alternated, and the comparison uses each form's lowest read.
-// The planted control puts the replaced statement in the narrowed slot: the
+// teamProjectLinkRowsSQL holds only the owned projects' side in memory. Its
+// rows are the rows of the statement it replaces, and its peak memory is not
+// higher. A single read of either form can peak a few MiB high, so each form is
+// read three times warm, alternated, and the comparison uses each form's lowest
+// read. The control feeds the comparison a peak one byte over the bound: the
 // same comparison must refuse it.
 func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID string) {
 	t.Helper()
-	replaced, narrowed := devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest(), devhealthfacts.TeamProjectLinkRowsSQLForTest()
-	if lower, line := linkRowsLowerOnLowestOfThree(t, ctx, query, direct, org, teamID, replaced, narrowed); !lower {
-		t.Errorf("narrowed statement not under the statement it replaced: %s", line)
+	replaced, narrowed := devhealthfacts.TeamProjectLinkRowsMainSQLForTest(), devhealthfacts.TeamProjectLinkRowsSQLForTest()
+	befores, afters, line := linkRowsPeaksOnThreeReads(t, ctx, query, direct, org, teamID, replaced, narrowed)
+	if !linkRowsWithinMargin(befores, afters) {
+		t.Errorf("link rows statement over the statement it replaces: %s", line)
 	} else {
 		t.Logf("MEMORY team project link rows: %s", line)
 	}
-	if lower, line := linkRowsLowerOnLowestOfThree(t, ctx, query, direct, org, teamID, replaced, replaced); lower {
-		t.Errorf("planted control: the replaced statement passed as narrowed against itself, so the comparison cannot tell a narrower statement: %s", line)
-	} else {
-		t.Logf("MEMORY team project link rows planted control (replaced statement in the narrowed slot) refused: %s", line)
+	if over := []uint64{linkRowsBound(befores) + 1}; linkRowsWithinMargin(befores, over) {
+		t.Errorf("control: a peak of %d bytes, one byte over the bound, passed the comparison: %s", over[0], line)
 	}
 }
 
-// linkRowsLowerOnLowestOfThree reads both statements once unmeasured, then
-// three times each, alternated, and reports whether the lowest read of after
-// is under linkRowsNarrowedMargin of the lowest read of before. Both
-// statements must return the same rows on every read.
-func linkRowsLowerOnLowestOfThree(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID, before, after string) (bool, string) {
+// linkRowsBound is linkRowsNarrowedMargin of the replaced statement's lowest read.
+func linkRowsBound(befores []uint64) uint64 {
+	return uint64(linkRowsNarrowedMargin * float64(slices.Min(befores)))
+}
+
+func linkRowsWithinMargin(befores, afters []uint64) bool {
+	return slices.Min(afters) <= linkRowsBound(befores)
+}
+
+// linkRowsPeaksOnThreeReads reads both statements once unmeasured, then three
+// times each, alternated, and returns each one's peaks. Both statements must
+// return the same rows on every read.
+func linkRowsPeaksOnThreeReads(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID, before, after string) (befores, afters []uint64, line string) {
 	t.Helper()
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", before)
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", after)
 	var rows int
-	var befores, afters []uint64
 	for range 3 {
 		beforeRows, peak := runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", before)
 		befores = append(befores, peak)
@@ -267,10 +250,9 @@ func linkRowsLowerOnLowestOfThree(t *testing.T, ctx context.Context, query conte
 		}
 		rows = len(afterRows)
 	}
-	bound := uint64(linkRowsNarrowedMargin * float64(slices.Min(befores)))
-	line := fmt.Sprintf("before lowest %d highest %d bytes (reads %v), after lowest %d highest %d bytes (reads %v), bound under %d bytes (%.2f of the before lowest), %d rows",
-		slices.Min(befores), slices.Max(befores), befores, slices.Min(afters), slices.Max(afters), afters, bound, linkRowsNarrowedMargin, rows)
-	return slices.Min(afters) < bound, line
+	line = fmt.Sprintf("before lowest %d highest %d bytes (reads %v), after lowest %d highest %d bytes (reads %v), bound at most %d bytes (%.2f of the before lowest), %d rows",
+		slices.Min(befores), slices.Max(befores), befores, slices.Min(afters), slices.Max(afters), afters, linkRowsBound(befores), linkRowsNarrowedMargin, rows)
+	return befores, afters, line
 }
 
 // Two identity edge cases the narrowed statement must keep exactly as the
@@ -332,51 +314,10 @@ func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, 
 	}
 }
 
-// takeTeamLinkCandidatesPeak removes the team link candidate statement from
-// measured and returns its peak. Its memory follows the granules that hold the
-// linked ids, not the organization, so it leaves the slope pairs for its own
-// absolute row.
-func takeTeamLinkCandidatesPeak(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64, measured statementMemory) uint64 {
-	t.Helper()
-	rows, err := direct.Query(ctx, `SELECT DISTINCT normalized_query_hash FROM system.query_log
-WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, markMicros, teamLinkCandidatesMarker)
-	if err != nil {
-		t.Fatalf("read query_log: %v", err)
-	}
-	defer rows.Close()
-	var peak uint64
-	found := 0
-	for rows.Next() {
-		var hash uint64
-		if err := rows.Scan(&hash); err != nil {
-			t.Fatalf("scan query_log: %v", err)
-		}
-		if p, ok := measured[hash]; ok {
-			peak = max(peak, p)
-			delete(measured, hash)
-			found++
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("read query_log rows: %v", err)
-	}
-	if found == 0 {
-		t.Fatalf("team link candidate statement not measured (the measurement did not happen)")
-	}
-	return peak
-}
-
 func runLinkRows(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID, marker, rows string) ([]string, uint64) {
 	t.Helper()
 	statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, toString(pr_repo_id), pr_number, link_rank"
 	mark := serverNowMicros(t, ctx, direct)
-	if strings.Contains(rows, devhealthfacts.TeamLinkCandidatesTableName) {
-		sent, err := devhealthfacts.TeamLinkCandidatesContextForTest(ctx, query, org, []string{teamID})
-		if err != nil {
-			t.Fatalf("%s: team link candidates: %v", marker, err)
-		}
-		ctx = sent
-	}
 	var out []string
 	err := readers.QueryOrgScopedNamed(ctx, query, "TeamProjectLinkRows", statement, org, []string{teamID}, func(row contextpacket.ClickHouseRowScanner) error {
 		var team, item, repo string

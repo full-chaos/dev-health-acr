@@ -13,7 +13,7 @@ import (
 // inlineLinkedSet is the linked set as the statement read it before it was
 // sent as an external table: the link chain inlined.
 func inlineLinkedSet(bound factTimeBound) string {
-	return `(SELECT groupUniqArray((toString(pr_repo_id), toString(pr_number), team_id)) FROM ` + inlineTeamLinkCandidates(teamProjectLinkRowsSQL("ids", bound), bound) + `)`
+	return `(SELECT groupUniqArray((toString(pr_repo_id), toString(pr_number), team_id)) FROM ` + teamProjectLinkRowsSQL("ids", bound) + `)`
 }
 
 // inlineSentLinkedMix puts the linked set and the scope ids the production

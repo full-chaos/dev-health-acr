@@ -108,11 +108,7 @@ func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.
 	if reachedRepositoryCount(reachedOnly) == 0 {
 		return counts, nil
 	}
-	ctx, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, bound)
-	if err != nil || !ok {
-		return counts, err
-	}
-	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequestStates", orgID, teamIDs,
+	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequestStates", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "team_id", repoExpr: "repo", repoType: "String"},
 		append(boundReaderBindings(bound), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
 		func(having string, limit int) string {

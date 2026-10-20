@@ -103,12 +103,8 @@ func membershipScopeExternalTable(ids []string) (*ext.Table, error) {
 func (p *InvestmentProvider) readLinkedPullRequestSet(ctx context.Context, orgID string, chunk []string, bound factTimeBound) (repos, numbers, teams []string, err error) {
 	var issues []string
 	var ranks []uint8
-	setCtx, ok, err := withTeamLinkCandidates(ctx, p.facts.client, orgID, chunk, bound)
-	if err != nil || !ok {
-		return nil, nil, nil, err
-	}
 	rows := 0
-	err = readers.QueryOrgScopedNamed(setCtx, p.facts.client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+	err = readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 		rows++
 		return row.Scan(&repos, &numbers, &teams, &issues, &ranks)
 	}, boundReaderBindings(bound)...)
