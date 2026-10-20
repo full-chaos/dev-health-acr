@@ -69,6 +69,10 @@ GOTEST_CONTEXTFABRIC_TIMEOUT ?= 750s
 # re-measured from its first hosted run (race-devhealthsource prints it and
 # fails past 85% of this budget) and this number retuned from that evidence.
 GOTEST_DEVHEALTHSOURCE_TIMEOUT ?= 600s
+# internal/mcp's own isolated budget (its own ci.yml job, race-mcp). Hosted
+# shard time was 225-380s over 38 runs (p99 380s); 380s x 1.2 = 456s, rounded
+# to 480s. Retune from the first isolated main runs' race.json.
+GOTEST_MCP_TIMEOUT ?= 480s
 # internal/contextfabric/factoracle's own isolated budget (its own ci.yml job,
 # race-factoracle). The package seeds a ClickHouse store from the venue capture
 # and replays 95 cases; it ran 100s in a shared 420s race shard before the
@@ -99,6 +103,11 @@ VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 # CHAOS-6777: every go test target runs its binaries through this wrapper so
 # each package binary gets its own testcontainers session and reaper.
 GOTEST_EXEC := -exec $(CURDIR)/scripts/ci/testcontainers-session-exec.sh
+
+# CHAOS-10226: the production-size proofs (build tag sizeproof) run in the
+# plain unit run only; the -race targets never pass it. Guarded by
+# internal/contextfabric/falkorgraph/sizeproof_guard_test.go.
+GOTEST_PLAIN_TAGS := -tags sizeproof
 
 GOTESTSUM_VERSION := v1.13.0
 GOCOVER_COBERTURA_VERSION := v1.5.0
@@ -133,7 +142,7 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test $(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) $(GOTEST_PLAIN_TAGS) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
 
 # The plain suite over the same partition the race suite and CI use: the
 # shared packages in one invocation at the default ceiling, then each isolated
@@ -148,6 +157,7 @@ test-split:
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
+			*/internal/mcp) timeout="$(GOTEST_MCP_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthfacts) timeout="$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
@@ -200,6 +210,7 @@ test-race-isolated:
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
+			*/internal/mcp) timeout="$(GOTEST_MCP_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-race-isolated: $$pkg (GOTEST_TIMEOUT=$$timeout)"; \
@@ -239,7 +250,7 @@ test-coverage:
 	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --version
 	status=0; \
 	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
-		$(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
+		$(GOTEST_EXEC) $(GOTEST_PLAIN_TAGS) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
 		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \
@@ -268,6 +279,7 @@ isolated-timeout:
 		*/internal/contextfabric) echo "$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthsource) echo "$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 		*/internal/contextfabric/factoracle) echo "$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
+		*/internal/mcp) echo "$(GOTEST_MCP_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthfacts) echo "$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac

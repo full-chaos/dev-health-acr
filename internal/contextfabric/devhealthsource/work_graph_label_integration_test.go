@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 const workGraphEdgesDDL = `CREATE TABLE work_graph_edges (edge_id String, source_type String, source_id String, target_type String, target_id String, edge_type String, repo_id UUID, provider String, provenance String, confidence Float64, evidence Nullable(String), discovered_at DateTime64(3), last_synced DateTime64(3), org_id String) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, edge_id)`
@@ -167,7 +168,8 @@ type workGraphCost struct {
 func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGraphCost {
 	t.Helper()
 	ctx := context.Background()
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	rawQuery, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -239,27 +241,30 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 		t.Fatalf("current database: %v", err)
 	}
 	var c workGraphCost
-	var statements uint64
-	row := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database, mark)
-	if err := row.Scan(&c.memory, &c.memoryHigh, &c.readBytes, &statements); err != nil {
+	var statements, threadless uint64
+	row := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database, mark)
+	if err := row.Scan(&c.memory, &c.memoryHigh, &c.readBytes, &statements, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "work_graph.v1", threadless)
 	if statements < 3 || c.memory == 0 || c.readBytes == 0 {
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 	}
 	var freshness uint64
-	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database, mark)
-	if err := row.Scan(&c.freshnessMemory, &c.freshnessMemoryHigh, &c.freshnessReadBytes, &freshness); err != nil {
+	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database, mark)
+	if err := row.Scan(&c.freshnessMemory, &c.freshnessMemoryHigh, &c.freshnessReadBytes, &freshness, &threadless); err != nil {
 		t.Fatalf("read query_log for the freshness read: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "work_graph.v1 freshness read", threadless)
 	if freshness < 3 || c.freshnessMemory == 0 {
 		t.Fatalf("freshness measurement did not happen: %d statements, %+v", freshness, c)
 	}
 	var gates uint64
-	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count() FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database, mark)
-	if err := row.Scan(&c.gateMemory, &c.gateMemoryHigh, &c.gateReadBytes, &gates); err != nil {
+	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database, mark)
+	if err := row.Scan(&c.gateMemory, &c.gateMemoryHigh, &c.gateReadBytes, &gates, &threadless); err != nil {
 		t.Fatalf("read query_log for the gate: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "work_graph.v1 issue gate", threadless)
 	if gates < 3 || c.gateMemory == 0 || c.gateReadBytes == 0 {
 		t.Fatalf("gate measurement did not happen: %d statements, %+v", gates, c)
 	}

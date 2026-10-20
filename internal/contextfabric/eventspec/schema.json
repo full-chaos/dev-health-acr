@@ -3217,6 +3217,16 @@
         "presence": "required"
       },
       {
+        "key": "removed_team_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "removed_lookup_failures",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "refused_kinds",
         "type": "string_slice",
         "presence": "required",
@@ -13806,7 +13816,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "one classified stored tuple per request; coverage counts contain no stored text",
+    "bounded_aggregation": "one classified stored tuple per request (evidence expansion: the served citing tuple, else the first withheld one, else the first unservable one); coverage counts contain no stored text",
     "fields": [
       {
         "key": "org_id",
@@ -13819,7 +13829,8 @@
         "presence": "required",
         "closed_vocabulary": [
           "reuse",
-          "result_by_id"
+          "result_by_id",
+          "evidence_expansion"
         ]
       },
       {
@@ -13831,8 +13842,14 @@
           "digest_changed",
           "authorization_unverifiable",
           "universal_grant",
-          "coverage_invalid"
+          "coverage_invalid",
+          "limitations_flooded"
         ]
+      },
+      {
+        "key": "result_id_hash",
+        "type": "string",
+        "presence": "required"
       },
       {
         "key": "semantic_read",

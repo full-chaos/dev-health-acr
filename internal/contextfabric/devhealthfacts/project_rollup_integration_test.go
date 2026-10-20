@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -272,10 +273,11 @@ func TestProjectPullRequestsAreServedAsRollupBesideTheExpandedPullRequestsOnReal
 // leaves each statement's peak memory flat and under the statement cap.
 func TestProjectRollupsServeAProjectWithManyWorkItemsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	s := newProjectRollupSeed(t, ctx, direct)
 	s.workItem("i-linked", "repo-a", "issue", "open", "proj-p")
 	s.workItem("b-open", "repo-a", "issue", "open", "")

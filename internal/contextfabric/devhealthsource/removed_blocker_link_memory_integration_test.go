@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // The projector caps every statement at 192 MiB. The relation-current rule
@@ -59,7 +60,7 @@ SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', 
 	// The projector sends max_threads with every statement (cmd/acr-projector
 	// runtime.go); without it the server's own default applies, which follows
 	// the host's cores, and the peak would measure the host, not the statement.
-	capped := contextpacket.NewMemoryCappedQueryClient(query, cap, contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))
+	capped := statementthreads.Capped(query, cap)
 	source, err := devhealthsource.NewClickHouseProjectionSource(capped)
 	if err != nil {
 		t.Fatal(err)
@@ -89,12 +90,13 @@ SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', 
 		t.Fatalf("flush logs (measurement did not happen): %v", err)
 	}
 	peakOf := func(marker string) (uint64, uint64) {
-		var statements, peak uint64
-		if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage) FROM system.query_log
+		var statements, peak, threadless uint64
+		if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND position(query, ?) > 0 AND query NOT LIKE 'INSERT%'`,
-			start.UTC().Format("2006-01-02 15:04:05.000000"), marker).Scan(&statements, &peak); err != nil {
+			start.UTC().Format("2006-01-02 15:04:05.000000"), marker).Scan(&statements, &peak, &threadless); err != nil {
 			t.Fatal(err)
 		}
+		statementthreads.RequireThreadBound(t, ctx, direct, marker, threadless)
 		return statements, peak
 	}
 	setCount, setPeak := peakOf("AS ended_links")

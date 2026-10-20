@@ -139,7 +139,7 @@ func TestLLMInterpretAcceptsAFencedReplyTheJSONGateRefused(t *testing.T) {
 func TestLLMGeneratorRejectsAnInvalidDrawWithItsLenientParse(t *testing.T) {
 	gen := llmGenerator{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	var err error
-	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -281,7 +281,7 @@ func TestLLMSchemaRejectionLogsWhereTheReplyBrokeTheSchemaWithoutItsText(t *test
 	var logs strings.Builder
 	gen := llmGenerator{logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	var err error
-	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		t.Fatal(err)
 	}
 	const secret = "SECRET_REPLY_VALUE"
