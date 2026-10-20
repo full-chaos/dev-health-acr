@@ -87,11 +87,7 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 			exec(`OPTIMIZE TABLE ` + table + ` FINAL`)
 		}
 	}
-	type measured struct {
-		lowest, highest, readBytes uint64
-		events                     string
-	}
-	measure := func(runCtx context.Context, marker, statement string, bindings []readers.Binding) measured {
+	measure := func(runCtx context.Context, marker, statement string, bindings []readers.Binding) diagPeak {
 		t.Helper()
 		tagged := strings.Replace(statement, "SELECT ", "SELECT '"+marker+"' AS diag_marker, ", 1)
 		run := func() {
@@ -107,11 +103,11 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 			t.Fatalf("flush logs: %v", err)
 		}
-		var m measured
-		if err := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), max(read_bytes),
+		m, err := diagReadPeak(direct.QueryRow(ctx, `SELECT count(), min(memory_usage), max(memory_usage), max(read_bytes),
   toString(argMax(mapFilter((k, v) -> match(k, 'Set|Join|External|Hash|Memory|Arena'), ProfileEvents), event_time_microseconds))
-FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND position(query, ?) > 0 AND position(query, 'system.query_log') = 0`, mark, "'"+marker+"' AS diag_marker").Scan(&m.lowest, &m.highest, &m.readBytes, &m.events); err != nil {
-			t.Fatalf("%s: read query_log: %v", marker, err)
+FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND position(query, ?) > 0 AND position(query, 'system.query_log') = 0`, mark, "'"+marker+"' AS diag_marker").Scan, marker)
+		if err != nil {
+			t.Fatal(err)
 		}
 		return m
 	}
@@ -148,7 +144,7 @@ FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'E
 				m := measure(runCtx, fmt.Sprintf("diag-%d-%s-%s", size, variant, s.Reader), s.SQL, s.Bindings)
 				sum += m.lowest
 				rows = append(rows, fmt.Sprintf("%s %d", s.Reader, m.lowest))
-				t.Logf("DIAG %d %s %s: lowest %d highest %d bytes, read_bytes %d, events %s", size, variant, s.Reader, m.lowest, m.highest, m.readBytes, m.events)
+				t.Logf("DIAG %d %s %s: %d rows, lowest %d highest %d bytes, read_bytes %d, events %s", size, variant, s.Reader, m.matched, m.lowest, m.highest, m.readBytes, m.events)
 			}
 			withCandidates := sum
 			if devhealthfacts.DiagLinkRowsUsesTable(variant) {
