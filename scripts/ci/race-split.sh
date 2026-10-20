@@ -110,6 +110,8 @@ unit_partition_three_way() {
       || { printf 'ci.yml must pass "%s" to -%s\n' "$mode" "$flag" >&2; return 1; }
   done
   all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  problems="$(LC_ALL=C comm -23 <({ names; mid_names; fourth_names; extra_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$all"))"
+  if [ -n "$problems" ]; then printf 'a list names no such test:\n%s\n' "$problems" >&2; return 1; fi
   a="$(go test -list "$(unit_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   b="$(go test -list "$(unit_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   skipped="$(go test -list "$(race_rest)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"

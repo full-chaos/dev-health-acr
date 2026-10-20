@@ -105,6 +105,10 @@ dir="$(fixture facts-extra-twice)"
 first="$(grep -v '^[[:space:]]*\(#\|$\)' "$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt" | head -n1)"
 printf '%s\n' "$first" >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
 expect_fail 'an extra name listed twice' "$dir" devhealthfacts
+dir="$(fixture facts-extra-and-mid-no-such-test)"
+printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-race-mid-tests.txt"
+printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
+expect_fail 'an extra name that is in the mid list but is no real test' "$dir" devhealthfacts
 
 [ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"
