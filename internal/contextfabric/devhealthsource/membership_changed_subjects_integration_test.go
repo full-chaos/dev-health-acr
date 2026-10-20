@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 const (
@@ -221,13 +222,14 @@ func TestLiveMembershipStatementRunsPerTick(t *testing.T) {
 	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
-	var count, peak, notSingleThread uint64
-	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), countIf(Settings['max_threads'] != '1') FROM system.query_log
+	var count, peak, notSingleThread, unbound uint64
+	if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), countIf(Settings['max_threads'] != '1'), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND positionCaseInsensitive(query, 'leadInFrame') > 0 AND query NOT LIKE 'INSERT%'`,
-		steadyStart.UTC().Format("2006-01-02 15:04:05.000000")).Scan(&count, &peak, &notSingleThread); err != nil {
+		steadyStart.UTC().Format("2006-01-02 15:04:05.000000")).Scan(&count, &peak, &notSingleThread, &unbound); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("SLOPE steady 4 calls: statements=%d peak_memory=%d", count, peak)
+	statementthreads.RequireThreadBound(t, ctx, direct, "membership statements", unbound)
 	if count == 0 {
 		t.Fatal("the query log holds no membership statement: the measure did not happen")
 	}

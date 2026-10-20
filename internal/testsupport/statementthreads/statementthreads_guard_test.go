@@ -35,8 +35,8 @@ type peakReader struct {
 // peakReaders finds, in one Go source file, every function whose own string
 // literals (not those of a nested function literal) read memory_usage from
 // system.query_log, and whether that same function checks the statement
-// threads: it calls RequireThreadBound, or its own literals read
-// query_log's max_threads setting.
+// threads: it calls RequireThreadBound. A literal that names query_log's
+// max_threads setting is not a check: it may only display the value.
 func peakReaders(rel string, src []byte) ([]peakReader, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), rel, src, parser.SkipObjectResolution)
 	if err != nil {
@@ -48,7 +48,7 @@ func peakReaders(rel string, src []byte) ([]peakReader, error) {
 		if body == nil {
 			return
 		}
-		var queryLog, peak, settings, calls bool
+		var queryLog, peak, calls bool
 		ast.Inspect(body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.FuncLit:
@@ -64,7 +64,6 @@ func peakReaders(rel string, src []byte) ([]peakReader, error) {
 				}
 				queryLog = queryLog || strings.Contains(text, "system.query_log")
 				peak = peak || peakColumn.MatchString(text)
-				settings = settings || strings.Contains(text, "Settings['max_threads']")
 			case *ast.CallExpr:
 				switch fn := node.Fun.(type) {
 				case *ast.SelectorExpr:
@@ -76,7 +75,7 @@ func peakReaders(rel string, src []byte) ([]peakReader, error) {
 			return true
 		})
 		if queryLog && peak {
-			out = append(out, peakReader{key: rel + ":" + name, checked: calls || settings})
+			out = append(out, peakReader{key: rel + ":" + name, checked: calls})
 		}
 	}
 	for _, decl := range file.Decls {
@@ -169,8 +168,10 @@ func other() { statementthreads.RequireThreadBound(nil, nil, nil, "", 0) }`, []p
 func read() { f := func() { _ = "SELECT max(memory_usage) FROM system.query_log" }; f(); statementthreads.RequireThreadBound(nil, nil, nil, "", 0) }`, []peakReader{{"f.go:read/func", false}}},
 		{"checked reader", `package p
 func read() { q := "SELECT max(memory_usage), " + x + " FROM system.query_log"; _ = q; statementthreads.RequireThreadBound(nil, nil, nil, "", 0) }`, []peakReader{{"f.go:read", true}}},
-		{"reader of the setting itself", `package p
-func read() { _ = "SELECT max(memory_usage), countIf(Settings['max_threads'] != '1') FROM system.query_log" }`, []peakReader{{"f.go:read", true}}},
+		{"reader that only displays the setting", `package p
+func read() { _ = "SELECT max(memory_usage), any(Settings['max_threads']) FROM system.query_log" }`, []peakReader{{"f.go:read", false}}},
+		{"reader that filters on the setting without the check", `package p
+func read() { _ = "SELECT max(memory_usage), countIf(Settings['max_threads'] != '1') FROM system.query_log" }`, []peakReader{{"f.go:read", false}}},
 		{"max_memory_usage setting only", `package p
 func read() { _ = "SELECT Settings['max_memory_usage'] FROM system.query_log" }`, nil},
 	} {
