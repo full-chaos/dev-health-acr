@@ -264,12 +264,52 @@ func TestRelativeWindowBounds(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if !end.Equal(now) {
-			t.Errorf("relativeWindowBounds(%q) end = %v, want now (%v)", tc.id, end, now)
+		wantEnd := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+		if !end.Equal(wantEnd) {
+			t.Errorf("relativeWindowBounds(%q) end = %v, want today 00:00 UTC (%v)", tc.id, end, wantEnd)
+		}
+		if want := wantEnd.AddDate(0, 0, -tc.wantDays); !start.Equal(want) {
+			t.Errorf("relativeWindowBounds(%q) start = %v, want %v", tc.id, start, want)
 		}
 		if got := int(end.Sub(start).Hours() / 24); got != tc.wantDays {
 			t.Errorf("relativeWindowBounds(%q) width = %d days, want %d", tc.id, got, tc.wantDays)
 		}
+	}
+}
+
+func TestTrailingWindowEndsAtTodayMidnightAtEveryHour(t *testing.T) {
+	t.Parallel()
+	wantStart := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for _, now := range []time.Time{
+		time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 19, 15, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 19, 23, 59, 59, 999999999, time.UTC),
+		time.Date(2026, 10, 19, 18, 0, 0, 0, time.FixedZone("x", -5*3600)),
+	} {
+		start, end, ok := relativeWindowBounds(RelativeWindowTrailing30D, now)
+		if !ok || !start.Equal(wantStart) || !end.Equal(wantEnd) {
+			t.Errorf("relativeWindowBounds(trailing_30d, %v) = %v, %v, %v; want %v, %v", now, start, end, ok, wantStart, wantEnd)
+		}
+	}
+	_, calEnd, _ := calendarWindowBounds(CalendarPeriodMonth, time.Date(2026, 10, 19, 15, 0, 0, 0, time.UTC))
+	if want := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC); !calEnd.Equal(want) {
+		t.Errorf("calendarWindowBounds(month) end = %v, want %v (unchanged)", calEnd, want)
+	}
+}
+
+func TestFrozenWindowKeyIsStableWithinADay(t *testing.T) {
+	t.Parallel()
+	key := func(now time.Time) string {
+		start, end, _ := relativeWindowBounds(RelativeWindowTrailing30D, now)
+		return windowKeyComponent(EffectiveEvidenceWindow{Start: &start, End: &end, RelativeID: RelativeWindowTrailing30D}, windowKeyFrozen)
+	}
+	a, b := key(time.Date(2026, 10, 19, 1, 0, 0, 0, time.UTC)), key(time.Date(2026, 10, 19, 22, 0, 0, 0, time.UTC))
+	if a == "" || a != b {
+		t.Errorf("frozen key differs within one day: %q vs %q", a, b)
+	}
+	if c := key(time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)); c == a {
+		t.Errorf("frozen key equal across days: %q", c)
 	}
 }
 
@@ -1770,5 +1810,47 @@ func TestAppendUniqueWarning(t *testing.T) {
 	}
 	if got := appendUniqueWarning(full, "a nudge"); len(got) != len(full) {
 		t.Errorf("appendUniqueWarning at the cap grew the list to %d, want it to stay at %d (never push over the wire bound)", len(got), len(full))
+	}
+}
+
+func TestInvestigateServesTrailingWindowEndingAtTodayMidnight(t *testing.T) {
+	t.Parallel()
+
+	var synthesized *EffectiveEvidenceWindow
+	engine, err := NewEngine(EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			synthesized = input.EvidenceWindow
+			return validInvestigationResult(), nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: &resultStoreStub{},
+	}, EngineOptions{
+		ServiceVersion: "acr-test", Now: func() time.Time { return time.Date(2026, 10, 19, 15, 0, 0, 0, time.UTC) },
+		NewResultID: func() string { return "result_fresh_00001" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	request := validInvestigationRequest()
+	request.Consumer = ConsumerInfo{Name: "context-fabric-workbench", Version: "0.1.0", Surface: "workbench"}
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
+
+	_, err = engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if synthesized == nil || synthesized.Start == nil || synthesized.End == nil {
+		t.Fatalf("synthesis input window = %+v, want bounds", synthesized)
+	}
+	wantStart := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	if !synthesized.Start.Equal(wantStart) || !synthesized.End.Equal(wantEnd) {
+		t.Fatalf("served window = %v..%v, want %v..%v", synthesized.Start, synthesized.End, wantStart, wantEnd)
 	}
 }

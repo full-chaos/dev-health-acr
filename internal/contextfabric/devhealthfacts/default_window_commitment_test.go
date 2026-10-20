@@ -17,7 +17,7 @@ import (
 // a team rollup read with no evidence window uses the provider's own trailing
 // window, resolved from its clock. That window is one standing commitment:
 // its moving bounds reach the service's model input but not the client input,
-// so two reads minutes apart over the same rows give one digest. Pinning one
+// so two reads a day apart over the same rows give one digest. Pinning one
 // clock per write-back would put the bounds back in the digest; when that
 // lands, this test changes to expect them in the client input.
 func TestAProviderDefaultWindowIsOneStandingCommitmentByDesign(t *testing.T) {
@@ -63,7 +63,7 @@ func TestAProviderDefaultWindowIsOneStandingCommitmentByDesign(t *testing.T) {
 		return fields["window_basis"]["string"], fields["window_start"]["string"], fields["window_end"]["string"]
 	}
 	server1, client1 := read(t0)
-	server2, client2 := read(t0.Add(7 * time.Minute))
+	server2, client2 := read(t0.Add(24 * time.Hour))
 	basis, start1, end1 := windowOf(server1)
 	_, start2, end2 := windowOf(server2)
 	if basis != "default_trailing" || start1 == nil || start1 == start2 || end1 == end2 {

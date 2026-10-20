@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 const (
@@ -37,7 +38,8 @@ func TestTeamLinkedMixDropsFallbackLinksCoveredByNativeAtTheLargestOrgShape(t *t
 	const orgID = "org-linked-native-cover"
 	shape := linkedMemoryProdShape
 	shape.fallbackEvery = 3
-	query, direct, _, ids := newLinkedProdShapeStore(t, ctx, orgID, shape)
+	rawQuery, direct, _, ids := newLinkedProdShapeStore(t, ctx, orgID, shape)
+	query := statementthreads.API(rawQuery)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	teams := make([]string, shape.teams)
 	for i := range teams {
@@ -70,12 +72,13 @@ func TestTeamLinkedMixDropsFallbackLinksCoveredByNativeAtTheLargestOrgShape(t *t
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", err)
 	}
-	var peak, readRows, runs uint64
-	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), count() FROM system.query_log
+	var peak, readRows, runs, threadless uint64
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, 'groupUniqArray(work_item_id)') > 0`, mark).Scan(&peak, &readRows, &runs); err != nil {
+  AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, 'groupUniqArray(work_item_id)') > 0`, mark).Scan(&peak, &readRows, &runs, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "native cover", threadless)
 	chunks := (shape.teams + 99) / 100
 	t.Logf("native cover at the largest org shape: %d link rows (%d fallback, %d covered), %d cover statements for one read of %d teams; peak %.2f MiB (bound %.0f), read_rows %d (bound %.0f)",
 		shape.links, fallback, covered, runs, shape.teams, float64(peak)/(1<<20), nativeCoverPeakBoundMiB, readRows, nativeCoverReadRowsPerLink*float64(shape.links))

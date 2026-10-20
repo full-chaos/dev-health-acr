@@ -372,7 +372,7 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 		// (dev-health-go's timebound.go): the Go ClickHouse driver binds a
 		// time.Time value against a DateTime64 parameter natively, and the
 		// SQL-side toDate() narrows it to the day column's own grain.
-		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day <= toDate({series_window_end:DateTime64(6,'UTC')})"
+		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day < toDate({series_window_end:DateTime64(6,'UTC')})"
 		extra = []readers.Binding{
 			{Name: "series_window_start", Value: evidenceWindow.Start.UTC()},
 			{Name: "series_window_end", Value: evidenceWindow.End.UTC()},
@@ -383,10 +383,11 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 		// matches the platform's own default evidence-window policy
 		// width, rather than a devhealthfacts-invented number.
 		now := clock().UTC()
-		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day <= toDate({series_window_end:DateTime64(6,'UTC')})"
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day < toDate({series_window_end:DateTime64(6,'UTC')})"
 		extra = []readers.Binding{
-			{Name: "series_window_start", Value: now.Add(-metricsSeriesDefaultWindow)},
-			{Name: "series_window_end", Value: now},
+			{Name: "series_window_start", Value: today.Add(-metricsSeriesDefaultWindow)},
+			{Name: "series_window_end", Value: today},
 		}
 	}
 	// Deliberately NOT withRowLimit (Codex R2, confirmed): that helper's

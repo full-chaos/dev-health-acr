@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 const (
@@ -33,16 +34,17 @@ func hotspotStatementCostSince(t *testing.T, ctx context.Context, direct clickho
 		t.Fatalf("flush logs (measurement did not happen): %v", err)
 	}
 	var cost hotspotStatementCost
-	var statements uint64
-	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(query_duration_ms), count() FROM system.query_log
+	var statements, threadless uint64
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(query_duration_ms), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.file_hotspot_daily')) AND position(query, 'groupArraySorted') > 0`, markMicros).
-		Scan(&cost.peak, &cost.readRows, &cost.durationMs, &statements); err != nil {
+		Scan(&cost.peak, &cost.readRows, &cost.durationMs, &statements, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	if statements == 0 {
 		t.Fatalf("measurement did not happen: no hotspot statement logged; recent:\n%s", recentServerStatements(ctx, direct))
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "file hotspots", threadless)
 	return cost
 }
 
@@ -60,7 +62,8 @@ func TestFileHotspotsStatementMemoryMergedAndPinnedMultiPartOnRealClickHouse(t *
 	}{{"merged", false}, {"pinned_multipart", true}} {
 		t.Run(state.name, func(t *testing.T) {
 			ctx := context.Background()
-			query, direct := sharedClickHouseFixture(t)
+			rawQuery, direct := sharedClickHouseFixture(t)
+			query := statementthreads.API(rawQuery)
 			for _, statement := range devhealthschema.ProjectionDDL("file_hotspot_daily") {
 				if err := direct.Exec(ctx, statement); err != nil {
 					t.Fatalf("declared projection: %v\n%s", err, statement)

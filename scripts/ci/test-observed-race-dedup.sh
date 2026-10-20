@@ -191,16 +191,16 @@ run_rows() {
     pull_request "$tmp/lists" "$tmp/r-pass" "$tmp/n-failed.json" '[{"shard":7}]'
   rowfull 'R4 push decides nothing: no leg is deferred, none is dropped' $'drop=[]\nexclude=[]\nrun=false' \
     push "$tmp/lists" "$tmp/r-pass" "$tmp/n-ok.json" '[]'
-  defer_row 'P1 heavy pull_request defers legs 6-9' $'unit_defer=[{"shard":6},{"shard":7},{"shard":8},{"shard":9}]\nunit_exclude=[{"shard":6},{"shard":7},{"shard":8},{"shard":9}]\nskip_jobs=[]' \
+  defer_row 'P1 heavy pull_request defers legs 6-10' $'unit_defer=[{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]\nunit_exclude=[{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]\nskip_jobs=[]' \
     pull_request true '[]' '[]'
   defer_row 'P2 push defers nothing' $'unit_defer=[]\nunit_exclude=[]\nskip_jobs=[]' push true '[]' '[]'
   defer_row 'P3 workflow_dispatch defers nothing' $'unit_defer=[]\nunit_exclude=[]\nskip_jobs=[]' workflow_dispatch true '[]' '[]'
   defer_row 'P4 a draft pull request (no race jobs) defers nothing' $'unit_defer=[]\nunit_exclude=[]\nskip_jobs=[]' pull_request false '[]' '[]'
   defer_row 'P5 reach skips legs 1-5: the unit matrix is empty and named in skip_jobs' \
-    $'unit_defer=[{"shard":6},{"shard":7},{"shard":8},{"shard":9}]\nunit_exclude=[{"shard":1},{"shard":2},{"shard":3},{"shard":4},{"shard":5},{"shard":6},{"shard":7},{"shard":8},{"shard":9}]\nskip_jobs=["unit"]' \
+    $'unit_defer=[{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]\nunit_exclude=[{"shard":1},{"shard":2},{"shard":3},{"shard":4},{"shard":5},{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]\nskip_jobs=["unit"]' \
     pull_request true '[]' '[{"shard":1},{"shard":2},{"shard":3},{"shard":4},{"shard":5}]'
   defer_row 'P6 reach skips only leg 2: unit keeps running' \
-    $'unit_defer=[{"shard":6},{"shard":7},{"shard":8},{"shard":9}]\nunit_exclude=[{"shard":2},{"shard":6},{"shard":7},{"shard":8},{"shard":9}]\nskip_jobs=[]' \
+    $'unit_defer=[{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]\nunit_exclude=[{"shard":2},{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]\nskip_jobs=[]' \
     pull_request true '[]' '[{"shard":2}]'
 
   local rd

@@ -109,8 +109,9 @@ func (e *windowRegistryTooNarrowError) Error() string {
 		" is narrower than " + strconv.Itoa(windowRegistryMinDurationFactor) + "x the configured answer-reuse max age (" + e.minimum.String() + ")"
 }
 
-// relativeWindowBounds derives absolute [start, end] bounds for id as of
-// now -- the ONLY function in this codebase that may do so, and only ever
+// relativeWindowBounds derives absolute [start, end) bounds for id as of
+// now: end is 00:00 UTC of today, exclusive, so a trailing window never holds
+// today's partial day (the ops readers' window) -- the ONLY function in this codebase that may do so, and only ever
 // from the engine's own now(). ok=false for RelativeWindowAllTime (no
 // bounds by definition) or an id outside the closed registry.
 func relativeWindowBounds(id RelativeWindowID, now time.Time) (start, end time.Time, ok bool) {
@@ -118,8 +119,8 @@ func relativeWindowBounds(id RelativeWindowID, now time.Time) (start, end time.T
 	if !known {
 		return time.Time{}, time.Time{}, false
 	}
-	now = now.UTC()
-	return now.Add(-duration), now, true
+	end = time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	return end.Add(-duration), end, true
 }
 
 // calendarWindowBounds () derives the bounds of the PREVIOUS calendar

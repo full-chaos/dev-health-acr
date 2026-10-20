@@ -34,6 +34,9 @@ func decodeResponse(body io.Reader, maxBytes int64) (response, error) {
 		return response{}, errors.New("invalid response object")
 	}
 	parsed, seen, err := decodeFields(decoder)
+	if errors.Is(err, errUnknownField) {
+		return response{}, err
+	}
 	if err != nil || !seen.schema || !seen.org || !seen.entitlement {
 		return response{}, errors.New("invalid entitlement response")
 	}
@@ -83,7 +86,7 @@ func decodeFields(decoder *json.Decoder) (response, responseFields, error) {
 			}
 			seen.platformModelFallback = true
 		default:
-			return response{}, responseFields{}, errors.New("unknown response field")
+			return response{}, responseFields{}, errUnknownField
 		}
 	}
 	return parsed, seen, nil

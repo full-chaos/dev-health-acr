@@ -108,15 +108,15 @@ func TestWorkItemStoredCoverageValidationPreservesTruth(t *testing.T) {
 func TestWorkItemStoredServingConfiguredInfo(t *testing.T) {
 	var logs bytes.Buffer
 	logger := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	for _, basis := range []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid"} {
+	for _, basis := range []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid", "limitations_flooded"} {
 		logs.Reset()
-		event := WorkItemStoredServingEvent{Surface: StoredAnswerabilitySurfaceReuse, Basis: basis, SemanticRead: SemanticStateReadAvailable, CensusRead: WorkItemTupleCensusReadAvailable, DetailsBefore: 100, ReasonsBefore: 100, DetailsAfter: 101, ReasonsAfter: 101}
+		event := WorkItemStoredServingEvent{Surface: StoredAnswerabilitySurfaceReuse, Basis: basis, ResultIDHash: "0123456789ab", SemanticRead: SemanticStateReadAvailable, CensusRead: WorkItemTupleCensusReadAvailable, DetailsBefore: 100, ReasonsBefore: 100, DetailsAfter: 101, ReasonsAfter: 101}
 		logger.RecordWorkItemStoredServing(context.Background(), storage.Principal{OrgID: "org-1"}, event)
 		var got map[string]any
 		if err := json.Unmarshal(logs.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got["level"] != "INFO" || got["msg"] != WorkItemStoredServingLogMessage || got["basis"] != basis || got["surface"] != "reuse" || got["coverage_details_after"] != float64(101) || got["coverage_bound"] != float64(contractsv1.ContextFabricCoverageEntriesMaxCount) {
+		if got["level"] != "INFO" || got["msg"] != WorkItemStoredServingLogMessage || got["basis"] != basis || got["result_id_hash"] != "0123456789ab" || got["surface"] != "reuse" || got["coverage_details_after"] != float64(101) || got["coverage_bound"] != float64(contractsv1.ContextFabricCoverageEntriesMaxCount) {
 			t.Fatalf("event=%v", got)
 		}
 	}
