@@ -30,8 +30,13 @@ const (
 	prodLinkedIssues           = 24_000
 	prodEstimatePeakBytes      = uint64(48 << 20)
 	historyFloorBytes          = uint64(2 << 20)
-	ownershipHistorySmall      = 100
-	ownershipHistoryLarge      = 1_000
+	// linksInsideLargeMax bounds each statement where every link of 96k is
+	// inside the owned projects: 30% headroom under the 256 MiB API statement
+	// cap (179.2 MiB). The link-row prunes that keep the outside links out of
+	// memory cost 20 to 26% here, where they prune nothing.
+	linksInsideLargeMax   = uint64(256 << 20 * 7 / 10)
+	ownershipHistorySmall = 100
+	ownershipHistoryLarge = 1_000
 )
 
 // The repositories a team reaches through its owned projects are read from the
@@ -107,7 +112,7 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 			})
 			t.Run("links inside the owned projects", func(t *testing.T) {
 				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownedLinksMemoryOrg, merged, parts, linkFiller("owned", "proj-owner", "repo-reached"),
-					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: 170 << 20})
+					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax})
 			})
 			if merged {
 				return
