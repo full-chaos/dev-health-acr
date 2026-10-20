@@ -22,3 +22,12 @@ if [ "$failed" -ne 0 ]; then
   printf '::error::%d testcontainers of session %s could not be removed\n' "$failed" "$session"
   exit 1
 fi
+# The runner and its docker daemon belong to this job alone, so a container
+# still present here escaped the session label (or its removal) and leaks.
+survivors="$(docker ps -aq)"
+printf 'reap-census: session=%s survivors=%d\n' "$session" "$(printf '%s' "$survivors" | grep -c . || true)"
+if [ -n "$survivors" ]; then
+  docker ps -a --format '{{.ID}} {{.Image}} {{.Names}} {{.Label "org.testcontainers.sessionId"}}'
+  printf '::error::containers outside session %s are still present after the reap\n' "$session"
+  exit 1
+fi

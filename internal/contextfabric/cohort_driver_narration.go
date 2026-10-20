@@ -191,7 +191,11 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 	// then grows with each id this composer assigns -- validateDrivers
 	// enforces uniqueness across the COMBINED result.Drivers array, so a
 	// generated id must clear both sets, not just its own.
-	takenDriverIDs := make(map[string]struct{}, len(synthesisDrivers)+membersToNarrate*driversPerMember)
+	idCapacity := len(synthesisDrivers)
+	if membersToNarrate > 0 && membersToNarrate <= maxNarratedMembers && driversPerMember > 0 && driversPerMember <= driversPerNarratedMember {
+		idCapacity += membersToNarrate * driversPerMember
+	}
+	takenDriverIDs := make(map[string]struct{}, idCapacity)
 	for _, driver := range synthesisDrivers {
 		takenDriverIDs[driver.DriverID] = struct{}{}
 	}
@@ -623,6 +627,11 @@ func cohortDriverJudgmentConfidence(member CohortMember) float64 {
 	}
 }
 
+const (
+	driversPerNarratedMember = 3
+	maxNarratedMembers       = 16
+)
+
 // cohortDriverNarrationBudget is design doc §5a's "Ordering problem"
 // section turned into a testable formula.
 //
@@ -667,8 +676,6 @@ func cohortDriverJudgmentConfidence(member CohortMember) float64 {
 // bonus on top of the Rows table (Score/RankingBasis/DataCompleteness),
 // never a requirement for the table to render.
 func cohortDriverNarrationBudget(maxDrivers, synthesisDriverCount, maxClaimedFacts, synthesisClaimedFactCount int) (membersToNarrate, driversPerMember int) {
-	const driversPerNarratedMember = 3
-	const maxNarratedMembers = 16
 
 	availableDrivers := maxDrivers - synthesisDriverCount
 	availableClaims := maxClaimedFacts - synthesisClaimedFactCount

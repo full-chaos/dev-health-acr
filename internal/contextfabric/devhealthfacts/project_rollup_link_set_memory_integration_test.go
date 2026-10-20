@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -27,10 +28,11 @@ const (
 // measured one (the set built twice) fails it.
 func TestProjectPullRequestRollupMemoryAgainstOrganizationLinksOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	s := newProjectRollupSeed(t, ctx, direct)
 	s.workItem("i-native", "repo-a", "issue", "open", "proj-p")
 	s.workItem("i-heuristic", "repo-a", "issue", "open", "proj-p")

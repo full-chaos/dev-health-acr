@@ -1,3 +1,5 @@
+//go:build sizeproof
+
 package falkorgraph
 
 import (
