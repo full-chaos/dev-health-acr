@@ -86,6 +86,13 @@ func TeamLinkCandidatesStatementForTest() string {
 	return teamLinkCandidatesStatement(factTimeBound{})
 }
 
+// TeamLinkCandidatesPerVersionStatementForTest is the team link candidate
+// statement as it read before it took the distinct issues: one array entry per
+// stored row version. A differential oracle only.
+func TeamLinkCandidatesPerVersionStatementForTest() string {
+	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(factTimeBound{})
+}
+
 // TeamLinkCandidatesTableForTest is the external table the team project link
 // rows read their candidates from.
 func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {

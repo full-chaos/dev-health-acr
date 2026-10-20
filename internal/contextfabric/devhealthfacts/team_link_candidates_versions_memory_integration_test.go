@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -27,7 +28,7 @@ const (
 // The team link candidates are one entry per distinct issue, not per stored row
 // version: with every owned linked issue stored in 20 unmerged versions, the
 // candidate statement's peak memory stays at the slope of the single-version
-// read.
+// read, and its ids are the set the per-version statement read.
 func TestTeamLinkCandidatesFollowDistinctIssuesNotRowVersionsOnRealClickHouse(t *testing.T) {
 	if raceDetectorEnabled {
 		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
@@ -61,6 +62,17 @@ func TestTeamLinkCandidatesFollowDistinctIssuesNotRowVersionsOnRealClickHouse(t 
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(number + 1000), 1, 'native', '', ?, ? FROM numbers(?)`,
 		repoUUID("repo-reached"), at, org, uint64(candidateVersionsIssues))
+	// Outside the candidates: owned issues with no link row, and linked issues
+	// of a project no requested team owns.
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
+SELECT concat('unlinked-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, ? FROM numbers(1000)`,
+		repoUUID("repo-filler"), org, at, project, at)
+	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
+SELECT concat('other-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', 'proj-other', NULL, ? FROM numbers(1000)`,
+		repoUUID("repo-filler"), org, at, at)
+	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT ?, concat('other-', repeat('x', 96), '-', toString(number)), toUInt32(number + 900000), 1, 'native', '', ?, ? FROM numbers(1000)`,
+		repoUUID("repo-reached"), at, org)
 	version := func(v int) {
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
 SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, addSeconds(?, ?) FROM numbers(?)`,
@@ -92,7 +104,33 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 		}
 		return lowest, entries
 	}
+	// The candidate set is the per-version statement's set: the same ids, each
+	// once, at one version and at twenty.
+	sameSet := func(label string) {
+		t.Helper()
+		sets := make([][]string, 0, 2)
+		for _, statement := range []string{devhealthfacts.TeamLinkCandidatesPerVersionStatementForTest(), devhealthfacts.TeamLinkCandidatesStatementForTest()} {
+			var ids []string
+			if err := readers.QueryOrgScopedNamed(ctx, query, "TeamLinkCandidatesDifferential", statement, org, []string{teamID}, func(row readers.RowScanner) error {
+				return row.Scan(&ids)
+			}); err != nil {
+				t.Fatalf("%s: candidates: %v: %s", label, err, readFailureCause(err))
+			}
+			sets = append(sets, ids)
+		}
+		perVersion, distinct := slices.Compact(slices.Sorted(slices.Values(sets[0]))), slices.Sorted(slices.Values(sets[1]))
+		if !slices.Equal(perVersion, distinct) {
+			t.Fatalf("%s: the distinct candidates differ from the per-version statement's set: %d vs %d ids", label, len(distinct), len(perVersion))
+		}
+		if len(slices.Compact(slices.Clone(distinct))) != len(distinct) {
+			t.Fatalf("%s: the distinct candidates repeat an id", label)
+		}
+		if len(distinct) != candidateVersionsIssues {
+			t.Fatalf("%s: %d distinct candidates, want the %d owned linked issues (no unlinked or other-project issue)", label, len(distinct), candidateVersionsIssues)
+		}
+	}
 	version(0)
+	sameSet("one version")
 	small, smallEntries := read("one version")
 	for v := 1; v < candidateVersionsCount; v++ {
 		version(v)
@@ -104,6 +142,7 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	if active < candidateVersionsCount {
 		t.Fatalf("%d active work_items parts, want at least %d (the unmerged versions were not kept)", active, candidateVersionsCount)
 	}
+	sameSet("twenty versions")
 	large, largeEntries := read("twenty versions")
 	t.Logf("VERSIONS team link candidate statement: %d array entries and peak %d bytes (%.1f%% of the API statement cap) with one version of %d issues; %d entries and peak %d bytes (%.1f%%) with %d versions (bound %.2fx + %d)",
 		smallEntries, small, 100*float64(small)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateVersionsIssues,
