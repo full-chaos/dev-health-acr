@@ -26,7 +26,7 @@ func TestSchemaRefusedInterpretDrawNamesTheBrokenStage(t *testing.T) {
 		{"prose", "I could not interpret this question.", contractsv1.ContextFabricInterpretationRejectionOutputNotJSON},
 		{"empty object text", " ", contractsv1.ContextFabricInterpretationRejectionOutputNotJSON},
 		{"wrong type", `{"shape":5,"requested_judgment":"x","fact_requirements":[],"clarification_needed":false,"time_context":{"axis":"current"}}`, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation},
-		{"null optional", `{"shape":"open","requested_judgment":"x","fact_requirements":[],"clarification_needed":false,"time_context":{"axis":"current","as_of":null}}`, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation},
+		{"null optional", `{"shape":"open","requested_judgment":"x","fact_requirements":[],"clarification_needed":false,"time_context":{"axis":"current"},"subject_terms":null}`, contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &scriptedLLM{model: "claude-haiku-5-5", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{Text: tc.reply}}}}
@@ -86,7 +86,7 @@ func TestSchemaRefusalLineIsWrittenAtInfo(t *testing.T) {
 	recorder := &levelRecorder{Handler: slog.NewTextHandler(io.Discard, nil), levels: map[string]slog.Level{}}
 	gen := llmGenerator{logger: slog.New(recorder)}
 	var err error
-	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		t.Fatal(err)
 	}
 	gen.clients = LLMClients{"m": &scriptedLLM{model: "m", replies: []llmReply{{result: llm.Result{Text: `{"shape":5}`}}}}}
