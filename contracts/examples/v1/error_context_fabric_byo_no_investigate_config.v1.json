@@ -1,0 +1,13 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR034",
+  "error": {
+    "code": "feature_not_enabled",
+    "message": "This organization's saved model keys are for other uses only; none is set for investigations",
+    "http_status": 403,
+    "retryable": false,
+    "details": {
+      "reason": "byo_no_investigate_config"
+    }
+  }
+}
