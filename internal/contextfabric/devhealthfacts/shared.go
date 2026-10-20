@@ -1307,12 +1307,12 @@ import (
 // series read takes the days before its end, so today's partial day is not read.
 // An answer saved under v252 holds today's rows.
 //
-// v253 -> v254: the team project link rows stream the organization's link rows
-// and pull requests past the owned projects' issues instead of holding them as
-// a join side, and the team linked pull request counts read only the reached
-// repositories' pull requests. The rows are unchanged; a team pull-request
-// read for an organization with many links outside the team's owned projects,
-// refused under v253 at the API statement memory cap, is served.
+// v253 -> v254: the team project link rows hold only the owned projects'
+// work items, their links and those links' pull requests, and the team linked
+// pull request counts read only the reached repositories' pull requests. The
+// rows are unchanged; a team pull-request read for an organization with many
+// links outside the team's owned projects, refused under v253 at the API
+// statement memory cap, is served.
 const QueryVersion = "devhealthfacts.clickhouse.v254"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

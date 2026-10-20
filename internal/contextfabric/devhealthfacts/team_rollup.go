@@ -147,42 +147,26 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // teamProjectLinkRowsSQL is the one team-to-linked-pull-request reach: a
 // derived table (team_id, work_item_id, pr_repo_id, pr_number, link_rank) of
 // the issues of every project a team owns (team_project_ownership, under the
-// bound's ownership rule) joined to their admitted link rows (the work item is
-// an issue, the tier is known, the linked pull request exists). teamParam
-// names the Array(String) binding holding the team ids; the bound's bindings
-// must ride with the statement. It is the same chain teamRepositories walks.
-// Work items are read twice, for linked issues of the owned projects only: the
-// link ids prune work_items granules on its primary key, first on the unmerged
-// rows to name the owned projects' candidates, then with FINAL on those
-// candidates, so the statement's cost follows the organization's links, not
-// the size of its work item table. The join order holds only the owned
-// projects' side in memory: the organization's link rows stream past the owned
-// issues, and its pull requests stream past the owned issues' links; the
-// swap of join sides is off so the planner keeps that order.
+// bound's ownership rule) joined to their admitted link rows
+// (the work item is an issue, admittedLinkedPullRequestRowsAmongSQL: the
+// linked pull request exists). teamParam names the
+// Array(String) binding holding the team ids; the bound's bindings must ride
+// with the statement, and the statement's context must carry the teams' link
+// candidates (withTeamLinkCandidates). It is the same chain teamRepositories
+// walks. The work items are read with FINAL for the owned projects' keys, and
+// the link rows and the pull requests joined to them for the candidates' link
+// hashes only; the join on the real work item id keeps exactly the owned
+// issues' rows. No join side holds the organization's other links.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := teamOwnedResolvedProjectsSQL(teamParam, bound)
 	keys := teamOwnedProjectKeyCandidatesSQL(teamParam, bound)
-	// The linked ids are intersected with the owned projects' work items on
-	// the unmerged rows first (a row of any version carrying an owned project
-	// is a superset of the work items whose latest version does), so the FINAL
-	// read below holds only those candidates, not every linked work item.
-	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
-      AND cp.project_id IN ` + keys + `)`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
-      AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
-	ownedIssues := `(SELECT o.team_id AS team_id, w.work_item_id AS work_item_id FROM ` + owned + ` AS o
-    INNER JOIN ` + issues + ` AS w ON w.provider = o.provider AND w.project_id = o.join_key)`
+    WHERE cw.org_id = {org_id:String} AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
 	return `(
-  SELECT DISTINCT lw.team_id AS team_id, lw.work_item_id AS work_item_id, lw.pr_repo_id AS pr_repo_id, lw.pr_number AS pr_number, lw.link_rank AS link_rank
-  FROM git_pull_requests AS pr FINAL
-  INNER JOIN (
-    SELECT ow.team_id AS team_id, l.org_id AS org_id, l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
-    FROM work_graph_issue_pr AS l FINAL
-    INNER JOIN ` + ownedIssues + ` AS ow ON l.work_item_id = ow.work_item_id
-    WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
-  ) AS lw ON pr.org_id = lw.org_id AND pr.repo_id = lw.pr_repo_id AND pr.number = lw.pr_number
-  SETTINGS query_plan_join_swap_table = 0
+  SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
+  FROM ` + owned + ` AS o
+  INNER JOIN ` + issues + ` AS w ON w.provider = o.provider AND w.project_id = o.join_key
+  INNER JOIN ` + admittedLinkedPullRequestRowsAmongSQL(teamLinkCandidateHashesSent) + ` AS l ON l.work_item_id = w.work_item_id
 )`
 }
 
@@ -247,7 +231,11 @@ func boundReaderBindings(bound factTimeBound) []readers.Binding {
 // reachedOnlyRepositories so it is counted once, as owned.
 func teamProjectReachedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string][]teamReachedRepo, error) {
 	reached := map[string][]teamReachedRepo{}
-	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectReachedRepositories", orgID, teamIDs,
+	ctx, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, bound)
+	if err != nil || !ok {
+		return reached, err
+	}
+	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectReachedRepositories", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "lr.team_id", repoExpr: "lr.pr_repo_id", repoType: "UUID"},
 		boundReaderBindings(bound),
 		func(having string, limit int) string {

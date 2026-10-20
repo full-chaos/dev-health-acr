@@ -55,9 +55,8 @@ const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id 
 
 const projectPopulationMarker = "-- project population"
 
-// teamLinkRowsMarker is in every statement that reads the team project link
-// rows and in no other.
-const teamLinkRowsMarker = "SETTINGS query_plan_join_swap_table = 0"
+// teamLinkCandidatesMarker is in the team link candidate statement and no other.
+const teamLinkCandidatesMarker = "SELECT groupArray(cp.work_item_id) FROM work_items AS cp"
 
 type fakeClient struct {
 	tables  []fakeTable
@@ -72,6 +71,17 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		for _, table := range c.tables {
 			if strings.Contains(table.match, projectPopulationMarker) {
 				return &fakeScanner{rows: table.rowsFor(statement)}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
+	// The team link candidates are answered only by a table that names their
+	// marker; a test that did not seed them gets no row, and the link-row
+	// statements after them are answered by their own tables.
+	if strings.Contains(statement, teamLinkCandidatesMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, teamLinkCandidatesMarker) {
+				return &fakeScanner{rows: table.rows}, nil
 			}
 		}
 		return &fakeScanner{}, nil
@@ -114,11 +124,6 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		return &fakeScanner{rows: [][]any{{[]string{}, []string{}}}}, nil
 	}
 	for _, table := range c.tables {
-		// The team link rows also read git_pull_requests; a table matched by
-		// that table name alone answers the repository pull request reads.
-		if strings.Contains(statement, teamLinkRowsMarker) && strings.HasPrefix(table.match, "FROM git_pull_requests") {
-			continue
-		}
 		if strings.Contains(statement, table.match) {
 			if table.err != nil {
 				return nil, table.err

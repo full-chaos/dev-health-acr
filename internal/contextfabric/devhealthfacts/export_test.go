@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -33,26 +36,75 @@ func TeamProjectLinkRowsSQLForTest() string {
 	return teamProjectLinkRowsSQL("ids", factTimeBound{})
 }
 
-// TeamProjectLinkRowsMainSQLForTest is the team project link rows statement as
-// it read before its join order kept only the owned projects' side in memory:
-// the owned issues, then every admitted link row of the organization joined to
-// its pull request, as the join's right side. A differential and memory
-// oracle only.
-func TeamProjectLinkRowsMainSQLForTest() string {
-	bound := factTimeBound{}
-	owned := teamOwnedResolvedProjectsSQL("ids", bound)
-	keys := teamOwnedProjectKeyCandidatesSQL("ids", bound)
-	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
-      AND cp.project_id IN ` + keys + `)`
-	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
-      AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
-	return `(
-  SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
-  FROM ` + owned + ` AS o
-  INNER JOIN ` + issues + ` AS w ON w.provider = o.provider AND w.project_id = o.join_key
-  INNER JOIN ` + admittedLinkedPullRequestRowsSQL + ` AS l ON l.work_item_id = w.work_item_id
-)`
+// TeamProjectLinkRowsUnprunedSQLForTest is the team project link rows with
+// their two candidate hash prunes removed: the rows the prunes must keep.
+func TeamProjectLinkRowsUnprunedSQLForTest() string {
+	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
+	for _, cut := range [][2]string{
+		{admittedLinkedPullRequestRowsAmongSQL(teamLinkCandidateHashesSent), admittedLinkedPullRequestRowsSQL},
+	} {
+		if strings.Count(statement, cut[0]) != 1 {
+			panic("team project link rows prune not found: " + cut[0])
+		}
+		statement = strings.Replace(statement, cut[0], cut[1], 1)
+	}
+	return statement
+}
+
+// TeamProjectLinkRowsEveryHashSQLForTest is the team project link rows with
+// the candidate hash prunes widened to every link hash of the organization:
+// each hash of a link row collides, as the worst case of a colliding hash.
+func TeamProjectLinkRowsEveryHashSQLForTest() string {
+	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
+	if strings.Count(statement, teamLinkCandidateHashesSent) != 2 {
+		panic("team project link rows hash prunes not found")
+	}
+	return strings.ReplaceAll(statement, teamLinkCandidateHashesSent, linkedWorkItemIDHashesSQL)
+}
+
+// teamLinkCandidatesSQL is the team link candidate set as a subquery: the
+// form a statement inlines it in when it runs without the external table.
+func teamLinkCandidatesSQL(bound factTimeBound) string {
+	return `(SELECT cp.work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound) + `)`
+}
+
+// inlineTeamLinkCandidates puts the team link candidates the statement takes
+// as an external table back into its text.
+func inlineTeamLinkCandidates(statement string, bound factTimeBound) string {
+	return strings.ReplaceAll(statement, teamLinkCandidateHashesSent, `(SELECT cityHash64(work_item_id) FROM `+teamLinkCandidatesSQL(bound)+`)`)
+}
+
+// TeamLinkCandidatesTableName is the external table the team project link rows
+// read their candidates from.
+const TeamLinkCandidatesTableName = teamLinkCandidatesTable
+
+// TeamLinkCandidatesStatementForTest is the statement that reads the team
+// link candidates (no bound): one row, one Array(String).
+func TeamLinkCandidatesStatementForTest() string {
+	return teamLinkCandidatesStatement(factTimeBound{})
+}
+
+// TeamLinkCandidatesTableForTest is the external table the team project link
+// rows read their candidates from.
+func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
+	return teamLinkCandidatesExternalTable(ids)
+}
+
+// TeamLinkCandidatesContextForTest reads the teams' link candidates through
+// client (no bound) and returns ctx carrying them, empty or not.
+func TeamLinkCandidatesContextForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (context.Context, error) {
+	var ids []string
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamLinkCandidates", teamLinkCandidatesStatement(factTimeBound{}), orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&ids)
+	})
+	if err != nil {
+		return nil, err
+	}
+	table, err := teamLinkCandidatesExternalTable(ids)
+	if err != nil {
+		return nil, err
+	}
+	return clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), nil
 }
 
 // TeamProjectLinkRowsPreStreamingSQLForTest is the team project link rows
