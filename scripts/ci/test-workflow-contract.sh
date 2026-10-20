@@ -741,7 +741,9 @@ check_testcontainers_session_reap() {
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
-    grep -qE "^ +[\"']?TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX[\"']? *:" <<<"$block" || continue
+    # Any spelling outside a whole-line comment counts: a block or flow
+    # mapping, a quoted key, a GITHUB_ENV write.
+    sed '/^[[:space:]]*#/d' <<<"$block" | grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' || continue
     if grep -qE '^ {4}services:' <<<"$block"; then
       printf 'job "%s" starts testcontainers and declares service containers; the post-reap census fails on any container it did not reap\n' "$job" >&2
       status=1
@@ -1296,6 +1298,29 @@ cat >> "$quoted_step_env" <<'YAML'
         run: go test ./internal/runtime/postgres
 YAML
 assert_check_fails 'added a testcontainers job with a quoted step-level prefix and no reap' check_testcontainers_session_reap "$quoted_step_env"
+flow_env="$tmpdir/flow-env.yml"
+cat "$workflow" > "$flow_env"
+cat >> "$flow_env" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    env: { TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/example }
+    steps:
+      - name: probe
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job with a flow-style env mapping and no reap' check_testcontainers_session_reap "$flow_env"
+env_file_prefix="$tmpdir/env-file-prefix.yml"
+cat "$workflow" > "$env_file_prefix"
+cat >> "$env_file_prefix" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: export the mirror prefix
+        run: echo "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=ghcr.io/example" >> "$GITHUB_ENV"
+      - name: probe
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job that sets the prefix through GITHUB_ENV and no reap' check_testcontainers_session_reap "$env_file_prefix"
 step_session="$tmpdir/step-session.yml"
 awk -v line="      TESTCONTAINERS_SESSION_ID: ci-\${{ github.run_id }}-\${{ github.run_attempt }}-\${{ github.job }}-\${{ strategy.job-index }}" '!done && $0 == line { sub(/^      /, "          "); done=1 } { print }' "$workflow" > "$step_session"
 cmp -s "$workflow" "$step_session" && { printf 'NEGATIVE CONTROL SETUP FAILED: step_session did not change the workflow\n' >&2; exit 1; }
