@@ -104,7 +104,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Select the unit and race shards this change reaches
         id: reach
         env:
@@ -289,7 +289,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Verify Go formatting
         run: make fmt-check
       - name: Vet Go packages
@@ -301,6 +301,8 @@ jobs:
       # packages would still report success.
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
+      - name: Test the measured race budget cut
+        run: scripts/ci/test-race-budget-cut.sh
       - name: Test the reached-shard selection and the lane check that accepts its skips
         run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
@@ -442,6 +444,8 @@ jobs:
       # mirrors everything (including its own copy of the reaper) under its
       # own repo-scoped path instead -- see mirror-images.yml.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -611,6 +615,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   # Observed race dedup, step two. Runs after the race jobs of devhealthfacts
   # and devhealthsource (it needs all seven, whatever their result) and decides
@@ -719,6 +726,8 @@ jobs:
       # mirrors everything (including its own copy of the reaper) under its
       # own repo-scoped path instead -- see mirror-images.yml.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -888,6 +897,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   # Runner-routing contract: race shards stay HOSTED-ONLY for now. Routed
   # to the pool alongside scripts/unit/build/race-devhealthschema in an
@@ -919,6 +931,8 @@ jobs:
       # CHAOS-4855 R1: see the unit job's env above for why this is
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -927,7 +941,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
@@ -989,6 +1003,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   # CHAOS-3974: internal/contextfabric/devhealthschema's full-repo
   # declaration-closure tests walk every file in the module, so their cost
@@ -1025,7 +1042,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Run isolated devhealthschema race suite
         run: |
           set -euo pipefail
@@ -1093,6 +1110,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1100,7 +1119,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1132,6 +1151,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
   race-devhealthfacts-heavy:
     name: race (devhealthfacts heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1144,6 +1166,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1151,7 +1175,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1181,6 +1205,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
   race-devhealthfacts-mid:
     name: race (devhealthfacts mid, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1193,6 +1220,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1200,7 +1229,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1230,6 +1259,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
   race-devhealthfacts-fourth:
     name: race (devhealthfacts fourth, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1242,6 +1274,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1249,7 +1283,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1279,6 +1313,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   # CHAOS-6342: devhealthsource is the OTHER shared-container HEAVY package
   # (see race-devhealthfacts above) and used to round-robin into race shard 1
@@ -1309,6 +1346,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1316,7 +1355,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1347,6 +1386,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
   race-devhealthsource-heavy:
     name: race (devhealthsource heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1358,6 +1400,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1365,7 +1409,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1398,6 +1442,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
   race-devhealthsource-mid:
     name: race (devhealthsource mid, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -1409,6 +1456,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1416,7 +1465,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1447,6 +1496,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   # The O4 oracle package (factoracle) seeds a ClickHouse store from the venue
   # capture and replays 95 cases; it ran 100s in a shared race shard and was
@@ -1469,6 +1521,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1476,7 +1530,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1506,6 +1560,64 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
+
+  # internal/mcp runs alone: in a shared race shard its package time swung
+  # 225-380s with the sibling packages and tripped the 85% guard at 357s of
+  # 420s. Its own budget is GOTEST_MCP_TIMEOUT (Makefile).
+  race-mcp:
+    name: race (mcp, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-mcp')
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: ${{ runner.environment == 'github-hosted' }}
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run isolated mcp race suite
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated mcp)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'mcp (isolated scope)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-mcp
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   race-factoracle-heavy:
     name: race (factoracle heavy, isolated scope)
@@ -1518,6 +1630,8 @@ jobs:
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1525,7 +1639,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1557,6 +1671,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
 
   build:
     runs-on: ubuntu-latest
@@ -1572,6 +1689,8 @@ jobs:
       # CHAOS-4855 R1: see the unit job's env above for why this is
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -1598,6 +1717,9 @@ jobs:
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
   contracts:
     needs:
       - plan
@@ -2100,6 +2222,7 @@ jobs:
       - race-devhealthsource-mid
       - race-factoracle
       - race-factoracle-heavy
+      - race-mcp
       - build
       - contracts
       - container-contract-smoke

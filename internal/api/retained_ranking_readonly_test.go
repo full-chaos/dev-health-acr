@@ -22,7 +22,8 @@ func (s retainedRankingReadOnlyStore) Save(context.Context, storage.Principal, c
 }
 
 // ResolveSubjects remains available for the existing live authorization check;
-// fresh discovery is forbidden on a reuse hit, like the fact/model spies.
+// no fresh discovery on a reuse hit, like the fact/model spies, except the
+// bounded removed-team recheck for team answers, which finds none here.
 type retainedRankingReuseGraph struct {
 	surfaceGraph
 	t *testing.T
@@ -31,4 +32,8 @@ type retainedRankingReuseGraph struct {
 func (g retainedRankingReuseGraph) DiscoverContext(context.Context, storage.Principal, cf.GraphDiscoveryRequest) (cf.GraphContext, error) {
 	g.t.Error("retained ranking reuse attempted fresh discovery")
 	return cf.GraphContext{}, errors.New("unexpected retained result discovery")
+}
+
+func (g retainedRankingReuseGraph) RemovedTeams(context.Context, storage.Principal, cf.ResolvedGraphBinding, []cf.SubjectRef) ([]cf.SubjectRef, error) {
+	return nil, nil
 }
