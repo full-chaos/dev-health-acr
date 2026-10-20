@@ -30,18 +30,6 @@ var sizeproofTests = []string{
 	"TestEmbedproviderEnvVarsListMatchesPackageSource",
 }
 
-// sizeproofSeedSymbols is the one list of production-size seeding symbols. A
-// Test function that is not tagged sizeproof must not reference any of them.
-var sizeproofSeedSymbols = []string{
-	"edgePageCostItems",
-	"costLargestLinks",
-	"costPastBoundLinks",
-	"walkMemoryLinks",
-	"walkMemorySeed",
-	"seedScopedOrganization",
-	"scopedFillers",
-}
-
 type sizeproofSource struct {
 	name   string
 	tagged bool
@@ -92,9 +80,43 @@ func sizeproofFileTagged(src string) bool {
 	return false
 }
 
+// sizeproofTaggedSymbols returns every top-level name declared in a file
+// tagged sizeproof: the production-size seeds, helpers and constants. It is
+// derived from the source, so a new seed constant needs no list entry.
+func sizeproofTaggedSymbols(sources []sizeproofSource) map[string]bool {
+	names := map[string]bool{}
+	for _, s := range sources {
+		if !s.tagged {
+			continue
+		}
+		for _, d := range s.file.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil {
+					names[d.Name.Name] = true
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					switch spec := spec.(type) {
+					case *ast.ValueSpec:
+						for _, n := range spec.Names {
+							names[n.Name] = true
+						}
+					case *ast.TypeSpec:
+						names[spec.Name.Name] = true
+					}
+				}
+			}
+		}
+	}
+	delete(names, "_")
+	return names
+}
+
 func sizeproofViolations(sources []sizeproofSource) []string {
 	var out []string
 	declared := map[string]bool{}
+	tagged := sizeproofTaggedSymbols(sources)
 	for _, s := range sources {
 		for _, d := range s.file.Decls {
 			fn, ok := d.(*ast.FuncDecl)
@@ -110,16 +132,14 @@ func sizeproofViolations(sources []sizeproofSource) []string {
 			if s.tagged {
 				continue
 			}
+			seen := map[string]bool{}
 			ast.Inspect(fn, func(n ast.Node) bool {
 				id, ok := n.(*ast.Ident)
-				if !ok {
+				if !ok || !tagged[id.Name] || seen[id.Name] {
 					return true
 				}
-				for _, sym := range sizeproofSeedSymbols {
-					if id.Name == sym {
-						out = append(out, s.name+": "+fn.Name.Name+" uses production-size seed symbol "+sym+" without `//go:build "+sizeproofTag+"`; tag the file (production-size seed symbols: "+strings.Join(sizeproofSeedSymbols, ", ")+", defined in sizeproofSeedSymbols)")
-					}
-				}
+				seen[id.Name] = true
+				out = append(out, s.name+": "+fn.Name.Name+" uses "+id.Name+", declared in a file tagged `//go:build "+sizeproofTag+"` (production-size seeds and helpers; derived by sizeproofTaggedSymbols, no list to maintain); tag this file too")
 				return true
 			})
 		}
@@ -146,14 +166,20 @@ func TestSizeproofGuardFlagsAnUntaggedProductionSizeTest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("a_test.go", "//go:build sizeproof\n\npackage falkorgraph\n\nfunc TestTheScopedCensusCostAtProductionSize() {}\nfunc TestEdgePageReadsOnlyTheOriginsEdges() {}\nfunc TestOneRepositoryWalkStaysSmallOnAWideLinkPopulation() {}\nfunc TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores() {}\nfunc TestEmbedproviderEnvVarsListMatchesPackageSource() {}\n")
+	write("a_test.go", "//go:build sizeproof\n\npackage falkorgraph\n\nfunc TestTheScopedCensusCostAtProductionSize() {}\nfunc TestEdgePageReadsOnlyTheOriginsEdges() {}\nfunc TestOneRepositoryWalkStaysSmallOnAWideLinkPopulation() {}\nfunc TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores() {}\nfunc TestEmbedproviderEnvVarsListMatchesPackageSource() {}\nconst walkMemoryLinks = 1\nconst edgePageCostItems = 2\nconst edgePageCostRepos = 3\nconst walkMemoryDimension = 4\n")
 	if v := sizeproofViolations(readSizeproofSources(t, dir)); len(v) != 0 {
 		t.Fatalf("a fully tagged fixture must pass, got %v", v)
 	}
 	write("b_test.go", "package falkorgraph\n\nfunc TestFifthProof() { _ = walkMemoryLinks }\n")
 	v := sizeproofViolations(readSizeproofSources(t, dir))
-	if len(v) != 1 || !strings.Contains(v[0], "walkMemoryLinks") || !strings.Contains(v[0], "sizeproofSeedSymbols") {
+	if len(v) != 1 || !strings.Contains(v[0], "walkMemoryLinks") || !strings.Contains(v[0], "sizeproofTaggedSymbols") {
 		t.Fatalf("an untagged test using a seed symbol must fail naming the list, got %v", v)
+	}
+	for _, sym := range []string{"edgePageCostRepos", "walkMemoryDimension", "edgePageCostItems"} {
+		write("b_test.go", "package falkorgraph\n\nfunc TestFifthProof() { _ = "+sym+" }\n")
+		if v := sizeproofViolations(readSizeproofSources(t, dir)); len(v) != 1 || !strings.Contains(v[0], sym) {
+			t.Fatalf("an untagged test using the tagged symbol %s must fail, got %v", sym, v)
+		}
 	}
 	for _, header := range []string{"//go:build !race\n\n", "//go:build sizeproof || race\n\n", "//go:build sizeproof || linux\n\n", "//go:build sizeproof && !race\n\n", ""} {
 		write("b_test.go", header+"package falkorgraph\n\nfunc TestFifthProof() { _ = edgePageCostItems }\n")
