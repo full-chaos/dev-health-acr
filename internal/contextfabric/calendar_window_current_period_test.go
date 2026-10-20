@@ -347,3 +347,33 @@ func TestWorkItemPeriodQuestionOnTheFirstOfTheMonthIsAnsweredWhenClarificationIs
 		}
 	}
 }
+
+func TestDeclinedClarificationInfersOnlyAWindowTheQuestionNamesAsAPeriod(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for _, class := range []WindowClass{"", WindowClassStateSnapshot} {
+		interpretation := InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}}, WindowClass: class}
+
+		named := ProposeWindowFromSpans("Which work items were created this month?")
+		if got := composeEffectiveWindowFor(interpretation, nil, named, windowPriorProposal{}, now, true); got == nil || got.Provenance != WindowInferredDefault {
+			t.Fatalf("class %q, a named period: window = %+v, want an inferred_default window", class, got)
+		}
+		if got := composeEffectiveWindowFor(interpretation, nil, named, windowPriorProposal{}, now, false); got != nil {
+			t.Fatalf("class %q, clarification allowed: window = %+v, want the refuse-to-guess nil unchanged", class, got)
+		}
+
+		pointInTime := ProposeWindowFromSpans("What was the state of the work items as of the end of this month?")
+		if !pointInTime.PointInTime || pointInTime.Reason != WindowBindRoutedInferred {
+			t.Fatalf("fixture defect: binder outcome = %+v, want a routed point-in-time span", pointInTime)
+		}
+		if got := composeEffectiveWindowFor(interpretation, nil, pointInTime, windowPriorProposal{}, now, true); got != nil {
+			t.Fatalf("class %q, a point in time: window = %+v, want none: an as-of instant is never an evidence window", class, got)
+		}
+
+		unnamed := ProposeWindowFromSpans("Which work items were created?")
+		prior := windowPriorProposal{OK: true, RelativeID: RelativeWindowTrailing90D}
+		if got := composeEffectiveWindowFor(interpretation, nil, unnamed, prior, now, true); got != nil {
+			t.Fatalf("class %q, no period named, a prior proposal: window = %+v, want none: a prior never rescues a refuse-to-guess", class, got)
+		}
+	}
+}
