@@ -20,15 +20,21 @@ const (
 	candidateVersionsOrg    = "4f7a2c91-8e35-4b06-a1d8-6c09e3b5f472"
 	candidateVersionsIssues = 24_000
 	candidateVersionsCount  = 20
+	// candidateVersionsBase is the smaller version count the slope compares
+	// against. At one version the scan is a single partial block; from ten on
+	// both sides read full blocks, so the slope sees the statement, not the
+	// scan's block buffers.
+	candidateVersionsBase = 10
 	// candidateVersionsFloor is the memory a statement may add beyond the
 	// slope when only the number of row versions grows.
 	candidateVersionsFloor = uint64(2 << 20)
 )
 
 // The team link candidates are one entry per distinct issue, not per stored row
-// version: with every owned linked issue stored in 20 unmerged versions, the
-// candidate statement's peak memory stays at the slope of the single-version
-// read, and its ids are the set the per-version statement read.
+// version: with every owned linked issue stored in 10 and then 20 unmerged
+// versions, the candidate array holds one entry per issue, the statement's peak
+// memory stays at the slope of the 10-version read, and its ids are the set the
+// per-version statement read.
 func TestTeamLinkCandidatesFollowDistinctIssuesNotRowVersionsOnRealClickHouse(t *testing.T) {
 	if raceDetectorEnabled {
 		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
@@ -131,8 +137,12 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	}
 	version(0)
 	sameSet("one version")
-	small, smallEntries := read("one version")
-	for v := 1; v < candidateVersionsCount; v++ {
+	for v := 1; v < candidateVersionsBase; v++ {
+		version(v)
+	}
+	sameSet("ten versions")
+	small, smallEntries := read("ten versions")
+	for v := candidateVersionsBase; v < candidateVersionsCount; v++ {
 		version(v)
 	}
 	var active uint64
@@ -144,11 +154,14 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	}
 	sameSet("twenty versions")
 	large, largeEntries := read("twenty versions")
-	t.Logf("VERSIONS team link candidate statement: %d array entries and peak %d bytes (%.1f%% of the API statement cap) with one version of %d issues; %d entries and peak %d bytes (%.1f%%) with %d versions (bound %.2fx + %d)",
-		smallEntries, small, 100*float64(small)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateVersionsIssues,
+	t.Logf("VERSIONS team link candidate statement over %d issues: %d array entries and peak %d bytes (%.1f%% of the API statement cap) with %d versions; %d entries and peak %d bytes (%.1f%%) with %d versions (bound %.2fx + %d)",
+		candidateVersionsIssues, smallEntries, small, 100*float64(small)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateVersionsBase,
 		largeEntries, large, 100*float64(large)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateVersionsCount, statementMemorySlope, candidateVersionsFloor)
+	if smallEntries != candidateVersionsIssues || largeEntries != candidateVersionsIssues {
+		t.Errorf("team link candidate array held %d entries with %d versions and %d with %d, want one per issue (%d)", smallEntries, candidateVersionsBase, largeEntries, candidateVersionsCount, candidateVersionsIssues)
+	}
 	if float64(large) > statementMemorySlope*float64(small)+float64(candidateVersionsFloor) {
-		t.Errorf("team link candidate statement grew with the row versions: peak %d bytes with %d versions, %d with one, over the %.2fx slope plus %d", large, candidateVersionsCount, small, statementMemorySlope, candidateVersionsFloor)
+		t.Errorf("team link candidate statement grew with the row versions: peak %d bytes with %d versions, %d with %d, over the %.2fx slope plus %d", large, candidateVersionsCount, small, candidateVersionsBase, statementMemorySlope, candidateVersionsFloor)
 	}
 }
 
