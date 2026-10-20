@@ -147,7 +147,7 @@ FROM (
 	)
 	WHERE repo_uuid != ''
 ) AS m
-INNER JOIN (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM `+teamProjectLinkRowsSQL("ids", bound)+`) AS lr
+INNER JOIN (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM `+inlineTeamLinkCandidates(teamProjectLinkRowsSQL("ids", bound), bound)+`) AS lr
 	ON m.repo_uuid = toString(lr.pr_repo_id) AND m.pr_number = toString(lr.pr_number)
 WHERE (lr.team_id, m.repo_uuid) NOT IN (SELECT team_id, repo_key FROM `+ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound))+`)
 GROUP BY lr.team_id

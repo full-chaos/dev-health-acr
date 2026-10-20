@@ -29,19 +29,21 @@ const (
 var orgLinksCeilingSizes = []int{24_000, 90_000, 400_000}
 
 // linkRowStatement is one link-row statement in query_log: its peak memory,
-// its read_bytes and the max_threads it ran with.
+// its read_bytes, the max_threads it ran with, and whether it is the team link
+// candidate statement (which still reads the organization's linked ids).
 type linkRowStatement struct {
 	peak      uint64
 	readBytes uint64
 	threads   string
+	candidate bool
 }
 
 // The team pull-request read is served for an organization with 400,000 link
 // rows outside the team's owned projects, through the client the hosted API
 // uses (the API statement memory cap at the production max_threads). Each
-// statement that reads the team's project link rows stays under half the cap
-// at that size: the organization's other links stream past the owned
-// projects' issues and are never held as a join side or a set.
+// statement that reads the team's project link rows, and the one that reads
+// the team's link candidates once per read, stays under half the cap at that
+// size: no link-row join side holds the organization's other links.
 func TestTeamPullRequestReadServesAnOrganizationWithManyOutsideLinksUnderTheAPICapOnRealClickHouse(t *testing.T) {
 	if raceDetectorEnabled {
 		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
@@ -161,8 +163,17 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 				label := fmt.Sprintf("%d outside links", size)
 				read(label + " warm-up")
 				runs := []map[uint64]linkRowStatement{read(label), read(label + " again"), read(label + " third")}
-				if len(runs[0]) < 3 {
-					t.Fatalf("%s %s: %d link-row statements logged, want at least 3 (the measurement did not happen)", mode, label, len(runs[0]))
+				if len(runs[0]) < 4 {
+					t.Fatalf("%s %s: %d link-row statements logged, want at least 4: the candidates and three link-row reads (the measurement did not happen)", mode, label, len(runs[0]))
+				}
+				candidates := 0
+				for _, statement := range runs[0] {
+					if statement.candidate {
+						candidates++
+					}
+				}
+				if candidates != 1 {
+					t.Fatalf("%s %s: %d team link candidate statements logged, want 1", mode, label, candidates)
 				}
 				hashes := make([]uint64, 0, len(runs[0]))
 				for hash := range runs[0] {
@@ -183,7 +194,11 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 						lowest, highest = min(lowest, statement.peak), max(highest, statement.peak)
 						readBytes = max(readBytes, statement.readBytes)
 					}
-					t.Logf("SLOPE %s: statement %d peak memory lowest %d, highest %d bytes, read_bytes highest %d at %d outside links (bound %d)", mode, hash, lowest, highest, readBytes, size, orgLinksCeilingBound)
+					kind := "link rows"
+					if runs[0][hash].candidate {
+						kind = "candidates"
+					}
+					t.Logf("SLOPE %s: %s statement %d peak memory lowest %d, highest %d bytes, read_bytes highest %d at %d outside links (bound %d)", mode, kind, hash, lowest, highest, readBytes, size, orgLinksCeilingBound)
 					if highest >= orgLinksCeilingBound {
 						t.Errorf("%s %s: statement %d peaked at %d bytes, want under %d (half the API statement cap)", mode, label, hash, highest, orgLinksCeilingBound)
 					}
@@ -201,7 +216,7 @@ func linkRowStatementsSince(t *testing.T, ctx context.Context, direct clickhouse
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), any(Settings['max_threads']) FROM system.query_log
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), any(Settings['max_threads']), max(position(query, 'SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp') > 0) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.team_project_ownership')) AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr'))
 GROUP BY normalized_query_hash`, markMicros)
@@ -213,10 +228,11 @@ GROUP BY normalized_query_hash`, markMicros)
 	for rows.Next() {
 		var hash, peak, readBytes uint64
 		var threads string
-		if err := rows.Scan(&hash, &peak, &readBytes, &threads); err != nil {
+		var candidate uint8
+		if err := rows.Scan(&hash, &peak, &readBytes, &threads, &candidate); err != nil {
 			t.Fatalf("scan query_log: %v", err)
 		}
-		out[hash] = linkRowStatement{peak: peak, readBytes: readBytes, threads: threads}
+		out[hash] = linkRowStatement{peak: peak, readBytes: readBytes, threads: threads, candidate: candidate == 1}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query_log rows (measurement did not happen): %v", err)

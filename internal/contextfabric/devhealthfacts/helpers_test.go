@@ -55,6 +55,9 @@ const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id 
 
 const projectPopulationMarker = "-- project population"
 
+// teamLinkCandidatesMarker is in the team link candidate statement and no other.
+const teamLinkCandidatesMarker = "SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp"
+
 type fakeClient struct {
 	tables  []fakeTable
 	queries []capturedQuery
@@ -68,6 +71,17 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		for _, table := range c.tables {
 			if strings.Contains(table.match, projectPopulationMarker) {
 				return &fakeScanner{rows: table.rowsFor(statement)}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
+	// The team link candidates are answered only by a table that names their
+	// marker; a test that did not seed them gets no row, and the link-row
+	// statements after them are answered by their own tables.
+	if strings.Contains(statement, teamLinkCandidatesMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, teamLinkCandidatesMarker) {
+				return &fakeScanner{rows: table.rows}, nil
 			}
 		}
 		return &fakeScanner{}, nil

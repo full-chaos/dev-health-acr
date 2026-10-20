@@ -119,7 +119,7 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repoUUID("repo-y"), link.item, uint32(3), float32(1), link.tier, "", link.lastSynced, org)
 	}
-	rowsOf := func(statement string) [][5]string {
+	rowsOf := func(ctx context.Context, statement string) [][5]string {
 		t.Helper()
 		rows, err := direct.Query(ctx, `SELECT toString(team_id), work_item_id, toString(pr_repo_id), toString(pr_number), toString(link_rank) FROM `+statement+` ORDER BY 1, 2, 3, 4, 5`,
 			clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner", "team-other"}))
@@ -137,7 +137,17 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 		}
 		return out
 	}
-	old, current := rowsOf(devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest()), rowsOf(devhealthfacts.TeamProjectLinkRowsSQLForTest())
+	var candidates []string
+	if err := direct.QueryRow(ctx, devhealthfacts.TeamLinkCandidatesStatementForTest(),
+		clickhouse.Named("org_id", org), clickhouse.Named("ids", []string{"team-owner", "team-other"})).Scan(&candidates); err != nil {
+		t.Fatalf("team link candidates: %v", err)
+	}
+	table, err := devhealthfacts.TeamLinkCandidatesTableForTest(candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := clickhouse.Context(ctx, clickhouse.WithExternalTable(table))
+	old, current := rowsOf(ctx, devhealthfacts.TeamProjectLinkRowsPreStreamingSQLForTest()), rowsOf(sent, devhealthfacts.TeamProjectLinkRowsSQLForTest())
 	if len(old) < 7 {
 		t.Fatalf("the seed reached %d link rows before the change, want at least 6: %v", len(old), old)
 	}

@@ -312,6 +312,13 @@ func runLinkRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Cli
 	t.Helper()
 	statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, toString(pr_repo_id), pr_number, link_rank"
 	mark := serverNowMicros(t, ctx, direct)
+	if strings.Contains(rows, devhealthfacts.TeamLinkCandidatesTableName) {
+		sent, err := devhealthfacts.TeamLinkCandidatesContextForTest(ctx, query, org, []string{teamID})
+		if err != nil {
+			t.Fatalf("%s: team link candidates: %v", marker, err)
+		}
+		ctx = sent
+	}
 	var out []string
 	err := readers.QueryOrgScopedNamed(ctx, query, "TeamProjectLinkRows", statement, org, []string{teamID}, func(row contextpacket.ClickHouseRowScanner) error {
 		var team, item, repo string

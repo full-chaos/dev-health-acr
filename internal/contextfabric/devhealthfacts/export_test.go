@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -31,6 +34,51 @@ func RelationCurrentProbeForTest(orgID string) string {
 
 func TeamProjectLinkRowsSQLForTest() string {
 	return teamProjectLinkRowsSQL("ids", factTimeBound{})
+}
+
+// teamLinkCandidatesSQL is the team link candidate set as a subquery: the
+// form a statement inlines it in when it runs without the external table.
+func teamLinkCandidatesSQL(bound factTimeBound) string {
+	return `(SELECT cp.work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound) + `)`
+}
+
+// inlineTeamLinkCandidates puts the team link candidates the statement takes
+// as an external table back into its text.
+func inlineTeamLinkCandidates(statement string, bound factTimeBound) string {
+	return strings.ReplaceAll(statement, teamLinkCandidatesSent, teamLinkCandidatesSQL(bound))
+}
+
+// TeamLinkCandidatesTableName is the external table the team project link rows
+// read their candidates from.
+const TeamLinkCandidatesTableName = teamLinkCandidatesTable
+
+// TeamLinkCandidatesStatementForTest is the statement that reads the team
+// link candidates (no bound): one row, one Array(String).
+func TeamLinkCandidatesStatementForTest() string {
+	return teamLinkCandidatesStatement(factTimeBound{})
+}
+
+// TeamLinkCandidatesTableForTest is the external table the team project link
+// rows read their candidates from.
+func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
+	return teamLinkCandidatesExternalTable(ids)
+}
+
+// TeamLinkCandidatesContextForTest reads the teams' link candidates through
+// client (no bound) and returns ctx carrying them, empty or not.
+func TeamLinkCandidatesContextForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (context.Context, error) {
+	var ids []string
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamLinkCandidates", teamLinkCandidatesStatement(factTimeBound{}), orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&ids)
+	})
+	if err != nil {
+		return nil, err
+	}
+	table, err := teamLinkCandidatesExternalTable(ids)
+	if err != nil {
+		return nil, err
+	}
+	return clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), nil
 }
 
 // TeamProjectLinkRowsPreStreamingSQLForTest is the team project link rows
