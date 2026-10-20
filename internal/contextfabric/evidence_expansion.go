@@ -169,8 +169,9 @@ type EvidenceExpansionDecision struct {
 	// Source is the source-row resolution that ran first (CHAOS-6180).
 	Source SourceRowDecision
 	// StoredServing is the work-item tuple serving decision of the served
-	// citing result, else of the first withheld one. Nil when no admitted
-	// citing result is a work-item tuple.
+	// citing result, else of the first withheld one, else of the first one
+	// that could not be served. Nil when no admitted citing result is a
+	// work-item tuple.
 	StoredServing *WorkItemStoredServingEvent
 	Err           error
 }

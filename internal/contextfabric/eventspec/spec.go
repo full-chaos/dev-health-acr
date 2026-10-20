@@ -4792,7 +4792,7 @@ var EvidenceExpansion = Event{
 var WorkItemStoredServing = Event{
 	ID: "contextfabric.work_item_stored_serving", Msg: "context fabric work item stored serving", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
-	BoundedAggregation: "one classified stored tuple per request (evidence expansion: the served citing tuple, else the first withheld one); coverage counts contain no stored text",
+	BoundedAggregation: "one classified stored tuple per request (evidence expansion: the served citing tuple, else the first withheld one, else the first unservable one); coverage counts contain no stored text",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reuse", "result_by_id", "evidence_expansion"}},

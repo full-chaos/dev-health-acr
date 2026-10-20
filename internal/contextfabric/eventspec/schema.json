@@ -13806,7 +13806,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "one classified stored tuple per request (evidence expansion: the served citing tuple, else the first withheld one); coverage counts contain no stored text",
+    "bounded_aggregation": "one classified stored tuple per request (evidence expansion: the served citing tuple, else the first withheld one, else the first unservable one); coverage counts contain no stored text",
     "fields": [
       {
         "key": "org_id",
