@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/FalkorDB/falkordb-go/v2 v2.1.0
-	github.com/full-chaos/dev-health-go v0.25.0
+	github.com/full-chaos/dev-health-go v0.25.3
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/invopop/jsonschema v0.13.0
