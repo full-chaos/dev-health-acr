@@ -95,25 +95,25 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 				}
 			}
 			t.Run("organization links outside the owned projects", func(t *testing.T) {
-				measureTeamReachAxis(t, ctx, query, direct, orgLinksMemoryOrg, merged, parts, linkFiller("outside", "", "repo-filler"),
+				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, orgLinksMemoryOrg, merged, parts, linkFiller("outside", "", "repo-filler"),
 					"organization links outside the owned projects "+mode, prodLinkedIssues, 90_000, orgLinksMemoryCeilingLinks, axisGuard{smallMax: 40 << 20, largeMax: 100 << 20})
 			})
 			t.Run("prod shape one quarter inside the owned projects", func(t *testing.T) {
 				inside, outside := linkFiller("owned", "proj-owner", "repo-reached"), linkFiller("outside", "", "repo-filler")
-				measureTeamReachAxis(t, ctx, query, direct, prodShapeMemoryOrg, merged, parts, func(exec func(string, ...any), org string, from, count int) {
+				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, prodShapeMemoryOrg, merged, parts, func(exec func(string, ...any), org string, from, count int) {
 					inside(exec, org, from/4, count/4)
 					outside(exec, org, from-from/4, count-count/4)
 				}, "prod shape (6k inside, 18k outside; 4x) "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: prodEstimatePeakBytes, largeMax: 120 << 20})
 			})
 			t.Run("links inside the owned projects", func(t *testing.T) {
-				measureTeamReachAxis(t, ctx, query, direct, ownedLinksMemoryOrg, merged, parts, linkFiller("owned", "proj-owner", "repo-reached"),
+				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownedLinksMemoryOrg, merged, parts, linkFiller("owned", "proj-owner", "repo-reached"),
 					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: 170 << 20})
 			})
 			if merged {
 				return
 			}
 			t.Run("project ownership history", func(t *testing.T) {
-				measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryProjectOrg, false, 0, func(exec func(string, ...any), org string, from, count int) {
+				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownershipHistoryProjectOrg, false, 0, func(exec func(string, ...any), org string, from, count int) {
 					n := count
 					exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
 SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDateTime64('2021-01-01 00:00:00', 3, 'UTC'), (number + ?) * 3600),
@@ -123,7 +123,7 @@ SELECT ?, 'linear', 'team-owner', 'proj-owner', NULL, 'native', addSeconds(toDat
 				}, "project ownership history versions", ownershipHistorySmall, ownershipHistoryLarge, 0, axisGuard{floor: historyFloorBytes})
 			})
 			t.Run("repository ownership history", func(t *testing.T) {
-				measureTeamReachAxis(t, ctx, query, direct, ownershipHistoryRepoOrg, false, 0, func(exec func(string, ...any), org string, from, count int) {
+				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownershipHistoryRepoOrg, false, 0, func(exec func(string, ...any), org string, from, count int) {
 					n := count
 					// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 					exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
@@ -141,7 +141,7 @@ SELECT ?, 'linear', 'team-owner', ?, 'acme/repo-filler', 'exact', 'native', 1, 1
 // owned project, grows the axis grow names from the smaller to the larger
 // size, and applies the slope guard to every statement the team pull request
 // read runs over team_project_ownership and team_repo_ownership.
-func measureTeamReachAxis(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org string, mergedParts bool, wantParts int,
+func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org string, mergedParts bool, wantParts int,
 	grow func(exec func(string, ...any), org string, from, count int), axis string, smallSize, largeSize, ceilingSize int, guard axisGuard) {
 	t.Helper()
 	at := ts(2026, 9, 29, 0, 0, 0)
@@ -170,13 +170,14 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query contextpacket
 		repoUUID("repo-reached"), reachedItem, uint32(1), float32(1), "native", "", at, org)
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
+	ceilingProvider := findProvider(t, devhealthfacts.NewProviders(ceilingQuery), contextfabric.FactPullRequests)
 	window := contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59))
 	filters := []statementFilter{
 		{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"},
 		{Table: "team_project_ownership", QueryContains: "team_project_ownership"},
 		{Table: "team_repo_ownership", QueryContains: "team_repo_ownership"},
 	}
-	read := func(label string) []statementMemory {
+	read := func(label string, provider contextfabric.FactProvider) []statementMemory {
 		var active uint64
 		if err := direct.QueryRow(ctx, `SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = 'work_items' AND active`).Scan(&active); err != nil {
 			t.Fatalf("count active parts: %v", err)
@@ -217,10 +218,10 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query contextpacket
 		merged()
 	}
 	growTo(smallSize)
-	read("warm-up")
-	small := minPeaks(read("smaller"), read("smaller again"), read("smaller third"))
+	read("warm-up", provider)
+	small := minPeaks(read("smaller", provider), read("smaller again", provider), read("smaller third", provider))
 	growTo(largeSize)
-	large := minPeaks(read("larger"), read("larger again"), read("larger third"))
+	large := minPeaks(read("larger", provider), read("larger again", provider), read("larger third", provider))
 	for i := range filters {
 		for hash, peak := range small[i] {
 			t.Logf("SLOPE %s: statement %d (%s) peak memory %d bytes at %d, %d at %d", axis, hash, filters[i].Table, peak, smallSize, large[i][hash], largeSize)
@@ -229,10 +230,14 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query contextpacket
 	}
 	if ceilingSize > 0 {
 		growTo(ceilingSize)
-		ceiling := read(fmt.Sprintf("ceiling (%d)", ceilingSize))
+		ceiling := read(fmt.Sprintf("ceiling (%d)", ceilingSize), ceilingProvider)
 		for i := range filters {
 			for hash, peak := range ceiling[i] {
-				t.Logf("CEILING %s: statement %d (%s) peak memory %d bytes at %d", axis, hash, filters[i].Table, peak, ceilingSize)
+				over := ""
+				if peak >= contextpacket.APIStatementMaxMemoryUsage {
+					over = " (OVER the API statement cap: the hosted API refuses this read at this size)"
+				}
+				t.Logf("CEILING %s: statement %d (%s) peak memory %d bytes at %d%s", axis, hash, filters[i].Table, peak, ceilingSize, over)
 			}
 		}
 	}

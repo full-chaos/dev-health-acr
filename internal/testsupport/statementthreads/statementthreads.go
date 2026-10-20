@@ -29,6 +29,13 @@ func Capped(inner contextpacket.ClickHouseQueryClient, capBytes uint64) contextp
 	return contextpacket.NewMemoryCappedQueryClient(inner, capBytes, contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))
 }
 
+// Unbounded is Capped with no practical cap: production threads for a
+// log-only reading whose statement may exceed the API cap (the reading itself
+// shows by how much).
+func Unbounded(inner contextpacket.ClickHouseQueryClient) contextpacket.ClickHouseQueryClient {
+	return Capped(inner, 1<<40)
+}
+
 // ThreadlessCount is a system.query_log aggregate: how many of the selected
 // statements ran with no max_threads setting, at the server default.
 const ThreadlessCount = "countIf(Settings['max_threads'] = '')"
