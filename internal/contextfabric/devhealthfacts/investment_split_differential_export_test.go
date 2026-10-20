@@ -216,7 +216,7 @@ func TeamLinkedMixSentForTest(ctx context.Context, client contextpacket.ClickHou
 		return nil, "", nil, err
 	}
 	sent := clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table))
-	return sent, linkedPullRequestMixStatement(current, subqueryMembershipScope, 1000), boundReaderBindings(current), nil
+	return sent, linkedPullRequestMixStatement(current, subqueryMembershipScope, linkedMixTeamChunk+1), boundReaderBindings(current), nil
 }
 
 // ReachDefects are, per statement on the folded split, its reach with one

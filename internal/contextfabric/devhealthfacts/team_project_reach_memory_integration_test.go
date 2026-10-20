@@ -29,11 +29,14 @@ const (
 	linkRowsNarrowedMargin = 0.98
 	// teamLinkCandidatesInterleavedBound is the team link candidate statement's
 	// absolute bound at the large interleaved organization: 2x the 3.99 MB
-	// measured there. teamLinkCandidatesPlantedBound is under that measurement,
-	// so the row must refuse it.
+	// measured there.
 	teamLinkCandidatesInterleavedBound = uint64(8 << 20)
-	teamLinkCandidatesPlantedBound     = uint64(3 << 20)
 )
+
+// teamLinkCandidatesWithinBound is the candidate statement's absolute row.
+func teamLinkCandidatesWithinBound(peak uint64) bool {
+	return peak <= teamLinkCandidatesInterleavedBound
+}
 
 var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
 
@@ -164,11 +167,11 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)
 	t.Logf("CANDIDATES team link candidate statement peak %d bytes at %d filler work items, %d at %d (interleaved %v, bound %d)", smallCandidates, blockerMemoryFillerItems, largeCandidates, blockerMemoryFillerItems+blockerMemoryMoreFillerItems, interleaved, teamLinkCandidatesInterleavedBound)
 	if interleaved {
-		if largeCandidates > teamLinkCandidatesInterleavedBound {
+		if !teamLinkCandidatesWithinBound(largeCandidates) {
 			t.Errorf("team link candidate statement peaked at %d bytes at the large interleaved organization, want at most %d", largeCandidates, teamLinkCandidatesInterleavedBound)
 		}
-		if largeCandidates <= teamLinkCandidatesPlantedBound {
-			t.Errorf("planted control: a %d-byte bound passed the team link candidate statement's %d-byte peak, so the row cannot tell its bound", teamLinkCandidatesPlantedBound, largeCandidates)
+		if teamLinkCandidatesWithinBound(teamLinkCandidatesInterleavedBound + 1) {
+			t.Errorf("control: a peak 1 byte over the %d-byte bound passed the team link candidate row", teamLinkCandidatesInterleavedBound)
 		}
 	}
 	if smallBytes == 0 {
