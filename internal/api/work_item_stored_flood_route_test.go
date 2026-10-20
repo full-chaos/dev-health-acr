@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -151,6 +152,92 @@ func TestStoredTupleFloodedLimitationsEvidenceExpansion(t *testing.T) {
 				t.Fatalf("certify: %v\n%s", err, logs.String())
 			}
 			t.Logf("HTTP=%d surface=evidence_expansion basis=%s limitations=%d", expand.Code, tc.basis, len(tc.limitations))
+		})
+	}
+}
+
+type orderedTupleEvidenceStore struct {
+	contextfabric.InvestigationResultStore
+	rows []contextfabric.StoredInvestigationResult
+}
+
+func (s *orderedTupleEvidenceStore) ResultIDsCitingEvidence(_ context.Context, _ storage.Principal, _ string, offset, _ int) ([]string, error) {
+	if offset > 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(s.rows))
+	for _, row := range s.rows {
+		ids = append(ids, row.Result.ResultID)
+	}
+	return ids, nil
+}
+
+func (s *orderedTupleEvidenceStore) Get(_ context.Context, reader storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
+	for _, row := range s.rows {
+		if row.Result.ResultID == resultID {
+			row.GrantDigest = contextfabric.StoredResultGrantDigest(reader)
+			return row, nil
+		}
+	}
+	return contextfabric.StoredInvestigationResult{}, fmt.Errorf("%w: %s", contextfabric.ErrInvestigationResultNotFound, resultID)
+}
+
+// With several citing tuples, the stored-serving line names the tuple that
+// was served, else the first one withheld: a later tuple the serving decision
+// admits but that cannot be served does not take its place.
+func TestStoredTupleFloodedEvidenceExpansionNamesTheDecisiveTuple(t *testing.T) {
+	principal := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{hostedTestRepository}}
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-flood-0001")
+	row := func(id string, mutate func(*contextfabric.StoredInvestigationResult)) contextfabric.StoredInvestigationResult {
+		stored := storedWorkItemTupleRouteFixture(t, principal)
+		stored.Result.ResultID = id
+		stored.Result.EvidenceRefIDs = append(stored.Result.EvidenceRefIDs, ref)
+		labels := map[string]string{}
+		for cited, label := range stored.Result.EvidenceRefLabels {
+			labels[cited] = label
+		}
+		labels[ref], _ = contractsv1.ContextFabricEvidenceRefLabel(ref)
+		stored.Result.EvidenceRefLabels = labels
+		mutate(&stored)
+		return stored
+	}
+	flooded := func(stored *contextfabric.StoredInvestigationResult) {
+		stored.Result.Limitations = storedRouteGapLookalikes(contractsv1.ContextFabricLimitationsMaxCount)
+	}
+	overfull := func(stored *contextfabric.StoredInvestigationResult) {
+		storedPGBoundaryCoverage(&stored.Result, contractsv1.ContextFabricCoverageEntriesMaxCount, false)
+	}
+	plain := func(*contextfabric.StoredInvestigationResult) {}
+	for _, tc := range []struct {
+		name     string
+		rows     []contextfabric.StoredInvestigationResult
+		status   int
+		basis    string
+		decisive string
+	}{
+		{name: "flooded then admitted but unservable", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_flooded_first", flooded), row("result_tuple_overfull_second", overfull)}, status: http.StatusServiceUnavailable, basis: "limitations_flooded", decisive: "result_tuple_flooded_first"},
+		{name: "flooded then served", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_flooded_first", flooded), row("result_tuple_served_second", plain)}, status: http.StatusOK, basis: "digest_matched", decisive: "result_tuple_served_second"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &orderedTupleEvidenceStore{rows: tc.rows}
+			logs := &bytes.Buffer{}
+			app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+			expand := httptest.NewRecorder()
+			app.Handler().ServeHTTP(expand, evidenceRequest(t, token, ref))
+			if expand.Code != tc.status {
+				t.Fatalf("source evidence status %d, want %d: %.400s", expand.Code, tc.status, expand.Body.String())
+			}
+			sum := sha256.Sum256([]byte(tc.decisive))
+			parsed, err := certify.Parse(logs.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.WorkItemStoredServing, Want: map[string]any{
+				"org_id": callerOrgID, "surface": "evidence_expansion", "basis": tc.basis, "result_id_hash": hex.EncodeToString(sum[:6]),
+			}}); err != nil {
+				t.Fatalf("certify: %v\n%s", err, logs.String())
+			}
+			t.Logf("HTTP=%d basis=%s decisive=%s", expand.Code, tc.basis, tc.decisive)
 		})
 	}
 }
