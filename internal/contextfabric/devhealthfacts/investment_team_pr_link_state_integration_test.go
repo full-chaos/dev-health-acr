@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // createPullRequestLinkTables creates the two tables the no-unit team reason
@@ -230,7 +231,8 @@ func TestTeamPullRequestLinkStateCostIsFlatWithLinkedIssuesOnRealClickHouse(t *t
 
 func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIssues bool) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
 	s.team("team-cost", "repo-cost")
@@ -262,15 +264,16 @@ func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIs
 			if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 				t.Fatalf("flush logs: %v", err)
 			}
-			var rows, memory uint64
-			if err := direct.QueryRow(ctx, `SELECT max(read_rows), max(memory_usage) FROM system.query_log
+			var rows, memory, threadless uint64
+			if err := direct.QueryRow(ctx, `SELECT max(read_rows), max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.', 'git_pull_requests')) AND position(query, 'toUUIDOrZero') > 0`, mark).Scan(&rows, &memory); err != nil {
+  AND has(tables, concat(currentDatabase(), '.', 'git_pull_requests')) AND position(query, 'toUUIDOrZero') > 0`, mark).Scan(&rows, &memory, &threadless); err != nil {
 				t.Fatalf("read query_log: %v", err)
 			}
 			if rows == 0 {
 				t.Fatalf("measurement did not happen: no logged link state statement")
 			}
+			statementthreads.RequireThreadBound(t, ctx, direct, "pull request link state", threadless)
 			if first || rows < lowRows {
 				lowRows = rows
 			}

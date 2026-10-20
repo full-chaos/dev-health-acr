@@ -268,3 +268,10 @@ func SetBlockerStartVariantForTest(variant string) (restore func()) {
 	blockerStartVariant = variant
 	return func() { blockerStartVariant = previous }
 }
+
+// BlockerStatementMaxThreadsForTest is the max_threads the blocker reader's
+// statements carry in their own SETTINGS (workItemReaderSettings).
+func BlockerStatementMaxThreadsForTest(ctx context.Context) (uint64, error) {
+	settings, err := workItemReaderSettings(ctx)
+	return settings.MaxThreads, err
+}
