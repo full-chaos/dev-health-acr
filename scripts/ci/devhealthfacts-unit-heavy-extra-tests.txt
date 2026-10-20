@@ -1,0 +1,7 @@
+# Unit legs only (race jobs ignore this list): tests of the race-mid/race-fourth lists
+# that unit leg 7 runs instead of leg 10, to keep both legs under 75% of the 1530s guard.
+# Cut by measured seconds: median of go-unit-shard-10 over 7 green main runs, 2026-10-20.
+# Every name must be in the mid or the fourth list, exactly once (race-split.sh verify, partition).
+TestProjectThemeMixAgainstRealClickHouse
+TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse
+TestTeamBlockerOldestAgeOnRealClickHouse
