@@ -404,7 +404,7 @@ mint_ops_service_token() {
   local attempt=1 max_attempts=30 deadline=$((SECONDS + 180)) token reason errfile
   errfile="$(mktemp)"
   while :; do
-    if token="$(dho service-credentials create --service acr --scope entitlements:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
+    if token="$(dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
       rm -f "$errfile"
       note "ops service credential minted (attempt ${attempt})"
       printf '%s' "$token"
