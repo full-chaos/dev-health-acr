@@ -79,12 +79,26 @@ const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHER
 // without reading work_items: a caller that has already restricted the work
 // items to issues joins it on work_item_id, and so reads the work item table
 // once.
-const admittedLinkedPullRequestRowsSQL = `(
+var admittedLinkedPullRequestRowsSQL = admittedLinkedPullRequestRowsAmongSQL("")
+
+// admittedLinkedPullRequestRowsAmongSQL is admittedLinkedPullRequestRowsSQL
+// over the link rows of the work item ids candidates names, with the pull
+// request rows read for those ids' links only; "" is every link row of the
+// organization. Every version of a kept link and of a kept pull request is
+// still read, so FINAL keeps the same row of each.
+func admittedLinkedPullRequestRowsAmongSQL(candidates string) string {
+	pullRequests, among := `git_pull_requests AS pr FINAL`, ``
+	if candidates != "" {
+		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
+		among = ` AND l.work_item_id IN ` + candidates
+	}
+	return `(
   SELECT l.work_item_id AS work_item_id, l.repo_id AS pr_repo_id, l.pr_number AS pr_number, ` + linkTierRankSQL + ` AS link_rank
   FROM work_graph_issue_pr AS l FINAL
-  INNER JOIN git_pull_requests AS pr FINAL ON ` + linkedPullRequestOnSQL + `
-  WHERE l.org_id = {org_id:String} AND ` + linkTierRankSQL + ` > 0
+  INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
+  WHERE l.org_id = {org_id:String}` + among + ` AND ` + linkTierRankSQL + ` > 0
 )`
+}
 
 // strongestLinkTierOfPullRequestsSQL is, for each pull request named by
 // {pull_request_keys} ("<repo id>:<number>"), the strongest admitted link tier
