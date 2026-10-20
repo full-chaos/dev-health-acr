@@ -19,12 +19,14 @@ import (
 )
 
 // serviceModelGrants answers agent_context_runtime as granted and
-// acr_service_model as configured, and records every entitlement asked for.
+// acr_service_model and platform_model_fallback as configured, and records
+// every entitlement asked for.
 type serviceModelGrants struct {
-	mu      sync.Mutex
-	feature bool
-	err     error
-	asked   []string
+	mu       sync.Mutex
+	feature  bool
+	fallback bool
+	err      error
+	asked    []string
 }
 
 func (g *serviceModelGrants) HasEntitlement(_ context.Context, _ string, entitlement string) (bool, error) {
@@ -36,6 +38,8 @@ func (g *serviceModelGrants) HasEntitlement(_ context.Context, _ string, entitle
 		return true, nil
 	case serviceModelEntitlement:
 		return g.feature, g.err
+	case platformModelFallbackEntitlement:
+		return g.fallback, g.err
 	default:
 		return false, errors.New("unexpected entitlement")
 	}
@@ -157,10 +161,10 @@ func TestServiceModelTurnIsServedOnTheFeatureOwnModelOrOpenDeployment(t *testing
 		basis   string
 		asked   int
 	}{
-		{name: "feature", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{}, basis: "entitlement", asked: 1},
-		{name: "feature and own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
+		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{}, basis: "platform_model_fallback", asked: 1},
+		{name: "own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 2},
 		{name: "open deployment and own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, open: true, basis: "own_model", asked: 0},
-		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 1},
+		{name: "feature, fallback grant and own model", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 2},
 		{name: "open deployment", grants: &serviceModelGrants{}, configs: ownModelConfigs{}, open: true, basis: "deployment_open", asked: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -215,12 +219,12 @@ func TestServiceModelDecisionForAnUnknownOrganizationIs401BeforeAnyModelCall(t *
 }
 
 // The caller's own interpretation and own synthesis, through both calls of the
-// write-back and the read by id, stay served with no model call and without
-// reading the organization model configuration.
+// write-back and the read by id, stay served with no model call for an
+// organization with no model configuration of its own, whatever the flags.
 func TestClientModelPathIsServedWithoutTheFeatureOrOwnModel(t *testing.T) {
 	rig := newWriteBackRouteRig(t)
 	rig.app.runtime.Entitlements = &serviceModelGrants{}
-	rig.app.runtime.OrgModelConfigs = ownModelConfigs{err: errors.New("must not be read on the client path")}
+	rig.app.runtime.OrgModelConfigs = ownModelConfigs{}
 	first := rig.firstCall(t)
 	draft := writeBackDraft(rig.project, writeBackMarker)
 	served := decodeEnvelope(t, rig.writeBack(t, first.SynthesisInput, writeBackOutputJSON(t, draft), nil))
@@ -287,14 +291,6 @@ func TestCapabilitiesNeverRefuseForTheServiceModel(t *testing.T) {
 	}
 }
 
-func TestWebAssertionCallerIsNeverDecidedOnTheServiceModel(t *testing.T) {
-	app := &App{runtime: &RuntimeDependencies{Entitlements: &serviceModelGrants{err: errors.New("must not be asked")}, OrgModelConfigs: ownModelConfigs{err: errors.New("must not be read")}}}
-	basis, allowed, err := app.serviceModelDecision(context.Background(), storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, OrgID: "org_1"}, contextfabric.InvestigationRequest{})
-	if err != nil || !allowed || basis != serviceModelBasisWebAssertion {
-		t.Fatalf("decision = %q %t %v, want web_assertion, allowed, no error", basis, allowed, err)
-	}
-}
-
 func TestSuppliedInterpretationWithServiceSynthesisIsRefusedWithoutTheFeatureOrOwnModel(t *testing.T) {
 	rig := newWriteBackRouteRig(t)
 	rig.app.runtime.Entitlements = &serviceModelGrants{}
@@ -323,13 +319,13 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 		supplied bool
 		withheld bool
 	}{
-		{name: "feature", grants: &serviceModelGrants{feature: true}, withheld: false},
+		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, withheld: false},
+		{name: "feature and fallback grant with an own model", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{found: true}, withheld: true},
 		{name: "open deployment", grants: &serviceModelGrants{}, open: true, withheld: false},
-		{name: "own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, withheld: true},
-		{name: "own model whose configuration is unusable", grants: &serviceModelGrants{}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigUnusable}, withheld: true},
+		{name: "own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, withheld: true},
+		{name: "own model whose configuration is unusable", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigUnusable}, withheld: true},
 		{name: "client model", grants: &serviceModelGrants{}, supplied: true, withheld: true},
-		{name: "client model with the feature", grants: &serviceModelGrants{feature: true}, supplied: true, withheld: false},
-		{name: "own model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, configs: ownModelConfigs{found: true}, withheld: true},
+		{name: "client model with the feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, supplied: true, withheld: false},
 		{name: "client model with the entitlement unreadable", grants: &serviceModelGrants{err: errors.New("entitlement down")}, supplied: true, withheld: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -367,24 +363,23 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 	}
 }
 
-// An unreadable acr_service_model closes only the deployment model: a turn the
-// organization's own model or the caller's own model can serve is still
-// served, with the deployment model withheld.
-func TestUnreadableServiceModelEntitlementStillServesTheOwnAndClientModelPaths(t *testing.T) {
+// An unreadable acr_service_model leaves a turn on the organization's own
+// model undecided (acr_service_model OFF turns it off), so it is answered as
+// unavailable before any model call; the caller's own model is still served,
+// with the deployment model withheld.
+func TestUnreadableServiceModelEntitlementLeavesTheOwnModelUnavailableAndServesTheClientModel(t *testing.T) {
 	t.Run("own model", func(t *testing.T) {
 		rig := gatedClientRouteRig(t, &serviceModelGrants{err: errors.New("entitlement down")}, ownModelConfigs{found: true})
-		decodeEnvelope(t, rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil))
-		if interprets, synthesizes := rig.model.counts(); interprets != 1 || synthesizes != 1 {
-			t.Fatalf("model calls = interpret %d synthesize %d, want 1 and 1 on the organization's model", interprets, synthesizes)
-		}
-		if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "own_model" {
-			t.Fatalf("decision log bases = %v, want [own_model]", got)
+		recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
+		assertNoModelCallAndNoResult(t, rig)
+		if body := decodeServiceModelRefusal(t, recorder, http.StatusServiceUnavailable); body.Error.Code != "upstream_unavailable" || !body.Error.Retryable {
+			t.Fatalf("error = %+v, want retryable upstream_unavailable", body.Error)
 		}
 	})
 	t.Run("client model", func(t *testing.T) {
 		rig := newWriteBackRouteRig(t)
 		rig.app.runtime.Entitlements = &serviceModelGrants{err: errors.New("entitlement down")}
-		rig.app.runtime.OrgModelConfigs = ownModelConfigs{err: errors.New("must not be read on the client path")}
+		rig.app.runtime.OrgModelConfigs = ownModelConfigs{}
 		first := rig.firstCall(t)
 		if first.SynthesisInput == nil {
 			t.Fatal("the client turn returned no synthesis input")

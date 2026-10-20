@@ -1,0 +1,13 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR033",
+  "error": {
+    "code": "feature_not_enabled",
+    "message": "ACR AI features are turned off for this organization",
+    "http_status": 403,
+    "retryable": false,
+    "details": {
+      "reason": "ai_features_turned_off"
+    }
+  }
+}
