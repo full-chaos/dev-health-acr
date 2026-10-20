@@ -392,8 +392,8 @@ func sortedKeys(keys map[string]bool) []string {
 var contractRootExemplars = []any{
 	AgentEpisode{}, AgentEpisodeCreate{}, Capabilities{}, ClientCredential{},
 	ContextFabricAnswerProjection{}, ContextFabricInvestigationRequest{},
-	ContextFabricInvestigationResult{}, ContextFabricOrgModelConfig{},
-	ContextFabricOrgModelConfigWriteRequest{}, ContextFabricProjectionBatch{},
+	ContextFabricInvestigationResult{},
+	ContextFabricProjectionBatch{},
 	ContextPacket{}, ContextPacketItem{}, ContextPacketRequest{},
 	CredentialAckRequest{}, CredentialAckResponse{},
 	CredentialRevokeRequest{}, CredentialRevokeResponse{},

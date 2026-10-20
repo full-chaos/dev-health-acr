@@ -11,8 +11,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgmodelconfigfake"
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -30,12 +28,11 @@ func (f *fakeRuntime) SynthesizeAnswer(ctx context.Context, principal storage.Pr
 	return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("fake runtime %s answered", f.name)
 }
 
-func writeRequest(model string) contractsv1.ContextFabricOrgModelConfigWriteRequest {
-	return contractsv1.ContextFabricOrgModelConfigWriteRequest{
-		SchemaVersion: contractsv1.ContextFabricOrgModelConfigWriteRequestSchema,
-		Provider:      "acme-gateway",
-		Model:         model,
-		Credential:    "sk-acme-live-a1b2c3d4e5f6wxyz",
+func writeRequest(model string) orgConfigInput {
+	return orgConfigInput{
+		Provider:   "acme-gateway",
+		Model:      model,
+		Credential: "sk-acme-live-a1b2c3d4e5f6wxyz",
 	}
 }
 
@@ -49,7 +46,7 @@ func runtimeName(err error) string {
 // TestRuntimeFor_usesDeploymentDefault_whenOrgHasNoConfiguration is
 // AC-3775-3's first half.
 func TestRuntimeFor_usesDeploymentDefault_whenOrgHasNoConfiguration(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	deploymentDefault := &fakeRuntime{name: "default"}
 	resolver := modelruntimeresolver.New(deploymentDefault, configs, func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 		t.Fatal("Build should not be called for an unconfigured organization")
@@ -65,7 +62,7 @@ func TestRuntimeFor_usesDeploymentDefault_whenOrgHasNoConfiguration(t *testing.T
 // proof: two organizations with different configurations get different
 // runtimes.
 func TestRuntimeFor_usesOrgRuntime_whenOrgIsConfigured(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-a"}, writeRequest("model-a")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig org-a: %v", err)
@@ -91,7 +88,7 @@ func TestRuntimeFor_usesOrgRuntime_whenOrgIsConfigured(t *testing.T) {
 // AC-3775-5's caching half: repeated requests for an unchanged
 // configuration must not pay construction cost again.
 func TestRuntimeFor_cachesConstructedRuntime_acrossRequests(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-a"}, writeRequest("model-a")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig: %v", err)
@@ -116,7 +113,7 @@ func TestRuntimeFor_cachesConstructedRuntime_acrossRequests(t *testing.T) {
 // restart.
 func TestRuntimeFor_invalidatesCache_whenConfigurationChanges(t *testing.T) {
 	tick := 0
-	configs := orgmodelconfigfake.NewStore(func() time.Time {
+	configs := newOrgConfigStub(func() time.Time {
 		tick++
 		return time.Date(2026, 8, 13, 9, tick, 0, 0, time.UTC)
 	})
@@ -145,7 +142,7 @@ func TestRuntimeFor_invalidatesCache_whenConfigurationChanges(t *testing.T) {
 // resolve/build failure for a configured organization must surface as
 // ErrModelUnavailable, and must never route to Default.
 func TestRuntimeFor_brokenCredential_neverFallsBackToDeploymentDefault(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-broken"}, writeRequest("model-broken")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig: %v", err)
@@ -169,7 +166,7 @@ func TestRuntimeFor_brokenCredential_neverFallsBackToDeploymentDefault(t *testin
 // org-broken's construction failure must not prevent org-healthy from
 // answering, before or after org-broken is resolved.
 func TestRuntimeFor_orgIsolation_oneOrgsFailureNeverAffectsAnother(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-broken"}, writeRequest("model-broken")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig org-broken: %v", err)
@@ -205,7 +202,7 @@ func TestRuntimeFor_returnsErrModelUnavailable_whenNoRuntimeAtAll(t *testing.T) 
 }
 
 // TestRuntimeFor_invalidatesCache_evenWhenBothWritesLandInTheSameClockTick
-// is the Codex round-1 F3 probe: orgmodelconfigfake's Store is given a `now`
+// is the Codex round-1 F3 probe: orgConfigStub is given a `now`
 // function that always returns the IDENTICAL timestamp, reproducing exactly
 // what a wall-clock cache key would collide on (two upserts in the same
 // tick, or a clock stepping backward). The fix -- Generation, a
@@ -213,7 +210,7 @@ func TestRuntimeFor_returnsErrModelUnavailable_whenNoRuntimeAtAll(t *testing.T) 
 // still detect the second write as a change and rebuild.
 func TestRuntimeFor_invalidatesCache_evenWhenBothWritesLandInTheSameClockTick(t *testing.T) {
 	frozen := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
-	configs := orgmodelconfigfake.NewStore(func() time.Time { return frozen })
+	configs := newOrgConfigStub(func() time.Time { return frozen })
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-a"}, writeRequest("model-a")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig: %v", err)
@@ -244,7 +241,7 @@ func TestRuntimeFor_invalidatesCache_evenWhenBothWritesLandInTheSameClockTick(t 
 // goroutine's request is guaranteed to observe a cold cache before any of
 // them completes.
 func TestRuntimeFor_coalescesConcurrentColdRequestsIntoOneBuild(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-a"}, writeRequest("model-a")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig: %v", err)
@@ -290,7 +287,7 @@ func TestRuntimeFor_coalescesConcurrentColdRequestsIntoOneBuild(t *testing.T) {
 // otherwise make the route return an empty response for callers who never
 // canceled anything themselves.
 func TestRuntimeFor_doesNotCacheACanceledBuild(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-a"}, writeRequest("model-a")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig: %v", err)
@@ -337,7 +334,7 @@ func TestRuntimeFor_doesNotCacheACanceledBuild(t *testing.T) {
 // Generation newer than the one this build was for, regardless of
 // completion order.
 func TestRuntimeFor_newerGenerationBuildIsNeverClobberedByAnOlderInFlightBuild(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	ctx := context.Background()
 	if _, err := configs.UpsertOrgModelConfig(ctx, storage.Principal{OrgID: "org-a"}, writeRequest("model-a")); err != nil {
 		t.Fatalf("UpsertOrgModelConfig: %v", err)

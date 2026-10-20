@@ -255,9 +255,8 @@ func TestContextFabricReuseModelIdentityResolver_resolveErrorNeverFallsBack(t *t
 }
 
 // TestChaos3786_ContextFabricReuseModelIdentityResolver_dedupesEqualFallback
-// is the codex round-1 P2 probe: pgmodelconfig reads a stored row back
-// WITHOUT revalidation (see pgmodelconfig/store.go's decode path), so a
-// row with FallbackModel == Model -- a shape the request-time
+// is the codex round-1 P2 probe: the ops settings store hands a stored row
+// back WITHOUT revalidation, so a row with FallbackModel == Model -- a shape the request-time
 // modelprovider.Config.Validate() rejects, but that could still reach
 // storage from a row written before that rule existed, or by a
 // future/older binary -- can still reach this resolver. The resolved

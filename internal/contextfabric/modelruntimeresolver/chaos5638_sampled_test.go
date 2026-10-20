@@ -12,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgmodelconfigfake"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -48,7 +47,7 @@ func (f *sampledFakeRuntime) InterpretQuestionForSample(_ context.Context, _ sto
 func TestAResolvedRuntimeThatCannotSampleFailsTypedAndLogsWarn(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	resolver := modelruntimeresolver.New(&fakeRuntime{name: "not-sampled"}, configs, func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 		t.Fatal("Build should not be called for an unconfigured organization")
 		return nil, nil
@@ -94,7 +93,7 @@ func TestAResolvedRuntimeThatCannotSampleFailsTypedAndLogsWarn(t *testing.T) {
 // against a Resolver that refuses every per-sample call.
 func TestAResolvedRuntimeThatCanSampleIsDelegatedTo(t *testing.T) {
 	var buf bytes.Buffer
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	resolver := modelruntimeresolver.New(&sampledFakeRuntime{name: "default"}, configs, func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 		t.Fatal("Build should not be called for an unconfigured organization")
 		return nil, nil
@@ -126,7 +125,7 @@ func TestTheResolverSatisfiesTheSampledPort(t *testing.T) {
 func TestTheNotSampledWarningCarriesTheRequestID(t *testing.T) {
 	const requestID = "req_0123456789abcdef0123456789abcdef"
 	var buf bytes.Buffer
-	resolver := modelruntimeresolver.New(&fakeRuntime{name: "not-sampled"}, orgmodelconfigfake.NewStore(nil),
+	resolver := modelruntimeresolver.New(&fakeRuntime{name: "not-sampled"}, newOrgConfigStub(nil),
 		func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 			t.Fatal("Build should not be called for an unconfigured organization")
 			return nil, nil
