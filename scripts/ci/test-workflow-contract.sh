@@ -23,10 +23,10 @@ default_workflow="$repo_root/.github/workflows/ci.yml"
 workflow="${1:-$default_workflow}"
 
 # The one runs-on form a job may use to reach the self-hosted pool: the
-# CI_RACE_RUNNER variable only on trusted runs (a pull request from this
-# repository, or a push), so a fork pull request never runs on the pool.
+# CI_RACE_RUNNER variable only on a push or a pull request from this
+# repository, so a fork pull request or any other event never runs on the pool.
 # shellcheck disable=SC2016
-routed_runs_on='    runs-on: ${{ (github.event_name != '"'"'pull_request'"'"' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}'
+routed_runs_on='    runs-on: ${{ (github.event_name == '"'"'push'"'"' || (github.event_name == '"'"'pull_request'"'"' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}'
 
 test -r "$workflow" || {
   printf '%s: cannot read workflow file: %s\n' "${0##*/}" "$workflow" >&2
@@ -696,18 +696,53 @@ check_race_runner_uses_variable() {
 # fallback, so the variable stays the one kill switch for all of them. The
 # scripts job stays hosted: the pool image carries no shellcheck.
 check_routed_jobs_fork_guarded() {
-  # Any runs-on that reads CI_RACE_RUNNER, in any job, uses the fork-guarded
-  # form: the repository is public, and a fork pull request on the pool runs
-  # untrusted code on the self-hosted host.
-  local file="$1" status=0 line
+  # Every line outside a whole-line comment that names CI_RACE_RUNNER, in any
+  # form (a folded or multi-line runs-on, a matrix value, a job output, any
+  # case), is exactly the fork-guarded runs-on line: the repository is public,
+  # and a fork pull request on the pool runs untrusted code on the self-hosted
+  # host. No other workflow beside this one names the variable.
+  local file="$1" status=0 line other
   while IFS= read -r line; do
     if [ "$line" != "$routed_runs_on" ]; then
-      printf 'runs-on reads CI_RACE_RUNNER without the fork guard: %s\n' "$line" >&2
+      printf 'a line names CI_RACE_RUNNER outside the fork-guarded runs-on form: %s\n' "$line" >&2
       status=1
     fi
-  done < <(grep -E '^ *runs-on:.*CI_RACE_RUNNER' "$file")
+  done < <(grep -iF 'CI_RACE_RUNNER' "$file" | grep -vE '^[[:space:]]*#')
+  for other in "$(dirname "$file")"/*.yml "$(dirname "$file")"/*.yaml; do
+    if [ ! -f "$other" ] || [ "$other" = "$file" ]; then
+      continue
+    fi
+    if grep -iF 'CI_RACE_RUNNER' "$other" | grep -qvE '^[[:space:]]*#'; then
+      printf 'workflow %s names CI_RACE_RUNNER; only %s may route to the pool\n' "$other" "$file" >&2
+      status=1
+    fi
+  done
   if ! grep -qxF "$routed_runs_on" "$file"; then
     printf 'no job reaches the pool through the fork-guarded CI_RACE_RUNNER form\n' >&2
+    status=1
+  fi
+  return "$status"
+}
+
+check_routed_workflow_triggers() {
+  # The fork guard trusts every event that is not pull_request. A workflow
+  # that routes to the pool may therefore be triggered only by pull_request
+  # and by a push to main; a new trigger (pull_request_target,
+  # workflow_dispatch, issue_comment, a wider push) needs its own guard first.
+  local file="$1" on events status=0
+  grep -qE '^ *runs-on:.*CI_RACE_RUNNER' "$file" || return 0
+  on="$(awk '/^("on"|on|'"'"'on'"'"'):[[:space:]]*$/ { in_on=1; next } in_on && /^[^[:space:]#]/ { in_on=0 } in_on { print }' "$file" | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d')"
+  if [ -z "$on" ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER but has no block-form "on:" trigger map\n' "$file" >&2
+    return 1
+  fi
+  events="$(grep -E '^  [^[:space:]]' <<<"$on" | sed -E 's/^  ([^:]+):.*/\1/' | sort | tr '\n' ' ')"
+  if [ "$events" != "pull_request push " ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER and is triggered by [%s]; only pull_request and push to main are covered by the fork guard\n' "$file" "$events" >&2
+    status=1
+  fi
+  if [ "$(awk '/^  push:/ { in_push=1; next } in_push && /^  [^[:space:]]/ { in_push=0 } in_push { print }' <<<"$on")" != "    branches: [main]" ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER and its push trigger is not exactly "branches: [main]"\n' "$file" >&2
     status=1
   fi
   return "$status"
@@ -1169,6 +1204,7 @@ run_all_checks() {
   check_race_runner_uses_variable "$file"
   check_first_stage_runner_uses_variable "$file"
   check_routed_jobs_fork_guarded "$file"
+  check_routed_workflow_triggers "$file"
   check_testcontainers_needs_mirror_preflight "$file"
   check_testcontainers_session_reap "$file"
   check_heavy_jobs_gated "$file"
@@ -1380,6 +1416,48 @@ guard_dropped="$tmpdir/guard-dropped.yml"
 sed 's/github.event.pull_request.head.repo.full_name == github.repository/true/' "$workflow" > "$guard_dropped"
 cmp -s "$workflow" "$guard_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: guard_dropped did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'replaced the same-repository condition with true' check_routed_jobs_fork_guarded "$guard_dropped"
+negated_guard="$tmpdir/negated-guard.yml"
+awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: ${{ (github.event_name != '"'"'pull_request'"'"' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+  "$workflow" > "$negated_guard"
+cmp -s "$workflow" "$negated_guard" && { printf 'NEGATIVE CONTROL SETUP FAILED: negated_guard did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job with the guard that trusts every event other than pull_request' check_routed_jobs_fork_guarded "$negated_guard"
+folded_runs_on="$tmpdir/folded-runs-on.yml"
+awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: >-"; print "      ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+  "$workflow" > "$folded_runs_on"
+cmp -s "$workflow" "$folded_runs_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: folded_runs_on did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job through a folded runs-on without the fork guard' check_routed_jobs_fork_guarded "$folded_runs_on"
+matrix_runner="$tmpdir/matrix-runner.yml"
+cat "$workflow" > "$matrix_runner"
+cat >> "$matrix_runner" <<'YAML'
+  runner-probe:
+    strategy:
+      matrix:
+        runner: ["${{ vars.ci_race_runner }}"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - run: true
+YAML
+assert_check_fails 'routed a job through a matrix value that names the variable in lower case' check_routed_jobs_fork_guarded "$matrix_runner"
+other_dir="$tmpdir/other-workflows"
+mkdir -p "$other_dir"
+cp "$workflow" "$other_dir/ci.yml"
+# shellcheck disable=SC2016
+printf 'jobs:\n  probe:\n    runs-on: ${{ vars.CI_RACE_RUNNER }}\n' > "$other_dir/side.yml"
+assert_check_fails 'routed a job of another workflow file through the variable' check_routed_jobs_fork_guarded "$other_dir/ci.yml"
+for trigger in 'pull_request_target:' 'workflow_dispatch:' 'issue_comment:'; do
+  extra_trigger="$tmpdir/extra-trigger.yml"
+  awk -v t="  $trigger" '!done && /^"on":$/ { print; print t; done=1; next } { print }' "$workflow" > "$extra_trigger"
+  cmp -s "$workflow" "$extra_trigger" && { printf 'NEGATIVE CONTROL SETUP FAILED: extra_trigger did not change the workflow\n' >&2; exit 1; }
+  assert_check_fails "added the $trigger trigger to a workflow that routes to the pool" check_routed_workflow_triggers "$extra_trigger"
+done
+wide_push="$tmpdir/wide-push.yml"
+sed 's/^    branches: \[main\]$/    branches: [main, '"'"'release\/**'"'"']/' "$workflow" > "$wide_push"
+cmp -s "$workflow" "$wide_push" && { printf 'NEGATIVE CONTROL SETUP FAILED: wide_push did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'widened the push trigger past main in a workflow that routes to the pool' check_routed_workflow_triggers "$wide_push"
+flow_on="$tmpdir/flow-on.yml"
+awk '/^"on":$/ { print "\"on\": [push, pull_request, workflow_dispatch]"; skip=1; next } skip && /^[^[:space:]]/ { skip=0 } skip { next } { print }' "$workflow" > "$flow_on"
+cmp -s "$workflow" "$flow_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: flow_on did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the trigger map with a flow list in a workflow that routes to the pool' check_routed_workflow_triggers "$flow_on"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
