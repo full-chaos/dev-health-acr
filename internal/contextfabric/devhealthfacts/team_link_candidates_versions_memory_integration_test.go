@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -65,9 +66,10 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, addSeconds(?, ?) FROM numbers(?)`,
 			repoUUID("repo-filler"), org, at, project, at, v, uint64(candidateVersionsIssues))
 	}
-	read := func(label string) uint64 {
+	read := func(label string) (uint64, int) {
 		t.Helper()
 		var lowest uint64
+		var entries int
 		for i := range 4 {
 			mark := serverNowMicros(t, ctx, direct)
 			var ids []string
@@ -79,6 +81,7 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 			if len(ids) < candidateVersionsIssues {
 				t.Fatalf("%s: %d candidates, want at least %d", label, len(ids), candidateVersionsIssues)
 			}
+			entries = len(ids)
 			peak := candidateStatementPeakSince(t, ctx, direct, mark)
 			if i == 0 {
 				continue
@@ -87,10 +90,10 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 				lowest = peak
 			}
 		}
-		return lowest
+		return lowest, entries
 	}
 	version(0)
-	small := read("one version")
+	small, smallEntries := read("one version")
 	for v := 1; v < candidateVersionsCount; v++ {
 		version(v)
 	}
@@ -101,8 +104,10 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	if active < candidateVersionsCount {
 		t.Fatalf("%d active work_items parts, want at least %d (the unmerged versions were not kept)", active, candidateVersionsCount)
 	}
-	large := read("twenty versions")
-	t.Logf("VERSIONS team link candidate statement peak %d bytes with one version of %d issues, %d with %d versions (bound %.2fx + %d)", small, candidateVersionsIssues, large, candidateVersionsCount, statementMemorySlope, candidateVersionsFloor)
+	large, largeEntries := read("twenty versions")
+	t.Logf("VERSIONS team link candidate statement: %d array entries and peak %d bytes (%.1f%% of the API statement cap) with one version of %d issues; %d entries and peak %d bytes (%.1f%%) with %d versions (bound %.2fx + %d)",
+		smallEntries, small, 100*float64(small)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateVersionsIssues,
+		largeEntries, large, 100*float64(large)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateVersionsCount, statementMemorySlope, candidateVersionsFloor)
 	if float64(large) > statementMemorySlope*float64(small)+float64(candidateVersionsFloor) {
 		t.Errorf("team link candidate statement grew with the row versions: peak %d bytes with %d versions, %d with one, over the %.2fx slope plus %d", large, candidateVersionsCount, small, statementMemorySlope, candidateVersionsFloor)
 	}
