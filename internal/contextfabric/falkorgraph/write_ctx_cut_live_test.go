@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +100,128 @@ func liveSDKAPI(t *testing.T, adapter *Adapter) *sdkAPI {
 	return nil
 }
 
+// replyGate holds back the server's reply on the connections it wraps while
+// armed, so a test decides when the reply arrives instead of racing a timer
+// against how fast the server happens to run the probe. It is test-only: the
+// production dialer is untouched.
+type replyGate struct {
+	mu      sync.Mutex
+	armed   bool
+	release chan struct{}
+	writes  atomic.Int64
+	sent    chan struct{}
+}
+
+func newReplyGate() *replyGate {
+	return &replyGate{sent: make(chan struct{}, 16)}
+}
+
+// arm starts holding replies back; every later write counts as a send.
+func (g *replyGate) arm() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.writes.Store(0)
+	for len(g.sent) > 0 {
+		<-g.sent
+	}
+	g.release = make(chan struct{})
+	g.armed = true
+}
+
+// open lets the held reply through and stops holding later ones.
+func (g *replyGate) open() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.armed {
+		close(g.release)
+		g.armed = false
+	}
+}
+
+func (g *replyGate) holding() (<-chan struct{}, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.release, g.armed
+}
+
+func (g *replyGate) dialer(base func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := base(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &gatedConn{Conn: conn, gate: g}, nil
+	}
+}
+
+type gatedConn struct {
+	net.Conn
+	gate     *replyGate
+	deadline atomic.Int64
+}
+
+func (c *gatedConn) SetReadDeadline(t time.Time) error {
+	if t.IsZero() {
+		c.deadline.Store(0)
+	} else {
+		c.deadline.Store(t.UnixNano())
+	}
+	return c.Conn.SetReadDeadline(t)
+}
+
+func (c *gatedConn) SetDeadline(t time.Time) error {
+	if t.IsZero() {
+		c.deadline.Store(0)
+	} else {
+		c.deadline.Store(t.UnixNano())
+	}
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *gatedConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if _, armed := c.gate.holding(); err == nil && armed {
+		c.gate.writes.Add(1)
+		select {
+		case c.gate.sent <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func (c *gatedConn) Read(b []byte) (int, error) {
+	if release, armed := c.gate.holding(); armed {
+		var expired <-chan time.Time
+		if at := c.deadline.Load(); at != 0 {
+			timer := time.NewTimer(time.Until(time.Unix(0, at)))
+			defer timer.Stop()
+			expired = timer.C
+		}
+		select {
+		case <-release:
+		case <-expired:
+			return 0, os.ErrDeadlineExceeded
+		}
+	}
+	return c.Conn.Read(b)
+}
+
+func gatedClient(t *testing.T, options redis.Options, gate *replyGate) *falkordb.FalkorDB {
+	t.Helper()
+	base := options.Dialer
+	if base == nil {
+		dialer := &net.Dialer{Timeout: options.DialTimeout}
+		base = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, addr)
+		}
+	}
+	options.Dialer = gate.dialer(base)
+	client := redis.NewClient(&options)
+	t.Cleanup(func() { gate.open(); _ = client.Close() })
+	return &falkordb.FalkorDB{Conn: client}
+}
+
 // TestLiveWriteCutOnARealFalkorDB measures, on one FalkorDB container, what a
 // cut does to a write that FalkorDB is still executing. The probe write is
 // sized so one uncut run takes at least probeMinimum (3x the longest cut),
@@ -164,36 +290,55 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 	// reply and the write lands once.
 	t.Run("cancel", func(t *testing.T) {
 		const runs = 3
-		waited, nilErrors, single := 0, 0, 0
+		gate := newReplyGate()
+		client := gatedClient(t, *api.read.Conn.(*redis.Client).Options(), gate)
+		if err := client.Conn.Ping(context.Background()).Err(); err != nil {
+			t.Fatalf("warm the gated client: %v", err)
+		}
+		stillBlocked, nilErrors, single := 0, 0, 0
 		for i := 0; i < runs; i++ {
 			run := fmt.Sprintf("cancel-%d", i)
 			ctx, cancel := context.WithCancel(context.Background())
-			timer := time.AfterFunc(cut, cancel)
-			began := time.Now()
-			err := sendSlowProbe(ctx, api.read, key, run, n)
-			spent := time.Since(began)
-			timer.Stop()
-			cancel()
-			if err == nil {
-				nilErrors++
+			gate.arm()
+			done := make(chan error, 1)
+			go func() { done <- sendSlowProbe(ctx, client, key, run, 1) }()
+			select {
+			case <-gate.sent:
+			case err := <-done:
+				cancel()
+				t.Fatalf("run %d: call returned before the command was sent: %v", i, err)
+			case <-time.After(30 * time.Second):
+				cancel()
+				t.Fatalf("run %d: the command was never sent", i)
 			}
-			if spent >= 3*cut {
-				waited++
+			cancel()
+			select {
+			case err := <-done:
+				t.Errorf("run %d: a cancel after the send cut the call: error=%v", i, err)
+				gate.open()
+			case <-time.After(200 * time.Millisecond):
+				stillBlocked++
+				gate.open()
+				err := <-done
+				if err == nil {
+					nilErrors++
+				}
 			}
 			if waitForProbeLandings(t, api, key, run, 1, 30*time.Second).count == 1 {
 				single++
 			}
 		}
-		t.Logf("write ctx cancel mid-command: runs=%d cut=%v probe=%v nil_errors=%d waited_past_cut=%d landed_once=%d", runs, cut, probe, nilErrors, waited, single)
-		if nilErrors != runs || waited != runs || single != runs {
-			t.Fatalf("a cancel after the send must not cut the command: nil_errors=%d waited_past_cut=%d landed_once=%d of %d", nilErrors, waited, single, runs)
+		t.Logf("write ctx cancel mid-command: runs=%d probe_rows=1 still_blocked_after_cancel=%d nil_errors=%d landed_once=%d", runs, stillBlocked, nilErrors, single)
+		if stillBlocked != runs || nilErrors != runs || single != runs {
+			t.Fatalf("a cancel after the send must not cut the command: still_blocked_after_cancel=%d nil_errors=%d landed_once=%d of %d", stillBlocked, nilErrors, single, runs)
 		}
 	})
 
 	// The write path as it is: the write client ignores the caller's ctx and
 	// does not resend (MaxRetries -1). The write client's own options are used
-	// with only the read timeout shortened, so one write slower than it returns
-	// an error and lands once.
+	// with only the read timeout shortened. The gate holds the server's reply
+	// past that timeout, so the call returns an error after exactly one send,
+	// and the write still lands once.
 	t.Run("resend", func(t *testing.T) {
 		options := *api.db.Conn.(*redis.Client).Options()
 		if options.ContextTimeoutEnabled {
@@ -204,23 +349,28 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 		}
 		options.ReadTimeout = readTimeout
 		options.MaxRetries = -1
-		client := redis.NewClient(&options)
-		t.Cleanup(func() { _ = client.Close() })
-		writeClient := &falkordb.FalkorDB{Conn: client}
-		sends := int64(1)
-		began := time.Now()
-		sendErr := sendSlowProbe(context.Background(), writeClient, key, "resend", n)
-		spent := time.Since(began)
-		landing := waitForProbeLandings(t, api, key, "resend", sends, time.Duration(sends)*probe*3+30*time.Second)
-		time.Sleep(probe + 200*time.Millisecond)
-		settled := readProbeLanding(t, api, key, "resend").count
-		t.Logf("write client read-timeout resend: read_timeout=%v probe=%v max_retries=%d error=%v returned_after=%v landed=%d settled=%d",
-			readTimeout, probe, options.MaxRetries, sendErr != nil, spent, landing.count, settled)
-		if sendErr == nil {
-			t.Fatalf("a write slower than the %v read timeout returned no error", readTimeout)
+		gate := newReplyGate()
+		writeClient := gatedClient(t, options, gate)
+		if err := writeClient.Conn.Ping(context.Background()).Err(); err != nil {
+			t.Fatalf("warm the gated write client: %v", err)
 		}
-		if settled != sends {
-			t.Fatalf("one write call slower than the read timeout landed %d times, want %d (the write client does not resend)", settled, sends)
+		gate.arm()
+		sendErr := sendSlowProbe(context.Background(), writeClient, key, "resend", 1)
+		sends := gate.writes.Load()
+		gate.open()
+		landing := waitForProbeLandings(t, api, key, "resend", 1, 30*time.Second)
+		time.Sleep(300 * time.Millisecond)
+		settled := readProbeLanding(t, api, key, "resend").count
+		t.Logf("write client read-timeout resend: read_timeout=%v max_retries=%d error=%v sends=%d landed=%d settled=%d",
+			readTimeout, options.MaxRetries, sendErr != nil, sends, landing.count, settled)
+		if sendErr == nil {
+			t.Fatalf("a write whose reply is held past the %v read timeout returned no error", readTimeout)
+		}
+		if sends != 1 {
+			t.Fatalf("the write client sent the command %d times, want 1 (the write client does not resend)", sends)
+		}
+		if settled != 1 {
+			t.Fatalf("one write call slower than the read timeout landed %d times, want 1", settled)
 		}
 	})
 }
