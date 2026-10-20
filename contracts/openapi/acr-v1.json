@@ -3010,7 +3010,7 @@
         }
       },
       "ContextFabricInvestigationForbidden": {
-        "description": "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. feature_not_enabled with details.reason ai_features_turned_off: the organization has a saved model configuration but acr_service_model is OFF (its own override), so ACR AI features are turned off for it. feature_not_enabled with details.reason byo_no_investigate_config: the organization's saved BYO model keys are for other purposes only and none is set for investigations; it is a BYO organization, so the service's model is never used in its place, even with platform_model_fallback. No model call was made and nothing was stored in either case. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Credential and web assertion callers are decided on the same rule.",
+        "description": "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. feature_not_enabled with details.reason ai_features_turned_off: the organization has a saved model configuration but acr_service_model is OFF (its own override), so ACR AI features are turned off for it. feature_not_enabled with details.reason byo_no_investigate_config: the organization's saved BYO model keys are for other purposes only and none is set for investigations; it is a BYO organization, so the service's model is never used in its place, even with platform_model_fallback. feature_not_enabled with details.reason own_model_turned_off: an organization admin turned the saved model configuration off (kept, not deleted), so the organization has no usable own model, and it does not hold both acr_service_model and platform_model_fallback; the service's model is never used in its place. No model call was made and nothing was stored in either case. The same question is served on the caller's own model with a supplied interpretation and synthesis_mode client. Credential and web assertion callers are decided on the same rule.",
         "content": {
           "application/json": {
             "schema": {
@@ -3032,7 +3032,8 @@
                                 "service_model_not_entitled",
                                 "own_model_gate_closed",
                                 "ai_features_turned_off",
-                                "byo_no_investigate_config"
+                                "byo_no_investigate_config",
+                                "own_model_turned_off"
                               ]
                             }
                           }

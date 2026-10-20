@@ -19,6 +19,7 @@ const (
 	ownModelGateClosedMessage        = "This organization's own model is saved but not enabled for its plan"
 	aiFeaturesTurnedOffMessage       = "ACR AI features are turned off for this organization"
 	noInvestigateConfigMessage       = "This organization's saved model keys are for other uses only; none is set for investigations"
+	ownModelTurnedOffMessage         = "This organization's own model is turned off by an organization admin"
 )
 
 // serviceModelBasis is why a turn may, or may not, use the deployment model.
@@ -31,6 +32,7 @@ const (
 	serviceModelBasisOwnModelGateClosed    serviceModelBasis = "own_model_gate_closed"
 	serviceModelBasisAIFeaturesTurnedOff   serviceModelBasis = "ai_features_turned_off"
 	serviceModelBasisNoInvestigateConfig   serviceModelBasis = "byo_no_investigate_config"
+	serviceModelBasisOwnModelTurnedOff     serviceModelBasis = "own_model_turned_off"
 	serviceModelBasisClientModel           serviceModelBasis = "client_model"
 	serviceModelBasisRefused               serviceModelBasis = "refused"
 )
@@ -48,6 +50,7 @@ const (
 	ownModelSaved
 	ownModelGateClosed
 	ownModelNoInvestigateConfig
+	ownModelTurnedOff
 )
 
 // serviceModelDecision decides which model an investigation may run on, for
@@ -62,6 +65,10 @@ const (
 //   - saved BYO keys for other purposes only (none resolves for
 //     investigations): a BYO org, refused with its own reason, whatever the
 //     flags; never the platform model;
+//   - a saved configuration an organization admin turned off: no usable own
+//     model. Refused as turned off when acr_service_model is OFF; the
+//     deployment model when the deployment is open or both flags are held;
+//     otherwise refused with its own reason, on the caller-model path too;
 //   - a saved organization model configuration: the organization's own model
 //     when acr_service_model (ops serves the effective value: the org's
 //     override, else ON for a saved configuration) is ON, with the deployment
@@ -89,6 +96,20 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		return serviceModelBasisOwnModelGateClosed, false, nil
 	case state == ownModelNoInvestigateConfig:
 		return serviceModelBasisNoInvestigateConfig, false, nil
+	case state == ownModelTurnedOff:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			return "", false, errServiceModelEntitlementUnavailable
+		case !on:
+			return serviceModelBasisAIFeaturesTurnedOff, false, nil
+		case granted:
+			return basis, true, nil
+		case featureErr != nil:
+			return "", false, errServiceModelEntitlementUnavailable
+		default:
+			return serviceModelBasisOwnModelTurnedOff, false, nil
+		}
 	case state == ownModelSaved:
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
@@ -168,6 +189,20 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 		reason = "own_model_gate_closed"
 	case state == ownModelNoInvestigateConfig:
 		reason = "byo_no_investigate_config"
+	case state == ownModelTurnedOff:
+		on, err := a.serviceModelOn(ctx, principal)
+		switch {
+		case err != nil:
+			reason = "entitlement_unreadable"
+		case !on:
+			listed, reason = false, "ai_features_turned_off"
+		default:
+			if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
+				reason = "entitlement_unreadable"
+			} else if !granted {
+				reason = "own_model_turned_off"
+			}
+		}
 	case state == ownModelSaved:
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
@@ -203,6 +238,8 @@ func (a *App) orgOwnModel(ctx context.Context, principal storage.Principal) (own
 		return ownModelGateClosed, nil
 	case errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig):
 		return ownModelNoInvestigateConfig, nil
+	case errors.Is(err, entitlements.ErrLLMConfigTurnedOff):
+		return ownModelTurnedOff, nil
 	case errors.Is(err, entitlements.ErrLLMConfigUnusable):
 		return ownModelSaved, nil
 	case err != nil:
@@ -246,6 +283,10 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	case serviceModelBasisNoInvestigateConfig:
 		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
 		writeError(w, r, http.StatusForbidden, "feature_not_enabled", noInvestigateConfigMessage, false, map[string]any{"reason": contractsv1.ContextFabricNoInvestigateConfigReason})
+		return nil, false
+	case serviceModelBasisOwnModelTurnedOff:
+		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", byoLLMGateResource, "denied", nil)
+		writeError(w, r, http.StatusForbidden, "feature_not_enabled", ownModelTurnedOffMessage, false, map[string]any{"reason": contractsv1.ContextFabricOwnModelTurnedOffReason})
 		return nil, false
 	case serviceModelBasisAIFeaturesTurnedOff:
 		a.recordReadAudit(ctx, principal, "entitlement_denied", "acr_entitlement", serviceModelEntitlement, "denied", nil)

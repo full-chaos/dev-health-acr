@@ -30,8 +30,8 @@ func TestOrgLLMConfigTurnedOffIsItsOwnAnswerAndCached(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
-		if found || err == nil {
-			t.Fatalf("read %d: found = %v err = %v, want no config and its own error", i, found, err)
+		if found || !errors.Is(err, entitlements.ErrLLMConfigTurnedOff) {
+			t.Fatalf("read %d: found = %v err = %v, want no config and ErrLLMConfigTurnedOff", i, found, err)
 		}
 		if errors.Is(err, entitlements.ErrLLMConfigUnusable) || errors.Is(err, entitlements.ErrLLMConfigGateClosed) || errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig) {
 			t.Fatalf("read %d: err = %v, want neither unusable, gate closed nor no investigate config", i, err)
