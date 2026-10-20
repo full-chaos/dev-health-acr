@@ -170,7 +170,7 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			timer := time.AfterFunc(cut, cancel)
 			began := time.Now()
-			err := sendSlowProbe(ctx, api.read, key, run, n)
+			err := sendSlowProbe(ctx, api.read, key, run, 1)
 			spent := time.Since(began)
 			timer.Stop()
 			cancel()
