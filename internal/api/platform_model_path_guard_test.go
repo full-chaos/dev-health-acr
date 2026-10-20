@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -19,6 +20,11 @@ import (
 // paritytestDir holds engine compositions for tests only; its importers are
 // checked to be test files, so it is not a production path.
 const paritytestDir = "internal/contextfabric/pginvestigation/paritytest"
+
+const (
+	resolverPackagePath      = "/internal/contextfabric/modelruntimeresolver"
+	contextFabricPackagePath = "/internal/contextfabric"
+)
 
 // platformModelPathSites is every production site, as "file:function", of the
 // path that can serve the platform model: the per-organization resolver whose
@@ -68,6 +74,7 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 				sites.paritytestImporters = append(sites.paritytestImporters, rel)
 			}
 		}
+		imports := importedNames(file)
 		inResolverPackage := strings.HasPrefix(rel, "internal/contextfabric/modelruntimeresolver/")
 		inContextFabric := strings.HasPrefix(rel, "internal/contextfabric/")
 		for _, decl := range file.Decls {
@@ -81,7 +88,7 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 			ast.Inspect(scope, func(node ast.Node) bool {
 				switch n := node.(type) {
 				case *ast.CompositeLit:
-					if isSelector(n.Type, "modelruntimeresolver", "Resolver") && !inResolverPackage {
+					if isPackageSelector(n.Type, imports, resolverPackagePath, "Resolver") && !inResolverPackage {
 						sites.resolverConstructions = append(sites.resolverConstructions, site)
 					}
 				case *ast.CallExpr:
@@ -90,9 +97,9 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 						return true
 					}
 					switch {
-					case isSelector(selector, "modelruntimeresolver", "New") && !inResolverPackage:
+					case isPackageSelector(selector, imports, resolverPackagePath, "New") && !inResolverPackage:
 						sites.resolverConstructions = append(sites.resolverConstructions, site)
-					case isSelector(selector, "contextfabric", "NewEngine"):
+					case isPackageSelector(selector, imports, contextFabricPackagePath, "NewEngine"):
 						sites.engineConstructions = append(sites.engineConstructions, site)
 					case selector.Sel.Name == "Investigate":
 						sites.investigateCalls = append(sites.investigateCalls, site)
@@ -125,6 +132,35 @@ func mentionsPlatformModelPathName(source []byte) bool {
 		}
 	}
 	return false
+}
+
+// importedNames maps each name a file binds to an import (its alias, else the
+// last element of the path) to the import path.
+func importedNames(file *ast.File) map[string]string {
+	names := map[string]string{}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path.Base(importPath)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		names[name] = importPath
+	}
+	return names
+}
+
+// isPackageSelector reports whether expr is name selected from the package at
+// the import path that ends in pathSuffix, under whatever name the file gave it.
+func isPackageSelector(expr ast.Expr, imports map[string]string, pathSuffix, name string) bool {
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != name {
+		return false
+	}
+	ident, ok := selector.X.(*ast.Ident)
+	return ok && strings.HasSuffix(imports[ident.Name], "github.com/full-chaos/dev-health-acr"+pathSuffix)
 }
 
 func isSelector(expr ast.Expr, pkg, name string) bool {
@@ -273,4 +309,60 @@ func callName(expr ast.Expr) string {
 		return selector.Sel.Name
 	}
 	return "a call"
+}
+
+// The scan resolves an import by its path, not by the package's default name:
+// a construction or call made through an import alias is a site too.
+func TestPlatformModelPathScanFindsSitesBehindImportAliases(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, source string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/plant/plain.go", `package plant
+
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+
+func Plain() { _ = modelruntimeresolver.New(nil, nil, nil) }
+`)
+	write("internal/plant/aliased.go", `package plant
+
+import mr "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+
+func Aliased() { _ = mr.New(nil, nil, nil) }
+`)
+	write("internal/plant/literal.go", `package plant
+
+import res "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+
+func Literal() { _ = &res.Resolver{} }
+`)
+	write("internal/plant/engine.go", `package plant
+
+import cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
+func Engine() { _, _ = cf.NewEngine(cf.EngineDependencies{}, cf.EngineOptions{}) }
+`)
+	write("internal/plant/unrelated.go", `package plant
+
+import mr "example.test/other/modelruntimeresolver"
+
+func Unrelated() { _ = mr.New(nil, nil, nil) }
+`)
+	sites := scanPlatformModelPath(t, root)
+	got := slices.Clone(sites.resolverConstructions)
+	slices.Sort(got)
+	want := []string{"internal/plant/aliased.go:Aliased", "internal/plant/literal.go:Literal", "internal/plant/plain.go:Plain"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("resolver constructions = %q, want %q", got, want)
+	}
+	if !slices.Equal(sites.engineConstructions, []string{"internal/plant/engine.go:Engine"}) {
+		t.Fatalf("engine constructions = %q, want the aliased NewEngine", sites.engineConstructions)
+	}
 }

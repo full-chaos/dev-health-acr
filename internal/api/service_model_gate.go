@@ -52,7 +52,11 @@ const (
 
 // serviceModelDecision decides which model an investigation may run on, for
 // every caller (credential and web assertion alike):
-//   - the caller's own interpretation and synthesis: no model is decided;
+//   - the caller's own interpretation and synthesis: decided on the same rule
+//     (a saved configuration, a closed gate and the feature switch apply to it
+//     too, because acr's own phrasing still binds a model); with no
+//     configuration and no grant it is served with the deployment model
+//     withheld;
 //   - a saved configuration behind a closed byo_llm gate: refused with its own
 //     reason, whatever the flags;
 //   - saved BYO keys for other purposes only (none resolves for
@@ -75,12 +79,7 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 	if featureErr != nil {
 		a.logger.WarnContext(ctx, "context fabric service model entitlement unavailable; deployment model withheld", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)))
 	}
-	if request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient {
-		if granted {
-			return basis, true, nil
-		}
-		return serviceModelBasisClientModel, false, nil
-	}
+	callerModel := request.SuppliedInterpretation != nil && request.SynthesisMode == contextfabric.SynthesisModeClient
 	state, err := a.orgOwnModel(ctx, principal)
 	if err != nil {
 		return "", false, err
@@ -102,6 +101,8 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 		}
 	case granted:
 		return basis, true, nil
+	case callerModel:
+		return serviceModelBasisClientModel, false, nil
 	case featureErr != nil:
 		return "", false, errServiceModelEntitlementUnavailable
 	default:

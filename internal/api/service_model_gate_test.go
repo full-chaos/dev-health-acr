@@ -219,12 +219,12 @@ func TestServiceModelDecisionForAnUnknownOrganizationIs401BeforeAnyModelCall(t *
 }
 
 // The caller's own interpretation and own synthesis, through both calls of the
-// write-back and the read by id, stay served with no model call and without
-// reading the organization model configuration.
+// write-back and the read by id, stay served with no model call for an
+// organization with no model configuration of its own, whatever the flags.
 func TestClientModelPathIsServedWithoutTheFeatureOrOwnModel(t *testing.T) {
 	rig := newWriteBackRouteRig(t)
 	rig.app.runtime.Entitlements = &serviceModelGrants{}
-	rig.app.runtime.OrgModelConfigs = ownModelConfigs{err: errors.New("must not be read on the client path")}
+	rig.app.runtime.OrgModelConfigs = ownModelConfigs{}
 	first := rig.firstCall(t)
 	draft := writeBackDraft(rig.project, writeBackMarker)
 	served := decodeEnvelope(t, rig.writeBack(t, first.SynthesisInput, writeBackOutputJSON(t, draft), nil))
@@ -379,7 +379,7 @@ func TestUnreadableServiceModelEntitlementLeavesTheOwnModelUnavailableAndServesT
 	t.Run("client model", func(t *testing.T) {
 		rig := newWriteBackRouteRig(t)
 		rig.app.runtime.Entitlements = &serviceModelGrants{err: errors.New("entitlement down")}
-		rig.app.runtime.OrgModelConfigs = ownModelConfigs{err: errors.New("must not be read on the client path")}
+		rig.app.runtime.OrgModelConfigs = ownModelConfigs{}
 		first := rig.firstCall(t)
 		if first.SynthesisInput == nil {
 			t.Fatal("the client turn returned no synthesis input")
