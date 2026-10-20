@@ -705,6 +705,34 @@ check_testcontainers_needs_mirror_preflight() {
   return "$status"
 }
 
+check_testcontainers_session_reap() {
+  # A job that starts testcontainers runs with the ryuk reaper off and its own
+  # session id, and removes that session's containers by id in a final
+  # always() step (scripts/ci/reap-testcontainers-session.sh).
+  local file="$1" job block status=0
+  while IFS= read -r job; do
+    [ "$job" = "mirror-preflight" ] && continue
+    block="$(job_block "$file" "$job")"
+    grep -qE '^ {6}TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:' <<<"$block" || continue
+    if ! grep -qE "^ {6}TESTCONTAINERS_RYUK_DISABLED: 'true'$" <<<"$block"; then
+      printf 'job "%s" starts testcontainers with the ryuk reaper on\n' "$job" >&2
+      status=1
+    fi
+    # shellcheck disable=SC2016
+    if ! grep -qF 'TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}' <<<"$block"; then
+      printf 'job "%s" has no per-job TESTCONTAINERS_SESSION_ID\n' "$job" >&2
+      status=1
+    fi
+    local last
+    last="$(awk '/^      - (name|uses)/ { buf="" } /^      - (name|uses)/, 0 { buf = buf $0 "\n" } END { printf "%s", buf }' <<<"$block" | sed '/^ *$/d;/^  #/d')"
+    if [ "$last" != "$(printf '%s\n' "      - name: Remove this job's testcontainers by session id" '        if: always()' '        run: scripts/ci/reap-testcontainers-session.sh')" ]; then
+      printf 'job "%s" does not end with the always() testcontainers reap step\n' "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
 # The steps of the reports job are PARSED, not grepped: a step whose text is
 # present but which never runs (a false `if:`, `continue-on-error`, a command
 # replaced by `true` with the old text left in a comment, `|| true` appended)
@@ -1073,6 +1101,7 @@ run_all_checks() {
   check_race_runner_uses_variable "$file"
   check_first_stage_runner_uses_variable "$file"
   check_testcontainers_needs_mirror_preflight "$file"
+  check_testcontainers_session_reap "$file"
   check_heavy_jobs_gated "$file"
   check_verify_reads_plan "$file"
   check_reach_gating "$file"
@@ -1133,6 +1162,25 @@ awk '!done && /^    runs-on: ubuntu-latest$/ { sub(/runs-on: ubuntu-latest/, "ru
   "$workflow" > "$pool_job_returns"
 assert_check_fails 'pointed a job back at the removed ARC pool' \
   check_go_cache "$pool_job_returns"
+
+# (c3) testcontainers jobs: reaper back on, session id dropped, reap step
+# gated off or moved before the tests.
+tc_ryuk_on="$tmpdir/tc-ryuk-on.yml"
+awk '!done && /TESTCONTAINERS_RYUK_DISABLED/ { done=1; next } { print }' "$workflow" > "$tc_ryuk_on"
+cmp -s "$workflow" "$tc_ryuk_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_ryuk_on did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped TESTCONTAINERS_RYUK_DISABLED from one testcontainers job' check_testcontainers_session_reap "$tc_ryuk_on"
+tc_no_session="$tmpdir/tc-no-session.yml"
+awk '!done && /TESTCONTAINERS_SESSION_ID: ci-/ { done=1; next } { print }' "$workflow" > "$tc_no_session"
+cmp -s "$workflow" "$tc_no_session" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_no_session did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the per-job TESTCONTAINERS_SESSION_ID' check_testcontainers_session_reap "$tc_no_session"
+tc_reap_gated="$tmpdir/tc-reap-gated.yml"
+awk 'prev ~ /Remove this job.s testcontainers by session id/ && !done { sub(/if: always\(\)/, "if: success()"); done=1 } { print; prev=$0 }' "$workflow" > "$tc_reap_gated"
+cmp -s "$workflow" "$tc_reap_gated" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_gated did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'gated the testcontainers reap step on success()' check_testcontainers_session_reap "$tc_reap_gated"
+tc_reap_dropped="$tmpdir/tc-reap-dropped.yml"
+awk '/Remove this job.s testcontainers by session id/ && !done { skip=3; done=1 } skip > 0 { skip--; next } { print }' "$workflow" > "$tc_reap_dropped"
+cmp -s "$workflow" "$tc_reap_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_dropped did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the testcontainers reap step from one job' check_testcontainers_session_reap "$tc_reap_dropped"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
