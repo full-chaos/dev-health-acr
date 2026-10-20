@@ -159,6 +159,11 @@ func TestTeamProjectLinkRowsMatchThePreStreamingStatementOnRealClickHouse(t *tes
 	if unpruned := rowsOf(ctx, devhealthfacts.TeamProjectLinkRowsUnprunedSQLForTest()); !reflect.DeepEqual(unpruned, current) {
 		t.Fatalf("link rows with the candidate prunes differ from the rows without them.\nwithout: %s\nwith:    %s", fmt.Sprint(unpruned), fmt.Sprint(current))
 	}
+	// Planted collisions: every link hash of the organization passes the hash
+	// prunes, and the real-id joins still keep exactly the candidates' rows.
+	if collided := rowsOf(sent, devhealthfacts.TeamProjectLinkRowsEveryHashSQLForTest()); !reflect.DeepEqual(collided, current) {
+		t.Fatalf("link rows with every link hash admitted differ from the pruned rows.\nevery hash: %s\npruned:     %s", fmt.Sprint(collided), fmt.Sprint(current))
+	}
 	var movedIn, movedAway bool
 	for _, row := range current {
 		if row[0] != "team-owner" {

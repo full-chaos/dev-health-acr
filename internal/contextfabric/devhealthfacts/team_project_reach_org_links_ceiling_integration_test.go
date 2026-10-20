@@ -22,6 +22,10 @@ const (
 	// orgLinksCeilingBound is half the API statement cap: a link-row statement
 	// at the ceiling size keeps that much room under the cap.
 	orgLinksCeilingBound = contextpacket.APIStatementMaxMemoryUsage / 2
+	// orgLinksCeilingReadBytesBound is three quarters of the per-statement
+	// max_bytes_to_read: the reads of the organization's links and work items
+	// at the ceiling size keep that much room before the cap refuses them.
+	orgLinksCeilingReadBytesBound = config.DefaultClickHouseMaxBytesToRead / 4 * 3
 )
 
 // orgLinksCeilingSizes are the organization link counts outside the owned
@@ -198,9 +202,12 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 					if runs[0][hash].candidate {
 						kind = "candidates"
 					}
-					t.Logf("SLOPE %s: %s statement %d peak memory lowest %d, highest %d bytes, read_bytes highest %d at %d outside links (bound %d)", mode, kind, hash, lowest, highest, readBytes, size, orgLinksCeilingBound)
+					t.Logf("SLOPE %s: %s statement %d peak memory lowest %d, highest %d bytes, read_bytes highest %d at %d outside links (bound %d, read_bytes bound %d)", mode, kind, hash, lowest, highest, readBytes, size, orgLinksCeilingBound, orgLinksCeilingReadBytesBound)
 					if highest >= orgLinksCeilingBound {
 						t.Errorf("%s %s: statement %d peaked at %d bytes, want under %d (half the API statement cap)", mode, label, hash, highest, orgLinksCeilingBound)
+					}
+					if size == orgLinksCeilingSizes[len(orgLinksCeilingSizes)-1] && readBytes >= orgLinksCeilingReadBytesBound {
+						t.Errorf("%s %s: %s statement %d read %d bytes, want under %d (three quarters of max_bytes_to_read)", mode, label, kind, hash, readBytes, orgLinksCeilingReadBytesBound)
 					}
 				}
 			}

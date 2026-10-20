@@ -52,6 +52,17 @@ func TeamProjectLinkRowsUnprunedSQLForTest() string {
 	return statement
 }
 
+// TeamProjectLinkRowsEveryHashSQLForTest is the team project link rows with
+// the candidate hash prunes widened to every link hash of the organization:
+// each hash of a link row collides, as the worst case of a colliding hash.
+func TeamProjectLinkRowsEveryHashSQLForTest() string {
+	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
+	if strings.Count(statement, teamLinkCandidateHashesSent) != 2 {
+		panic("team project link rows hash prunes not found")
+	}
+	return strings.ReplaceAll(statement, teamLinkCandidateHashesSent, linkedWorkItemIDHashesSQL)
+}
+
 // teamLinkCandidatesSQL is the team link candidate set as a subquery: the
 // form a statement inlines it in when it runs without the external table.
 func teamLinkCandidatesSQL(bound factTimeBound) string {

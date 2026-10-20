@@ -28,8 +28,10 @@ const (
 	// statement differ by under 1% between runs; the narrowing saves 5 to 7%.
 	linkRowsNarrowedMargin = 0.98
 	// teamLinkCandidatesInterleavedBound is the team link candidate statement's
-	// absolute bound at the large interleaved organization: 2x the 3.99 MB
-	// measured there.
+	// absolute bound at the large interleaved organization. The statement holds
+	// the organization's linked ids as fixed-width hashes and returns the few
+	// candidates as one array, so its peak is the scan of the unmerged work
+	// items; a set that grew with the organization would break the bound.
 	teamLinkCandidatesInterleavedBound = uint64(8 << 20)
 )
 
