@@ -154,3 +154,23 @@ func TestEntitlementLookupErrorLogsTheRejectionReason(t *testing.T) {
 		})
 	}
 }
+
+func TestMissingPlatformModelGrantLogsTheRejectionReasonAndKeepsTheLabel(t *testing.T) {
+	for _, tc := range rejectionCases {
+		t.Run(tc.reason, func(t *testing.T) {
+			logs := &bytes.Buffer{}
+			app := &App{logger: slog.New(slog.NewJSONHandler(logs, nil)), runtime: &RuntimeDependencies{
+				Entitlements: rejectingEntitlementClient(t, tc.status, tc.body, tc.closed),
+			}}
+
+			label := app.missingPlatformModelGrant(context.Background(), storage.Principal{OrgID: "org_1"})
+
+			if label != serviceModelEntitlement {
+				t.Fatalf("label = %q, want %q", label, serviceModelEntitlement)
+			}
+			if got := logReasons(t, logs, "context fabric service model audit label unavailable"); len(got) != 1 || got[0] != tc.reason {
+				t.Fatalf("reason attrs = %v, want [%s]", got, tc.reason)
+			}
+		})
+	}
+}
