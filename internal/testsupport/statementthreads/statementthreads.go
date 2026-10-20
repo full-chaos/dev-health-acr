@@ -84,5 +84,24 @@ func RequireThreadBound(tb testing.TB, ctx context.Context, direct clickhousedri
 	if err != nil {
 		tb.Fatalf("%s: %d measured statements did not run at max_threads %d (server default unreadable: %v); the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, unbound, contextpacket.StatementMaxThreads, err)
 	}
-	tb.Fatalf("%s: %d measured statements did not run at max_threads %d (server default %d follows the host's cores); the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, unbound, contextpacket.StatementMaxThreads, serverDefault)
+	tb.Fatalf("%s: %d measured statements did not run at max_threads %d (server default %d follows the host's cores); the peak measures the runner, not the statement (build the measured client with statementthreads.API); recent such statements:\n%s", label, unbound, contextpacket.StatementMaxThreads, serverDefault, recentUnbound(ctx, direct))
+}
+
+// recentUnbound lists the latest logged statements off the statement threads,
+// with the max_threads each logged, for a failure message.
+func recentUnbound(ctx context.Context, direct clickhousedriver.Conn) string {
+	rows, err := direct.Query(ctx, "SELECT concat('max_threads=', Settings['max_threads'], ' ', toString(type), ' ', substring(replaceRegexpAll(query, '\\\\s+', ' '), 1, 220)) FROM system.query_log WHERE event_time > now() - INTERVAL 15 MINUTE AND type != 'QueryStart' AND query_kind = 'Select' AND position(query, 'system.query_log') = 0 AND "+unboundThreads+" ORDER BY event_time_microseconds DESC LIMIT 8")
+	if err != nil {
+		return "query_log unreadable: " + err.Error()
+	}
+	defer func() { _ = rows.Close() }()
+	var out strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return out.String() + "scan: " + err.Error()
+		}
+		out.WriteString(line + "\n")
+	}
+	return out.String()
 }
