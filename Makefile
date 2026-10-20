@@ -104,6 +104,11 @@ VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 # each package binary gets its own testcontainers session and reaper.
 GOTEST_EXEC := -exec $(CURDIR)/scripts/ci/testcontainers-session-exec.sh
 
+# CHAOS-10226: the production-size proofs (build tag sizeproof) run in the
+# plain unit run only; the -race targets never pass it. Guarded by
+# internal/contextfabric/falkorgraph/sizeproof_guard_test.go.
+GOTEST_PLAIN_TAGS := -tags sizeproof
+
 GOTESTSUM_VERSION := v1.13.0
 GOCOVER_COBERTURA_VERSION := v1.5.0
 COVERAGE_DIR ?= .tmp/coverage
@@ -137,7 +142,7 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test $(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) $(GOTEST_PLAIN_TAGS) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
 
 # The plain suite over the same partition the race suite and CI use: the
 # shared packages in one invocation at the default ceiling, then each isolated
@@ -245,7 +250,7 @@ test-coverage:
 	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --version
 	status=0; \
 	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
-		$(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
+		$(GOTEST_EXEC) $(GOTEST_PLAIN_TAGS) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
 		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \
