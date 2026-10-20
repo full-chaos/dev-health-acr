@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # test-unit-split-partition.sh proves the devhealthsource unit legs (6, 8, 9 in
-# ci.yml) run every test exactly once, and that the check saying so can fail.
+# ci.yml) and the devhealthfacts unit legs (5, 7, 10) run every test exactly once, and that the check saying so can fail.
 # Controls run race-split.sh from a scratch copy of scripts/ci and ci.yml with
 # the real module symlinked in, so each mutation touches only the copy.
 #
@@ -30,8 +30,8 @@ fixture() {
 }
 
 expect_fail() {
-  local label="$1" dir="$2"
-  if "$dir/scripts/ci/race-split.sh" devhealthsource partition >"$tmp/out" 2>&1; then
+  local label="$1" dir="$2" pkg="${3:-devhealthsource}"
+  if "$dir/scripts/ci/race-split.sh" "$pkg" partition >"$tmp/out" 2>&1; then
     printf 'NEGATIVE CONTROL FAILED: partition accepted: %s\n' "$label" >&2
     exit 1
   fi
@@ -63,5 +63,26 @@ expect_fail 'leg 9 using -skip instead of -run' "$dir"
 dir="$(fixture empty-mid)"
 printf 'TestNoSuchTestExists\n' >"$dir/scripts/ci/devhealthsource-race-mid-tests.txt"
 expect_fail 'a mid list that matches no test' "$dir"
+
+# devhealthfacts runs the same three-way split: leg 5 skips heavy, mid and
+# fourth, leg 7 runs heavy minus mid/fourth, leg 10 runs mid plus fourth.
+echo "positive: real tree, devhealthfacts"
+"$root/scripts/ci/race-split.sh" devhealthfacts partition
+
+split_entries="$("$root/scripts/ci/test-shard.sh" --print-unit-split-packages | tr ' ' '\n' | grep -c '/devhealthfacts$' || true)"
+[ "$split_entries" -eq 2 ] || { printf 'unit_split_packages names devhealthfacts %s time(s), want 2\n' "$split_entries" >&2; exit 1; }
+
+dir="$(fixture facts-no-mid-leg)"
+sed 's/race-split\.sh devhealthfacts unit-mid)/race-split.sh devhealthfacts unit-mid-gone)/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
+cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: facts-no-mid-leg" >&2; exit 1; }
+mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
+expect_fail 'a workflow with no devhealthfacts unit-mid leg' "$dir" devhealthfacts
+
+# One test named in both the mid and the fourth list would run twice in the
+# unit-mid leg's union with the heavy leg or in two race jobs.
+dir="$(fixture facts-test-in-two-lists)"
+dup="$(grep -v '^[[:space:]]*\(#\|$\)' "$dir/scripts/ci/devhealthfacts-race-mid-tests.txt" | head -n1)"
+printf '%s\n' "$dup" >>"$dir/scripts/ci/devhealthfacts-race-fourth-tests.txt"
+expect_fail 'a test named in both the mid and the fourth list' "$dir" devhealthfacts
 
 echo "PASS: unit split partition and its negative controls"
