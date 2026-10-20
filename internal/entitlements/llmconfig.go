@@ -31,6 +31,26 @@ const llmConfigCacheTTL = 15 * time.Second
 // platform model is never used in its place.
 var ErrLLMConfigUnusable = errors.New("Dev Health BYO LLM configuration is unusable")
 
+// ErrLLMConfigGateClosed is a BYO configuration ops holds but will not serve
+// because the org's byo_llm gate is closed (a lapsed tier, an override off).
+// It is neither "no BYO" nor "unusable": the turn is refused with its own
+// reason and never runs on the platform model.
+var ErrLLMConfigGateClosed = errors.New("Dev Health BYO LLM configuration is behind a closed byo_llm gate")
+
+// ErrLLMConfigNoInvestigateConfig is an org whose saved BYO keys are for other
+// purposes only: none resolves for investigations. The org is a BYO org, so the
+// turn is refused with its own reason and never runs on the platform model.
+var ErrLLMConfigNoInvestigateConfig = errors.New("Dev Health BYO LLM configuration has no investigate-capable config")
+
+// llmConfigReasonHeader carries why ops answered the marked no-config 404.
+const (
+	llmConfigMarkerHeader        = "X-Org-Llm-Config"
+	llmConfigMarkerNone          = "none"
+	llmConfigReasonHeader        = "X-Org-Llm-Config-Reason"
+	llmConfigGateClosedReason    = "byo_llm_gate_closed"
+	llmConfigNoInvestigateReason = "byo_no_investigate_config"
+)
+
 // OrgLLMConfig is one org's BYO LLM configuration as ops serves it. APIKey is
 // the plaintext credential: it never reaches a log line, an error or a
 // printed value (String, GoString, LogValue and MarshalJSON redact it).
@@ -74,6 +94,7 @@ type llmConfigResponse struct {
 type llmConfigEntry struct {
 	config  OrgLLMConfig
 	found   bool
+	refusal error
 	expires time.Time
 }
 
@@ -102,20 +123,35 @@ func (c *llmConfigCache) put(orgID string, entry llmConfigEntry) {
 	c.entries[orgID] = entry
 }
 
-// OrgLLMConfig returns orgID's BYO LLM configuration from ops. found=false
-// is "no BYO configured" (404): the caller uses the platform model. An
-// unusable configuration is ErrLLMConfigUnusable; ops being unreachable or
-// answering 5xx is errUnavailable. Answers (found or not) are reused for
-// llmConfigCacheTTL; errors are never cached.
+// OrgLLMConfig returns orgID's BYO LLM configuration from ops. found=false with
+// no error is "no BYO configured": a 404 that carries X-Org-Llm-Config: none and
+// no reason header. A 404 with the marker and the reason byo_llm_gate_closed is
+// ErrLLMConfigGateClosed (a saved configuration behind a closed byo_llm gate); with
+// byo_no_investigate_config it is ErrLLMConfigNoInvestigateConfig (saved keys for
+// other purposes only). A 409 (a saved configuration whose stored key is
+// unreadable) is ErrLLMConfigUnusable. Everything else is unavailable (errUnavailable),
+// because the source cannot be read or has broken its contract: ops unreachable, a
+// 5xx, a 401 or 403 (the credential or its scope is refused), a 404 without the
+// marker or with an unknown reason, and a 200 whose body does not decode or names
+// another schema, organization, provider, model or version. Answers (found, not
+// found, gate closed or no investigate config) are reused for llmConfigCacheTTL;
+// errors are never cached.
 func (c *Client) OrgLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, bool, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return OrgLLMConfig{}, false, errors.New("unsupported llm config request")
 	}
 	now := c.now()
 	if entry, ok := c.llmConfigs.get(orgID, now); ok {
+		if entry.refusal != nil {
+			return OrgLLMConfig{}, false, entry.refusal
+		}
 		return entry.config, entry.found, nil
 	}
 	config, found, err := c.fetchLLMConfig(ctx, orgID)
+	if errors.Is(err, ErrLLMConfigGateClosed) || errors.Is(err, ErrLLMConfigNoInvestigateConfig) {
+		c.llmConfigs.put(orgID, llmConfigEntry{refusal: err, expires: now.Add(llmConfigCacheTTL)})
+		return OrgLLMConfig{}, false, err
+	}
 	if err != nil {
 		return OrgLLMConfig{}, false, err
 	}
@@ -139,8 +175,21 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return OrgLLMConfig{}, false, nil
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:
+		if response.Header.Get(llmConfigMarkerHeader) != llmConfigMarkerNone {
+			return OrgLLMConfig{}, false, errUnavailable
+		}
+		switch response.Header.Get(llmConfigReasonHeader) {
+		case llmConfigGateClosedReason:
+			return OrgLLMConfig{}, false, ErrLLMConfigGateClosed
+		case llmConfigNoInvestigateReason:
+			return OrgLLMConfig{}, false, ErrLLMConfigNoInvestigateConfig
+		case "":
+			return OrgLLMConfig{}, false, nil
+		}
+		return OrgLLMConfig{}, false, errUnavailable
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return OrgLLMConfig{}, false, errUnavailable
+	case http.StatusConflict:
 		return OrgLLMConfig{}, false, fmt.Errorf("%w: ops answered %d", ErrLLMConfigUnusable, response.StatusCode)
 	default:
 		return OrgLLMConfig{}, false, errUnavailable
@@ -153,17 +202,17 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	decoder.DisallowUnknownFields()
 	var parsed llmConfigResponse
 	if err := decoder.Decode(&parsed); err != nil {
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: the body does not decode", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	}
 	switch {
 	case parsed.SchemaVersion != llmConfigSchemaVersion:
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: schema_version is not %s", ErrLLMConfigUnusable, llmConfigSchemaVersion)
+		return OrgLLMConfig{}, false, errUnavailable
 	case parsed.OrgID != orgID:
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: the body names another organization", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	case strings.TrimSpace(parsed.Provider) == "" || strings.TrimSpace(parsed.Model) == "":
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: provider or model is empty", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	case strings.TrimSpace(parsed.Version) == "":
-		return OrgLLMConfig{}, false, fmt.Errorf("%w: version is empty", ErrLLMConfigUnusable)
+		return OrgLLMConfig{}, false, errUnavailable
 	}
 	return OrgLLMConfig{
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),

@@ -37,3 +37,36 @@ func TestServiceModelDefaultRejectsAnyOtherValue(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceModelDefaultOnIsRefusedOnlyInProduction(t *testing.T) {
+	for _, tc := range []struct {
+		environment string
+		value       string
+		refused     bool
+	}{
+		{environment: "production", value: "on", refused: true},
+		{environment: "production", value: "off"},
+		{environment: "staging", value: "on"},
+		{environment: "test", value: "on"},
+		{environment: "development", value: "on"},
+	} {
+		t.Run(tc.environment+"/"+tc.value, func(t *testing.T) {
+			values := completeRuntimeEnvironment()
+			values["ACR_ENVIRONMENT"] = tc.environment
+			values["ACR_MCP_SERVICE_MODEL_DEFAULT"] = tc.value
+			cfg, err := load(mapLookup(values))
+			if tc.refused {
+				if err == nil || !strings.Contains(err.Error(), "ACR_MCP_SERVICE_MODEL_DEFAULT") {
+					t.Fatalf("load() error = %v, want a refusal naming ACR_MCP_SERVICE_MODEL_DEFAULT", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ServiceModelOpen != (tc.value == "on") {
+				t.Fatalf("ServiceModelOpen = %t for %q", cfg.ServiceModelOpen, tc.value)
+			}
+		})
+	}
+}

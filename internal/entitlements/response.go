@@ -12,6 +12,9 @@ type response struct {
 	OrgID               string
 	AgentContextRuntime bool
 	ServiceModel        bool
+	// PlatformModelFallback is optional: an ops build without the field reads
+	// as not granted.
+	PlatformModelFallback bool
 }
 
 type healthResponse struct {
@@ -43,7 +46,7 @@ func decodeResponse(body io.Reader, maxBytes int64) (response, error) {
 	return parsed, nil
 }
 
-type responseFields struct{ schema, org, entitlement, serviceModel bool }
+type responseFields struct{ schema, org, entitlement, serviceModel, platformModelFallback bool }
 
 func decodeFields(decoder *json.Decoder) (response, responseFields, error) {
 	var parsed response
@@ -74,6 +77,11 @@ func decodeFields(decoder *json.Decoder) (response, responseFields, error) {
 				return response{}, responseFields{}, errors.New("invalid acr_service_model")
 			}
 			seen.serviceModel = true
+		case "platform_model_fallback":
+			if seen.platformModelFallback || decodeRequiredValue(decoder, &parsed.PlatformModelFallback) != nil {
+				return response{}, responseFields{}, errors.New("invalid platform_model_fallback")
+			}
+			seen.platformModelFallback = true
 		default:
 			return response{}, responseFields{}, errors.New("unknown response field")
 		}
