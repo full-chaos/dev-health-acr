@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -33,12 +34,11 @@ const (
 var orgLinksCeilingSizes = []int{24_000, 90_000, 400_000}
 
 // linkRowStatement is one link-row statement in query_log: its peak memory,
-// its read_bytes, the max_threads it ran with, and whether it is the team link
+// its read_bytes, and whether it is the team link
 // candidate statement (which still reads the organization's linked ids).
 type linkRowStatement struct {
 	peak      uint64
 	readBytes uint64
-	threads   string
 	candidate bool
 }
 
@@ -60,7 +60,7 @@ func TestTeamPullRequestReadServesAnOrganizationWithManyOutsideLinksUnderTheAPIC
 				maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 				options.MaxBytesToRead = &maxBytesToRead
 			})
-			query := contextpacket.NewMemoryCappedQueryClient(rawQuery, contextpacket.APIStatementMaxMemoryUsage, contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))
+			query := statementthreads.API(rawQuery)
 			for _, statement := range devhealthschema.DDL(
 				// devhealthschema:not-a-production-replica the table names here select or fill what devhealthschema.DDL renders; no schema is defined in this file
 				"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_dependency_first_seen", "work_graph_issue_pr",
@@ -128,15 +128,6 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 				}
 			}
 
-			var serverThreads string
-			if err := direct.QueryRow(ctx, `SELECT value FROM system.settings WHERE name = 'max_threads'`).Scan(&serverThreads); err != nil {
-				t.Fatalf("read the server max_threads: %v", err)
-			}
-			wantThreads := fmt.Sprint(contextpacket.StatementMaxThreads)
-			// A setting equal to the server default is not logged as changed.
-			ranAtStatementThreads := func(logged string) bool {
-				return logged == wantThreads || (logged == "" && (serverThreads == wantThreads || serverThreads == "auto("+wantThreads+")"))
-			}
 			provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
 			window := contractsv1TimeContext(ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 30, 23, 59, 59))
 			read := func(label string) map[uint64]linkRowStatement {
@@ -192,9 +183,6 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 						if !ok {
 							t.Fatalf("%s %s: statement %d did not run in every read", mode, label, hash)
 						}
-						if !ranAtStatementThreads(statement.threads) {
-							t.Fatalf("%s %s: statement %d ran with max_threads %q (server default %q), want %s (the peak would measure the runner)", mode, label, hash, statement.threads, serverThreads, wantThreads)
-						}
 						lowest, highest = min(lowest, statement.peak), max(highest, statement.peak)
 						readBytes = max(readBytes, statement.readBytes)
 					}
@@ -217,13 +205,14 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 
 // linkRowStatementsSince is every finished or failed SELECT after the mark
 // that reads both the team project ownership and the link rows: per
-// normalized query hash, its peak memory and the max_threads it ran with.
+// normalized query hash, its peak memory and read_bytes. Every one must have
+// run at the statement thread count.
 func linkRowStatementsSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) map[uint64]linkRowStatement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), any(Settings['max_threads']), max(position(query, 'SELECT groupArray(cp.work_item_id) FROM work_items AS cp') > 0) FROM system.query_log
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), `+statementthreads.UnboundThreadsCount+`, max(position(query, 'SELECT groupArray(cp.work_item_id) FROM work_items AS cp') > 0) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.team_project_ownership')) AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr'))
 GROUP BY normalized_query_hash`, markMicros)
@@ -232,17 +221,19 @@ GROUP BY normalized_query_hash`, markMicros)
 	}
 	defer rows.Close()
 	out := map[uint64]linkRowStatement{}
+	var threadless uint64
 	for rows.Next() {
-		var hash, peak, readBytes uint64
-		var threads string
+		var hash, peak, readBytes, unbound uint64
 		var candidate uint8
-		if err := rows.Scan(&hash, &peak, &readBytes, &threads, &candidate); err != nil {
+		if err := rows.Scan(&hash, &peak, &readBytes, &unbound, &candidate); err != nil {
 			t.Fatalf("scan query_log: %v", err)
 		}
-		out[hash] = linkRowStatement{peak: peak, readBytes: readBytes, threads: threads, candidate: candidate == 1}
+		out[hash] = linkRowStatement{peak: peak, readBytes: readBytes, candidate: candidate == 1}
+		threadless += unbound
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "team link-row statements", threadless)
 	return out
 }
