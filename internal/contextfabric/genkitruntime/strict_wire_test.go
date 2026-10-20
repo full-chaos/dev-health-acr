@@ -243,10 +243,10 @@ func TestEmptyWireDefaultsEqualAbsentInterpretation(t *testing.T) {
 func TestEmptyWireDefaultsEqualAbsentSynthesis(t *testing.T) {
 	schema := strictSchemas(t)["synthesize"]
 	wireReply := `{"status":"complete","direct_judgment":"j","current_state":"c","strongest_pressures":[],"drivers":[],
-	 "remaining_work":[],"readiness_gaps":[],"conflicts":[],"limitations":[],"evidence_ref_ids":[],
+	 "findings":[],"limitations":[],"evidence_ref_ids":[],
 	 "claimed_facts":[{"claim_id":"c1","kind":"work","subject":{"kind":"team","canonical_id":"t","label":"T"},"field":"f",
 	   "value":{"kind":"integer","string":"","integer":4,"number":0,"boolean":false},
-	   "fact_id":"","derived_from":[],"operation":"","rows":[],"table":null,"time_series_rows":[],"time_series_table":null}],
+	   "fact_id":"","derived_from":[],"operation":"","rows":[],"tables":[]}],
 	 "deterministic_answer":"a","warnings":[],"coverage_disclosures":[]}`
 	absentReply := `{"status":"complete","direct_judgment":"j","current_state":"c","strongest_pressures":[],"drivers":[],
 	 "remaining_work":[],"readiness_gaps":[],"conflicts":[],"limitations":[],"evidence_ref_ids":[],
@@ -278,8 +278,9 @@ func TestScalarValuesKeepTheirKindOnTheWire(t *testing.T) {
 		"false": `{"boolean":false}`, "null": `{"null":true}`,
 	}
 	for name, scalar := range cases {
-		reply := `{"status":"complete","direct_judgment":"j","current_state":"c","strongest_pressures":[],"drivers":[],"remaining_work":[],"readiness_gaps":[],"conflicts":[],"limitations":[],"evidence_ref_ids":[],"deterministic_answer":"a","warnings":[],` +
-			`"claimed_facts":[{"claim_id":"c1","kind":"work","subject":{"kind":"team","canonical_id":"t","label":"T"},"field":"f","value":` + scalar + `,"rows":[{"fields":[{"key":"x","value":` + scalar + `}]}]}]}`
+		entry := `{"key":"x",` + scalar[1:]
+		reply := `{"status":"complete","direct_judgment":"j","current_state":"c","strongest_pressures":[],"drivers":[],"findings":[],"limitations":[],"evidence_ref_ids":[],"deterministic_answer":"a","warnings":[],` +
+			`"claimed_facts":[{"claim_id":"c1","kind":"work","subject":{"kind":"team","canonical_id":"t","label":"T"},"field":"f","value":` + scalar + `,"rows":[{"series":"table","fields":[` + entry + `]}],"tables":[]}]}`
 		var got struct {
 			ClaimedFacts []struct {
 				Value json.RawMessage `json:"value"`

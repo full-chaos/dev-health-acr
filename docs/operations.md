@@ -920,10 +920,14 @@ enforces them), and every property is required (an optional string or list is
 sent as "" or [], an optional object or date as null). The reply is restored to
 the served shape before the local check, so the answer contract is unchanged,
 and the `context fabric model answer format path` log line reports
-`format_path=schema` for interpret. The synthesis schema stays on the tool-call
-mode on purpose: its closed form is refused by Anthropic with HTTP 400 "The
-compiled grammar is too large" (a limit the fit check cannot see), and the
-mode is chosen per operation before the call, never switched after a refusal.
+`format_path=schema` for interpret and synthesis. The synthesis wire folds its
+repeated structures to stay under Anthropic's compiled-grammar cap (HTTP 400
+"The compiled grammar is too large", a limit the fit check cannot see): the
+three finding lists are one `findings` list tagged `list`, rows and
+time_series_rows are one `rows` list and the two table declarations one
+`tables` list, each tagged `series`, and a row's fields are scalar entries. The
+restore step splits them back. The mode is chosen per operation before the
+call, never switched after a refusal.
 OpenAI-compatible kinds get no provider-enforced schema. A BYO model that
 returns JSON breaking the schema is refused by the local check, never answered
 by another model.

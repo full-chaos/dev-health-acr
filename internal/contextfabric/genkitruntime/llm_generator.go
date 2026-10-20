@@ -84,10 +84,9 @@ type outputSchema struct {
 	// strict is wire in the closed form Anthropic structured outputs accept;
 	// a reply that follows it is restored to wire's shape before the check.
 	strict map[string]any
-	// closed is whether an Anthropic call sends strict. The synthesis schema
-	// stays open: its closed form is over Anthropic's compiled-grammar cap
-	// (HTTP 400, no fallback), so that operation uses the tool path the
-	// client picks for the open schema, decided here before any call.
+	// closed is whether an Anthropic call sends strict. Synthesis is closed
+	// too since CHAOS-10311 folded its repeated structures under
+	// Anthropic's compiled-grammar cap (HTTP 400, no fallback).
 	closed   bool
 	compiled *gojsonschema.Schema
 	// instructions is Genkit's own JSON format instruction for this schema
@@ -157,7 +156,7 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		return nil, err
 	}
-	if gen.synthesis, err = newOutputSchema(synthesisOutput{}, false); err != nil {
+	if gen.synthesis, err = newOutputSchema(synthesisOutput{}, true); err != nil {
 		return nil, err
 	}
 	if gen.phrasing, err = newOutputSchema(phrasingOutput{}, true); err != nil {
