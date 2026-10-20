@@ -2807,7 +2807,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// gated request pays for interpretation only -- CHAOS-4040's own
 	// run-3 acceptance bar ("class-default cases interpretation-only").
 	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
-	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
+	effectiveWindow := composeEffectiveWindowFor(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now(), !request.Options.AllowClarification)
 	// CHAOS-4360: same-conversation window carry. Attempted ONLY when this
 	// turn's own canonicalization would otherwise be inferred_default --
 	// windowCanon.Effective is nil by construction at this point (see the

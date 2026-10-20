@@ -833,6 +833,15 @@ type windowPriorProposal struct {
 }
 
 func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+	return composeEffectiveWindowFor(interpretation, requestWindow, binderProposal, priorWindow, now, false)
+}
+
+// composeEffectiveWindowFor is composeEffectiveWindow for a request that may
+// have declined clarification. Such a request cannot be asked to confirm a
+// window, and the question names a period: the engine answers against the
+// window it infers from that period even when the interpreter's window class
+// would otherwise refuse to guess one.
+func composeEffectiveWindowFor(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time, clarificationDeclined bool) *contractsv1.ContextFabricEffectiveEvidenceWindow {
 	if interpretation.TimeContext.Axis != TemporalCurrent {
 		return nil
 	}
@@ -851,7 +860,8 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	// MCP surface it stays an inferred proposal below; on MCP the engine commits
 	// it before this runs (commitBinderCalendarWindow).
 	stated := binderProposal.Reason == WindowBindRoutedInferred && binderProposal.Trailing
-	if !ok && !stated {
+	proposedAndDeclined := clarificationDeclined && binderProposal.Reason == WindowBindRoutedInferred && !binderProposal.PointInTime
+	if !ok && !stated && !proposedAndDeclined {
 		// state_snapshot, or no class could be determined at all --
 		// "refuse to guess" (design brief §2): no window, never a wrong
 		// constraint. A prior proposal is deliberately NOT consulted to

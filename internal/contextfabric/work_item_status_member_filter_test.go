@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -131,6 +132,11 @@ func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMember
 
 func runTupleFilterCaseWithClass(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest, windowClass WindowClass) statusFilterRun {
 	t.Helper()
+	return runTupleFilterCaseAt(t, frame, census, investigation, windowClass, nil)
+}
+
+func runTupleFilterCaseAt(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest, windowClass WindowClass, now func() time.Time) statusFilterRun {
+	t.Helper()
 	population := census.AuthorizedPopulation
 	var run statusFilterRun
 	frame = ValidateFrame(frame, nil, "").Frame
@@ -163,7 +169,7 @@ func runTupleFilterCaseWithClass(t *testing.T, frame QuestionFrame, census WorkI
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Available work items.", CurrentState: "Available work items.", DeterministicAnswer: "Available work items.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
 		}), Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
-	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_status_filter_001" }})
+	}, EngineOptions{ServiceVersion: "test", Now: now, NewResultID: func() string { return "result_status_filter_001" }})
 	if err != nil {
 		t.Fatal(err)
 	}

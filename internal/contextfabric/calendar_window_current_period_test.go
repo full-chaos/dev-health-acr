@@ -323,3 +323,27 @@ func TestWorkItemPeriodQuestionIsAnsweredAgainstTheInferredWindowWhenClarificati
 		t.Fatalf("stated trailing control: err=%v status=%q membership reads=%d, want unchanged", run.invokedErr, run.result.Status, run.reads)
 	}
 }
+
+func TestWorkItemPeriodQuestionOnTheFirstOfTheMonthIsAnsweredWhenClarificationIsDeclined(t *testing.T) {
+	census := WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}
+	firstOfMonth := func() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		question string
+		want     WindowProvenance
+	}{
+		{"Which work items in Project Alpha were created this month?", WindowInferredDefault},
+		{"Which work items in Project Alpha were created last month?", WindowQuestionStated},
+	}
+	for _, tc := range cases {
+		for _, class := range []WindowClass{"", WindowClassStateSnapshot, WindowClassTrendAssessment} {
+			request := statedPeriodRequest(tc.question)
+			request.Consumer.Surface = mcpSurface
+			request.Options.AllowClarification = false
+			run := runTupleFilterCaseAt(t, periodTupleFrame(), census, request, class, firstOfMonth)
+			window := run.result.EffectiveEvidenceWindow
+			if run.invokedErr != nil || run.result.Status == InvestigationNoMatch || run.reads != 1 || window == nil || window.Provenance != tc.want {
+				t.Fatalf("%q class %q: err=%v status=%q membership reads=%d window=%+v, want one period read over a %s window", tc.question, class, run.invokedErr, run.result.Status, run.reads, window, tc.want)
+			}
+		}
+	}
+}
