@@ -745,6 +745,54 @@ check_routed_workflow_triggers() {
     printf 'workflow %s routes to CI_RACE_RUNNER and its push trigger is not exactly "branches: [main]"\n' "$file" >&2
     status=1
   fi
+  # A pull_request filter other than types (branches, paths, paths-ignore)
+  # can stop the workflow, and the contract with it, from running at all.
+  local pr_keys
+  pr_keys="$(awk '/^  pull_request:/ { in_pr=1; next } in_pr && /^  [^[:space:]]/ { in_pr=0 } in_pr && /^    [^[:space:]]/ { print }' <<<"$on" | sed -E 's/^    ([^:]+):.*/\1/' | sort -u | tr '\n' ' ')"
+  if [ -n "$pr_keys" ] && [ "$pr_keys" != "types " ]; then
+    printf 'workflow %s routes to CI_RACE_RUNNER and its pull_request trigger carries filters [%s]; only types is allowed\n' "$file" "$pr_keys" >&2
+    status=1
+  fi
+  return "$status"
+}
+
+# check_runner_sources: in this workflow and every workflow beside it, a job's
+# runs-on is a literal label, the fork-guarded line (this workflow only), or
+# ${{ matrix.<key> }} over a matrix with no expressions. The vars context is
+# never indexed by a computed name. Together with
+# check_routed_jobs_fork_guarded this leaves no expression that can name the
+# pool runner without the fork guard.
+check_runner_sources() {
+  local file="$1" wf job block line value status=0
+  for wf in "$file" "$(dirname "$file")"/*.yml "$(dirname "$file")"/*.yaml; do
+    if [ ! -f "$wf" ] || { [ "$wf" != "$file" ] && [ "$wf" -ef "$file" ]; }; then
+      continue
+    fi
+    if grep -vE '^[[:space:]]*#' "$wf" | grep -qiE 'vars[[:space:]]*\['; then
+      printf 'workflow %s indexes the vars context by a computed name\n' "$wf" >&2
+      status=1
+    fi
+    while IFS= read -r job; do
+      block="$(job_block "$wf" "$job")"
+      while IFS= read -r line; do
+        value="$(sed -E 's/^[[:space:]]*runs-on:[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
+        if [ "$wf" = "$file" ] && [ "$line" = "$routed_runs_on" ]; then
+          continue
+        elif [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          continue
+        elif [[ "$value" =~ ^\$\{\{\ matrix\.[A-Za-z0-9_-]+\ \}\}$ ]]; then
+          # shellcheck disable=SC2016
+          if awk '/^    strategy:/ { in_s=1; next } in_s && /^    [^[:space:]]/ { in_s=0 } in_s { print }' <<<"$block" | grep -vE '^[[:space:]]*#' | grep -qF '${{'; then
+            printf 'job "%s" in %s runs on a matrix value and its matrix holds an expression\n' "$job" "$wf" >&2
+            status=1
+          fi
+        else
+          printf 'job "%s" in %s runs on "%s": only a literal label, the fork-guarded line or a literal matrix value is allowed\n' "$job" "$wf" "$value" >&2
+          status=1
+        fi
+      done < <(grep -E '^[[:space:]]+runs-on:' <<<"$block")
+    done < <(list_jobs "$wf")
+  done
   return "$status"
 }
 
@@ -1205,6 +1253,7 @@ run_all_checks() {
   check_first_stage_runner_uses_variable "$file"
   check_routed_jobs_fork_guarded "$file"
   check_routed_workflow_triggers "$file"
+  check_runner_sources "$file"
   check_testcontainers_needs_mirror_preflight "$file"
   check_testcontainers_session_reap "$file"
   check_heavy_jobs_gated "$file"
@@ -1458,6 +1507,38 @@ flow_on="$tmpdir/flow-on.yml"
 awk '/^"on":$/ { print "\"on\": [push, pull_request, workflow_dispatch]"; skip=1; next } skip && /^[^[:space:]]/ { skip=0 } skip { next } { print }' "$workflow" > "$flow_on"
 cmp -s "$workflow" "$flow_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: flow_on did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'replaced the trigger map with a flow list in a workflow that routes to the pool' check_routed_workflow_triggers "$flow_on"
+for filter in "paths-ignore: ['**']" "branches: [main]" "paths: ['docs/**']"; do
+  pr_filter="$tmpdir/pr-filter.yml"
+  awk -v f="    $filter" '!done && /^  pull_request:$/ { print; print f; done=1; next } { print }' "$workflow" > "$pr_filter"
+  cmp -s "$workflow" "$pr_filter" && { printf 'NEGATIVE CONTROL SETUP FAILED: pr_filter did not change the workflow\n' >&2; exit 1; }
+  assert_check_fails "added a pull_request filter ($filter) to a workflow that routes to the pool" check_routed_workflow_triggers "$pr_filter"
+done
+computed_vars="$tmpdir/computed-vars.yml"
+awk '/^  docs-mermaid:$/ { in_job=1 } in_job && /^  [A-Za-z0-9_-]+:/ && !/^  docs-mermaid:$/ { in_job=0 } in_job && /^    runs-on: / && !done { print "    runs-on: ${{ vars[format('"'"'CI_{0}'"'"', '"'"'RACE_RUNNER'"'"')] || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' "$workflow" > "$computed_vars"
+cmp -s "$workflow" "$computed_vars" && { printf 'NEGATIVE CONTROL SETUP FAILED: computed_vars did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job through a computed vars index' check_runner_sources "$computed_vars"
+expr_runner="$tmpdir/expr-runner.yml"
+awk '/^  docs-mermaid:$/ { in_job=1 } in_job && /^  [A-Za-z0-9_-]+:/ && !/^  docs-mermaid:$/ { in_job=0 } in_job && /^    runs-on: / && !done { print "    runs-on: ${{ needs.plan.outputs.runner }}"; done=1; next } { print }' "$workflow" > "$expr_runner"
+cmp -s "$workflow" "$expr_runner" && { printf 'NEGATIVE CONTROL SETUP FAILED: expr_runner did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a job through a job output' check_runner_sources "$expr_runner"
+matrix_expr="$tmpdir/matrix-expr.yml"
+cat "$workflow" > "$matrix_expr"
+cat >> "$matrix_expr" <<'YAML'
+  matrix-probe:
+    strategy:
+      matrix:
+        runner: ["${{ vars.OTHER_RUNNER }}"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - run: true
+YAML
+assert_check_fails 'ran a job on a matrix value that holds an expression' check_runner_sources "$matrix_expr"
+side_dir="$tmpdir/side-workflows"
+mkdir -p "$side_dir"
+cp "$workflow" "$side_dir/ci.yml"
+# shellcheck disable=SC2016
+printf 'jobs:\n  probe:\n    runs-on: ${{ vars[format('"'"'CI_{0}'"'"', '"'"'RACE_RUNNER'"'"')] }}\n' > "$side_dir/side.yml"
+assert_check_fails 'routed a job of another workflow file through a computed vars index' check_runner_sources "$side_dir/ci.yml"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
