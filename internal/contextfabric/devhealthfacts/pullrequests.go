@@ -421,9 +421,13 @@ func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.Click
 	if reachedRepositoryCount(reachedOnly) == 0 {
 		return counts, nil
 	}
-	err := pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequests", orgID, teamIDs,
+	ctx, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, bound)
+	if err != nil || !ok {
+		return counts, err
+	}
+	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequests", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "lr.team_id", repoExpr: "lr.pr_repo_id", repoType: "UUID"},
-		append(window.bindings(), boundReaderBindings(bound)...),
+		append(append(window.bindings(), boundReaderBindings(bound)...), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
 		func(having string, limit int) string {
 			return `SELECT lr.team_id, toString(lr.pr_repo_id),
 	toInt64(countIf(` + window.timestampExpr("pr.created_at") + `)),
@@ -431,6 +435,7 @@ func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.Click
 	toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NOT NULL AND ` + window.timestampExpr("pr.closed_at") + `))
 FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
 INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
+WHERE pr.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_ids:Array(String)}) AS id))
 GROUP BY lr.team_id, lr.pr_repo_id
 ` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id
