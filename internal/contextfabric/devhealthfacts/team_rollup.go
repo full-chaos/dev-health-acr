@@ -153,9 +153,11 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement, and the statement's context must carry the teams' link
 // candidates (withTeamLinkCandidates). It is the same chain teamRepositories
-// walks. The work items are read with FINAL for the candidates only, and the
-// link rows and the pull requests joined to them for the candidates' links
-// only, so no join side holds the organization's other links.
+// walks. The work items are read with FINAL for the candidates only (the
+// String ids keep the work item index pruning), and the link rows and the pull
+// requests joined to them for the candidates' link hashes only; the join on
+// the real work item id keeps exactly the candidates' rows. No join side holds
+// the organization's other links.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := teamOwnedResolvedProjectsSQL(teamParam, bound)
 	keys := teamOwnedProjectKeyCandidatesSQL(teamParam, bound)
@@ -166,7 +168,7 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
   SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
   FROM ` + owned + ` AS o
   INNER JOIN ` + issues + ` AS w ON w.provider = o.provider AND w.project_id = o.join_key
-  INNER JOIN ` + admittedLinkedPullRequestRowsAmongSQL(teamLinkCandidatesSent) + ` AS l ON l.work_item_id = w.work_item_id
+  INNER JOIN ` + admittedLinkedPullRequestRowsAmongSQL(teamLinkCandidateHashesSent) + ` AS l ON l.work_item_id = w.work_item_id
 )`
 }
 

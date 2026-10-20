@@ -20,6 +20,11 @@ const teamLinkCandidatesTable = "_team_link_candidates"
 // teamLinkCandidatesSent is the candidate set read back from its external table.
 const teamLinkCandidatesSent = `(SELECT work_item_id FROM ` + teamLinkCandidatesTable + `)`
 
+// teamLinkCandidateHashesSent is the candidate set's cityHash64 values, computed
+// server-side: a fixed-width prune set for the link-row and pull request sites,
+// whose real-id joins drop what a colliding hash lets through.
+const teamLinkCandidateHashesSent = `(SELECT cityHash64(work_item_id) FROM ` + teamLinkCandidatesTable + `)`
+
 // teamLinkCandidatesPredicate keeps every work item id with a link row whose
 // row of any version carries a join key of a project the {ids} teams own under
 // the bound: a superset of the owned projects' linked issues whose latest

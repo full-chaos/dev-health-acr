@@ -36,6 +36,22 @@ func TeamProjectLinkRowsSQLForTest() string {
 	return teamProjectLinkRowsSQL("ids", factTimeBound{})
 }
 
+// TeamProjectLinkRowsUnprunedSQLForTest is the team project link rows with
+// their three candidate prunes removed: the rows the prunes must keep.
+func TeamProjectLinkRowsUnprunedSQLForTest() string {
+	statement := teamProjectLinkRowsSQL("ids", factTimeBound{})
+	for _, cut := range [][2]string{
+		{"cw.work_item_id IN " + teamLinkCandidatesSent, "1"},
+		{admittedLinkedPullRequestRowsAmongSQL(teamLinkCandidateHashesSent), admittedLinkedPullRequestRowsSQL},
+	} {
+		if strings.Count(statement, cut[0]) != 1 {
+			panic("team project link rows prune not found: " + cut[0])
+		}
+		statement = strings.Replace(statement, cut[0], cut[1], 1)
+	}
+	return statement
+}
+
 // teamLinkCandidatesSQL is the team link candidate set as a subquery: the
 // form a statement inlines it in when it runs without the external table.
 func teamLinkCandidatesSQL(bound factTimeBound) string {
@@ -45,6 +61,7 @@ func teamLinkCandidatesSQL(bound factTimeBound) string {
 // inlineTeamLinkCandidates puts the team link candidates the statement takes
 // as an external table back into its text.
 func inlineTeamLinkCandidates(statement string, bound factTimeBound) string {
+	statement = strings.ReplaceAll(statement, teamLinkCandidateHashesSent, `(SELECT cityHash64(work_item_id) FROM `+teamLinkCandidatesSQL(bound)+`)`)
 	return strings.ReplaceAll(statement, teamLinkCandidatesSent, teamLinkCandidatesSQL(bound))
 }
 
