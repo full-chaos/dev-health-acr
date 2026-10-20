@@ -1639,7 +1639,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-contracts-v1')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'

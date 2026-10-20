@@ -712,7 +712,7 @@ check_routed_jobs_fork_guarded() {
     if [ ! -f "$other" ] || [ "$other" = "$file" ]; then
       continue
     fi
-    if grep -iF 'CI_RACE_RUNNER' "$other" | grep -qvE '^[[:space:]]*#'; then
+    if grep -iF 'CI_RACE_RUNNER' "$other" | grep -vE '^[[:space:]]*#' | grep -q .; then
       printf 'workflow %s names CI_RACE_RUNNER; only %s may route to the pool\n' "$other" "$file" >&2
       status=1
     fi
