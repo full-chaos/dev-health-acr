@@ -669,14 +669,14 @@ check_race_runner_uses_variable() {
     case "$job" in race|race-*) ;; *) continue ;; esac
     block="$(job_block "$file" "$job")"
     if [[ "$pinned" == *" $job "* ]]; then
-      if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block" || grep -qF 'vars.CI_RACE_RUNNER' <<<"$block"; then
+      if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block" || grep -qE '^ +runs-on:.*CI_RACE_RUNNER' <<<"$block"; then
         printf 'job "%s" must stay on ubuntu-latest: it exceeds its budget on the self-hosted pool\n' "$job" >&2
         status=1
       fi
       continue
     fi
     # shellcheck disable=SC2016
-    if ! grep -qF 'runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
+    if ! grep -qxF '    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
       printf 'job "%s" does not set runs-on from the CI_RACE_RUNNER variable with a '"'"'ubuntu-latest'"'"' fallback -- it would either hardcode a label or silently drop the fallback\n' \
         "$job" >&2
       status=1
@@ -741,14 +741,18 @@ check_testcontainers_session_reap() {
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
-    grep -qE '^ +TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:' <<<"$block" || continue
-    if ! grep -qE "^ {6}TESTCONTAINERS_RYUK_DISABLED: 'true'$" <<<"$block"; then
-      printf 'job "%s" starts testcontainers with the ryuk reaper on\n' "$job" >&2
+    grep -qE "^ +[\"']?TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX[\"']? *:" <<<"$block" || continue
+    if grep -qE '^ {4}services:' <<<"$block"; then
+      printf 'job "%s" starts testcontainers and declares service containers; the post-reap census fails on any container it did not reap\n' "$job" >&2
+      status=1
+    fi
+    if ! grep -qxF "      TESTCONTAINERS_RYUK_DISABLED: 'true'" <<<"$block"; then
+      printf 'job "%s" starts testcontainers without a job-level TESTCONTAINERS_RYUK_DISABLED: '"'"'true'"'"' (the reap step reads the job env)\n' "$job" >&2
       status=1
     fi
     # shellcheck disable=SC2016
-    if ! grep -qF 'TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}' <<<"$block"; then
-      printf 'job "%s" has no per-job TESTCONTAINERS_SESSION_ID\n' "$job" >&2
+    if ! grep -qxF '      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}' <<<"$block"; then
+      printf 'job "%s" has no job-level TESTCONTAINERS_SESSION_ID (the reap step reads the job env)\n' "$job" >&2
       status=1
     fi
     local last
@@ -1266,6 +1270,40 @@ cat >> "$step_env_tc" <<'YAML'
         run: go test ./internal/runtime/postgres
 YAML
 assert_check_fails 'added a testcontainers job with the prefix in a step-level env and no reap' check_testcontainers_session_reap "$step_env_tc"
+
+# (c7) the review r1 shapes: a fitting race leg hardcoded hosted with the
+# expected expression left in a comment; a quoted step-level prefix with no
+# reap; the session id only in a step env; a service container beside the
+# census.
+comment_routed="$tmpdir/comment-routed.yml"
+awk '
+  /^  race-factoracle:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
+  in_job && /^    runs-on: / { print "    # runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; print "    runs-on: ubuntu-latest"; next }
+  { print }
+' "$workflow" > "$comment_routed"
+cmp -s "$workflow" "$comment_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: comment_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'hardcoded a fitting race leg hosted and left the routed form in a comment' check_race_runner_uses_variable "$comment_routed"
+quoted_step_env="$tmpdir/quoted-step-env.yml"
+cat "$workflow" > "$quoted_step_env"
+cat >> "$quoted_step_env" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        env:
+          "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX": ghcr.io/example
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job with a quoted step-level prefix and no reap' check_testcontainers_session_reap "$quoted_step_env"
+step_session="$tmpdir/step-session.yml"
+awk -v line="      TESTCONTAINERS_SESSION_ID: ci-\${{ github.run_id }}-\${{ github.run_attempt }}-\${{ github.job }}-\${{ strategy.job-index }}" '!done && $0 == line { sub(/^      /, "          "); done=1 } { print }' "$workflow" > "$step_session"
+cmp -s "$workflow" "$step_session" && { printf 'NEGATIVE CONTROL SETUP FAILED: step_session did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'moved a job session id into a step env' check_testcontainers_session_reap "$step_session"
+service_beside="$tmpdir/service-beside.yml"
+awk '!done && /^  race:$/ { print; print "    services:"; print "      redis:"; print "        image: redis"; done=1; next } { print }' "$workflow" > "$service_beside"
+cmp -s "$workflow" "$service_beside" && { printf 'NEGATIVE CONTROL SETUP FAILED: service_beside did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'declared a service container in a job with the post-reap census' check_testcontainers_session_reap "$service_beside"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
