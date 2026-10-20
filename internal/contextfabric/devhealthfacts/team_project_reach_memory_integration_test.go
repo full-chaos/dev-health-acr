@@ -27,6 +27,12 @@ const (
 	// under the lowest of the statement it replaced. Lowest-of-3 reads of one
 	// statement differ by under 1% between runs; the narrowing saves 5 to 7%.
 	linkRowsNarrowedMargin = 0.98
+	// teamLinkCandidatesInterleavedBound is the team link candidate statement's
+	// absolute bound at the large interleaved organization: 2x the 3.99 MB
+	// measured there. teamLinkCandidatesPlantedBound is under that measurement,
+	// so the row must refuse it.
+	teamLinkCandidatesInterleavedBound = uint64(8 << 20)
+	teamLinkCandidatesPlantedBound     = uint64(3 << 20)
 )
 
 var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
@@ -148,12 +154,23 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	}
 	small, smallResult, smallErr := read()
 	smallBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
+	smallCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, small)
 	addFiller("more-", blockerMemoryMoreFillerItems)
 	large, largeResult, largeErr := read()
 	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
+	largeCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, large)
 	t.Logf("read_bytes of the project-reached statements: %d at %d filler work items, %d at %d", smallBytes, blockerMemoryFillerItems, largeBytes, blockerMemoryFillerItems+blockerMemoryMoreFillerItems)
 	// The reach read and the linked pull request read run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)
+	t.Logf("CANDIDATES team link candidate statement peak %d bytes at %d filler work items, %d at %d (interleaved %v, bound %d)", smallCandidates, blockerMemoryFillerItems, largeCandidates, blockerMemoryFillerItems+blockerMemoryMoreFillerItems, interleaved, teamLinkCandidatesInterleavedBound)
+	if interleaved {
+		if largeCandidates > teamLinkCandidatesInterleavedBound {
+			t.Errorf("team link candidate statement peaked at %d bytes at the large interleaved organization, want at most %d", largeCandidates, teamLinkCandidatesInterleavedBound)
+		}
+		if largeCandidates <= teamLinkCandidatesPlantedBound {
+			t.Errorf("planted control: a %d-byte bound passed the team link candidate statement's %d-byte peak, so the row cannot tell its bound", teamLinkCandidatesPlantedBound, largeCandidates)
+		}
+	}
 	if smallBytes == 0 {
 		t.Fatalf("read_bytes measurement did not happen: no project-reached statement logged at the smaller size")
 	}
@@ -306,6 +323,40 @@ func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, 
 			t.Fatalf("a project key resolving to two projects reached an issue: %v", afterRows)
 		}
 	}
+}
+
+// takeTeamLinkCandidatesPeak removes the team link candidate statement from
+// measured and returns its peak. Its memory follows the granules that hold the
+// linked ids, not the organization, so it leaves the slope pairs for its own
+// absolute row.
+func takeTeamLinkCandidatesPeak(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64, measured statementMemory) uint64 {
+	t.Helper()
+	rows, err := direct.Query(ctx, `SELECT DISTINCT normalized_query_hash FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, markMicros, teamLinkCandidatesMarker)
+	if err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	defer rows.Close()
+	var peak uint64
+	found := 0
+	for rows.Next() {
+		var hash uint64
+		if err := rows.Scan(&hash); err != nil {
+			t.Fatalf("scan query_log: %v", err)
+		}
+		if p, ok := measured[hash]; ok {
+			peak = max(peak, p)
+			delete(measured, hash)
+			found++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read query_log rows: %v", err)
+	}
+	if found == 0 {
+		t.Fatalf("team link candidate statement not measured (the measurement did not happen)")
+	}
+	return peak
 }
 
 func runLinkRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID, marker, rows string) ([]string, uint64) {
