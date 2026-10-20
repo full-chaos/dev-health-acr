@@ -146,7 +146,7 @@ func blockerProdShapeQueryLog(t *testing.T, ctx context.Context, direct clickhou
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.ThreadlessCount+`
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.UnboundThreadsCount+`
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
 GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
@@ -251,7 +251,7 @@ func blockerProdShapePlantedReading(t *testing.T, ctx context.Context, direct cl
 		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 			t.Fatalf("flush logs: %v", err)
 		}
-		rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(exception_code), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.ThreadlessCount+`
+		rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(exception_code), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.UnboundThreadsCount+`
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
 GROUP BY normalized_query_hash`, mark)
@@ -591,7 +591,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	}
 	for _, name := range devhealthfacts.BlockerFragmentNames {
 		var peak, readRows, threadless uint64
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, fragmentMark, "'frag-"+name+"'").Scan(&peak, &readRows, &threadless); err != nil {
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, fragmentMark, "'frag-"+name+"'").Scan(&peak, &readRows, &threadless); err != nil {
 			t.Fatalf("fragment %s: %v", name, err)
 		}
 		statementthreads.RequireThreadBound(t, ctx, direct, "fragment "+name, threadless)

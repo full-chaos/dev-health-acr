@@ -137,7 +137,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 			}
 			_ = rows.Close()
 			mustExec(t, f.ctx, f.h.direct, "SYSTEM FLUSH LOGS")
-			r, err := f.h.direct.Query(f.ctx, `SELECT memory_usage, read_rows, `+statementthreads.Threadless+` FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time DESC LIMIT 1`, tag)
+			r, err := f.h.direct.Query(f.ctx, `SELECT memory_usage, read_rows, `+statementthreads.UnboundThreads+` FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time DESC LIMIT 1`, tag)
 			if err != nil {
 				t.Fatalf("query_log: %v", err)
 			}

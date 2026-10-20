@@ -131,7 +131,7 @@ func runScopeLiteralCase(t *testing.T, ctx context.Context, client contextpacket
 		t.Fatalf("flush logs (measurement did not happen): %v", flushErr)
 	}
 	var logged, mem, readRows, threadless uint64
-	if qErr := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), max(read_rows), `+statementthreads.ThreadlessCount+` FROM system.query_log
+	if qErr := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), max(read_rows), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_unit_investments'))`, mark).Scan(&logged, &mem, &readRows, &threadless); qErr != nil {
 		t.Fatalf("%s: read query_log (measurement did not happen): %v (run error %v)", c.Name, qErr, err)

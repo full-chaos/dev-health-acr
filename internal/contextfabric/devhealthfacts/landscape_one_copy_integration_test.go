@@ -145,7 +145,7 @@ func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE type = 'QueryFinish' AND (query LIKE '%one_churn%' OR query LIKE '%avg(x_raw)%' OR query LIKE '%avg(il.x_raw)%') AND query NOT LIKE '%system.query_log%'`)
+	rows, err := direct.Query(ctx, `SELECT max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND (query LIKE '%one_churn%' OR query LIKE '%avg(x_raw)%' OR query LIKE '%avg(il.x_raw)%') AND query NOT LIKE '%system.query_log%'`)
 	if err != nil {
 		t.Fatalf("query_log: %v", err)
 	}

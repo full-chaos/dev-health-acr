@@ -265,7 +265,7 @@ func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIs
 				t.Fatalf("flush logs: %v", err)
 			}
 			var rows, memory, threadless uint64
-			if err := direct.QueryRow(ctx, `SELECT max(read_rows), max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log
+			if err := direct.QueryRow(ctx, `SELECT max(read_rows), max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.', 'git_pull_requests')) AND position(query, 'toUUIDOrZero') > 0`, mark).Scan(&rows, &memory, &threadless); err != nil {
 				t.Fatalf("read query_log: %v", err)

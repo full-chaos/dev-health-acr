@@ -90,7 +90,7 @@ SELECT ?, concat(?, toString(number)), 1, 1, 'heuristic', '', ?, ? FROM numbers(
 				t.Fatalf("flush logs (measurement did not happen): %v", err)
 			}
 			var runPeak, runResult, runs, threadless uint64
-			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(result_bytes), count(), `+statementthreads.ThreadlessCount+` FROM system.query_log
+			if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(result_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, pullRequestFallbackSetMarker).Scan(&runPeak, &runResult, &runs, &threadless); err != nil {
 				t.Fatalf("read query_log: %v", err)
 			}

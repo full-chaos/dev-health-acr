@@ -1,11 +1,15 @@
 package statementthreads
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,26 +18,80 @@ import (
 
 var peakColumn = regexp.MustCompile(`(^|[^_A-Za-z])memory_usage\b`)
 
-// memoryPeakReader reports whether a test file reads a statement's peak
-// memory from the server's query log.
-func memoryPeakReader(source string) bool {
-	return strings.Contains(source, "system.query_log") && peakColumn.MatchString(source)
+// diagnosticPeakReads are query_log reads of memory_usage that only list or
+// log statements and assert no bound, by file and enclosing function.
+var diagnosticPeakReads = map[string]string{
+	"internal/contextfabric/devhealthfacts/statement_memory_guard_integration_test.go:recentServerStatements":             "lists the last statements for a failure message",
+	"internal/contextfabric/devhealthfacts/team_project_reach_org_links_memory_integration_test.go:failedStatementsSince": "lists failed statements for a failure message",
 }
 
-// threadBound reports whether a peak-reading file checks the thread count its
-// measured statements ran at: through this package, through the shared
-// devhealthfacts reader that does (statementMemorySince), or by reading
-// query_log's max_threads setting itself.
-func threadBound(source string) bool {
-	return strings.Contains(source, "statementthreads.RequireThreadBound(") ||
-		strings.Contains(source, "statementMemorySince(") ||
-		strings.Contains(source, "Settings['max_threads']")
+// peakReader is one function (declaration or literal) whose own string
+// literals read memory_usage from system.query_log.
+type peakReader struct {
+	key     string
+	checked bool
+}
+
+// peakReaders finds, in one Go source file, every function whose own string
+// literals (not those of a nested function literal) read memory_usage from
+// system.query_log, and whether that same function checks the statement
+// threads: it calls RequireThreadBound, or its own literals read
+// query_log's max_threads setting.
+func peakReaders(rel string, src []byte) ([]peakReader, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), rel, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var out []peakReader
+	var visit func(name string, body *ast.BlockStmt)
+	visit = func(name string, body *ast.BlockStmt) {
+		if body == nil {
+			return
+		}
+		var queryLog, peak, settings, calls bool
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncLit:
+				visit(name+"/func", node.Body)
+				return false
+			case *ast.BasicLit:
+				if node.Kind != token.STRING {
+					return true
+				}
+				text, err := strconv.Unquote(node.Value)
+				if err != nil {
+					return true
+				}
+				queryLog = queryLog || strings.Contains(text, "system.query_log")
+				peak = peak || peakColumn.MatchString(text)
+				settings = settings || strings.Contains(text, "Settings['max_threads']")
+			case *ast.CallExpr:
+				switch fn := node.Fun.(type) {
+				case *ast.SelectorExpr:
+					calls = calls || fn.Sel.Name == "RequireThreadBound"
+				case *ast.Ident:
+					calls = calls || fn.Name == "RequireThreadBound"
+				}
+			}
+			return true
+		})
+		if queryLog && peak {
+			out = append(out, peakReader{key: rel + ":" + name, checked: calls || settings})
+		}
+	}
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			visit(fn.Name.Name, fn.Body)
+		}
+	}
+	return out, nil
 }
 
 func TestEveryMemoryPeakReaderChecksTheStatementThreads(t *testing.T) {
 	root := repopath.Root(t)
 	var unbound []string
 	readers := 0
+	seenDiagnostic := map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -48,21 +106,30 @@ func TestEveryMemoryPeakReaderChecksTheStatementThreads(t *testing.T) {
 		if !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		body, err := os.ReadFile(path)
+		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		source := string(body)
-		if !memoryPeakReader(source) {
+		if strings.HasPrefix(rel, "internal/testsupport/statementthreads/") {
 			return nil
 		}
-		readers++
-		if !threadBound(source) {
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
+		src, err := readFile(path)
+		if err != nil {
+			return err
+		}
+		found, err := peakReaders(rel, src)
+		if err != nil {
+			return err
+		}
+		for _, r := range found {
+			readers++
+			if _, ok := diagnosticPeakReads[r.key]; ok {
+				seenDiagnostic[r.key] = true
+				continue
 			}
-			unbound = append(unbound, rel)
+			if !r.checked {
+				unbound = append(unbound, r.key)
+			}
 		}
 		return nil
 	})
@@ -70,28 +137,56 @@ func TestEveryMemoryPeakReaderChecksTheStatementThreads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if readers == 0 {
-		t.Fatal("no test file reads memory_usage from system.query_log: the walk measured nothing")
+		t.Fatal("no test function reads memory_usage from system.query_log: the walk measured nothing")
+	}
+	for key := range diagnosticPeakReads {
+		if !seenDiagnostic[key] {
+			t.Errorf("allowlisted diagnostic read %s no longer exists; remove it from diagnosticPeakReads", key)
+		}
 	}
 	sort.Strings(unbound)
 	if len(unbound) > 0 {
-		t.Fatalf("%d of %d test files read a statement's peak memory from system.query_log without checking the thread count it ran at; ClickHouse's default max_threads follows the server's cores, so the peak measures the runner. Measure through statementthreads.API and call statementthreads.RequireThreadBound:\n%s", len(unbound), readers, strings.Join(unbound, "\n"))
+		t.Fatalf("%d of %d query_log memory readers do not check the thread count their statements ran at; ClickHouse's default max_threads follows the server's cores, so the peak measures the runner. Measure through statementthreads.API and call statementthreads.RequireThreadBound in the same function:\n%s", len(unbound), readers, strings.Join(unbound, "\n"))
 	}
-	t.Logf("%d memory peak readers, every one checks the statement threads", readers)
+	t.Logf("%d query_log memory readers, every one checks the statement threads or is an allowlisted diagnostic", readers)
 }
 
-func TestMemoryPeakReaderGuardRejectsAnUnboundReader(t *testing.T) {
-	reader := "rows := direct.Query(ctx, `SELECT max(memory_usage) FROM system.query_log`)"
-	if !memoryPeakReader(reader) {
-		t.Fatal("a max(memory_usage) read of system.query_log is not seen as a peak reader")
-	}
-	if threadBound(reader) {
-		t.Fatal("a peak reader with no thread check passes the guard")
-	}
-	if memoryPeakReader("SELECT Settings['max_memory_usage'] FROM system.query_log") {
-		t.Fatal("a read of the max_memory_usage setting is taken for a peak reader")
-	}
-	if !threadBound(reader + "\nstatementthreads.RequireThreadBound(t, label, n)") {
-		t.Fatal("a peak reader that checks the threads fails the guard")
+func TestPeakReaderGuardBindsTheCheckToTheReadingFunction(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		src  string
+		want []peakReader
+	}{
+		{"unchecked reader", `package p
+func read() { q := "SELECT max(memory_usage) FROM system.query_log" ; _ = q }`, []peakReader{{"f.go:read", false}}},
+		{"check named only in a comment", `package p
+// statementthreads.RequireThreadBound(t, ctx, direct, label, n)
+func read() { q := "SELECT max(memory_usage) FROM system.query_log" ; _ = q }`, []peakReader{{"f.go:read", false}}},
+		{"check in another function", `package p
+func read() { q := "SELECT max(memory_usage) FROM system.query_log" ; _ = q }
+func other() { statementthreads.RequireThreadBound(nil, nil, nil, "", 0) }`, []peakReader{{"f.go:read", false}}},
+		{"check in the outer function, read in a closure", `package p
+func read() { f := func() { _ = "SELECT max(memory_usage) FROM system.query_log" }; f(); statementthreads.RequireThreadBound(nil, nil, nil, "", 0) }`, []peakReader{{"f.go:read/func", false}}},
+		{"checked reader", `package p
+func read() { q := "SELECT max(memory_usage), " + x + " FROM system.query_log"; _ = q; statementthreads.RequireThreadBound(nil, nil, nil, "", 0) }`, []peakReader{{"f.go:read", true}}},
+		{"reader of the setting itself", `package p
+func read() { _ = "SELECT max(memory_usage), countIf(Settings['max_threads'] != '1') FROM system.query_log" }`, []peakReader{{"f.go:read", true}}},
+		{"max_memory_usage setting only", `package p
+func read() { _ = "SELECT Settings['max_memory_usage'] FROM system.query_log" }`, nil},
+	} {
+		got, err := peakReaders("f.go", []byte(c.src))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if len(got) != len(c.want) {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: %+v, want %+v", c.name, got[i], c.want[i])
+			}
+		}
 	}
 }
 
@@ -108,3 +203,5 @@ func TestParseThreadsReadsSentAndDefaultValues(t *testing.T) {
 		}
 	}
 }
+
+func readFile(path string) ([]byte, error) { return os.ReadFile(path) }

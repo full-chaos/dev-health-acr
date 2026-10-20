@@ -81,7 +81,7 @@ func runLinkedForm(t *testing.T, ctx context.Context, client contextpacket.Click
 	}
 	var mem, ms, threadless uint64
 	var code int32
-	if qErr := direct.QueryRow(ctx, `SELECT memory_usage, query_duration_ms, exception_code, `+statementthreads.Threadless+` FROM system.query_log
+	if qErr := direct.QueryRow(ctx, `SELECT memory_usage, query_duration_ms, exception_code, `+statementthreads.UnboundThreads+` FROM system.query_log
 WHERE type != 'QueryStart' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &ms, &code, &threadless); qErr != nil {
 		t.Fatalf("%s: no query_log row for %s (measurement did not happen): %v (run error %v)", name, tag, qErr, err)
 	}

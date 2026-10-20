@@ -87,7 +87,7 @@ SELECT ?, NULL, ?, 'work_item', concat('req-', repeat('x', 64), '-', toString(nu
 		}
 		var s readOnceStats
 		var threadless uint64
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), `+statementthreads.ThreadlessCount+` FROM system.query_log
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, mark, table, fragment).Scan(&s.memory, &s.readRows, &s.scalarMiss, &threadless); err != nil {
 			t.Fatalf("read query_log: %v", err)

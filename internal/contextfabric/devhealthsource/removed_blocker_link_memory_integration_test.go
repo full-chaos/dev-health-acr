@@ -91,7 +91,7 @@ SELECT concat('jira:PROJECTKEY-', toString(number)), ?, ?, 'issue', 'open', '', 
 	}
 	peakOf := func(marker string) (uint64, uint64) {
 		var statements, peak, threadless uint64
-		if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log
+		if err := direct.QueryRow(ctx, `SELECT count(), max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE type = 'QueryFinish' AND query_start_time_microseconds >= toDateTime64(?, 6, 'UTC') AND position(query, ?) > 0 AND query NOT LIKE 'INSERT%'`,
 			start.UTC().Format("2006-01-02 15:04:05.000000"), marker).Scan(&statements, &peak, &threadless); err != nil {
 			t.Fatal(err)

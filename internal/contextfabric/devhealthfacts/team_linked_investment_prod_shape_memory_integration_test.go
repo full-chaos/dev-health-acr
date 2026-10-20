@@ -281,7 +281,7 @@ func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextp
 				t.Fatalf("flush logs (measurement did not happen): %v", err)
 			}
 			var mem, readRows, threadless uint64
-			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows, `+statementthreads.Threadless+` FROM system.query_log
+			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows, `+statementthreads.UnboundThreads+` FROM system.query_log
 WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &readRows, &threadless); err != nil {
 				t.Fatalf("%s %s: no query_log row for %s (measurement did not happen): %v", stage, frag.Name, tag, err)
 			}

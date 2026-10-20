@@ -43,7 +43,7 @@ func blockerStatusPeaks(t *testing.T, ctx context.Context, query contextpacket.C
 			t.Fatalf("flush logs: %v", err)
 		}
 		var peak, threadless uint64
-		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
+		if err := direct.QueryRow(ctx, `SELECT max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies')) AND position(query, 'blocker_status') > 0`, mark).Scan(&peak, &threadless); err != nil || peak == 0 {
 			t.Fatalf("run %d: statement not found in query_log (measurement did not happen): %v", run, err)
 		}
@@ -140,16 +140,24 @@ SELECT concat('unrelated-%d-', lpad(toString(number), 12, '0')), toUUID('0000000
 
 	mark := serverNowMicros(t, ctx, direct)
 	var counterpartRows uint64
-	if err := direct.QueryRow(ctx, `SELECT count() FROM (SELECT work_item_id, toString(any(repo_id)) AS counterpart_repo_id, uniqExact(repo_id) AS counterpart_repo_count FROM work_items FINAL WHERE org_id = ? GROUP BY work_item_id) /* frag-counterpart */`, blockerProdShapeOrg).Scan(&counterpartRows); err != nil {
+	rows, err := query.Query(ctx, `SELECT count() FROM (SELECT work_item_id, toString(any(repo_id)) AS counterpart_repo_id, uniqExact(repo_id) AS counterpart_repo_count FROM work_items FINAL WHERE org_id = {org:String} GROUP BY work_item_id) /* frag-counterpart */`, []contextpacket.ClickHouseBinding{{Name: "org", Value: blockerProdShapeOrg}})
+	if err != nil {
 		t.Fatalf("counterpart-repository join shape: %v", err)
 	}
+	for rows.Next() {
+		if err := rows.Scan(&counterpartRows); err != nil {
+			t.Fatalf("counterpart-repository join shape: %v", err)
+		}
+	}
+	_ = rows.Close()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	var counterpartPeak uint64
-	if err := direct.QueryRow(ctx, `SELECT max(memory_usage) FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, 'frag-counterpart') > 0`, mark).Scan(&counterpartPeak); err != nil {
+	var counterpartPeak, unbound uint64
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, 'frag-counterpart') > 0`, mark).Scan(&counterpartPeak, &unbound); err != nil {
 		t.Fatalf("counterpart peak: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "counterpart join shape", unbound)
 	t.Logf("BLOCKERSTATUS counterpart-repository join shape (org-wide GROUP BY work_item_id) over %d groups: peak %d bytes (%.1f MiB)", counterpartRows, counterpartPeak, float64(counterpartPeak)/(1<<20))
 }
 

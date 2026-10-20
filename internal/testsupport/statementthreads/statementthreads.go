@@ -36,13 +36,21 @@ func Unbounded(inner contextpacket.ClickHouseQueryClient) contextpacket.ClickHou
 	return Capped(inner, 1<<40)
 }
 
-// ThreadlessCount is a system.query_log aggregate: how many of the selected
-// statements ran with no max_threads setting, at the server default.
-const ThreadlessCount = "countIf(Settings['max_threads'] = '')"
+// unboundThreads is the query_log condition of a measured statement that did
+// not run at the statement thread count: its text carries no max_threads of
+// its own (a statement's own SETTINGS is its production choice), and its
+// logged setting is neither the statement thread count nor absent on a server
+// whose default already is that count. query_log lists a setting only when it
+// differs from the server default, so on such a server a statement sent with
+// max_threads = 4 logs none.
+var unboundThreads = fmt.Sprintf("positionCaseInsensitive(query, 'max_threads') = 0 AND Settings['max_threads'] != '%[1]d' AND NOT (Settings['max_threads'] = '' AND (SELECT value FROM system.settings WHERE name = 'max_threads') IN ('%[1]d', 'auto(%[1]d)'))", contextpacket.StatementMaxThreads)
 
-// Threadless is ThreadlessCount for one query_log row: 1 when that statement
-// ran without a max_threads setting.
-const Threadless = "toUInt64(Settings['max_threads'] = '')"
+// UnboundThreadsCount is a system.query_log aggregate: how many of the
+// selected statements did not run at the statement thread count.
+var UnboundThreadsCount = "countIf(" + unboundThreads + ")"
+
+// UnboundThreads is UnboundThreadsCount for one query_log row.
+var UnboundThreads = "toUInt64(" + unboundThreads + ")"
 
 // ServerDefaultThreads reads the server's own max_threads default on a
 // connection that sends no statement settings.
@@ -65,22 +73,16 @@ func ParseThreads(value string) (uint64, error) {
 	return threads, nil
 }
 
-// RequireThreadBound fails the test when measured statements ran with no
-// max_threads setting on a server whose default is not the statement thread
-// count. query_log lists only settings that differ from the server default,
-// so on a server that already defaults to StatementMaxThreads (a 4-core host)
-// a statement sent with max_threads = 4 logs no setting and ran at 4 anyway.
-func RequireThreadBound(tb testing.TB, ctx context.Context, direct clickhousedriver.Conn, label string, threadless uint64) {
+// RequireThreadBound fails the test when any measured statement did not run
+// at the statement thread count (UnboundThreadsCount / UnboundThreads).
+func RequireThreadBound(tb testing.TB, ctx context.Context, direct clickhousedriver.Conn, label string, unbound uint64) {
 	tb.Helper()
-	if threadless == 0 {
+	if unbound == 0 {
 		return
 	}
 	serverDefault, err := ServerDefaultThreads(ctx, direct)
 	if err != nil {
-		tb.Fatalf("%s: %d measured statements logged no max_threads and the server default is unreadable: %v", label, threadless, err)
+		tb.Fatalf("%s: %d measured statements did not run at max_threads %d (server default unreadable: %v); the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, unbound, contextpacket.StatementMaxThreads, err)
 	}
-	if serverDefault == contextpacket.StatementMaxThreads {
-		return
-	}
-	tb.Fatalf("%s: %d measured statements ran without max_threads, at the server default %d that follows the host's cores; the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, threadless, serverDefault)
+	tb.Fatalf("%s: %d measured statements did not run at max_threads %d (server default %d follows the host's cores); the peak measures the runner, not the statement (build the measured client with statementthreads.API)", label, unbound, contextpacket.StatementMaxThreads, serverDefault)
 }

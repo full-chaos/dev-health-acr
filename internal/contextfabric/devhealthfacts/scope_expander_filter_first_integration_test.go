@@ -585,7 +585,7 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query contextpacke
 		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
 			t.Fatalf("flush logs: %v", flushErr)
 		}
-		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code), `+statementthreads.ThreadlessCount+` FROM system.query_log
+		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND position(query, 'git_pull_requests') > 0`, mark).Scan(&memory, &readBytes, &readRows, &scalarMisses, &scalarHits, &code, &threadless); scanErr != nil {
 			t.Fatalf("read query_log: %v", scanErr)

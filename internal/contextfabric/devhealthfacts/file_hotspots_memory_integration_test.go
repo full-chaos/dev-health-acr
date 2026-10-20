@@ -35,7 +35,7 @@ func hotspotStatementCostSince(t *testing.T, ctx context.Context, direct clickho
 	}
 	var cost hotspotStatementCost
 	var statements, threadless uint64
-	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(query_duration_ms), count(), `+statementthreads.ThreadlessCount+` FROM system.query_log
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), max(query_duration_ms), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.file_hotspot_daily')) AND position(query, 'groupArraySorted') > 0`, markMicros).
 		Scan(&cost.peak, &cost.readRows, &cost.durationMs, &statements, &threadless); err != nil {

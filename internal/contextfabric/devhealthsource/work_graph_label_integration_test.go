@@ -242,7 +242,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	}
 	var c workGraphCost
 	var statements, threadless uint64
-	row := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database, mark)
+	row := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database, mark)
 	if err := row.Scan(&c.memory, &c.memoryHigh, &c.readBytes, &statements, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
@@ -251,7 +251,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 	}
 	var freshness uint64
-	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database, mark)
+	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database, mark)
 	if err := row.Scan(&c.freshnessMemory, &c.freshnessMemoryHigh, &c.freshnessReadBytes, &freshness, &threadless); err != nil {
 		t.Fatalf("read query_log for the freshness read: %v", err)
 	}
@@ -260,7 +260,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 		t.Fatalf("freshness measurement did not happen: %d statements, %+v", freshness, c)
 	}
 	var gates uint64
-	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.ThreadlessCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database, mark)
+	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database, mark)
 	if err := row.Scan(&c.gateMemory, &c.gateMemoryHigh, &c.gateReadBytes, &gates, &threadless); err != nil {
 		t.Fatalf("read query_log for the gate: %v", err)
 	}
