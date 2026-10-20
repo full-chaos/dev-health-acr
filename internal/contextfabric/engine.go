@@ -2604,7 +2604,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// canonicalization exist: the window and its time field are bound by the
 	// server, never carried on the frame. Every other frame keeps the
 	// ordinary tighten.
-	windowBasis := deriveWorkItemTupleWindowBasis(request.Question, windowCanon, ledgerWindow.Applied())
+	windowBasis := deriveWorkItemTupleWindowBasisFor(request.Question, windowCanon, ledgerWindow.Applied(), !request.Options.AllowClarification)
 	var workItemTuple bool
 	// A current frame whose request committed a window and whose question binds
 	// one time field is a period question: the window must reach the membership.
@@ -2807,7 +2807,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// gated request pays for interpretation only -- CHAOS-4040's own
 	// run-3 acceptance bar ("class-default cases interpretation-only").
 	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
-	effectiveWindow := composeEffectiveWindow(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now())
+	effectiveWindow := composeEffectiveWindowFor(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now(), !request.Options.AllowClarification)
 	// CHAOS-4360: same-conversation window carry. Attempted ONLY when this
 	// turn's own canonicalization would otherwise be inferred_default --
 	// windowCanon.Effective is nil by construction at this point (see the
@@ -2929,7 +2929,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			confirmedNeedsForUnevaluatedExit, carriedStructureEntriesUnevaluatedExit = withheldForUnevaluatedExit(confirmedNeedsForCapture, carriedStructureEntries, entry, disposition)
 		}
 	}
-	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
+	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault && request.Options.AllowClarification {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
 		// offers-only resolution whose commit-bearing outputs are discarded
@@ -3381,7 +3381,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
 			// The read applies the window the answer discloses: the effective
 			// window's own bounds, committed from the question or the caller.
-			if effectiveWindow == nil || effectiveWindow.Provenance == WindowInferredDefault || effectiveWindow.Start == nil || effectiveWindow.End == nil || windowBasis.Role == "" {
+			if effectiveWindow == nil || (effectiveWindow.Provenance == WindowInferredDefault && request.Options.AllowClarification) || effectiveWindow.Start == nil || effectiveWindow.End == nil || windowBasis.Role == "" {
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
 				resolution = withoutSubjects(resolution)
 				return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))

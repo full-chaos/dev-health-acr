@@ -512,28 +512,22 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	result.LimitationsDisplaced += temporalDisplaced
 	// effectiveWindow: composed ABOVE, before ResolveSubjects (CHAOS-4040
 	// reordering -- see that call site's own comment), reused here
-	// unchanged. By construction it can no longer be Provenance==inferred_default
-	// here (that case already gated and returned above) -- every path
-	// reaching this line carries a confirmed/stated window or none at all.
+	// unchanged. An inferred_default window reaches this line only when the
+	// caller declined clarification (otherwise the gate above returned); the
+	// answer then discloses it with one warning, below.
 	result.EffectiveEvidenceWindow = effectiveWindow
 	conflictLimited, conflictDisplaced := appendBoundedLimitations(result.Limitations, statedPeriodLimitations(windowCanon))
 	result.Limitations = conflictLimited
 	result.LimitationsDisplaced += conflictDisplaced
 	windowOutcome := windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, params.WindowCarried)
 	pending.WindowCanonicalization = &windowOutcome
-	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
-	// note deferred -- nil unless the effective window is genuinely
-	// inferred. CHAOS-4040 (sol-max ruling 2026-08-21) makes this call
-	// permanently a no-op ON THIS DECISIVE PATH: composeWindowClarification
-	// only returns non-nil for Provenance==inferred_default, and the gate
-	// above (windowConfirmationRequiredResult) already intercepts every
-	// such window before this line -- see result.EffectiveEvidenceWindow's
-	// own assignment comment above ("every path reaching this line carries
-	// a confirmed/stated window or none at all"). Left in place rather
-	// than removed: it stays correct (nil) if that invariant ever changes,
-	// and matches windowConfirmationRequiredResult's own identical call
-	// for the SAME data, on the gate terminal instead of this one.
+	// The window offer is composed for an inferred window and dropped when the
+	// caller declined clarification: nothing can redeem it.
 	result.WindowClarification = composeWindowClarification(result.EffectiveEvidenceWindow, result.ResultID, e.now())
+	if windowConfirmationSkipped(request, result.EffectiveEvidenceWindow) {
+		result.WindowClarification = nil
+		result.Warnings = appendRequiredWarning(result.Warnings, windowConfirmationSkippedWarning(result.EffectiveEvidenceWindow))
+	}
 	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
 	}

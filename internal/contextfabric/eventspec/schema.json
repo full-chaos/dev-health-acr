@@ -12374,7 +12374,10 @@
           "trailing_90_days",
           "trailing_3_months",
           "trailing_365_days",
-          "trailing_12_months"
+          "trailing_12_months",
+          "calendar_this_month",
+          "calendar_this_quarter",
+          "calendar_this_year"
         ]
       },
       {

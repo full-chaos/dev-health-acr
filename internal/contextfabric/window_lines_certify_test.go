@@ -32,6 +32,7 @@ func TestWindowBinderLineCertifiesWhatTheBinderProposes(t *testing.T) {
 		"Last month, how is the team doing?", "Last quarter, how is the team doing?", "Last year, how is the team doing?",
 		"Last 30 days, how is the team doing?", "Past 90 days, how is the team doing?", "Last 3 months, how is the team doing?",
 		"Last 365 days, how is the team doing?", "Last 12 months, how is the team doing?",
+		"This month, how is the team doing?", "This quarter, how is the team doing?", "This year, how is the team doing?",
 	}
 	seenReason, seenGrammar := map[string]bool{}, map[string]bool{}
 	for _, question := range questions {

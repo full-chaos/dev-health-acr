@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -126,6 +127,16 @@ func runStatusFilterTupleCensus(t *testing.T, frame QuestionFrame, census WorkIt
 
 func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest) statusFilterRun {
 	t.Helper()
+	return runTupleFilterCaseWithClass(t, frame, census, investigation, "")
+}
+
+func runTupleFilterCaseWithClass(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest, windowClass WindowClass) statusFilterRun {
+	t.Helper()
+	return runTupleFilterCaseAt(t, frame, census, investigation, windowClass, nil)
+}
+
+func runTupleFilterCaseAt(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest, windowClass WindowClass, now func() time.Time) statusFilterRun {
+	t.Helper()
 	population := census.AuthorizedPopulation
 	var run statusFilterRun
 	frame = ValidateFrame(frame, nil, "").Frame
@@ -136,7 +147,7 @@ func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMember
 	gate, _ := NewWorkItemMembershipGate(1, 0)
 	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent}), WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"}}
 	engine, err := NewEngine(EngineDependencies{
-		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}}}, outcome: outcome},
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}}, WindowClass: windowClass}, outcome: outcome},
 		Graph:       run.graph,
 		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
 			return true, ""
@@ -158,7 +169,7 @@ func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMember
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Available work items.", CurrentState: "Available work items.", DeterministicAnswer: "Available work items.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
 		}), Results: store, Requirements: registryDeriver{}, Telemetry: telemetry,
-	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_status_filter_001" }})
+	}, EngineOptions{ServiceVersion: "test", Now: now, NewResultID: func() string { return "result_status_filter_001" }})
 	if err != nil {
 		t.Fatal(err)
 	}
