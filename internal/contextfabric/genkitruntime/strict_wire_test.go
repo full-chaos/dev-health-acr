@@ -421,3 +421,30 @@ func TestAnthropicCallsSendTheChosenSchemaPerOperation(t *testing.T) {
 		}
 	}
 }
+
+// A reply that leaves the closed wire shape is not rewritten into one the
+// original schema accepts: the local check must still see the violation.
+func TestRestoreLeavesWireShapeViolationsForTheLocalCheck(t *testing.T) {
+	interpret := strictSchemas(t)["interpret"]
+	extraEntryField := `{"shape":"open","requested_judgment":"j","time_context":{"axis":"current"},"clarification_needed":false,"fact_requirements":[{"kind":"work","parameters":[{"key":"a","value":"b","unexpected":"x"}]}]}`
+	missingEntryValue := `{"shape":"open","requested_judgment":"j","time_context":{"axis":"current"},"clarification_needed":false,"fact_requirements":[{"kind":"work","parameters":[{"key":"a"}]}]}`
+	for name, reply := range map[string]string{"extra entry field": extraEntryField, "missing entry value": missingEntryValue} {
+		if got := restoreStrictReply(interpret.wire, reply); got != reply {
+			t.Errorf("%s: reply was rewritten to %s", name, got)
+		}
+	}
+	synthesize := strictSchemas(t)["synthesize"]
+	claim := func(scalar string) string {
+		return `{"status":"complete","direct_judgment":"j","current_state":"c","strongest_pressures":[],"drivers":[],"remaining_work":[],"readiness_gaps":[],"conflicts":[],"limitations":[],"evidence_ref_ids":[],"deterministic_answer":"a","warnings":[],` +
+			`"claimed_facts":[{"claim_id":"c1","kind":"work","subject":{"kind":"team","canonical_id":"t","label":"T"},"field":"f","value":` + scalar + `,"rows":[]}]}`
+	}
+	for name, scalar := range map[string]string{
+		"missing member": `{"kind":"integer","integer":4}`,
+		"extra member":   `{"kind":"integer","string":"","integer":4,"number":0,"boolean":false,"extra":1}`,
+	} {
+		reply := claim(scalar)
+		if got := restoreStrictReply(synthesize.wire, reply); got != reply {
+			t.Errorf("%s: reply was rewritten to %s", name, got)
+		}
+	}
+}
