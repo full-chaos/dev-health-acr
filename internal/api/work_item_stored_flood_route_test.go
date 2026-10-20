@@ -183,8 +183,8 @@ func (s *orderedTupleEvidenceStore) Get(_ context.Context, reader storage.Princi
 }
 
 // With several citing tuples, the stored-serving line names the tuple that
-// was served, else the first one withheld: a later tuple the serving decision
-// admits but that cannot be served does not take its place.
+// was served, else the first one withheld, else the first one that could not
+// be served, whatever order the citing results are read in.
 func TestStoredTupleFloodedEvidenceExpansionNamesTheDecisiveTuple(t *testing.T) {
 	principal := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{hostedTestRepository}}
 	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-flood-0001")
@@ -216,6 +216,9 @@ func TestStoredTupleFloodedEvidenceExpansionNamesTheDecisiveTuple(t *testing.T) 
 		decisive string
 	}{
 		{name: "flooded then admitted but unservable", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_flooded_first", flooded), row("result_tuple_overfull_second", overfull)}, status: http.StatusServiceUnavailable, basis: "limitations_flooded", decisive: "result_tuple_flooded_first"},
+		{name: "admitted but unservable then flooded", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_overfull_first", overfull), row("result_tuple_flooded_second", flooded)}, status: http.StatusServiceUnavailable, basis: "limitations_flooded", decisive: "result_tuple_flooded_second"},
+		{name: "admitted but unservable alone", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_overfull_only", overfull)}, status: http.StatusServiceUnavailable, basis: "coverage_invalid", decisive: "result_tuple_overfull_only"},
+		{name: "admitted but unservable then served", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_overfull_first", overfull), row("result_tuple_served_second", plain)}, status: http.StatusOK, basis: "digest_matched", decisive: "result_tuple_served_second"},
 		{name: "flooded then served", rows: []contextfabric.StoredInvestigationResult{row("result_tuple_flooded_first", flooded), row("result_tuple_served_second", plain)}, status: http.StatusOK, basis: "digest_matched", decisive: "result_tuple_served_second"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
