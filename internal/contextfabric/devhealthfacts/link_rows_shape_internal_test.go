@@ -34,7 +34,7 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 	if strings.Contains(statement, admittedLinkedPullRequestRowsSQL) {
 		t.Fatalf("team project link rows join every link row and pull request of the organization:\n%s", statement)
 	}
-	for _, want := range []string{"cp.work_item_id IN " + linkedWorkItemIDsSQL, "cw.work_item_id IN (SELECT cp.work_item_id", "l.work_item_id IN (SELECT cp.work_item_id", "lc.work_item_id IN (SELECT cp.work_item_id", "cw.project_id IN (SELECT v FROM", "cp.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{"cp.work_item_id IN " + linkedWorkItemIDsSQL, "cw.work_item_id IN (SELECT arrayJoin((SELECT groupUniqArray(cp.work_item_id)", "l.work_item_id IN (SELECT arrayJoin((SELECT groupUniqArray(cp.work_item_id)", "lc.work_item_id IN (SELECT arrayJoin((SELECT groupUniqArray(cp.work_item_id)", "cw.project_id IN (SELECT v FROM", "cp.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}

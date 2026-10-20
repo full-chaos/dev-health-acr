@@ -164,9 +164,11 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	// The linked ids are intersected with the owned projects' work items on
 	// the unmerged rows first (a row of any version carrying an owned project
 	// is a superset of the work items whose latest version does), so the FINAL
-	// read below holds only those candidates, not every linked work item.
-	candidates := `(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
-      AND cp.project_id IN ` + keys + `)`
+	// read below holds only those candidates, not every linked work item. It is
+	// one scalar subquery, which ClickHouse runs once per statement however
+	// often the issue read and both link-row join sides reference it.
+	candidates := `(SELECT arrayJoin((SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp WHERE cp.org_id = {org_id:String} AND cp.work_item_id IN ` + linkedWorkItemIDsSQL + `
+      AND cp.project_id IN ` + keys + `)))`
 	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
     WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + candidates + `
       AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
