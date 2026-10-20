@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgmodelconfigfake"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -28,7 +27,7 @@ func TestTheResolverIsGivenTheServiceLogger(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	resolver := newOrgModelRuntimeResolver(
-		notSampledRuntime{}, orgmodelconfigfake.NewStore(nil),
+		notSampledRuntime{}, noOrgModelConfig{},
 		func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 			t.Fatal("Build must not run for an unconfigured organization")
 			return nil, nil
@@ -128,4 +127,10 @@ func TestTheCompositionConstructorWiresBothHalvesOfTheEnsemble(t *testing.T) {
 	if notSampled.SampledRuntime != nil {
 		t.Fatalf("SampledRuntime = %T for a runtime with no per-sample method", notSampled.SampledRuntime)
 	}
+}
+
+type noOrgModelConfig struct{}
+
+func (noOrgModelConfig) ResolveOrgModelConfig(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
+	return contextfabric.ResolvedOrgModelConfig{}, false, nil
 }
