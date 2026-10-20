@@ -146,7 +146,7 @@ func blockerProdShapeQueryLog(t *testing.T, ctx context.Context, direct clickhou
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.UnboundThreadsCount+`
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_rows), any(substring(replaceRegexpAll(query, '\\s+', ' '), 1, 110)), `+statementthreads.UnboundThreadsCount+`, arrayStringConcat(groupUniqArray(Settings['max_threads']), ',')
 FROM system.query_log WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_item_dependencies'))
 GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
@@ -159,9 +159,11 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 	for rows.Next() {
 		var st blockerProdShapeStatement
 		var unbound uint64
-		if err := rows.Scan(&st.hash, &st.peak, &st.readRows, &st.head, &unbound); err != nil {
+		var threads string
+		if err := rows.Scan(&st.hash, &st.peak, &st.readRows, &st.head, &unbound, &threads); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("STATEMENT-THREADS statement %d logged max_threads [%s], unbound %d: %s", st.hash, threads, unbound, st.head)
 		out = append(out, st)
 		threadless += unbound
 	}

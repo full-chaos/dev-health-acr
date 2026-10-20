@@ -37,13 +37,15 @@ func Unbounded(inner contextpacket.ClickHouseQueryClient) contextpacket.ClickHou
 }
 
 // unboundThreads is the query_log condition of a measured statement that did
-// not run at the statement thread count: its text carries no max_threads of
-// its own (a statement's own SETTINGS is its production choice), and its
-// logged setting is neither the statement thread count nor absent on a server
-// whose default already is that count. query_log lists a setting only when it
-// differs from the server default, so on such a server a statement sent with
-// max_threads = 4 logs none.
-var unboundThreads = fmt.Sprintf("positionCaseInsensitive(query, 'max_threads') = 0 AND Settings['max_threads'] != '%[1]d' AND NOT (Settings['max_threads'] = '' AND (SELECT value FROM system.settings WHERE name = 'max_threads') IN ('%[1]d', 'auto(%[1]d)'))", contextpacket.StatementMaxThreads)
+// not run at a thread count of its own choosing: query_log's Settings map
+// logs no max_threads for it on a server whose default is not the statement
+// thread count. The map lists every setting that differs from the server
+// default, whether the client sent it or the statement's own SETTINGS set it,
+// so a statement's own SETTINGS (its production choice) logs there even when
+// query_log cuts the text (log_queries_cut_to_length) and drops the clause.
+// The text is not read: a client at another count and a statement's own
+// SETTINGS log the same, so both count as bound.
+var unboundThreads = fmt.Sprintf("Settings['max_threads'] = '' AND (SELECT value FROM system.settings WHERE name = 'max_threads') NOT IN ('%[1]d', 'auto(%[1]d)')", contextpacket.StatementMaxThreads)
 
 // UnboundThreadsCount is a system.query_log aggregate: how many of the
 // selected statements did not run at the statement thread count.
@@ -90,7 +92,7 @@ func RequireThreadBound(tb testing.TB, ctx context.Context, direct clickhousedri
 // recentUnbound lists the latest logged statements off the statement threads,
 // with the max_threads each logged, for a failure message.
 func recentUnbound(ctx context.Context, direct clickhousedriver.Conn) string {
-	rows, err := direct.Query(ctx, "SELECT concat('max_threads=', Settings['max_threads'], ' ', toString(type), ' ', substring(replaceRegexpAll(query, '\\\\s+', ' '), 1, 220)) FROM system.query_log WHERE event_time > now() - INTERVAL 15 MINUTE AND type != 'QueryStart' AND query_kind = 'Select' AND position(query, 'system.query_log') = 0 AND "+unboundThreads+" ORDER BY event_time_microseconds DESC LIMIT 8")
+	rows, err := direct.Query(ctx, "SELECT concat('max_threads=', Settings['max_threads'], ' ', toString(type), ' len=', toString(length(query)), ' ', substring(replaceRegexpAll(query, '\\\\s+', ' '), 1, 160), ' ... ', right(replaceRegexpAll(query, '\\\\s+', ' '), 80)) FROM system.query_log WHERE event_time > now() - INTERVAL 15 MINUTE AND type != 'QueryStart' AND query_kind = 'Select' AND position(query, 'system.query_log') = 0 AND "+unboundThreads+" ORDER BY event_time_microseconds DESC LIMIT 8")
 	if err != nil {
 		return "query_log unreadable: " + err.Error()
 	}

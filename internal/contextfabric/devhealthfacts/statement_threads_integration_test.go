@@ -48,10 +48,12 @@ func TestMeasuredClientRunsAtTheStatementThreadsOnRealClickHouse(t *testing.T) {
 	}
 }
 
-// The thread check counts a measured statement that ran at any thread count
-// other than the statement's: sent by a client at another count, or at the
-// server default on a host whose default differs. A statement's own SETTINGS
-// max_threads is its production choice and is not counted.
+// The thread check counts a measured statement that ran at the server default
+// on a host whose default is not the statement thread count: query_log's
+// Settings map logs no max_threads for it. A statement sent at the statement
+// thread count, at another count, or carrying its own SETTINGS max_threads
+// logs the value and is not counted, also when the statement is longer than
+// query_log keeps and its SETTINGS clause is cut from the logged text.
 func TestUnboundThreadsCountsEveryStatementOffTheStatementThreadsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	raw, direct := sharedClickHouseFixture(t)
@@ -59,7 +61,7 @@ func TestUnboundThreadsCountsEveryStatementOffTheStatementThreadsOnRealClickHous
 	if err != nil {
 		t.Fatal(err)
 	}
-	unbound := func(client contextpacket.ClickHouseQueryClient, statement, tag string) uint64 {
+	unbound := func(client contextpacket.ClickHouseQueryClient, statement, tag string) (uint64, string) {
 		t.Helper()
 		mark := serverNowMicros(t, ctx, direct)
 		rows, err := client.Query(ctx, statement, nil)
@@ -73,29 +75,39 @@ func TestUnboundThreadsCountsEveryStatementOffTheStatementThreadsOnRealClickHous
 			t.Fatal(err)
 		}
 		var logged, count uint64
-		if err := direct.QueryRow(ctx, `SELECT count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, tag).Scan(&logged, &count); err != nil {
+		var setting string
+		if err := direct.QueryRow(ctx, `SELECT count(), `+statementthreads.UnboundThreadsCount+`, any(Settings['max_threads']) FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`, mark, tag).Scan(&logged, &count, &setting); err != nil {
 			t.Fatalf("%s: read query_log: %v", tag, err)
 		}
 		if logged != 1 {
 			t.Fatalf("%s: %d statements logged, want 1: the measurement did not happen", tag, logged)
 		}
-		return count
+		return count, setting
 	}
+	long := strings.Repeat("1000000, ", 12000) + "1000001"
 	at8 := contextpacket.NewMemoryCappedQueryClient(raw, contextpacket.APIStatementMaxMemoryUsage, contextpacket.WithMaxThreads(8))
 	for _, c := range []struct {
 		name   string
 		client contextpacket.ClickHouseQueryClient
 		sql    string
 		want   uint64
+		logged string
 	}{
-		{"production client", statementthreads.API(raw), "SELECT count() FROM numbers(1000) /* threads-api */", 0},
-		{"client at 8 threads", at8, "SELECT count() FROM numbers(1000) /* threads-at8 */", 1},
-		{"statement's own SETTINGS", raw, "SELECT count() FROM numbers(1000) /* threads-inline */ SETTINGS max_threads = 8", 0},
-		{"raw client at the server default", raw, "SELECT count() FROM numbers(1000) /* threads-raw */", map[bool]uint64{true: 0, false: 1}[serverDefault == contextpacket.StatementMaxThreads]},
+		{"production client", statementthreads.API(raw), "SELECT count() FROM numbers(1000) /* threads-api */", 0, ""},
+		{"client at 8 threads", at8, "SELECT count() FROM numbers(1000) /* threads-at8 */", 0, "8"},
+		{"statement's own SETTINGS", raw, "SELECT count() FROM numbers(1000) /* threads-inline */ SETTINGS max_threads = 8", 0, "8"},
+		{"raw client at the server default", raw, "SELECT count() FROM numbers(1000) /* threads-raw */", map[bool]uint64{true: 0, false: 1}[serverDefault == contextpacket.StatementMaxThreads], ""},
+		{"cut statement's own SETTINGS", raw, "SELECT /* threads-cut-inline */ count() FROM numbers(1000) WHERE number NOT IN (" + long + ") SETTINGS max_threads = 8", 0, "8"},
+		{"cut statement at the server default", raw, "SELECT /* threads-cut-raw */ count() FROM numbers(1000) WHERE number NOT IN (" + long + ")", map[bool]uint64{true: 0, false: 1}[serverDefault == contextpacket.StatementMaxThreads], ""},
 	} {
 		tag := c.sql[strings.Index(c.sql, "/* ")+3 : strings.Index(c.sql, " */")]
-		if got := unbound(c.client, c.sql, tag); got != c.want {
-			t.Errorf("%s (server default %d): UnboundThreadsCount = %d, want %d", c.name, serverDefault, got, c.want)
+		got, setting := unbound(c.client, c.sql, tag)
+		if got != c.want {
+			t.Errorf("%s (server default %d): UnboundThreadsCount = %d, want %d (logged max_threads %q)", c.name, serverDefault, got, c.want, setting)
 		}
+		if c.logged != "" && setting != c.logged {
+			t.Errorf("%s: query_log Settings max_threads = %q, want %q", c.name, setting, c.logged)
+		}
+		t.Logf("STATEMENT-THREADS %s: logged max_threads %q, unbound %d (server default %d)", c.name, setting, got, serverDefault)
 	}
 }
