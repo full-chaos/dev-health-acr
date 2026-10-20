@@ -28,11 +28,12 @@ const (
 // projects the read is measured at; the last is the ceiling.
 var orgLinksCeilingSizes = []int{24_000, 90_000, 400_000}
 
-// linkRowStatement is one link-row statement in query_log: its peak memory
-// and the max_threads it ran with.
+// linkRowStatement is one link-row statement in query_log: its peak memory,
+// its read_bytes and the max_threads it ran with.
 type linkRowStatement struct {
-	peak    uint64
-	threads string
+	peak      uint64
+	readBytes uint64
+	threads   string
 }
 
 // The team pull-request read is served for an organization with 400,000 link
@@ -170,6 +171,7 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 				sort.Slice(hashes, func(i, j int) bool { return hashes[i] < hashes[j] })
 				for _, hash := range hashes {
 					lowest, highest := runs[0][hash].peak, runs[0][hash].peak
+					var readBytes uint64
 					for _, run := range runs {
 						statement, ok := run[hash]
 						if !ok {
@@ -179,8 +181,9 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 							t.Fatalf("%s %s: statement %d ran with max_threads %q (server default %q), want %s (the peak would measure the runner)", mode, label, hash, statement.threads, serverThreads, wantThreads)
 						}
 						lowest, highest = min(lowest, statement.peak), max(highest, statement.peak)
+						readBytes = max(readBytes, statement.readBytes)
 					}
-					t.Logf("SLOPE %s: statement %d peak memory lowest %d, highest %d bytes at %d outside links (bound %d)", mode, hash, lowest, highest, size, orgLinksCeilingBound)
+					t.Logf("SLOPE %s: statement %d peak memory lowest %d, highest %d bytes, read_bytes highest %d at %d outside links (bound %d)", mode, hash, lowest, highest, readBytes, size, orgLinksCeilingBound)
 					if highest >= orgLinksCeilingBound {
 						t.Errorf("%s %s: statement %d peaked at %d bytes, want under %d (half the API statement cap)", mode, label, hash, highest, orgLinksCeilingBound)
 					}
@@ -198,7 +201,7 @@ func linkRowStatementsSince(t *testing.T, ctx context.Context, direct clickhouse
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), any(Settings['max_threads']) FROM system.query_log
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), any(Settings['max_threads']) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.team_project_ownership')) AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr'))
 GROUP BY normalized_query_hash`, markMicros)
@@ -208,12 +211,12 @@ GROUP BY normalized_query_hash`, markMicros)
 	defer rows.Close()
 	out := map[uint64]linkRowStatement{}
 	for rows.Next() {
-		var hash, peak uint64
+		var hash, peak, readBytes uint64
 		var threads string
-		if err := rows.Scan(&hash, &peak, &threads); err != nil {
+		if err := rows.Scan(&hash, &peak, &readBytes, &threads); err != nil {
 			t.Fatalf("scan query_log: %v", err)
 		}
-		out[hash] = linkRowStatement{peak: peak, threads: threads}
+		out[hash] = linkRowStatement{peak: peak, readBytes: readBytes, threads: threads}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
