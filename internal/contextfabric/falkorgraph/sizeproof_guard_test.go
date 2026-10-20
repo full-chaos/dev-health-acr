@@ -313,7 +313,7 @@ func TestSizeproofMakefileCheckFlagsATaggedRaceLine(t *testing.T) {
 // sizeproofSelected asks the Go loader which test files a build with the given
 // tags compiles into the package test binary. This applies every constraint
 // Go applies, file-name suffixes (_windows_test.go) included.
-func sizeproofSelected(t *testing.T, dir, tags string) map[string]bool {
+func sizeproofSelected(t *testing.T, dir, tags, goarch string) map[string]bool {
 	t.Helper()
 	args := []string{"list"}
 	if tags != "" {
@@ -322,6 +322,7 @@ func sizeproofSelected(t *testing.T, dir, tags string) map[string]bool {
 	args = append(args, "-f", "{{range .TestGoFiles}}{{.}}\n{{end}}", ".")
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
@@ -337,8 +338,23 @@ func sizeproofSelected(t *testing.T, dir, tags string) map[string]bool {
 // compiled with the tag sizeproof and left out without it.
 func sizeproofSelectionProblems(t *testing.T, dir string, sources []sizeproofSource) []string {
 	t.Helper()
-	with := sizeproofSelected(t, dir, sizeproofTag)
-	without := sizeproofSelected(t, dir, "")
+	var out []string
+	for _, goarch := range sizeproofArches {
+		out = append(out, sizeproofSelectionProblemsFor(t, dir, sources, goarch)...)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sizeproofArches are the linux architectures CI builds on (hosted amd64,
+// bigboy arm64): a file-name suffix such as _arm64_test.go drops the file on
+// one of them only.
+var sizeproofArches = []string{"amd64", "arm64"}
+
+func sizeproofSelectionProblemsFor(t *testing.T, dir string, sources []sizeproofSource, goarch string) []string {
+	t.Helper()
+	with := sizeproofSelected(t, dir, sizeproofTag, goarch)
+	without := sizeproofSelected(t, dir, "", goarch)
 	var out []string
 	for _, s := range sources {
 		for _, d := range s.file.Decls {
@@ -351,10 +367,10 @@ func sizeproofSelectionProblems(t *testing.T, dir string, sources []sizeproofSou
 					continue
 				}
 				if !with[s.name] {
-					out = append(out, s.name+": "+want+" is not compiled with -tags "+sizeproofTag+" (go list TestGoFiles; a file-name suffix such as _windows_test.go or a constraint drops it)")
+					out = append(out, s.name+": "+want+" is not compiled with -tags "+sizeproofTag+" on linux/"+goarch+" (go list TestGoFiles; a file-name suffix such as _windows_test.go or a constraint drops it)")
 				}
 				if without[s.name] {
-					out = append(out, s.name+": "+want+" is compiled without -tags "+sizeproofTag)
+					out = append(out, s.name+": "+want+" is compiled without -tags "+sizeproofTag+" on linux/"+goarch)
 				}
 			}
 		}
@@ -386,11 +402,13 @@ func TestSizeproofSelectionCheckFlagsAFileNameSuffixAndAMissingTag(t *testing.T)
 		problems     int
 	}{
 		{"a_test.go", "//go:build sizeproof\n\n", 0},
-		{"a_windows_test.go", "//go:build sizeproof\n\n", 1},
-		{"a_test.go", "", 1},
+		{"a_windows_test.go", "//go:build sizeproof\n\n", 2},
+		{"a_arm64_test.go", "//go:build sizeproof\n\n", 1},
+		{"a_amd64_test.go", "//go:build sizeproof\n\n", 1},
+		{"a_test.go", "", 2},
 	}
 	for _, c := range cases {
-		for _, f := range []string{"a_test.go", "a_windows_test.go"} {
+		for _, f := range []string{"a_test.go", "a_windows_test.go", "a_arm64_test.go", "a_amd64_test.go"} {
 			os.Remove(filepath.Join(dir, f))
 		}
 		write(c.file, body(c.header))
