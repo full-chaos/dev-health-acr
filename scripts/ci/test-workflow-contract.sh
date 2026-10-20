@@ -657,12 +657,22 @@ check_pin_binds_checkout_ref() {
 # variable, with the documented `vars.X || 'default'` fallback form, never a
 # bare literal.
 check_race_runner_uses_variable() {
+  # Every race-family job reads the CI_RACE_RUNNER variable with a hosted
+  # fallback, except the legs measured over budget on the self-hosted pool,
+  # which are pinned to ubuntu-latest.
   local file="$1" job status=0 block
-  for job in race race-devhealthschema; do
+  local pinned=" race-devhealthfacts race-devhealthfacts-heavy race-devhealthsource-heavy "
+  for job in race race-devhealthschema race-devhealthfacts race-devhealthfacts-heavy race-devhealthsource-heavy; do
+    [ -n "$(job_block "$file" "$job")" ] || { printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2; status=1; }
+  done
+  while IFS= read -r job; do
+    case "$job" in race|race-*) ;; *) continue ;; esac
     block="$(job_block "$file" "$job")"
-    if [ -z "$block" ]; then
-      printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2
-      status=1
+    if [[ "$pinned" == *" $job "* ]]; then
+      if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block" || grep -qF 'vars.CI_RACE_RUNNER' <<<"$block"; then
+        printf 'job "%s" must stay on ubuntu-latest: it exceeds its budget on the self-hosted pool\n' "$job" >&2
+        status=1
+      fi
       continue
     fi
     # shellcheck disable=SC2016
@@ -671,7 +681,7 @@ check_race_runner_uses_variable() {
         "$job" >&2
       status=1
     fi
-  done
+  done < <(list_jobs "$file")
   return "$status"
 }
 
@@ -731,7 +741,7 @@ check_testcontainers_session_reap() {
   while IFS= read -r job; do
     [ "$job" = "mirror-preflight" ] && continue
     block="$(job_block "$file" "$job")"
-    grep -qE '^ {6}TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:' <<<"$block" || continue
+    grep -qE '^ +TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:' <<<"$block" || continue
     if ! grep -qE "^ {6}TESTCONTAINERS_RYUK_DISABLED: 'true'$" <<<"$block"; then
       printf 'job "%s" starts testcontainers with the ryuk reaper on\n' "$job" >&2
       status=1
@@ -1221,6 +1231,41 @@ tc_reap_dropped="$tmpdir/tc-reap-dropped.yml"
 awk '/Remove this job.s testcontainers by session id/ && !done { skip=3; done=1 } skip > 0 { skip--; next } { print }' "$workflow" > "$tc_reap_dropped"
 cmp -s "$workflow" "$tc_reap_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_dropped did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'dropped the testcontainers reap step from one job' check_testcontainers_session_reap "$tc_reap_dropped"
+
+# (c4) the race-runner pinning: a pinned heavy leg back on the variable, and
+# another race leg pinned to a hosted label.
+pinned_routed="$tmpdir/pinned-routed.yml"
+awk '
+  /^  race-devhealthfacts-heavy:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthfacts-heavy:$/ { in_job=0 }
+  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; next }
+  { print }
+' "$workflow" > "$pinned_routed"
+cmp -s "$workflow" "$pinned_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: pinned_routed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed a pinned heavy race leg back through CI_RACE_RUNNER' check_race_runner_uses_variable "$pinned_routed"
+other_pinned="$tmpdir/other-pinned.yml"
+awk '
+  /^  race-factoracle:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
+  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  { print }
+' "$workflow" > "$other_pinned"
+cmp -s "$workflow" "$other_pinned" && { printf 'NEGATIVE CONTROL SETUP FAILED: other_pinned did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'pinned a race leg that fits the pool to ubuntu-latest' check_race_runner_uses_variable "$other_pinned"
+# (c5) a testcontainers job whose image prefix is set in a step-level env
+# and that carries no ryuk override, session id or reap step.
+step_env_tc="$tmpdir/step-env-tc.yml"
+cat "$workflow" > "$step_env_tc"
+cat >> "$step_env_tc" <<'YAML'
+  session-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        env:
+          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/example
+        run: go test ./internal/runtime/postgres
+YAML
+assert_check_fails 'added a testcontainers job with the prefix in a step-level env and no reap' check_testcontainers_session_reap "$step_env_tc"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.

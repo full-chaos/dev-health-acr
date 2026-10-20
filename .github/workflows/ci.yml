@@ -1105,7 +1105,8 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1117,7 +1118,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1161,7 +1162,8 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-heavy')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1173,7 +1175,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1395,7 +1397,8 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-heavy')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1407,7 +1410,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.2'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
