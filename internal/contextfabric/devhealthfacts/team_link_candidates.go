@@ -40,11 +40,11 @@ func teamLinkCandidatesPredicate(bound factTimeBound) string {
       AND cp.project_id IN ` + teamOwnedProjectKeyCandidatesSQL("ids", bound)
 }
 
-// teamLinkCandidatesStatement returns the candidates as one array row, one
-// entry per matching row version (Go dedupes): no set of distinct ids is built
-// on the server, and one row stays within the client's result row cap.
+// teamLinkCandidatesStatement returns the distinct candidates as one array
+// row: one entry per issue however many unmerged versions it has, and one row
+// stays within the client's result row cap.
 func teamLinkCandidatesStatement(bound factTimeBound) string {
-	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound)
+	return `SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound) + `)`
 }
 
 // withTeamLinkCandidates reads the teams' link candidates once and returns ctx

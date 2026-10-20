@@ -56,7 +56,7 @@ const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id 
 const projectPopulationMarker = "-- project population"
 
 // teamLinkCandidatesMarker is in the team link candidate statement and no other.
-const teamLinkCandidatesMarker = "SELECT groupArray(cp.work_item_id) FROM work_items AS cp"
+const teamLinkCandidatesMarker = "SELECT DISTINCT cp.work_item_id AS work_item_id FROM work_items AS cp"
 
 type fakeClient struct {
 	tables  []fakeTable
