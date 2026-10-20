@@ -79,16 +79,17 @@ func TestOrgLLMConfigMapsEachStatus(t *testing.T) {
 		wantUnused bool
 		wantErr    bool
 	}{
-		{"404 is no BYO", http.StatusNotFound, `{"detail":"Not found"}`, false, false, false},
-		{"401 is unusable", http.StatusUnauthorized, `{"detail":"Unauthorized"}`, false, true, true},
-		{"403 is unusable", http.StatusForbidden, `{"detail":"Forbidden"}`, false, true, true},
+		{"404 without the no-config marker is unavailable", http.StatusNotFound, `{"detail":"Not found"}`, false, false, true},
+		{"401 is unavailable, not a saved config", http.StatusUnauthorized, `{"detail":"Unauthorized"}`, false, false, true},
+		{"403 is unavailable, not a saved config", http.StatusForbidden, `{"detail":"Forbidden"}`, false, false, true},
 		{"409 undecryptable is unusable", http.StatusConflict, `{"detail":"stored config unreadable"}`, false, true, true},
 		{"503 is unavailable", http.StatusServiceUnavailable, `{"detail":"Service unavailable"}`, false, false, true},
-		{"another org is unusable", http.StatusOK, llmBody(map[string]any{"org_id": "99999999-2222-4333-8444-555555555555"}), false, true, true},
-		{"another schema is unusable", http.StatusOK, llmBody(map[string]any{"schema_version": "acr_llm_config.v2"}), false, true, true},
-		{"no model is unusable", http.StatusOK, llmBody(map[string]any{"model": " "}), false, true, true},
-		{"no version is unusable", http.StatusOK, llmBody(map[string]any{"version": ""}), false, true, true},
-		{"an unknown field is unusable", http.StatusOK, llmBody(map[string]any{"extra": 1}), false, true, true},
+		{"a body that is not JSON is a contract break: unavailable", http.StatusOK, `not json`, false, false, true},
+		{"another org is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"org_id": "99999999-2222-4333-8444-555555555555"}), false, false, true},
+		{"another schema is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"schema_version": "acr_llm_config.v2"}), false, false, true},
+		{"no model is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"model": " "}), false, false, true},
+		{"no version is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"version": ""}), false, false, true},
+		{"an unknown field is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"extra": 1}), false, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

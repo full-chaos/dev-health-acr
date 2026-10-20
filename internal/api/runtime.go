@@ -124,10 +124,11 @@ type RuntimeDependencies struct {
 	// OrgModelConfigs resolves an organization's BYO LLM configuration from
 	// the ops settings store. Nil when no per-organization source is wired.
 	OrgModelConfigs contextfabric.OrgModelConfigResolver
-	// ServiceModelOpen lets every credential caller run an investigation on
-	// the deployment's own model (ACR_MCP_SERVICE_MODEL_DEFAULT=on). Off,
-	// only an organization with the acr_service_model entitlement or its own
-	// model configuration may; see service_model_gate.go.
+	// ServiceModelOpen treats every organization as holding acr_service_model
+	// and platform_model_fallback (ACR_MCP_SERVICE_MODEL_DEFAULT=on;
+	// development and venues only). A saved organization model configuration
+	// still wins, and one behind a closed byo_llm gate is still refused; see
+	// service_model_gate.go.
 	ServiceModelOpen bool
 	// ReadinessChecks gates /readyz -- the k8s readinessProbe target, which
 	// pulls the WHOLE pod from every Service's endpoints (including the

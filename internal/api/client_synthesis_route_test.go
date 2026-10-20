@@ -102,6 +102,8 @@ type clientRouteFixture struct {
 	// assembly overrides the production assembly; set noAssembly for none.
 	noAssembly bool
 	resources  limits.ResourceBudget
+	// runtime, when set, wraps the fixture model as the engine's model runtime.
+	runtime func(contextfabric.ModelRuntime) contextfabric.ModelRuntime
 }
 
 type clientRouteRig struct {
@@ -135,8 +137,12 @@ func newClientRouteRigWithAssembly(t *testing.T, fixture clientRouteFixture, edi
 	model := &clientRouteModel{interpreted: fixture.interpreted}
 	store := memoryinvestigation.NewStore()
 	rig := &clientRouteRig{model: model, store: store, logs: &bytes.Buffer{}}
+	var runtime contextfabric.ModelRuntime = model
+	if fixture.runtime != nil {
+		runtime = fixture.runtime(model)
+	}
 	synthesizer := contextfabric.RuntimeAnswerSynthesizer{
-		Runtime: model, Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "client-synthesis-route", Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
+		Runtime: runtime, Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "client-synthesis-route", Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
 	}
 	synthesizer.Telemetry = contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(rig.logs, nil)))
 	if !fixture.noAssembly {
@@ -146,7 +152,7 @@ func newClientRouteRigWithAssembly(t *testing.T, fixture clientRouteFixture, edi
 		}
 	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: model},
+		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: runtime},
 		Graph:       clientRouteGraph{authorizingGraph: authorizingGraph{liveGraphReader: liveGraphReader{project: project}, outcome: contextfabric.StoredSubjectAdmitted}, cohort: fixture.cohort},
 		Facts:       liveFactReader{bundle: fixture.facts},
 		Synthesizer: synthesizer,
