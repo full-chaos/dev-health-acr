@@ -32,7 +32,12 @@ const scopeStatementCeiling = uint64(32 << 20)
 // All from hosted runs 38461148186, 38463043081, 38464327840: 18.7-24.0 MB at
 // both sizes, no trend with size. The 1.15x rule is unchanged, and each
 // statement's organization-wide form grows by 260 MB or more.
-var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20, "projectRepositoriesAsOf": 6 << 20}
+// projectRepositories also gets 6 MiB: hosted run 39408289460 read 4,393,442
+// bytes at the smaller size and 7,067,414 at the larger (scoped spread
+// 2.6 MB), a +2.67 MB diff over the 2 MiB default. Its organization-wide form
+// read 9,254,735 and 23,452,587 in the same run (+14.2 MB), so the 6 MiB floor
+// still trips it: the organization-wide check below fails the test otherwise.
+var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20, "projectRepositories": 6 << 20, "projectRepositoriesAsOf": 6 << 20}
 
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
