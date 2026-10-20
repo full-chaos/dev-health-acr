@@ -80,8 +80,8 @@ func TestOrgLLMConfigMapsEachStatus(t *testing.T) {
 		wantErr    bool
 	}{
 		{"404 without the no-config marker is unavailable", http.StatusNotFound, `{"detail":"Not found"}`, false, false, true},
-		{"401 is unusable", http.StatusUnauthorized, `{"detail":"Unauthorized"}`, false, true, true},
-		{"403 is unusable", http.StatusForbidden, `{"detail":"Forbidden"}`, false, true, true},
+		{"401 is unavailable, not a saved config", http.StatusUnauthorized, `{"detail":"Unauthorized"}`, false, false, true},
+		{"403 is unavailable, not a saved config", http.StatusForbidden, `{"detail":"Forbidden"}`, false, false, true},
 		{"409 undecryptable is unusable", http.StatusConflict, `{"detail":"stored config unreadable"}`, false, true, true},
 		{"503 is unavailable", http.StatusServiceUnavailable, `{"detail":"Service unavailable"}`, false, false, true},
 		{"another org is unusable", http.StatusOK, llmBody(map[string]any{"org_id": "99999999-2222-4333-8444-555555555555"}), false, true, true},

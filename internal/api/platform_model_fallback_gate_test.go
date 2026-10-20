@@ -61,6 +61,12 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Org-Llm-Config-Reason", "byo_no_investigate_config")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+		case "scope_refused":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"detail":"Forbidden"}`))
+		case "credential_refused":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"Unauthorized"}`))
 		case "bare_404":
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
@@ -254,6 +260,27 @@ func TestAnUnmarkedOrUnknownOpsNotFoundNeverDrawsThePlatformModel(t *testing.T) 
 			}
 			if got := sides.count("own"); got != 0 {
 				t.Fatalf("own model calls = %d, want 0", got)
+			}
+			assertNoModelCallAndNoResult(t, rig)
+		})
+	}
+}
+
+// A credential or scope refusal from ops is an outage of the config source, not
+// a saved configuration: the caller sees the runtime-outage answer (503
+// store_unavailable), never a per-org reason such as ai_features_turned_off, and
+// no model is called, even for an organization holding both flags.
+func TestAnOpsCredentialOrScopeRefusalIsUnavailableNotASavedConfiguration(t *testing.T) {
+	for _, mode := range []string{"scope_refused", "credential_refused"} {
+		t.Run(mode, func(t *testing.T) {
+			rig, sides := opsBackedRouteRig(t, opsStandIn{fallback: boolRef(true), llmConfig: mode})
+			recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil)
+			body := decodeServiceModelRefusal(t, recorder, http.StatusServiceUnavailable)
+			if body.Error.Code != "store_unavailable" || !body.Error.Retryable {
+				t.Fatalf("error = %+v, want retryable store_unavailable", body.Error)
+			}
+			if sides.count("deployment") != 0 || sides.count("own") != 0 {
+				t.Fatalf("model calls = deployment %d own %d, want 0 and 0", sides.count("deployment"), sides.count("own"))
 			}
 			assertNoModelCallAndNoResult(t, rig)
 		})

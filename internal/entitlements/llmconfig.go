@@ -181,7 +181,9 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 			return OrgLLMConfig{}, false, nil
 		}
 		return OrgLLMConfig{}, false, errUnavailable
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return OrgLLMConfig{}, false, errUnavailable
+	case http.StatusConflict:
 		return OrgLLMConfig{}, false, fmt.Errorf("%w: ops answered %d", ErrLLMConfigUnusable, response.StatusCode)
 	default:
 		return OrgLLMConfig{}, false, errUnavailable
