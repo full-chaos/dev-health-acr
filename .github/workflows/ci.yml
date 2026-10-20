@@ -301,6 +301,8 @@ jobs:
       # packages would still report success.
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
+      - name: Test the measured race budget cut
+        run: scripts/ci/test-race-budget-cut.sh
       - name: Test the reached-shard selection and the lane check that accepts its skips
         run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
@@ -1562,6 +1564,61 @@ jobs:
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
 
+  # internal/mcp runs alone: in a shared race shard its package time swung
+  # 225-380s with the sibling packages and tripped the 85% guard at 357s of
+  # 420s. Its own budget is GOTEST_MCP_TIMEOUT (Makefile).
+  race-mcp:
+    name: race (mcp, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs:
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-mcp')
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.2'
+          cache: ${{ runner.environment == 'github-hosted' }}
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run isolated mcp race suite
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated mcp)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'mcp (isolated scope)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-mcp
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
+
   race-factoracle-heavy:
     name: race (factoracle heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -2165,6 +2222,7 @@ jobs:
       - race-devhealthsource-mid
       - race-factoracle
       - race-factoracle-heavy
+      - race-mcp
       - build
       - contracts
       - container-contract-smoke
