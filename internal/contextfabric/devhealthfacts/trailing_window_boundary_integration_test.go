@@ -60,6 +60,7 @@ func TestTrailingWindowEndExcludesTheEndDayAgainstRealClickHouse(t *testing.T) {
 	}
 	pr(1, ts(2026, 9, 19, 23, 0, 0))
 	pr(2, ts(2026, 9, 20, 0, 0, 0))
+	pr(3, ts(2026, 9, 20, 10, 0, 0))
 
 	window := contractsv1TimeContext(ts(2026, 9, 13, 0, 0, 0), ts(2026, 9, 20, 0, 0, 0))
 	read := func(kind contextfabric.FactKind, subject contextfabric.SubjectRef) contextfabric.CanonicalFact {
@@ -86,5 +87,14 @@ func TestTrailingWindowEndExcludesTheEndDayAgainstRealClickHouse(t *testing.T) {
 		fields := read(contextfabric.FactDeployments, teamSubject("team-boundary")).Fields
 		wantInt(t, fields, "deployments_count_window", 2)
 		wantInt(t, fields, "failed_deployments_count_window", 1)
+	})
+	t.Run("no_window_default_ends_at_today_midnight", func(t *testing.T) {
+		restore := devhealthfacts.SetClockForTest(func() time.Time { return ts(2026, 9, 20, 15, 0, 0) })
+		defer restore()
+		window = contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+		fields := read(contextfabric.FactMetrics, teamSubject("team-boundary")).Fields
+		wantInt(t, fields, "change_failure_deployments_count", 2)
+		wantInt(t, fields, "window_pr_count", 1)
+		wantInt(t, read(contextfabric.FactDeployments, teamSubject("team-boundary")).Fields, "deployments_count_window", 2)
 	})
 }
