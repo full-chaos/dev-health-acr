@@ -451,8 +451,13 @@ func TestMetricsProviderSeriesFallsBackToPlatformDefaultWindow(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	end := windowBinding(t, client, "series_window_end")
-	if end.Before(before) || end.After(after) {
-		t.Fatalf("series_window_end = %v, want between %v and %v (now)", end, before, after)
+	midnight := func(v time.Time) time.Time { return time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, time.UTC) }
+	if !end.Equal(midnight(before)) && !end.Equal(midnight(after)) {
+		t.Fatalf("series_window_end = %v, want today 00:00 UTC (%v)", end, midnight(after))
+	}
+	statement := client.queries[len(client.queries)-1].statement
+	if !strings.Contains(statement, "day < toDate({series_window_end") || strings.Contains(statement, "day <= toDate") {
+		t.Fatalf("statement = %q, want the series read to exclude the end day", statement)
 	}
 	start := windowBinding(t, client, "series_window_start")
 	width := end.Sub(start)
@@ -651,5 +656,46 @@ func TestMetricsProviderNotTruncatedBelowLimit(t *testing.T) {
 	}
 	if result.Truncated {
 		t.Fatalf("result.Truncated = true, want false when the series (64 days) is exactly at, not over, the cap")
+	}
+}
+
+func readSeriesWindow(t *testing.T, start, end time.Time) (string, time.Time) {
+	t.Helper()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{
+			Axis:           contextfabric.TemporalCurrent,
+			EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &start, End: &end},
+		},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	return client.queries[len(client.queries)-1].statement, windowBinding(t, client, "series_window_end")
+}
+
+func TestMetricsSeriesExplicitMidDayEndExcludesItsPartialDay(t *testing.T) {
+	t.Parallel()
+	end := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	statement, bound := readSeriesWindow(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), end)
+	if !bound.Equal(end) {
+		t.Fatalf("series_window_end = %v, want %v", bound, end)
+	}
+	if !strings.Contains(statement, "day < toDate({series_window_end:DateTime64(6,'UTC')})") || strings.Contains(statement, "day <= toDate") {
+		t.Fatalf("statement = %q, want day < toDate(end): the mid-day end's own day is never read", statement)
+	}
+}
+
+func TestMetricsSeriesCalendarMonthEndStopsAtTheLastDayOfTheMonth(t *testing.T) {
+	t.Parallel()
+	end := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	statement, bound := readSeriesWindow(t, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), end)
+	if !bound.Equal(end) {
+		t.Fatalf("series_window_end = %v, want %v", bound, end)
+	}
+	if !strings.Contains(statement, "day < toDate({series_window_end:DateTime64(6,'UTC')})") || strings.Contains(statement, "day <= toDate") {
+		t.Fatalf("statement = %q, want day < toDate(end): 2026-10-01 is not read for September", statement)
 	}
 }

@@ -116,6 +116,7 @@ isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
   "github.com/full-chaos/dev-health-acr/internal/mcp"
+  "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 # CHAOS-5977: dedicated_isolated_packages is a SUBSET of isolated_packages
@@ -162,11 +163,15 @@ isolated_packages=(
 # internal/mcp joins them (race-mcp): in a shared 4-vCPU shard its race time
 # swung 225-380s with its siblings and tripped the 85% guard at 357s of 420s;
 # alone it has its own 480s budget (GOTEST_MCP_TIMEOUT).
+# internal/contracts/v1 joins them (race-contracts-v1): 143-367s in race shard 4
+# depending on runner speed, 360s against the 357s guard; alone it has its own
+# 440s budget (GOTEST_CONTRACTS_V1_TIMEOUT).
 dedicated_isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
   "github.com/full-chaos/dev-health-acr/internal/mcp"
+  "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 # CHAOS-7282: unit_dedicated_packages is a SUBSET of isolated_packages naming
@@ -250,7 +255,6 @@ race_spread_pins=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun=2"
   "github.com/full-chaos/dev-health-acr/internal/releasebuild=4"
   "github.com/full-chaos/dev-health-acr/migrations/postgres=1"
-  "github.com/full-chaos/dev-health-acr/internal/contracts/v1=4"
 )
 
 pinned_shard_of() {

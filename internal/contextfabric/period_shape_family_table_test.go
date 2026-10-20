@@ -149,7 +149,8 @@ func periodShapeRuleRead(c periodShapeTableCell, now time.Time) (start, end time
 	day := 24 * time.Hour
 	switch {
 	case c.kind == periodQuestionStated:
-		start, end, conflict = now.Add(-30*day), now, c.cell.time == suppliedRangeDifferent
+		end = now.Truncate(day)
+		start, conflict = end.Add(-30*day), c.cell.time == suppliedRangeDifferent
 	case c.kind == periodQuestionNamed && !comparison:
 		start, end = calendarPeriodOracle("last month", now)
 		conflict = suppliedRangeConflictsWith(c.cell.time, now, start, end)

@@ -42,6 +42,12 @@ var ErrLLMConfigGateClosed = errors.New("Dev Health BYO LLM configuration is beh
 // turn is refused with its own reason and never runs on the platform model.
 var ErrLLMConfigNoInvestigateConfig = errors.New("Dev Health BYO LLM configuration has no investigate-capable config")
 
+// ErrLLMConfigTurnedOff is an org whose admin turned its saved BYO configuration
+// off without deleting it. The org has no usable own model: the gate treats it
+// as an org with no configuration, so only the platform-admin grant draws the
+// platform model and every other turn is refused with its own reason.
+var ErrLLMConfigTurnedOff = errors.New("Dev Health BYO LLM configuration is turned off by the organization")
+
 // llmConfigReasonHeader carries why ops answered the marked no-config 404.
 const (
 	llmConfigMarkerHeader        = "X-Org-Llm-Config"
@@ -49,6 +55,7 @@ const (
 	llmConfigReasonHeader        = "X-Org-Llm-Config-Reason"
 	llmConfigGateClosedReason    = "byo_llm_gate_closed"
 	llmConfigNoInvestigateReason = "byo_no_investigate_config"
+	llmConfigTurnedOffReason     = "byo_llm_turned_off"
 )
 
 // OrgLLMConfig is one org's BYO LLM configuration as ops serves it. APIKey is
@@ -128,13 +135,14 @@ func (c *llmConfigCache) put(orgID string, entry llmConfigEntry) {
 // no reason header. A 404 with the marker and the reason byo_llm_gate_closed is
 // ErrLLMConfigGateClosed (a saved configuration behind a closed byo_llm gate); with
 // byo_no_investigate_config it is ErrLLMConfigNoInvestigateConfig (saved keys for
-// other purposes only). A 409 (a saved configuration whose stored key is
+// other purposes only); with byo_llm_turned_off it is ErrLLMConfigTurnedOff (a saved
+// configuration an org admin turned off). A 409 (a saved configuration whose stored key is
 // unreadable) is ErrLLMConfigUnusable. Everything else is unavailable (errUnavailable),
 // because the source cannot be read or has broken its contract: ops unreachable, a
 // 5xx, a 401 or 403 (the credential or its scope is refused), a 404 without the
 // marker or with an unknown reason, and a 200 whose body does not decode or names
 // another schema, organization, provider, model or version. Answers (found, not
-// found, gate closed or no investigate config) are reused for llmConfigCacheTTL;
+// found, gate closed, no investigate config or turned off) are reused for llmConfigCacheTTL;
 // errors are never cached.
 func (c *Client) OrgLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, bool, error) {
 	if strings.TrimSpace(orgID) == "" {
@@ -148,7 +156,7 @@ func (c *Client) OrgLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig, 
 		return entry.config, entry.found, nil
 	}
 	config, found, err := c.fetchLLMConfig(ctx, orgID)
-	if errors.Is(err, ErrLLMConfigGateClosed) || errors.Is(err, ErrLLMConfigNoInvestigateConfig) {
+	if errors.Is(err, ErrLLMConfigGateClosed) || errors.Is(err, ErrLLMConfigNoInvestigateConfig) || errors.Is(err, ErrLLMConfigTurnedOff) {
 		c.llmConfigs.put(orgID, llmConfigEntry{refusal: err, expires: now.Add(llmConfigCacheTTL)})
 		return OrgLLMConfig{}, false, err
 	}
@@ -183,6 +191,8 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 			return OrgLLMConfig{}, false, ErrLLMConfigGateClosed
 		case llmConfigNoInvestigateReason:
 			return OrgLLMConfig{}, false, ErrLLMConfigNoInvestigateConfig
+		case llmConfigTurnedOffReason:
+			return OrgLLMConfig{}, false, ErrLLMConfigTurnedOff
 		case "":
 			return OrgLLMConfig{}, false, nil
 		}

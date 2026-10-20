@@ -413,7 +413,8 @@ func TestClarificationWithNoModelConfiguredIsServedWithStructuralLabelsAsWithhel
 // A caller-model turn passes the same gate as a service-model turn before any
 // model is bound: a saved configuration behind a closed byo_llm gate, one with
 // no investigate config, and one with the feature off are each refused with
-// their own reason, whatever the flags, and neither the deployment model nor
+// their own reason, whatever the flags (a turned-off own model with no
+// fallback grant likewise), and neither the deployment model nor
 // the organization's own model phrases anything. A resolver outage is
 // unavailable, never a deployment draw.
 func TestCallerModelTurnIsGatedBeforeAnyModelIsBound(t *testing.T) {
@@ -426,6 +427,8 @@ func TestCallerModelTurnIsGatedBeforeAnyModelIsBound(t *testing.T) {
 	}{
 		{name: "closed byo_llm gate with both flags", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigGateClosed}, status: http.StatusForbidden, reason: "own_model_gate_closed"},
 		{name: "keys for other purposes only with both flags", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigNoInvestigateConfig}, status: http.StatusForbidden, reason: "byo_no_investigate_config"},
+		{name: "own model turned off with the feature and no grant", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigTurnedOff}, status: http.StatusForbidden, reason: "own_model_turned_off"},
+		{name: "own model turned off with the feature off", grants: &serviceModelGrants{fallback: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigTurnedOff}, status: http.StatusForbidden, reason: "ai_features_turned_off"},
 		{name: "saved config with the feature off", grants: &serviceModelGrants{fallback: true}, configs: ownModelConfigs{found: true}, status: http.StatusForbidden, reason: "ai_features_turned_off"},
 		{name: "saved config with the feature off and no grants", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, status: http.StatusForbidden, reason: "ai_features_turned_off"},
 		{name: "resolver outage with both flags", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{err: errors.New("ops unreachable")}, status: http.StatusServiceUnavailable},
