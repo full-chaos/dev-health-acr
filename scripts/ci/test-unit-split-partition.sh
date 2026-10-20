@@ -11,6 +11,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+fails=0
+bad() { printf 'FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 echo "positive: real tree"
 "$root/scripts/ci/race-split.sh" devhealthsource partition
@@ -32,8 +34,8 @@ fixture() {
 expect_fail() {
   local label="$1" dir="$2" pkg="${3:-devhealthsource}"
   if "$dir/scripts/ci/race-split.sh" "$pkg" partition >"$tmp/out" 2>&1; then
-    printf 'NEGATIVE CONTROL FAILED: partition accepted: %s\n' "$label" >&2
-    exit 1
+    bad "NEGATIVE CONTROL: partition accepted: $label"
+    return 0
   fi
   printf 'CONTROL OK: partition rejects %s\n' "$label"
 }
@@ -67,14 +69,14 @@ expect_fail 'a mid list that matches no test' "$dir"
 # devhealthfacts runs the same three-way split: leg 5 skips heavy, mid and
 # fourth, leg 7 runs heavy minus mid/fourth, leg 10 runs mid plus fourth.
 echo "positive: real tree, devhealthfacts"
-"$root/scripts/ci/race-split.sh" devhealthfacts partition
+"$root/scripts/ci/race-split.sh" devhealthfacts partition || bad "devhealthfacts partition rejects the real tree"
 
 split_entries="$("$root/scripts/ci/test-shard.sh" --print-unit-split-packages | tr ' ' '\n' | grep -c '/devhealthfacts$' || true)"
-[ "$split_entries" -eq 2 ] || { printf 'unit_split_packages names devhealthfacts %s time(s), want 2\n' "$split_entries" >&2; exit 1; }
+[ "$split_entries" -eq 2 ] || bad "unit_split_packages names devhealthfacts $split_entries time(s), want 2"
 
 dir="$(fixture facts-no-mid-leg)"
 sed 's/race-split\.sh devhealthfacts unit-mid)/race-split.sh devhealthfacts unit-mid-gone)/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
-cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: facts-no-mid-leg" >&2; exit 1; }
+cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && bad "CONTROL SETUP: facts-no-mid-leg did not change the workflow (no devhealthfacts unit-mid leg to remove)"
 mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
 expect_fail 'a workflow with no devhealthfacts unit-mid leg' "$dir" devhealthfacts
 
@@ -85,4 +87,5 @@ dup="$(grep -v '^[[:space:]]*\(#\|$\)' "$dir/scripts/ci/devhealthfacts-race-mid-
 printf '%s\n' "$dup" >>"$dir/scripts/ci/devhealthfacts-race-fourth-tests.txt"
 expect_fail 'a test named in both the mid and the fourth list' "$dir" devhealthfacts
 
+[ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"

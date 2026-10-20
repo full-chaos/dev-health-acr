@@ -1035,7 +1035,7 @@ check_observed_race_dedup() {
     list_needs <<<"$ded" | grep -qx "$job" || { printf 'unit-dedicated does not need %s\n' "$job" >&2; status=1; }
   done
   # shellcheck disable=SC2016
-  grep -qxF '    name: unit (shard ${{ matrix.shard }} of 9)' <<<"$ded" || {
+  grep -qxF '    name: unit (shard ${{ matrix.shard }} of 10)' <<<"$ded" || {
     printf 'unit-dedicated is not named like the unit legs\n' >&2; status=1; }
 
   plan_job="$(job_block "$file" unit-dedup-plan)"
@@ -1306,7 +1306,7 @@ unit_mismatched_shards="$tmpdir/unit-mismatched-shards.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9\]/, "shard: [1, 2, 3]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]/, "shard: [1, 2, 3]") }
   { print }
 ' "$workflow" > "$unit_mismatched_shards"
 assert_check_fails 'shrank the unit matrix to 3 shards without updating test-shard.sh total' \
@@ -1320,7 +1320,7 @@ unit_drops_dedicated_leg="$tmpdir/unit-drops-dedicated-leg.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9\]/, "shard: [1, 2, 3, 4, 6, 7, 8, 9]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]/, "shard: [1, 2, 3, 4, 6, 7, 8, 9, 10]") }
   { print }
 ' "$workflow" > "$unit_drops_dedicated_leg"
 cmp -s "$workflow" "$unit_drops_dedicated_leg" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_dedicated_leg did not change the workflow\n' >&2; exit 1; }
@@ -1333,7 +1333,7 @@ unit_drops_heavy_half_leg="$tmpdir/unit-drops-heavy-half-leg.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9\]/, "shard: [1, 2, 3, 4, 5, 6, 7, 9]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]/ { sub(/shard: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]/, "shard: [1, 2, 3, 4, 5, 6, 7, 9, 10]") }
   { print }
 ' "$workflow" > "$unit_drops_heavy_half_leg"
 cmp -s "$workflow" "$unit_drops_heavy_half_leg" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_heavy_half_leg did not change the workflow\n' >&2; exit 1; }
@@ -1380,7 +1380,7 @@ assert_check_fails 'gated verify on success(), so a failing shard skips the merg
 
 # One subcommand's -expect edited alone.
 reports_expect_drift="$tmpdir/reports-expect-drift.yml"
-sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 9/mergetestreports coverage -dir .tmp\/unit-shards -expect 8/' \
+sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 10/mergetestreports coverage -dir .tmp\/unit-shards -expect 9/' \
   "$workflow" > "$reports_expect_drift"
 cmp -s "$workflow" "$reports_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_expect_drift did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'changed only the coverage merge'"'"'s -expect' check_reports_job "$reports_expect_drift"
@@ -1400,7 +1400,7 @@ cmp -s "$workflow" "$reports_without_crosscheck" && { printf 'NEGATIVE CONTROL S
 assert_check_fails 'deleted the crosscheck step from the reports job' check_reports_job "$reports_without_crosscheck"
 
 reports_crosscheck_expect_drift="$tmpdir/reports-crosscheck-expect-drift.yml"
-sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 9/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 8/' \
+sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 10/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 9/' \
   "$workflow" > "$reports_crosscheck_expect_drift"
 cmp -s "$workflow" "$reports_crosscheck_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_expect_drift did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'changed only the crosscheck step'"'"'s -expect' check_reports_job "$reports_crosscheck_expect_drift"
@@ -1771,7 +1771,7 @@ print(sys.argv[2], end="")
 PY
 )"
 assert_check_fails 'unit-dedicated matrix lost a dedicated leg' check_observed_race_dedup \
-  "$(mutate_dedup matrix 'shard: [6, 7, 8, 9]' 'shard: [6, 7, 8]')"
+  "$(mutate_dedup matrix 'shard: [6, 7, 8, 9, 10]' 'shard: [6, 7, 8]')"
 # shellcheck disable=SC2016
 assert_check_fails 'unit-dedicated stopped excluding the dropped legs' check_observed_race_dedup \
   "$(mutate_dedup exclude "fromJSON(needs.unit-dedup-plan.outputs.exclude || '[]')" "fromJSON(needs.plan.outputs.unit_skip)")"
