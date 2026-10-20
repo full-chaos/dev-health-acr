@@ -22,7 +22,7 @@ var comparisonHintWindow = regexp.MustCompile(`evidence_window start (\S+?) and 
 func TestAClientThatFollowsTheComparisonHintLiterallyGetsTheOtherPeriod(t *testing.T) {
 	day := 24 * time.Hour
 	now := suppliedRangeRigNow
-	start := now.Add(-30 * day)
+	start := now.Truncate(day).Add(-30 * day)
 	interpreted, frame := periodShapeInterpreted([]InvestigationGoal{GoalAssessState}, TemporalIntentPeriodComparison, []FactKind{FactFlow}, TimeContext{Axis: TemporalCurrent})
 	first := runPeriodShapeTurn(t, suppliedInterpretedPath, measureComparisonQuestion, interpreted, frame)
 
