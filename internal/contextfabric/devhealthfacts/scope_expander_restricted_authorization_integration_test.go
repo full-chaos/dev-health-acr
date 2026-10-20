@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // The two work-item selections under a repository-restricted principal: a
@@ -22,7 +23,8 @@ import (
 // and counts must name every admission path.
 func TestScopeExpanderWorkItemsAuthorizeRepoLessItemsForARestrictedPrincipalOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL(sharedClickHouseTables...) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
@@ -113,7 +115,7 @@ SELECT ?, concat('other-', toString(number)), toUInt32(number + 100), 1, 'native
 			if !filtered || !clean {
 				t.Fatalf("the served statement does not carry a removable candidate filter (filtered %v, clean %v)", filtered, clean)
 			}
-			scoped, whole := scopeRows(t, ctx, query, captured), scopeRows(t, ctx, query, capturedStatement{statement: orgWide, bindings: captured.bindings})
+			scoped, whole := scopeRows(t, ctx, rawQuery, captured), scopeRows(t, ctx, rawQuery, capturedStatement{statement: orgWide, bindings: captured.bindings})
 			if len(scoped) == 0 {
 				t.Fatal("the statement returned no rows, the comparison did not happen")
 			}

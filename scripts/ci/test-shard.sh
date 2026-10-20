@@ -208,7 +208,12 @@ unit_split_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 )
+# devhealthfacts is listed twice: its rest and heavy halves ran 1361-1456s and
+# 1168-1372s against the 1530s guard (85% of 1800s), so the race-mid and
+# race-fourth lists get a third leg (10); legs 5, 7 and 10 are disjoint
+# (race-split.sh devhealthfacts partition).
 # devhealthsource joined both lists because its single unit binary ran 503s to
 # 526s against the 510s guard (85% of 600s) and failed unrelated PRs.
 

@@ -39,7 +39,7 @@ func TestOutputSchemaInstructionsEmbedGoldenBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema, err := newOutputSchema(interpretationOutput{})
+	schema, err := newOutputSchema(interpretationOutput{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

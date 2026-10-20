@@ -4790,15 +4790,16 @@ var EvidenceExpansion = Event{
 }
 
 // WorkItemStoredServing records tuple authorization and mandatory coverage
-// capacity on both stored serving surfaces, before any success is emitted.
+// capacity on every stored serving surface, before any success is emitted.
 var WorkItemStoredServing = Event{
 	ID: "contextfabric.work_item_stored_serving", Msg: "context fabric work item stored serving", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
-	BoundedAggregation: "one classified stored tuple per request; coverage counts contain no stored text",
+	BoundedAggregation: "one classified stored tuple per request (evidence expansion: the served citing tuple, else the first withheld one, else the first unservable one); coverage counts contain no stored text",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reuse", "result_by_id"}},
-		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid"}},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reuse", "result_by_id", "evidence_expansion"}},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid", "limitations_flooded"}},
+		{Key: "result_id_hash", Type: FieldString, Presence: PresenceRequired},
 		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"available", "absent", "malformed", "unsupported_version", "oversized"}},
 		{Key: "census_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"available", "absent", "malformed", "unsupported_version"}},
 		{Key: "coverage_details_before", Type: FieldInt, Presence: PresenceRequired},
