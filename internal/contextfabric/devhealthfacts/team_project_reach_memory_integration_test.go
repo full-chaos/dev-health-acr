@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -41,10 +42,11 @@ var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
 // share granules.
 func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
+	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",
@@ -64,7 +66,7 @@ func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnR
 	})
 }
 
-func measureProjectReachedRead(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org string, interleaved bool) {
+func measureProjectReachedRead(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org string, interleaved bool) {
 	at := ts(2026, 9, 29, 0, 0, 0)
 	exec := func(statement string, args ...any) {
 		t.Helper()
@@ -208,7 +210,7 @@ WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessin
 // times warm, alternated, and the comparison uses each form's lowest read.
 // The planted control puts the replaced statement in the narrowed slot: the
 // same comparison must refuse it.
-func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID string) {
+func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID string) {
 	t.Helper()
 	replaced, narrowed := devhealthfacts.TeamProjectLinkRowsTwoPassSQLForTest(), devhealthfacts.TeamProjectLinkRowsSQLForTest()
 	if lower, line := linkRowsLowerOnLowestOfThree(t, ctx, query, direct, org, teamID, replaced, narrowed); !lower {
@@ -227,7 +229,7 @@ func assertLinkRowsNarrowedWithIdenticalRows(t *testing.T, ctx context.Context, 
 // three times each, alternated, and reports whether the lowest read of after
 // is under linkRowsNarrowedMargin of the lowest read of before. Both
 // statements must return the same rows on every read.
-func linkRowsLowerOnLowestOfThree(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID, before, after string) (bool, string) {
+func linkRowsLowerOnLowestOfThree(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID, before, after string) (bool, string) {
 	t.Helper()
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-before", before)
 	runLinkRows(t, ctx, query, direct, org, teamID, "link-rows-after", after)
@@ -256,7 +258,7 @@ func linkRowsLowerOnLowestOfThree(t *testing.T, ctx context.Context, query *runt
 // ownership arm matches it, the identity resolution gives it the join key "",
 // and an issue with no project id is then one of its issues. The narrowed
 // statement must return exactly the rows of the statement it replaced.
-func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
+func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn) {
 	t.Helper()
 	const org, teamID = "c1d2e3f4-5a6b-4c7d-8e9f-0a1b2c3d4e5f", "team-empty-id"
 	at := ts(2026, 9, 29, 0, 0, 0)
@@ -308,7 +310,7 @@ func assertIdentityEdgeCaseLinkRowsIdentical(t *testing.T, ctx context.Context, 
 	}
 }
 
-func runLinkRows(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, direct clickhousedriver.Conn, org, teamID, marker, rows string) ([]string, uint64) {
+func runLinkRows(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn, org, teamID, marker, rows string) ([]string, uint64) {
 	t.Helper()
 	statement := "SELECT /* " + marker + " */ team_id, work_item_id, toString(pr_repo_id), toInt64(pr_number), toInt64(link_rank) FROM " + rows + " AS lr ORDER BY team_id, work_item_id, toString(pr_repo_id), pr_number, link_rank"
 	mark := serverNowMicros(t, ctx, direct)

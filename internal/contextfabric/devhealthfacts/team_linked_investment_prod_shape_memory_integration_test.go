@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 // linkedProdShape is the largest prod organization's volume for the tables
@@ -279,11 +280,12 @@ func measureLinkedMixFragments(t *testing.T, ctx context.Context, query contextp
 			if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 				t.Fatalf("flush logs (measurement did not happen): %v", err)
 			}
-			var mem, readRows uint64
-			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows FROM system.query_log
-WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &readRows); err != nil {
+			var mem, readRows, threadless uint64
+			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows, `+statementthreads.UnboundThreads+` FROM system.query_log
+WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&mem, &readRows, &threadless); err != nil {
 				t.Fatalf("%s %s: no query_log row for %s (measurement did not happen): %v", stage, frag.Name, tag, err)
 			}
+			statementthreads.RequireThreadBound(t, ctx, direct, stage+" "+frag.Name, threadless)
 			if mib := float64(mem) / (1 << 20); best.mib < 0 || mib < best.mib {
 				best = linkedFragmentPeak{name: frag.Name, mib: mib, readRows: readRows}
 			}
@@ -511,12 +513,12 @@ func TestTeamLinkedInvestmentStatementMemoryOnTheProdShape(t *testing.T) {
 	if missing != "" {
 		t.Fatalf("form %s: marker not in the rendered statement", missing)
 	}
-	capped := contextpacket.NewMemoryCappedQueryClient(query, contextpacket.APIStatementMaxMemoryUsage)
+	capped := statementthreads.API(query)
 	provider := findProvider(t, devhealthfacts.NewProviders(capped), contextfabric.FactInvestment)
 
 	check := func(stage string) {
 		t.Helper()
-		peaks := measureLinkedMixFragments(t, ctx, query, direct, orgID, stage, fragments)
+		peaks := measureLinkedMixFragments(t, ctx, capped, direct, orgID, stage, fragments)
 		// Every warm served read must hold the bounds, so the highest one is
 		// compared; the split rows and the form that must break the bounds are
 		// taken at their lowest, the side that makes each check harder.
