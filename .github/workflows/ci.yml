@@ -301,6 +301,8 @@ jobs:
       # packages would still report success.
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
+      - name: Test the measured race budget cut
+        run: scripts/ci/test-race-budget-cut.sh
       - name: Test the reached-shard selection and the lane check that accepts its skips
         run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
