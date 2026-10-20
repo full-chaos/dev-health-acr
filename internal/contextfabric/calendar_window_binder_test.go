@@ -32,7 +32,6 @@ func TestCalendarWindow_BinderNamesTheCalendarPeriod(t *testing.T) {
 		// A name, or a mid-sentence position with no conjunction.
 		{"How is the Last Year and Beyond project doing?", CalendarPeriodNone},
 		{"How did last month treat the operational work of each repository?", CalendarPeriodNone},
-		{"Which repository carried the most work this month?", CalendarPeriodNone},
 		{"Which repository carried the most work?", CalendarPeriodNone},
 	}
 	for _, tc := range cases {

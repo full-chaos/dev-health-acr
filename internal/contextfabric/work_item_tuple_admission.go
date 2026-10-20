@@ -449,6 +449,14 @@ type workItemTupleWindowBasis struct {
 // question states. A window carried from an earlier turn, remembered, or
 // inferred from the class table is not committed here.
 func deriveWorkItemTupleWindowBasis(question string, windowCanon requestWindowCanonicalization, remembered bool) workItemTupleWindowBasis {
+	return deriveWorkItemTupleWindowBasisFor(question, windowCanon, remembered, false)
+}
+
+// deriveWorkItemTupleWindowBasisFor is the basis for a request that may have
+// declined clarification. Such a request is answered against the window the
+// engine infers from the period the question names, so that period commits
+// the basis too: nothing can be asked to confirm it.
+func deriveWorkItemTupleWindowBasisFor(question string, windowCanon requestWindowCanonicalization, remembered, clarificationDeclined bool) workItemTupleWindowBasis {
 	basis := workItemTupleWindowBasis{RoleReason: MemberTimeRoleNoVerb}
 	span := BoundWindowSpan{SpanStart: 0, SpanEnd: len(question)}
 	if spans := BindWindowSpans(question); len(spans) == 1 {
@@ -461,6 +469,8 @@ func deriveWorkItemTupleWindowBasis(question string, windowCanon requestWindowCa
 	case windowCanon.Effective != nil && windowCanon.Effective.Start != nil && windowCanon.Effective.End != nil:
 		basis.Committed = true
 	case windowCanon.BinderProposal.Reason == WindowBindRoutedInferred && windowCanon.BinderProposal.Trailing:
+		basis.Committed = true
+	case clarificationDeclined && windowCanon.BinderProposal.Reason == WindowBindRoutedInferred && !windowCanon.BinderProposal.PointInTime:
 		basis.Committed = true
 	}
 	if !basis.Committed {

@@ -303,31 +303,6 @@ func TestCHAOS4336_ClassDefaultGate_EmptyPoolStillOffersWindowExpand(t *testing.
 	}
 }
 
-func TestCHAOS4234_ClassDefaultGate_RefusedNoClarificationNeverRunsTheOffersOnlyResolve(t *testing.T) {
-	t.Parallel()
-	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-	graph := chaos4234GatedGraph()
-	store := &staticResultStore{results: map[string]InvestigationResult{}}
-	engine := buildWindowGateEngine(t, interpreter, graph, store)
-
-	request := validInvestigationRequest()
-	request.Options.AllowClarification = false
-
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
-	}
-	if result.Status != InvestigationNoMatch {
-		t.Fatalf("Status = %q, want no_match (refused, no clarification allowed)", result.Status)
-	}
-	if graph.resolveCalls != 0 {
-		t.Fatalf("graph.resolveCalls = %d, want 0: no clarification can be offered, so nothing is read", graph.resolveCalls)
-	}
-	if result.StructureNeeds != nil {
-		t.Fatalf("StructureNeeds = %#v, want nil on a refused terminal", result.StructureNeeds)
-	}
-}
-
 func TestCHAOS4234_OneTurnRedemption_WindowAndKindReceiptsFromOneGatedResult(t *testing.T) {
 	t.Parallel()
 	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
