@@ -36,7 +36,7 @@ set -euo pipefail
 # Subcommands:
 #   legs     [--workflow F]                    print `leg<TAB>package<TAB>mode<TAB>mode-arg` per dedicated leg
 #   covering [--workflow F] PACKAGE            print the race job keys that cover PACKAGE, one per line
-#   collect  --out DIR [--workflow F] [--legs "6 7 8 9"]
+#   collect  --out DIR [--workflow F] [--legs "6 7 8 9 10"]
 #                                              write DIR/leg-N.package and DIR/leg-N.tests per leg (go + compile only)
 #   defer    --event E --heavy true|false --skip-jobs JSON --unit-skip JSON [--workflow F]
 #                                              the plan job's step: unit_defer, unit_exclude and skip_jobs outputs
@@ -49,7 +49,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 expected_covering_devhealthfacts=4
 expected_covering_devhealthsource=3
-default_legs="6 7 8 9"
+default_legs="6 7 8 9 10"
 
 die() { printf 'observed-race-dedup: %s\n' "$*" >&2; exit 2; }
 

@@ -263,7 +263,7 @@ lane() {
 }
 
 full='{"heavy":"true","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
-reached_unit='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":1},{\"shard\":2},{\"shard\":3},{\"shard\":4},{\"shard\":5},{\"shard\":6},{\"shard\":7},{\"shard\":8},{\"shard\":9}]","race_skip":"[]"}'
+reached_unit='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"unit\"]","unit_skip":"[{\"shard\":1},{\"shard\":2},{\"shard\":3},{\"shard\":4},{\"shard\":5},{\"shard\":6},{\"shard\":7},{\"shard\":8},{\"shard\":9},{\"shard\":10}]","race_skip":"[]"}'
 reached_none='{"heavy":"true","reach_mode":"reached","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
 reached_fo='{"heavy":"true","reach_mode":"reached","skip_jobs":"[\"race-factoracle\"]","unit_skip":"[]","race_skip":"[]"}'
 full_with_skip='{"heavy":"true","reach_mode":"full","skip_jobs":"[\"unit\"]","unit_skip":"[]","race_skip":"[]"}'
@@ -305,7 +305,7 @@ lane pr-draft-heavy-skipped 0 pull_request "$draft_full" "${draft_skips[@]}"
 
 # ---- 7. observed race dedup: the two jobs the deferral adds ------------------
 
-four='[{"shard":6},{"shard":7},{"shard":8},{"shard":9}]'
+four='[{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]'
 defer_out() { # UNIT_SKIP_JSON DEFER_JSON EXCLUDE_JSON [REACH]
   jq -nc --arg us "$1" --arg d "$2" --arg e "$3" --arg r "${4:-full}" \
     '{heavy: "true", reach_mode: $r, skip_jobs: "[]", unit_skip: $us, race_skip: "[]", unit_defer: $d, unit_exclude: $e}'
@@ -332,10 +332,10 @@ dedup_drop='[]'
 lane pr-exclude-short 1 pull_request "$(defer_out '[]' "$four" '[{"shard":6},{"shard":7},{"shard":9}]')" unit-dedup-plan=success unit-dedicated=success
 lane pr-defer-not-a-list 1 pull_request "$(defer_out '[]' 'oops' "$four")" unit-dedup-plan=success unit-dedicated=success
 lane pr-reach-skips-and-drops 0 pull_request "$(defer_out '[{"shard":6},{"shard":7}]' "$four" "$four" reached)" unit-dedup-plan=success unit-dedicated=success
-dedup_drop='[{"shard":8},{"shard":9}]'
+dedup_drop='[{"shard":8},{"shard":9},{"shard":10}]'
 lane pr-reach-skips-and-drops-all 0 pull_request "$(defer_out '[{"shard":6},{"shard":7}]' "$four" "$four" reached)" unit-dedup-plan=success
 dedup_drop='[]'
-all_nine='[{"shard":1},{"shard":2},{"shard":3},{"shard":4},{"shard":5},{"shard":6},{"shard":7},{"shard":8},{"shard":9}]'
+all_nine='[{"shard":1},{"shard":2},{"shard":3},{"shard":4},{"shard":5},{"shard":6},{"shard":7},{"shard":8},{"shard":9},{"shard":10}]'
 whole_unit_defer="$(jq -nc --argjson all "$all_nine" --arg four "$four" '{heavy: "true", reach_mode: "reached", skip_jobs: "[\"unit\"]", unit_skip: ($all[:5] | tostring), race_skip: "[]", unit_defer: $four, unit_exclude: ($all | tostring)}')"
 lane pr-whole-unit-skip-by-reach-and-defer 0 pull_request "$whole_unit_defer" unit=skipped unit-dedup-plan=success unit-dedicated=success
 lane pr-whole-unit-skip-ran-anyway 1 pull_request "$whole_unit_defer" unit-dedup-plan=success unit-dedicated=success

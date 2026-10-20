@@ -64,11 +64,14 @@ join_regex() {
 race_heavy() { LC_ALL=C comm -23 <(names) <({ mid_names; fourth_names; } | LC_ALL=C sort -u) | join_regex; }
 race_mid() { mid_names | join_regex; }
 race_fourth() { fourth_names | join_regex; }
+race_mid_fourth() { { mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
 race_rest() { { names; mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
 both_lists() { LC_ALL=C comm -12 <(mid_names) <(fourth_names); }
 
 # devhealthsource's plain unit legs run three disjoint parts: heavy minus mid
 # (-run, leg 8), mid (-run, leg 9), and everything else (-skip of both, leg 6).
+# devhealthfacts runs the same shape: heavy minus mid/fourth (leg 7), mid plus
+# fourth (leg 10), everything else (leg 5).
 unit_partition_three_way() {
   local wf="$root/.github/workflows/ci.yml" want n all a b skipped c counted bad lost
   for want in "race-split.sh $name unit-rest)" "race-split.sh $name unit-heavy)" "race-split.sh $name unit-mid)"; do
@@ -86,7 +89,7 @@ unit_partition_three_way() {
   done
   all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-  b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  b="$(go test -list "$(race_mid_fourth)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   skipped="$(go test -list "$(race_rest)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
   c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
   counted="$(printf '%s\n%s\n%s\n' "$a" "$b" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
@@ -108,7 +111,12 @@ case "${2:-}" in
     wf="$root/.github/workflows/ci.yml"
     unit_mode=heavy
     unit_regex="$(regex)"
-    if [ "$name" = devhealthsource ]; then
+    if [ "$name" = devhealthsource ] || [ "$name" = devhealthfacts ]; then
+      dup="$(both_lists)"
+      if [ -n "$dup" ]; then
+        printf 'named in both race-mid and race-fourth lists:\n%s\n' "$dup" >&2
+        exit 1
+      fi
       unit_partition_three_way
       exit $?
     fi
@@ -129,7 +137,7 @@ case "${2:-}" in
       "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
     ;;
   unit-heavy) race_heavy ;;
-  unit-mid) race_mid ;;
+  unit-mid) race_mid_fourth ;;
   unit-rest) race_rest ;;
   race-heavy) race_heavy ;;
   race-mid) race_mid ;;

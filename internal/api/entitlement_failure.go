@@ -21,7 +21,7 @@ func (a *App) writeEntitlementLookupError(w http.ResponseWriter, r *http.Request
 	if errors.Is(err, entitlements.ErrOrganizationUnknown) {
 		class = "entitlement_organization_unknown"
 	}
-	a.logger.ErrorContext(r.Context(), "entitlement lookup failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", class)
+	a.logger.ErrorContext(r.Context(), "entitlement lookup failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", class, "reason", entitlements.RejectionReason(err))
 	if class == "entitlement_organization_unknown" {
 		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
