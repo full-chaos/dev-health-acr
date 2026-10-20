@@ -68,7 +68,7 @@ jobs:
   # `verify` accepts those skips ONLY from these outputs, ONLY when
   # reach_mode=reached, and ONLY on a pull_request event.
   plan:
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
       reach_mode: ${{ steps.reach.outputs.reach_mode }}
@@ -146,7 +146,7 @@ jobs:
   # SELF_HOSTED_RUNNERS repo variable. The ARC pool is gone, so the pair is
   # collapsed to this single hosted job and every consumer needs it directly.
   mirror-preflight:
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -273,7 +273,7 @@ jobs:
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
   lint:
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -920,9 +920,11 @@ jobs:
         shard: [1, 2, 3, 4]
         exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}
     name: race (shard ${{ matrix.shard }} of 4)
-    # CI_RACE_RUNNER repo variable selects a larger hosted runner for the
-    # race shards (memory/CPU headroom); unset, this falls back to ubuntu-latest.
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # The CI_RACE_RUNNER repo variable routes the race shards to the
+    # self-hosted pool on trusted runs only (a pull request from this
+    # repository or a push); a fork pull request, or the variable unset,
+    # runs on ubuntu-latest.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
@@ -1032,7 +1034,7 @@ jobs:
     needs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1217,7 +1219,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-mid')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1271,7 +1273,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fourth')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1343,7 +1345,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1454,7 +1456,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-mid')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1519,7 +1521,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1573,7 +1575,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle-heavy')
-    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
