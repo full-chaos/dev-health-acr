@@ -148,7 +148,12 @@ func (a *App) serviceModelOn(ctx context.Context, principal storage.Principal) (
 // missingPlatformModelGrant names the flag a refused organization lacks, for
 // the audit row: acr_service_model first, then platform_model_fallback.
 func (a *App) missingPlatformModelGrant(ctx context.Context, principal storage.Principal) string {
-	if on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement); err == nil && on {
+	on, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
+	if err != nil {
+		a.logger.WarnContext(ctx, "context fabric service model audit label unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "reason", entitlements.RejectionReason(err))
+		return serviceModelEntitlement
+	}
+	if on {
 		return platformModelFallbackEntitlement
 	}
 	return serviceModelEntitlement
