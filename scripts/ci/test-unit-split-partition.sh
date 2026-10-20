@@ -87,5 +87,24 @@ dup="$(grep -v '^[[:space:]]*\(#\|$\)' "$dir/scripts/ci/devhealthfacts-race-mid-
 printf '%s\n' "$dup" >>"$dir/scripts/ci/devhealthfacts-race-fourth-tests.txt"
 expect_fail 'a test named in both the mid and the fourth list' "$dir" devhealthfacts
 
+# The unit-only extra list moves named mid/fourth tests from leg 10 to leg 7.
+# A name outside the mid and fourth lists would run in leg 7 and again in leg 5
+# or the heavy half; a name listed twice is a typo that hides a dropped test.
+echo "positive: real tree, extra list"
+[ -f "$root/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt" ] || bad "devhealthfacts-unit-heavy-extra-tests.txt is missing"
+heavy_only="$(LC_ALL=C comm -23 <(grep -v '^[[:space:]]*\(#\|$\)' "$root/scripts/ci/devhealthfacts-heavy-tests.txt" | LC_ALL=C sort -u) <(cat "$root"/scripts/ci/devhealthfacts-race-mid-tests.txt "$root"/scripts/ci/devhealthfacts-race-fourth-tests.txt | grep -v '^[[:space:]]*\(#\|$\)' | LC_ALL=C sort -u) | head -n1)"
+[ -n "$heavy_only" ] || bad "CONTROL SETUP: no heavy-only test name to use"
+
+dir="$(fixture facts-extra-not-in-mid-fourth)"
+printf '%s\n' "$heavy_only" >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
+expect_fail 'an extra name that is in neither the mid nor the fourth list' "$dir" devhealthfacts
+dir="$(fixture facts-extra-no-such-test)"
+printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
+expect_fail 'an extra name that is no real test' "$dir" devhealthfacts
+dir="$(fixture facts-extra-twice)"
+first="$(grep -v '^[[:space:]]*\(#\|$\)' "$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt" | head -n1)"
+printf '%s\n' "$first" >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
+expect_fail 'an extra name listed twice' "$dir" devhealthfacts
+
 [ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"
