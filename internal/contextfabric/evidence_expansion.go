@@ -255,6 +255,7 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 		return contractsv1.ExpandedEvidence{}, decision
 	}
 	var firstUnavailable, firstDenied *StoredResultAuthorization
+	storedServingRank := 0
 	var readErr error
 	for offset := 0; ; offset += CitedEvidenceCandidateLimit {
 		if err := ctx.Err(); err != nil {
@@ -304,8 +305,17 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 			}
 			decision.AdmittedCount++
 			served, withheld, tupleEvent, serveErr := servedStoredResult(stored, principal)
-			if tupleEvent != nil && (decision.StoredServing == nil || (!withheld && serveErr == nil)) {
-				decision.StoredServing = tupleEvent
+			if tupleEvent != nil {
+				// Served outranks withheld, which outranks unservable; the first of a rank is kept.
+				rank := 1
+				if withheld {
+					rank = 2
+				} else if serveErr == nil {
+					rank = 3
+				}
+				if rank > storedServingRank {
+					decision.StoredServing, storedServingRank = tupleEvent, rank
+				}
 			}
 			if serveErr != nil {
 				decision.UnreadableCount++
