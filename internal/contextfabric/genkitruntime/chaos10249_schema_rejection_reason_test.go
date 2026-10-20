@@ -86,7 +86,7 @@ func TestSchemaRefusalLineIsWrittenAtInfo(t *testing.T) {
 	recorder := &levelRecorder{Handler: slog.NewTextHandler(io.Discard, nil), levels: map[string]slog.Level{}}
 	gen := llmGenerator{logger: slog.New(recorder)}
 	var err error
-	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		t.Fatal(err)
 	}
 	gen.clients = LLMClients{"m": &scriptedLLM{model: "m", replies: []llmReply{{result: llm.Result{Text: `{"shape":5}`}}}}}

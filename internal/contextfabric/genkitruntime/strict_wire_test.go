@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -16,7 +18,7 @@ func strictSchemas(t *testing.T) map[string]outputSchema {
 	t.Helper()
 	out := map[string]outputSchema{}
 	for name, value := range map[string]any{"interpret": interpretationOutput{}, "synthesize": synthesisOutput{}, "phrase": phrasingOutput{}} {
-		schema, err := newOutputSchema(value)
+		schema, err := newOutputSchema(value, name != "synthesize")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,8 +93,42 @@ func hasKey(node any, keys ...string) bool {
 
 // Prod logged format_path=tool for every anthropic turn: open maps, an
 // optional-property count of 35 and 39 (limit 24), conditional keywords and an
-// untyped property all kept the schemas out of structured outputs.
-func TestAnthropicStrictSchemasFitStructuredOutputs(t *testing.T) {
+// untyped property all kept the schemas out of structured outputs. Interpret
+// and phrase now fit. Synthesize is kept on the tool path on purpose: its
+// closed form passes the library's fit check but Anthropic refuses it live
+// (HTTP 400 "The compiled grammar is too large", req_011CgCX1m6FWErtNJADGMY22,
+// a 400 that no fallback may answer), so the operation is decided up front.
+func TestAnthropicWireModePerOperation(t *testing.T) {
+	want := map[string]string{"interpret": llm.FormatPathSchema, "phrase": llm.FormatPathSchema, "synthesize": llm.FormatPathTool}
+	for name, schema := range strictSchemas(t) {
+		var sentBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&sentBody)
+			w.Header().Set("content-type", "application/json")
+			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"{}"},{"type":"tool_use","id":"t","name":"` + outputFormatName + `","input":{}}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+		}))
+		provider, err := llm.New(llm.Config{Kind: llm.KindAnthropic, APIKey: llm.NewSecret("k"), BaseURL: server.URL, Model: "claude-haiku-5-5", HTTPClient: server.Client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := provider.Complete(context.Background(), llm.Request{System: "s", Prompt: "p", Format: &llm.JSONFormat{Name: outputFormatName, Schema: schema.anthropicWire()}})
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.FormatPath != want[name] {
+			t.Errorf("%s: format_path = %q (%s), want %q", name, result.FormatPath, result.FormatReason, want[name])
+		}
+		if _, ok := sentBody["output_config"]; ok != (want[name] == llm.FormatPathSchema) {
+			t.Errorf("%s: output_config present = %v", name, ok)
+		}
+	}
+}
+
+// The closed form of every schema stays inside the library's fit check, so
+// moving synthesize onto it later is a one-flag change once it fits the
+// compiled-grammar cap.
+func TestClosedFormOfEverySchemaFitsTheLibraryCheck(t *testing.T) {
 	for name, schema := range strictSchemas(t) {
 		var sentBody map[string]any
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,10 +146,7 @@ func TestAnthropicStrictSchemasFitStructuredOutputs(t *testing.T) {
 			t.Fatal(err)
 		}
 		if result.FormatPath != llm.FormatPathSchema {
-			t.Errorf("%s: format_path = %q (%s), want %q", name, result.FormatPath, result.FormatReason, llm.FormatPathSchema)
-		}
-		if _, ok := sentBody["output_config"]; !ok {
-			t.Errorf("%s: request carried no output_config", name)
+			t.Errorf("%s: format_path = %q (%s)", name, result.FormatPath, result.FormatReason)
 		}
 	}
 }
@@ -350,5 +383,41 @@ func TestEveryOptionalPropertyHasAGoKindThatMakesEmptyEqualAbsent(t *testing.T) 
 	walk("synthesize", reflect.TypeOf(synthesisOutput{}), schemas["synthesize"].wire)
 	if visited < 55 {
 		t.Fatalf("walked %d optional properties, the schemas hold more", visited)
+	}
+}
+
+// The Anthropic call of each operation sends the schema chosen for it up
+// front: interpretation closed, synthesis open (tool path), with no retry on
+// the other form.
+func TestAnthropicCallsSendTheChosenSchemaPerOperation(t *testing.T) {
+	schemas := strictSchemas(t)
+	cases := map[string]func(*Runtime) error{
+		"interpret": func(r *Runtime) error {
+			_, _, err := r.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+			return err
+		},
+		"synthesize": func(r *Runtime) error {
+			_, _, err := r.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+			return err
+		},
+	}
+	for name, call := range cases {
+		client := &scriptedLLM{model: "claude-haiku-5-5", kind: llm.KindAnthropic, replies: []llmReply{{result: llm.Result{Text: "not json"}}}}
+		runtime, err := NewWithLLM(Config{
+			Provider: "anthropic", Model: "claude-haiku-5-5", InterpretationPromptVersion: "interpret-v1", SynthesisPromptVersion: "synthesis-v1",
+			SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1", Timeout: time.Second, MaxAttempts: 1, MaxInputBytes: 128 << 10,
+		}, LLMClients{"claude-haiku-5-5": client})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = call(runtime)
+		sent := client.request(0).Format.Schema
+		want := schemas[name].wire
+		if name == "interpret" {
+			want = schemas[name].strict
+		}
+		if !reflect.DeepEqual(sent, want) {
+			t.Errorf("%s: the Anthropic call sent a different schema than the one chosen for it", name)
+		}
 	}
 }

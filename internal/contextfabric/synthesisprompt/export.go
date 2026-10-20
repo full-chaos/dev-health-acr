@@ -37,12 +37,7 @@ const (
 	// answer reused under v25 is never served with a bare score.
 	//
 	// v26 -> v27: the deficiency rule basis is dated by rule_basis_as_of_day when it is present, not only by rule_computed_at.
-	//
-	// v27 -> v28: an Anthropic turn sends a closed wire form of the output
-	// schema (maps as key/value lists, tagged scalars, every property
-	// required), so an answer reused under v27 is never served for a
-	// differently shaped call.
-	PromptVersion = "context-fabric-synthesis.v28"
+	PromptVersion = "context-fabric-synthesis.v27"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

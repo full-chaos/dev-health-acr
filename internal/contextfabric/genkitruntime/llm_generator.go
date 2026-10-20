@@ -83,14 +83,27 @@ type outputSchema struct {
 	wire map[string]any
 	// strict is wire in the closed form Anthropic structured outputs accept;
 	// a reply that follows it is restored to wire's shape before the check.
-	strict   map[string]any
+	strict map[string]any
+	// closed is whether an Anthropic call sends strict. The synthesis schema
+	// stays open: its closed form is over Anthropic's compiled-grammar cap
+	// (HTTP 400, no fallback), so that operation uses the tool path the
+	// client picks for the open schema, decided here before any call.
+	closed   bool
 	compiled *gojsonschema.Schema
 	// instructions is Genkit's own JSON format instruction for this schema
 	// (ai/format_json.go), which Genkit appended to the system message.
 	instructions string
 }
 
-func newOutputSchema(value any) (outputSchema, error) {
+// anthropicWire is the schema an Anthropic call sends.
+func (s outputSchema) anthropicWire() map[string]any {
+	if s.closed {
+		return s.strict
+	}
+	return s.wire
+}
+
+func newOutputSchema(value any, closed bool) (outputSchema, error) {
 	wire := inferSchemaMap(value)
 	raw, err := json.Marshal(wire)
 	if err != nil {
@@ -101,7 +114,7 @@ func newOutputSchema(value any) (outputSchema, error) {
 		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
 	}
 	instructions := fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", string(raw))
-	return outputSchema{wire: wire, strict: strictWire(wire), compiled: compiled, instructions: instructions}, nil
+	return outputSchema{wire: wire, strict: strictWire(wire), closed: closed, compiled: compiled, instructions: instructions}, nil
 }
 
 // LLMClients maps each model a runtime calls (Config.Model, and
@@ -141,13 +154,13 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 		gen.logger = slog.Default()
 	}
 	var err error
-	if gen.interpretation, err = newOutputSchema(interpretationOutput{}); err != nil {
+	if gen.interpretation, err = newOutputSchema(interpretationOutput{}, true); err != nil {
 		return nil, err
 	}
-	if gen.synthesis, err = newOutputSchema(synthesisOutput{}); err != nil {
+	if gen.synthesis, err = newOutputSchema(synthesisOutput{}, false); err != nil {
 		return nil, err
 	}
-	if gen.phrasing, err = newOutputSchema(phrasingOutput{}); err != nil {
+	if gen.phrasing, err = newOutputSchema(phrasingOutput{}, true); err != nil {
 		return nil, err
 	}
 	runtime, err := newWithGenerator(config, gen)
@@ -212,7 +225,7 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 		// Anthropic: the schema itself, as structured outputs or one tool
 		// call, picked by the client before the call.
 		call.System = request.System
-		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.strict}
+		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.anthropicWire()}
 	} else {
 		// Chat Completions: the request Genkit sent, byte for byte. No schema
 		// on the wire (a JSON object answer) and the schema as text at the
@@ -257,7 +270,7 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 	if reply == "" {
 		reply = result.Unparsed
 	}
-	if client.Kind() == llm.KindAnthropic {
+	if client.Kind() == llm.KindAnthropic && schema.closed {
 		reply = restoreStrictReply(schema.wire, reply)
 	}
 	return reply, usage, nil
