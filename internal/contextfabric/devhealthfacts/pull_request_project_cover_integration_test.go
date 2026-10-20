@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
 func pullRequestSubjectByRepoLabel(label string, number uint32) contextfabric.SubjectRef {
@@ -115,11 +116,13 @@ func statementRuns(t *testing.T, ctx context.Context, direct clickhousedriver.Co
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (measurement did not happen): %v", err)
 	}
-	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), count() FROM system.query_log
+	var threadless uint64
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_rows), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, ?) > 0`, mark, marker).Scan(&peak, &readRows, &runs); err != nil {
+  AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, ?) > 0`, mark, marker).Scan(&peak, &readRows, &runs, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, marker, threadless)
 	return peak, readRows, runs
 }
 
@@ -139,7 +142,8 @@ func TestPullRequestProjectCoverCostAtTheLargestOrgShape(t *testing.T) {
 			orgID := "org-pr-project-cover-cost-" + fmt.Sprint(c.fallbackEvery)
 			shape := linkedMemoryProdShape
 			shape.fallbackEvery = c.fallbackEvery
-			query, direct, _, _ := newLinkedProdShapeStore(t, ctx, orgID, shape)
+			rawQuery, direct, _, _ := newLinkedProdShapeStore(t, ctx, orgID, shape)
+			query := statementthreads.API(rawQuery)
 			provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactPullRequests)
 			var subjects []contextfabric.SubjectRef
 			for repo := 0; repo < shape.ownedRepos; repo++ {
