@@ -304,7 +304,7 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 			}
 			decision.AdmittedCount++
 			served, withheld, tupleEvent, serveErr := servedStoredResult(stored, principal)
-			if tupleEvent != nil && (decision.StoredServing == nil || !withheld) {
+			if tupleEvent != nil && (decision.StoredServing == nil || (!withheld && serveErr == nil)) {
 				decision.StoredServing = tupleEvent
 			}
 			if serveErr != nil {
