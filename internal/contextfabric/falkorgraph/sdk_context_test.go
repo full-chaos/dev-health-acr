@@ -121,7 +121,7 @@ func TestTheTwoClientsAreOptionedForTheirPathAndShareThePoolSize(t *testing.T) {
 
 // countingRESPServer parses RESP commands, answers HELLO with an error (so the
 // client falls back to RESP2) and every other command with +OK at once, except
-// GRAPH.QUERY: it counts each one and answers it only after delay.
+// GRAPH.QUERY and GRAPH.RO_QUERY: it counts each one and answers it only after delay.
 func countingRESPServer(t *testing.T, delay time.Duration) (string, *atomic.Int64) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -177,7 +177,7 @@ func countingRESPServer(t *testing.T, delay time.Duration) (string, *atomic.Int6
 					switch name {
 					case "HELLO":
 						reply = "-ERR unknown command 'HELLO'\r\n"
-					case "GRAPH.QUERY":
+					case "GRAPH.QUERY", "GRAPH.RO_QUERY":
 						graphQueries.Add(1)
 						time.Sleep(delay)
 					}
@@ -191,13 +191,11 @@ func countingRESPServer(t *testing.T, delay time.Duration) (string, *atomic.Int6
 	return ln.Addr().String(), &graphQueries
 }
 
-// TestTheWriteClientResendsAWriteWhoseReplyMissedTheRequestTimeout pins the
-// driver behaviour the write path lives with: a write whose reply does not
-// arrive within the RequestTimeout is sent again, MaxRetries (3) more times,
-// whatever the caller's ctx. Every write statement must therefore be
-// replay-idempotent. Changing MaxRetries on the write client is a decision
-// this test makes visible.
-func TestTheWriteClientResendsAWriteWhoseReplyMissedTheRequestTimeout(t *testing.T) {
+// TestTheWriteClientDoesNotResendAWriteWhoseReplyMissedTheRequestTimeout pins
+// MaxRetries -1 on the write client: a write whose reply does not arrive within
+// the RequestTimeout returns its error after one send. The projector replay is
+// the only retry; every write statement stays replay-idempotent.
+func TestTheWriteClientDoesNotResendAWriteWhoseReplyMissedTheRequestTimeout(t *testing.T) {
 	addr, graphQueries := countingRESPServer(t, 1500*time.Millisecond)
 	api, err := newSDKAPI(Config{
 		Addr: addr, GraphPrefix: "acr-cf-ctx", RequestTimeout: time.Second,
@@ -207,15 +205,66 @@ func TestTheWriteClientResendsAWriteWhoseReplyMissedTheRequestTimeout(t *testing
 		t.Fatal(err)
 	}
 	s := api.(*sdkAPI)
-	options := s.db.Conn.(*redis.Client).Options()
-	if options.MaxRetries != 3 {
-		t.Fatalf("write client MaxRetries = %d, want the driver default 3 that the write-path rule (replay-idempotent writes) was decided on", options.MaxRetries)
+	if got := s.db.Conn.(*redis.Client).Options().MaxRetries; got != 0 {
+		t.Fatalf("write client MaxRetries = %d, want 0 (configured -1: no driver resend)", got)
 	}
 	_, err = s.query(context.Background(), "g", "CREATE (:Probe)", nil, false)
 	if err == nil {
 		t.Fatal("a write slower than the request timeout returned no error")
 	}
+	if got := graphQueries.Load(); got != 1 {
+		t.Fatalf("one write call sent GRAPH.QUERY %d times, want 1", got)
+	}
+}
+
+// TestTheReadClientKeepsTheDriverRetries pins that the read client still
+// resends a read whose reply missed the RequestTimeout (driver default 3).
+func TestTheReadClientKeepsTheDriverRetries(t *testing.T) {
+	addr, graphQueries := countingRESPServer(t, 1500*time.Millisecond)
+	api, err := newSDKAPI(Config{
+		Addr: addr, GraphPrefix: "acr-cf-ctx", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 25, PoolSize: 3, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := api.(*sdkAPI)
+	options := s.read.Conn.(*redis.Client).Options()
+	if options.MaxRetries != 3 {
+		t.Fatalf("read client MaxRetries = %d, want the driver default 3", options.MaxRetries)
+	}
+	_, err = s.query(context.Background(), "g", "MATCH (n) RETURN n", nil, true)
+	if err == nil {
+		t.Fatal("a read slower than the request timeout returned no error")
+	}
 	if got, want := graphQueries.Load(), int64(options.MaxRetries+1); got != want {
-		t.Fatalf("one write call sent GRAPH.QUERY %d times, want MaxRetries+1 = %d", got, want)
+		t.Fatalf("one read call sent GRAPH.RO_QUERY %d times, want %d", got, want)
+	}
+}
+
+// TestAnOptionsCopyOfTheWriteClientReinitsToDriverRetries pins a trap: the
+// write client is configured with MaxRetries -1, which go-redis stores as 0,
+// so a copy of its Options() passed to redis.NewClient is read as "unset" and
+// becomes the default 3 again unless -1 is set on the copy.
+func TestAnOptionsCopyOfTheWriteClientReinitsToDriverRetries(t *testing.T) {
+	api, err := newSDKAPI(Config{
+		Addr: "127.0.0.1:1", GraphPrefix: "acr-cf-ctx", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 25, PoolSize: 3, AllowInsecure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := *api.(*sdkAPI).db.Conn.(*redis.Client).Options()
+	if options.MaxRetries != 0 {
+		t.Fatalf("write client MaxRetries = %d, want 0 (configured -1)", options.MaxRetries)
+	}
+	reinit := redis.NewClient(&options)
+	t.Cleanup(func() { _ = reinit.Close() })
+	options.MaxRetries = -1
+	fixed := redis.NewClient(&options)
+	t.Cleanup(func() { _ = fixed.Close() })
+	t.Logf("copy-reinit=%d fixed=%d", reinit.Options().MaxRetries, fixed.Options().MaxRetries)
+	if reinit.Options().MaxRetries != 3 || fixed.Options().MaxRetries != 0 {
+		t.Fatalf("copy-reinit=%d fixed=%d, want 3 and 0", reinit.Options().MaxRetries, fixed.Options().MaxRetries)
 	}
 }
