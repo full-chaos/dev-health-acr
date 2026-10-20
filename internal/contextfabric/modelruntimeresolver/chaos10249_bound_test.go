@@ -6,14 +6,13 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgmodelconfigfake"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // A turn the gate admitted on the deployment model is served by it on every
 // call, even for an organization whose configuration exists by then.
 func TestRuntimeFor_deploymentBoundTurnIgnoresTheOrgConfiguration(t *testing.T) {
-	configs := orgmodelconfigfake.NewStore(nil)
+	configs := newOrgConfigStub(nil)
 	if _, err := configs.UpsertOrgModelConfig(context.Background(), storage.Principal{OrgID: "org-1"}, writeRequest("m1")); err != nil {
 		t.Fatal(err)
 	}

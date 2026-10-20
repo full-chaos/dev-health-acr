@@ -133,3 +133,17 @@ func TestQueryVersionMovedPastTheTeamOwnsNoRepository(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before a team without repositories was served not_applicable (v187 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// An answer about a committed team the source proved gone at its provider
+// carries the removed-team limitation, so an answer stored before it (v251 and
+// before) holds none and must not be reused.
+func TestQueryVersionMovedPastTheRemovedTeamLimitation(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 252 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the removed-team limitation (v251 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}

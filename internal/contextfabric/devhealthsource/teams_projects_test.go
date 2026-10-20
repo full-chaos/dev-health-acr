@@ -45,7 +45,7 @@ func TestTeamsProjectsSourceDisabledIsANoop(t *testing.T) {
 // nil/empty value meaning "no team_repo_ownership rows for this team",
 // same convention project_keys already used pre-CHAOS-3833.
 func teamRow(id, name, description, provider, nativeKey string, isActive uint8, updatedAt time.Time, projectKeys, ownedRepos []string) []any {
-	return []any{id, name, description, provider, nativeKey, isActive, updatedAt, projectKeys, ownedRepos}
+	return []any{id, name, description, provider, nativeKey, isActive, "", updatedAt, projectKeys, ownedRepos}
 }
 
 func projectRow(id, name, projectKey, provider, state, url string, isActive uint8, updatedAt time.Time) []any {

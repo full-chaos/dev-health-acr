@@ -605,9 +605,7 @@ func TestChaos3786_FindReusableMissesWhenChainNoLongerNamesTheStoredIdentity(t *
 // fallback identity) leaves chain membership blind: the row's identity is
 // still, and remains, a member of the chain, so FindReusable keeps hitting
 // on identity/chain grounds alone. Only an explicit
-// InvalidateOrganizationReuse call -- which the model-config PUT/DELETE
-// routes now make on every write (internal/api/context_fabric_model_config_routes.go)
-// -- closes this gap, by bumping the epoch unconditionally rather than
+// InvalidateOrganizationReuse call closes this gap, by bumping the epoch unconditionally rather than
 // relying on the identity dimension to have detected anything.
 func TestChaos3786_InvalidateOrganizationReuseCatchesWhatChainMembershipCannot(t *testing.T) {
 	ctx := context.Background()

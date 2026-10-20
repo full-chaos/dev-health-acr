@@ -123,7 +123,7 @@ var extractTables = []tableSpec{
 	}},
 	{Table: tableTeams, Where: "1", Rules: map[string]columnRule{
 		"id": ruleTeam, "name": ruleHash, "description": ruleDrop, "updated_at": ruleKeep, "org_id": ruleOrg, "provider": ruleKeep,
-		"native_team_key": ruleDrop, "project_keys": ruleDropArray, "is_active": ruleKeep, "last_synced": ruleKeep,
+		"native_team_key": ruleDrop, "project_keys": ruleDropArray, "is_active": ruleKeep, "gone_at": ruleDrop, "last_synced": ruleKeep,
 	}},
 	// Ownership rows that ended before the window can match no read of it.
 	// The source writes one more row, equal but for valid_from and

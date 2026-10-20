@@ -143,8 +143,7 @@ func TestCodeGraphProvider_discardsValidLookingOutputAfterDirectIndexReplacement
 
 func managedGuardFixture(t *testing.T) (string, string, string) {
 	t.Helper()
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
+	home := privateCodeGraphHome(t)
 	managed := managedCodeGraphFixtureRoot(t, home)
 	first, err := os.MkdirTemp(managed, "acr-guard-")
 	require.NoError(t, err)

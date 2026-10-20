@@ -190,24 +190,24 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 		}
 	})
 
-	// The write path as it is: the write client ignores the caller's ctx, but
-	// go-redis resends a command whose reply missed the read timeout
-	// (MaxRetries, default 3). The write client's own options are used with
-	// only the read timeout shortened, so one write slower than it returns an
-	// error and lands MaxRetries+1 times.
+	// The write path as it is: the write client ignores the caller's ctx and
+	// does not resend (MaxRetries -1). The write client's own options are used
+	// with only the read timeout shortened, so one write slower than it returns
+	// an error and lands once.
 	t.Run("resend", func(t *testing.T) {
 		options := *api.db.Conn.(*redis.Client).Options()
 		if options.ContextTimeoutEnabled {
 			t.Fatal("the write client enforces the caller's ctx; this test pins the client the write path uses")
 		}
-		if options.MaxRetries != 3 {
-			t.Fatalf("write client MaxRetries = %d, want the driver default 3 this test measures", options.MaxRetries)
+		if options.MaxRetries != 0 {
+			t.Fatalf("write client MaxRetries = %d, want 0 (configured -1: no driver resend)", options.MaxRetries)
 		}
 		options.ReadTimeout = readTimeout
+		options.MaxRetries = -1
 		client := redis.NewClient(&options)
 		t.Cleanup(func() { _ = client.Close() })
 		writeClient := &falkordb.FalkorDB{Conn: client}
-		sends := int64(options.MaxRetries + 1)
+		sends := int64(1)
 		began := time.Now()
 		sendErr := sendSlowProbe(context.Background(), writeClient, key, "resend", n)
 		spent := time.Since(began)
@@ -220,7 +220,7 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			t.Fatalf("a write slower than the %v read timeout returned no error", readTimeout)
 		}
 		if settled != sends {
-			t.Fatalf("one write call slower than the read timeout landed %d times, want MaxRetries+1 = %d (the driver resends a timed-out write)", settled, sends)
+			t.Fatalf("one write call slower than the read timeout landed %d times, want %d (the write client does not resend)", settled, sends)
 		}
 	})
 }

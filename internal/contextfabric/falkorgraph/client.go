@@ -31,14 +31,15 @@ import (
 // and listGraphs; everything else is a write. Each client gets PoolSize
 // connections, so one process holds at most 2 x PoolSize.
 //
-// A write is at-least-once on either client. Both keep the driver's default
-// MaxRetries (3): a command whose reply misses the RequestTimeout is sent
-// again, so one slow write call can land up to four times, and the caller's
-// error does not mean the write did not land. A ctx deadline on the read
-// client's options ends the call with an error while the server still commits
-// the write. Every write statement must therefore be replay-idempotent, and a
-// ctx deadline may reach the write path only with a caller that replays on
-// error (write_ctx_cut_live_test.go measures all three on a real FalkorDB).
+// A write is at-least-once. The WRITE client sets MaxRetries to -1: a write
+// whose reply misses the RequestTimeout returns its error and is not sent
+// again; the projector replay is the only retry. The READ client keeps the
+// driver default (3). A write may still land after its error (the server
+// commits after the caller gave up, and a ctx deadline on the read client's
+// options ends the call while the server still commits), so every write
+// statement must be replay-idempotent, and a ctx deadline may reach the write
+// path only with a caller that replays on error (write_ctx_cut_live_test.go
+// measures this on a real FalkorDB).
 type sdkAPI struct {
 	db     *falkordb.FalkorDB
 	read   *falkordb.FalkorDB
@@ -56,7 +57,7 @@ func newSDKAPI(config Config) (conn, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	newClient := func(contextTimeout bool) (*falkordb.FalkorDB, error) {
+	newClient := func(contextTimeout bool, maxRetries int) (*falkordb.FalkorDB, error) {
 		options := &falkordb.ConnectionOption{
 			Addr:                  config.Addr,
 			Password:              config.Password,
@@ -65,17 +66,18 @@ func newSDKAPI(config Config) (conn, error) {
 			ReadTimeout:           config.RequestTimeout,
 			WriteTimeout:          config.RequestTimeout,
 			ContextTimeoutEnabled: contextTimeout,
+			MaxRetries:            maxRetries,
 		}
 		if config.TLS {
 			options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
 		return falkordb.FalkorDBNew(options)
 	}
-	db, err := newClient(false)
+	db, err := newClient(false, -1)
 	if err != nil {
 		return nil, safeDependencyError("connect to falkordb", err)
 	}
-	read, err := newClient(true)
+	read, err := newClient(true, 0)
 	if err != nil {
 		return nil, safeDependencyError("connect to falkordb", err)
 	}
