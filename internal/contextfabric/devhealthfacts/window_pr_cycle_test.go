@@ -171,7 +171,7 @@ func TestWindowPRCycleFiltersOnTheMergeTimeInsideTheEvidenceWindow(t *testing.T)
 					continue
 				}
 				found = true
-				if !strings.Contains(q.statement, "merged_at >= {rollup_start:DateTime64(6,'UTC')}") || !strings.Contains(q.statement, "merged_at <= {rollup_end:DateTime64(6,'UTC')}") {
+				if !strings.Contains(q.statement, "merged_at >= {rollup_start:DateTime64(6,'UTC')}") || !strings.Contains(q.statement, "merged_at < {rollup_end:DateTime64(6,'UTC')}") {
 					t.Fatalf("window statement does not bound merged_at by the window:\n%s", q.statement)
 				}
 				got := map[string]any{}
