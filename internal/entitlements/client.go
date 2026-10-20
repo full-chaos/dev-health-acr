@@ -79,16 +79,18 @@ func New(config Config) (*Client, error) {
 }
 
 const (
-	agentContextRuntimeEntitlement = "agent_context_runtime"
-	serviceModelEntitlement        = "acr_service_model"
+	agentContextRuntimeEntitlement   = "agent_context_runtime"
+	serviceModelEntitlement          = "acr_service_model"
+	platformModelFallbackEntitlement = "platform_model_fallback"
 )
 
-// HasEntitlement answers agent_context_runtime or acr_service_model from one
-// cached response per organization. The cache lifetime follows
-// agent_context_runtime, so a changed acr_service_model grant is seen within
-// the positive or negative cache TTL.
+// HasEntitlement answers agent_context_runtime, acr_service_model or
+// platform_model_fallback from one cached response per organization. The
+// cache lifetime follows agent_context_runtime, so a changed acr_service_model
+// or platform_model_fallback grant is seen within the positive or negative
+// cache TTL.
 func (c *Client) HasEntitlement(ctx context.Context, orgID, entitlement string) (bool, error) {
-	if strings.TrimSpace(orgID) == "" || (entitlement != agentContextRuntimeEntitlement && entitlement != serviceModelEntitlement) {
+	if strings.TrimSpace(orgID) == "" || (entitlement != agentContextRuntimeEntitlement && entitlement != serviceModelEntitlement && entitlement != platformModelFallbackEntitlement) {
 		return false, errors.New("unsupported entitlement request")
 	}
 	now := c.now()
@@ -106,8 +108,11 @@ func (c *Client) HasEntitlement(ctx context.Context, orgID, entitlement string) 
 		c.cache.put(orgID, result, now.Add(ttl))
 		value = result
 	}
-	if entitlement == serviceModelEntitlement {
+	switch entitlement {
+	case serviceModelEntitlement:
 		return value.serviceModel, nil
+	case platformModelFallbackEntitlement:
+		return value.platformModelFallback, nil
 	}
 	return value.runtime, nil
 }
@@ -168,7 +173,7 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 	if err != nil || parsed.SchemaVersion != entitlementSchemaVersion || parsed.OrgID != orgID {
 		return grants{}, errUnavailable
 	}
-	return grants{runtime: parsed.AgentContextRuntime, serviceModel: parsed.ServiceModel}, nil
+	return grants{runtime: parsed.AgentContextRuntime, serviceModel: parsed.ServiceModel, platformModelFallback: parsed.PlatformModelFallback}, nil
 }
 
 // OrganizationUnknown reports whether Dev Health positively says the

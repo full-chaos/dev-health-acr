@@ -172,6 +172,11 @@ func newDTStack(t *testing.T) *dtStack {
 
 func newDTStackWith(t *testing.T, entitlements api.EntitlementProvider) *dtStack {
 	t.Helper()
+	return newDTStackWithModelConfigs(t, entitlements, nil)
+}
+
+func newDTStackWithModelConfigs(t *testing.T, entitlements api.EntitlementProvider, modelConfigs contextfabric.OrgModelConfigResolver) *dtStack {
+	t.Helper()
 	now := time.Now()
 	audit := memory.NewAuditStore()
 	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: audit, Now: func() time.Time { return now.Add(-time.Hour) }})
@@ -231,6 +236,7 @@ func newDTStackWith(t *testing.T, entitlements api.EntitlementProvider) *dtStack
 		Runtime: &api.RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Assembler: assembler, Evidence: evaluation,
 			Entitlements:         entitlements,
+			OrgModelConfigs:      modelConfigs,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(time.Now)),
 			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "entitlement"}},
