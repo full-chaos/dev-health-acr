@@ -205,6 +205,15 @@ type QuestionInterpreter interface {
 // DiscoverContext then take that SAME binding explicitly, rather than
 // resolving their own -- a caller who forgets to resolve or thread it fails
 // to compile.
+// RemovedTeamReader is the optional bounded read of which of the given team
+// subjects are removed at their source (the node carries gone_at) and readable
+// by the caller. It costs one keyed query per batch of teams and never walks
+// the graph; a reuse hit for an answer that cites no evidence uses it instead
+// of a full discovery.
+type RemovedTeamReader interface {
+	RemovedTeams(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) ([]SubjectRef, error)
+}
+
 type GraphReader interface {
 	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
 	// ResolveSubjects' own request parameter already carries ExpectedKinds/
@@ -1307,9 +1316,8 @@ type RebuildEpochSnapshotter interface {
 // investigation saved after the cutover captures the CURRENT (bumped)
 // epoch as its own invalidation_epoch, so it is unaffected going forward.
 // An operator who additionally wants to invalidate a SPECIFIC
-// organization at any later point (e.g. after a configuration change --
-// see internal/api/context_fabric_model_config_routes.go's PUT/DELETE
-// handlers, which already do this automatically on every write) can call
+// organization at any later point (e.g. after a configuration change in
+// the ops settings store, which acr does not observe) can call
 // ReuseInvalidator.InvalidateOrganizationReuse directly.
 //
 // Implementations MUST resolve the same organization-effective chain that

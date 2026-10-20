@@ -16,10 +16,8 @@ import (
 // deployment-default surface's tuning) since §19.3.2 does not put those
 // knobs in the per-organization contract.
 // AllowInsecureBaseURL is always false here: an organization-supplied base
-// URL always leaves ACR's trust boundary, and
-// ContextFabricOrgModelConfigWriteRequest.Validate() already rejected
-// anything other than https before this configuration could ever be
-// stored.
+// URL always leaves ACR's trust boundary; the ops settings store that owns
+// the configuration accepts only https before it can reach this resolver.
 func NewModelProviderBuild(defaults modelprovider.Config) Build {
 	return func(ctx context.Context, resolved contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
 		return modelprovider.New(ctx, orgModelProviderConfig(defaults, resolved))

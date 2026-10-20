@@ -54,4 +54,32 @@ rc=0
 GOTEST_TIMEOUT='' RUNNER="$tmp/real.sh" "$here/run-isolated-budget.sh" t example/pkg >/dev/null 2>&1 || rc=$?
 if [ "$rc" -eq 2 ]; then echo "ok   missing-budget-fails"; else echo "FAIL missing-budget rc=$rc"; fails=$((fails + 1)); fi
 
+# RACE_JSON_OUT: the test2json events land in the named file, the readable
+# output is on stdout, and the guard reads the JSON form (including a leading
+# non-JSON line such as make's recipe echo).
+json_out="$tmp/race/out.json"
+stubj="$tmp/json.sh"
+cat >"$stubj" <<'STUB'
+#!/usr/bin/env bash
+echo 'go test -race -json example/pkg'
+echo '{"Action":"run","Package":"example/pkg","Test":"TestA"}'
+echo '{"Action":"output","Package":"example/pkg","Test":"TestA","Output":"--- PASS: TestA (0.00s)\n"}'
+echo '{"Action":"pass","Package":"example/pkg","Test":"TestA","Elapsed":0}'
+echo '{"Action":"pass","Package":"example/pkg","Elapsed":505.6}'
+STUB
+chmod +x "$stubj"
+rc=0
+RACE_JSON_OUT="$json_out" GOTEST_TIMEOUT=600s RUNNER="$stubj" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/j.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'top 5 packages' "$tmp/j.out" && grep -q -- '--- PASS: TestA' "$tmp/j.out" \
+  && [ "$(jq -Rc 'fromjson?' "$json_out" | wc -l | tr -d ' ')" -eq 4 ]; then
+  echo "ok   json-out-kept-and-guarded"
+else
+  echo "FAIL json-out rc=$rc"; cat "$tmp/j.out"; fails=$((fails + 1))
+fi
+# a JSON run whose package time is over 85% still fails
+sed -i 's/"Elapsed":505.6/"Elapsed":511.0/' "$stubj"
+rc=0
+RACE_JSON_OUT="$json_out" GOTEST_TIMEOUT=600s RUNNER="$stubj" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/j2.out" 2>&1 || rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'example/pkg at 511s is over 85%' "$tmp/j2.out"; then echo "ok   json-over-line-fails"; else echo "FAIL json-over rc=$rc"; fails=$((fails + 1)); fi
+
 [ "$fails" -eq 0 ]

@@ -26,6 +26,9 @@ var exampleSchemaPairs = map[string]string{
 	"error_context_fabric_synthesis_contract.v1.json":              "error.v1.schema.json",
 	"error_context_fabric_upstream_invalid_output.v1.json":         "error.v1.schema.json",
 	"error_context_fabric_service_model_not_entitled.v1.json":      "error.v1.schema.json",
+	"error_context_fabric_own_model_gate_closed.v1.json":           "error.v1.schema.json",
+	"error_context_fabric_ai_features_turned_off.v1.json":          "error.v1.schema.json",
+	"error_context_fabric_byo_no_investigate_config.v1.json":       "error.v1.schema.json",
 	"error_store_unavailable.v1.json":                              "error.v1.schema.json",
 	"error_rate_limited_request_budget.v1.json":                    "error.v1.schema.json",
 	"error_rate_limited_capabilities_budget.v1.json":               "error.v1.schema.json",
@@ -49,6 +52,9 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_read_facts_response.v1.json":                              "mcp_read_facts_response.v1.schema.json",
 	"mcp_read_relationships_request.v1.json":                       "mcp_read_relationships_request.v1.schema.json",
 	"mcp_read_relationships_response.v1.json":                      "mcp_read_relationships_response.v1.schema.json",
+	"mcp_read_relationships_team_removed_response.v1.json":         "mcp_read_relationships_response.v1.schema.json",
+	"mcp_read_relationships_team_unchecked_response.v1.json":       "mcp_read_relationships_response.v1.schema.json",
+	"mcp_read_facts_team_unchecked_response.v1.json":               "mcp_read_facts_response.v1.schema.json",
 	"evaluation_demo.v1.json":                                      "evaluation_demo.v1.schema.json",
 	"mcp_data_catalog_request.v1.json":                             "mcp_data_catalog_request.v1.schema.json",
 	"mcp_data_catalog_response.v1.json":                            "mcp_data_catalog_response.v1.schema.json",
@@ -96,8 +102,6 @@ var exampleSchemaPairs = map[string]string{
 	"context_fabric_answer_projection_historical.v1.json":    "context_fabric_answer_projection.v1.schema.json",
 	"context_fabric_answer_projection_render_shapes.v1.json": "context_fabric_answer_projection.v1.schema.json",
 	"context_fabric_projection_batch.v1.json":                "context_fabric_projection_batch.v1.schema.json",
-	"context_fabric_org_model_config.v1.json":                "context_fabric_org_model_config.v1.schema.json",
-	"context_fabric_org_model_config_write_request.v1.json":  "context_fabric_org_model_config_write_request.v1.schema.json",
 	// CHAOS-4042: the anchor membership-verify semantic major. Wire fields
 	// are identical to v1's investigation result; only structure_needs'
 	// anchor_options meaning differs (membership, not unique-claimant) --

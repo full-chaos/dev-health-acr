@@ -34,7 +34,7 @@ fi
 lines="$(mktemp)"
 trap 'rm -f "$lines"' EXIT
 if [ "$json" -eq 1 ]; then
-  jq -r 'select((.Action == "pass" or .Action == "fail") and (.Test == null) and (.Package != null)) |
+  jq -Rr 'fromjson? | select((.Action == "pass" or .Action == "fail") and (.Test == null) and (.Package != null)) |
     (if .Action == "pass" then "ok" else "FAIL" end) + "\t" + .Package + "\t" + ((.Elapsed // 0) | tostring) + "s"' \
     "$file" >"$lines"
 else

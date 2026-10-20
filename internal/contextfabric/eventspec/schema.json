@@ -3217,6 +3217,16 @@
         "presence": "required"
       },
       {
+        "key": "removed_team_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "removed_lookup_failures",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "refused_kinds",
         "type": "string_slice",
         "presence": "required",

@@ -115,6 +115,7 @@ isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
+  "github.com/full-chaos/dev-health-acr/internal/mcp"
 )
 
 # CHAOS-5977: dedicated_isolated_packages is a SUBSET of isolated_packages
@@ -158,10 +159,14 @@ isolated_packages=(
 # the capture of the venue at ops 5c9a3d32, then a `panic: test timed out
 # after 7m0s` at 420s in "race (shard 4 of 4)" on two hosted runs). It runs
 # alone in its own job under GOTEST_FACTORACLE_TIMEOUT.
+# internal/mcp joins them (race-mcp): in a shared 4-vCPU shard its race time
+# swung 225-380s with its siblings and tripped the 85% guard at 357s of 420s;
+# alone it has its own 480s budget (GOTEST_MCP_TIMEOUT).
 dedicated_isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
+  "github.com/full-chaos/dev-health-acr/internal/mcp"
 )
 
 # CHAOS-7282: unit_dedicated_packages is a SUBSET of isolated_packages naming
@@ -240,6 +245,7 @@ race_spread_pins=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun=2"
   "github.com/full-chaos/dev-health-acr/internal/releasebuild=4"
   "github.com/full-chaos/dev-health-acr/migrations/postgres=1"
+  "github.com/full-chaos/dev-health-acr/internal/contracts/v1=4"
 )
 
 pinned_shard_of() {
