@@ -72,3 +72,30 @@ func TestMustAttemptDialAcceptsOnlyARealNetworkFailure(t *testing.T) {
 		t.Fatal("a network failure must be accepted")
 	}
 }
+
+func TestMustAttemptDialRefusesGenericTransportText(t *testing.T) {
+	for _, text := range []string{"transport unavailable", "unavailable", "transport"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%q was accepted as a network attempt", text)
+				}
+			}()
+			MustAttemptDial(errors.New(text))
+		}()
+	}
+}
+
+func TestMustFailWithNeedsTheNamedText(t *testing.T) {
+	MustFailWith(errors.New("x: failed in transport"), "failed in transport")
+	for _, err := range []error{nil, errors.New("other")} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%v was accepted", err)
+				}
+			}()
+			MustFailWith(err, "failed in transport")
+		}()
+	}
+}

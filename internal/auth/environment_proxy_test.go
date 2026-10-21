@@ -12,6 +12,6 @@ import (
 func TestASuppliedMetadataClientWithoutATransportNeverDialsTheEnvironmentProxy(t *testing.T) {
 	proxycapture.Check(t, func(ctx context.Context) {
 		_, err := NewClientMetadataFetcher(&http.Client{}).Fetch(ctx, "https://upstream.invalid/oauth/client.json")
-		proxycapture.MustAttemptDial(err)
+		proxycapture.MustFailWith(err, "fetch_failed")
 	}).AssertNothingReached(t)
 }

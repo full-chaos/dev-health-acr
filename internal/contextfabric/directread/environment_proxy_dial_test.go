@@ -19,13 +19,13 @@ func TestTheQueryClientsNeverDialTheEnvironmentProxy(t *testing.T) {
 				panic(err)
 			}
 			_, err = query.Execute(ctx, call)
-			proxycapture.MustAttemptDial(err)
+			proxycapture.MustFailWith(err, "query service call failed: transport")
 			graphql, err := directread.NewHTTPGraphQLClientWithHTTP(proxycapture.Target, time.Second, supplied)
 			if err != nil {
 				panic(err)
 			}
 			_, err = graphql.Execute(ctx, call)
-			proxycapture.MustAttemptDial(err)
+			proxycapture.MustFailWith(err, "query service call failed: transport")
 		}
 	}).AssertNothingReached(t)
 }

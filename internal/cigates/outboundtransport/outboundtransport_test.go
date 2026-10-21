@@ -317,12 +317,12 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		}
 		if n.Results != nil {
 			for _, field := range n.Results.List {
-				if isNamed(info.Types[field.Type].Type, "Client") {
+				if isNamed(derefPointer(info.Types[field.Type].Type), "Client") {
 					for range field.Names {
 						kinds = append(kinds, "client-no-transport")
 					}
 				}
-				if isReverseProxy(info.Types[field.Type].Type) {
+				if isReverseProxyRef(info.Types[field.Type].Type) {
 					for range field.Names {
 						kinds = append(kinds, "reverseproxy-no-transport")
 					}

@@ -176,10 +176,22 @@ func MustAttemptDial(err error) {
 		return
 	}
 	text := strings.ToLower(err.Error())
-	for _, marker := range []string{"upstream.invalid", "no such host", "dial", "lookup", "connection refused", "unavailable", "deadline exceeded", "transport"} {
+	for _, marker := range []string{"upstream.invalid", "no such host", "dial", "lookup", "connection refused", "deadline exceeded"} {
 		if strings.Contains(text, marker) {
 			return
 		}
 	}
 	panic(fmt.Sprintf("the request failed before any network attempt: %v", err))
+}
+
+// MustFailWith is MustAttemptDial for a client that sanitizes its transport errors: the error must be non-nil and
+// carry the client's own transport-failure text, named by the test. A sanitized error cannot show the dial itself, so
+// a pre-dial return that produces the same text is the one mutation this does not catch.
+func MustFailWith(err error, want string) {
+	if err == nil {
+		panic("the request to the unreachable target succeeded: it did not go where the test points it")
+	}
+	if !strings.Contains(err.Error(), want) {
+		panic(fmt.Sprintf("the request failed with %q, want the client's transport failure %q", err, want))
+	}
 }

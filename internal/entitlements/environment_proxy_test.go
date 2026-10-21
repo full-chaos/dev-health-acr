@@ -32,8 +32,8 @@ func TestTheEntitlementClientWithoutAProxyURLNeverDialsTheEnvironmentProxy(t *te
 			panic(err)
 		}
 		defer client.Close()
-		proxycapture.MustAttemptDial(client.Check(ctx))
+		proxycapture.MustFailWith(client.Check(ctx), "entitlement service unavailable")
 		_, err = client.HasEntitlement(ctx, "org", "agent_context_runtime")
-		proxycapture.MustAttemptDial(err)
+		proxycapture.MustFailWith(err, "entitlement service unavailable")
 	}).AssertNothingReached(t)
 }
