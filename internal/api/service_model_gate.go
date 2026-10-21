@@ -200,12 +200,12 @@ func (a *App) serviceModelListable(ctx context.Context, principal storage.Princi
 		on, err := a.serviceModelOn(ctx, principal)
 		switch {
 		case err != nil:
-			reason = "entitlement_unreadable"
+			reason, entitlementReason = "entitlement_unreadable", entitlements.RejectionReason(err)
 		case !on:
 			listed, reason = false, "ai_features_turned_off"
 		default:
 			if _, granted, err := a.deploymentModelGrant(ctx, principal); err != nil {
-				reason = "entitlement_unreadable"
+				reason, entitlementReason = "entitlement_unreadable", entitlements.RejectionReason(err)
 			} else if !granted {
 				reason = "own_model_turned_off"
 			}
