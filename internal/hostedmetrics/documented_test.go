@@ -83,6 +83,7 @@ func producedInstruments(t *testing.T) map[string][]string {
 	instruments.ClickHouseNearMemoryCap(ctx)
 	instruments.ClickHousePeakUnobserved(ctx)
 	instruments.OutcomeRowEvicted(ctx, "path_drop")
+	instruments.LimitationDisclosureSkipped(ctx)
 	produced := map[string][]string{}
 	for cell := range read() {
 		name, rest, _ := strings.Cut(cell, "{")

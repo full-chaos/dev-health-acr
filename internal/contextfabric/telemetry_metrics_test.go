@@ -130,3 +130,20 @@ func TestSlogEngineTelemetryCountsOutcomeRowEvictions(t *testing.T) {
 		}
 	}
 }
+
+// The production telemetry counts a disclosure that appendBoundedLimitations
+// had to leave out; a served addition is not counted.
+func TestSlogEngineTelemetryCountsSkippedLimitationDisclosures(t *testing.T) {
+	instruments, read := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
+	restore := SetLimitationDisclosureSkipRecorder(nil)
+	t.Cleanup(restore)
+	captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).WithMetrics(instruments)
+		appendBoundedLimitations(modelLimitations(2), []string{retrievalDegradedLimitation})
+		appendBoundedLimitations(gapLookalikes(contractsv1.ContextFabricLimitationsMaxCount), []string{retrievalDegradedLimitation})
+	})
+	got := read()
+	if want := int64(1); got["acr_limitation_disclosure_skipped_total{}"] != want || len(got) != 1 {
+		t.Fatalf("cells %v, want exactly acr_limitation_disclosure_skipped_total=1", got)
+	}
+}
