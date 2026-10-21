@@ -16,6 +16,7 @@ func TestTheEmbedderNeverDialsTheEnvironmentProxy(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		_, _ = embedder.Embed(ctx, []string{"ping"})
+		_, err = embedder.Embed(ctx, []string{"ping"})
+		proxycapture.MustAttemptDial(err)
 	}).AssertNothingReached(t)
 }

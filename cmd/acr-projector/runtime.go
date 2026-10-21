@@ -390,6 +390,9 @@ type projectorClickHouseClient struct {
 }
 
 func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, metrics *hostedmetrics.Instruments) (projectorClickHouseClient, error) {
+	if err := config.ValidateClickHouseDSNScheme(cfg.ClickHouseDSN); err != nil {
+		return projectorClickHouseClient{}, err
+	}
 	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(cfg.ClickHouseCACertPath)
 	if err != nil {
 		return projectorClickHouseClient{}, err

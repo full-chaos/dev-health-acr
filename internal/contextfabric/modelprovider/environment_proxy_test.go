@@ -45,7 +45,8 @@ func TestTheLLMClientsNeverDialTheEnvironmentProxy(t *testing.T) {
 				panic(err)
 			}
 			for _, client := range clients {
-				_, _ = client.Complete(ctx, llm.Request{Prompt: "ping"})
+				_, err = client.Complete(ctx, llm.Request{Prompt: "ping"})
+				proxycapture.MustFailWith(err, "endpoint could not be reached")
 				_ = client.Close()
 			}
 		}

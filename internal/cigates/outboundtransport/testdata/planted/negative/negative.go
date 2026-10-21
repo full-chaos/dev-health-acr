@@ -2,6 +2,7 @@ package negative
 
 import (
 	"net/http"
+	"net/http/httputil"
 	"time"
 )
 
@@ -30,4 +31,13 @@ func Cloned() *http.Client {
 
 func Adapter() *http.Client {
 	return &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) { return nil, nil })}
+}
+
+func Proxy() *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{Transport: &http.Transport{}}
+}
+
+func ProxyCloned() *httputil.ReverseProxy {
+	base := &http.Transport{}
+	return &httputil.ReverseProxy{Transport: base.Clone()}
 }

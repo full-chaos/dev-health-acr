@@ -558,6 +558,9 @@ func (c Config) Validate() error {
 	if c.LocalCompositionReady && (c.Environment != "development" || c.RequireBackingStores) {
 		return errors.New("ACR_LOCAL_COMPOSITION_READY requires development with backing stores disabled")
 	}
+	if err := ValidateClickHouseDSNScheme(c.ClickHouseDSN); err != nil {
+		return err
+	}
 	if c.RequireBackingStores {
 		if err := validateHostedRuntime(c); err != nil {
 			return err

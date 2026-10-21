@@ -42,7 +42,7 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_CAPABILITIES_LIMIT_WINDOW` | `ACR_LIMIT_WINDOW`, else `1m` | Fixed window of the capabilities class |
 | `ACR_REQUIRE_BACKING_STORES` | environment dependent | Defaults true in every environment (dictation 811) -- the one exemption is `ACR_ENVIRONMENT=development` with `ACR_LOCAL_COMPOSITION_READY=true` |
 | `ACR_LOCAL_COMPOSITION_READY` | `false` | Explicit opt-in to local, storeless development (`ACR_ENVIRONMENT=development` only); `Validate` rejects it anywhere else or alongside `ACR_REQUIRE_BACKING_STORES=true` |
-| `ACR_CLICKHOUSE_DSN` / `ACR_CLICKHOUSE_DSN_FILE` | empty | Read-only Dev Health evidence store configuration |
+| `ACR_CLICKHOUSE_DSN` / `ACR_CLICKHOUSE_DSN_FILE` | empty | Read-only Dev Health evidence store configuration; native `clickhouse://` or `tcp://` only, `http://` and `https://` are refused at startup (the HTTP driver sends through the environment proxy) |
 | `ACR_CLICKHOUSE_CA_BUNDLE` | empty | Optional PEM CA bundle for ClickHouse TLS |
 | `ACR_POSTGRES_DSN` / `ACR_POSTGRES_DSN_FILE` | empty | ACR operational store configuration |
 | `ACR_POSTGRES_POOLER_ADMIN_DSN` / `ACR_POSTGRES_POOLER_ADMIN_DSN_FILE` | empty | Optional PgBouncer admin connection for transaction-pool validation |

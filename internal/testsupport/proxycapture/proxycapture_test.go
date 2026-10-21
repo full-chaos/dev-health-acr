@@ -2,6 +2,9 @@ package proxycapture
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -53,5 +56,46 @@ func TestATransportWithoutProxyReachesNothing(t *testing.T) {
 func TestTheRunPatternAnchorsEverySubtestLevel(t *testing.T) {
 	if got, want := runPattern("TestA/b.c"), `^TestA$/^b\.c$`; got != want {
 		t.Fatalf("runPattern = %q, want %q", got, want)
+	}
+}
+
+func TestMustAttemptDialAcceptsOnlyARealNetworkFailure(t *testing.T) {
+	refused := func(err error) (refused bool) {
+		defer func() { refused = recover() != nil }()
+		MustAttemptDial(err)
+		return false
+	}
+	if !refused(nil) || !refused(errors.New("returned early")) {
+		t.Fatal("a nil or non-network error must be refused")
+	}
+	if refused(&net.OpError{Op: "dial", Err: errors.New("x")}) || refused(fmt.Errorf("wrapped: %w", &net.DNSError{Name: "upstream.invalid"})) {
+		t.Fatal("a network failure must be accepted")
+	}
+}
+
+func TestMustAttemptDialRefusesGenericTransportText(t *testing.T) {
+	for _, text := range []string{"transport unavailable", "unavailable", "transport"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%q was accepted as a network attempt", text)
+				}
+			}()
+			MustAttemptDial(errors.New(text))
+		}()
+	}
+}
+
+func TestMustFailWithNeedsTheNamedText(t *testing.T) {
+	MustFailWith(errors.New("x: failed in transport"), "failed in transport")
+	for _, err := range []error{nil, errors.New("other")} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%v was accepted", err)
+				}
+			}()
+			MustFailWith(err, "failed in transport")
+		}()
 	}
 }

@@ -22,3 +22,5 @@ func Returned(client *http.Client) http.Client { return *client }
 func Argument(client *http.Client) { consume(*client) }
 
 func Sent(client *http.Client, out chan<- http.Client) { out <- *client }
+
+func NamedPointerClientResult() (client *http.Client) { return nil }

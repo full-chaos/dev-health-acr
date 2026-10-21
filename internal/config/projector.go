@@ -343,6 +343,9 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 		}
 	}
+	if err := ValidateClickHouseDSNScheme(c.ClickHouseDSN); err != nil {
+		return err
+	}
 	// r3 P1 finding 1 (class sweep): gated on required.projection -- priors
 	// never runs the projection coordinator loop, so a shared operator
 	// environment's ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true (set for a

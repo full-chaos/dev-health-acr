@@ -143,7 +143,7 @@ func TestLoadProjectorFullStores_postgresOnlyStillRefusesNamingClickHouse(t *tes
 // be refused, naming Postgres, for every requiredStoresAll caller.
 func TestLoadProjectorFullStores_clickHouseOnlyStillRefusesNamingPostgres(t *testing.T) {
 	_, err := loadProjector(mapLookup(map[string]string{
-		"ACR_CLICKHOUSE_DSN": "https://clickhouse.internal",
+		"ACR_CLICKHOUSE_DSN": "clickhouse://clickhouse.internal",
 	}), requiredStoresAll)
 	if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_DSN") {
 		t.Fatalf("loadProjector(requiredStoresAll) error = %v, want an ACR_POSTGRES_DSN refusal", err)
@@ -159,7 +159,7 @@ func TestLoadProjectorFullStores_canonicalConfigurationSucceeds(t *testing.T) {
 	cfg, err := loadProjector(mapLookup(map[string]string{
 		"ACR_POSTGRES_DSN":             "postgres://configured",
 		"ACR_POSTGRES_CONNECTION_KIND": "direct",
-		"ACR_CLICKHOUSE_DSN":           "https://clickhouse.internal",
+		"ACR_CLICKHOUSE_DSN":           "clickhouse://clickhouse.internal",
 	}), requiredStoresAll)
 	if err != nil {
 		t.Fatalf("loadProjector(requiredStoresAll) error = %v, want a canonical full-stack configuration to succeed", err)
@@ -309,7 +309,7 @@ func TestLoadProjectorProductionRequiresBackingStores(t *testing.T) {
 
 func TestLoadProjectorEnabledProductionRequiresOrgAllowlist(t *testing.T) {
 	_, err := loadProjector(mapLookup(map[string]string{
-		"ACR_ENVIRONMENT": "production", "ACR_CLICKHOUSE_DSN": "https://clickhouse.internal", "ACR_POSTGRES_DSN": "postgres://db/acr",
+		"ACR_ENVIRONMENT": "production", "ACR_CLICKHOUSE_DSN": "clickhouse://clickhouse.internal", "ACR_POSTGRES_DSN": "postgres://db/acr",
 		"ACR_POSTGRES_CONNECTION_KIND": "direct", "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true",
 	}), requiredStoresAll)
 	if err == nil {
