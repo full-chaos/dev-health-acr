@@ -14,12 +14,16 @@ func TestTheQueryClientsNeverDialTheEnvironmentProxy(t *testing.T) {
 	proxycapture.Check(t, func(ctx context.Context) {
 		call := directread.QueryCall{OrgID: "org", Document: "query { a }"}
 		for _, supplied := range []*http.Client{nil, {}} {
-			if client, err := directread.NewHTTPQueryClientWithHTTP(proxycapture.Target, time.Second, supplied); err == nil {
-				_, _ = client.Execute(ctx, call)
+			query, err := directread.NewHTTPQueryClientWithHTTP(proxycapture.Target, time.Second, supplied)
+			if err != nil {
+				panic(err)
 			}
-			if client, err := directread.NewHTTPGraphQLClientWithHTTP(proxycapture.Target, time.Second, supplied); err == nil {
-				_, _ = client.Execute(ctx, call)
+			_, _ = query.Execute(ctx, call)
+			graphql, err := directread.NewHTTPGraphQLClientWithHTTP(proxycapture.Target, time.Second, supplied)
+			if err != nil {
+				panic(err)
 			}
+			_, _ = graphql.Execute(ctx, call)
 		}
 	}).AssertNothingReached(t)
 }

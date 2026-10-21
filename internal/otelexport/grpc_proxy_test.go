@@ -2,8 +2,10 @@ package otelexport
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,16 +28,18 @@ func TestTheGRPCExportersNeverDialTheEnvironmentProxy(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		call := func(send func(context.Context)) {
+		call := func(send func(context.Context) error) {
 			callCtx, cancel := context.WithTimeout(ctx, time.Second)
 			defer cancel()
-			send(callCtx)
+			if err := send(callCtx); err == nil || !strings.Contains(err.Error(), "name resolver error") {
+				panic(fmt.Sprintf("export did not attempt the configured endpoint: %v", err))
+			}
 		}
-		call(func(c context.Context) {
-			_ = spans.ExportSpans(c, tracetest.SpanStubs{{Name: "probe"}}.Snapshots())
+		call(func(c context.Context) error {
+			return spans.ExportSpans(c, tracetest.SpanStubs{{Name: "probe"}}.Snapshots())
 		})
-		call(func(c context.Context) { _ = metrics.Export(c, &metricdata.ResourceMetrics{}) })
-		call(func(c context.Context) { _ = logs.Export(c, make([]sdklog.Record, 1)) })
+		call(func(c context.Context) error { return metrics.Export(c, &metricdata.ResourceMetrics{}) })
+		call(func(c context.Context) error { return logs.Export(c, make([]sdklog.Record, 1)) })
 	}).AssertNothingReached(t)
 }
 

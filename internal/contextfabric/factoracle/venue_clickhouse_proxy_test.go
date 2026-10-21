@@ -24,7 +24,7 @@ func TestTheVenueClickHouseClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 		}
 		conn, err := openVenueClickHouse(VenueConfig{ClickHouseDSNFile: dsnFile})
 		if err != nil {
-			return
+			panic(err)
 		}
 		defer conn.Close()
 		_ = conn.Ping(ctx)
