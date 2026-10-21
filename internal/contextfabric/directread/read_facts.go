@@ -801,8 +801,9 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 			if requested.Days > maxDays {
 				return contextfabric.TimeContext{}, EffectiveWindow{}, windowBeyondMax(maxDays)
 			}
-			end = r.now().UTC().Truncate(time.Second)
-			start = end.Add(-time.Duration(requested.Days) * 24 * time.Hour)
+			now := r.now().UTC()
+			end = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+			start = end.AddDate(0, 0, -requested.Days)
 		}
 		if !start.Before(end) {
 			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("start must be before end")
@@ -811,10 +812,19 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 			return contextfabric.TimeContext{}, EffectiveWindow{}, windowBeyondMax(maxDays)
 		}
 		return contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
-			EffectiveWindow{Mode: requested.Mode, Axis: string(contextfabric.TemporalRange), Start: &start, End: &end}, nil
+			EffectiveWindow{Mode: requested.Mode, Axis: string(contextfabric.TemporalRange), Start: &start, End: &end, Note: trailingWindowNote(requested)}, nil
 	default:
 		return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("window mode must be current, as_of, range or trailing")
 	}
+}
+
+// trailingWindowNote states the D6083 reading of a trailing window: [today-N, today) in UTC, shared with every ops
+// reader, so a read never moves within a day as data lands.
+func trailingWindowNote(requested *RequestWindow) string {
+	if requested.Mode != WindowTrailing {
+		return ""
+	}
+	return fmt.Sprintf("trailing %d days: the %d most recent completed UTC days, start inclusive to end exclusive; the end is today 00:00 UTC, so today's partial day is not in the window", requested.Days, requested.Days)
 }
 
 // serveFact maps one gated fact to the wire. It applies the tables mode and
