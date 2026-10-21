@@ -90,3 +90,9 @@ func PointerSlice() []*httputil.ReverseProxy { return nil }
 func PointerMap() map[string]*httputil.ReverseProxy { return nil }
 
 func PointerChan() chan *httputil.ReverseProxy { return nil }
+
+func NamedPointerResult() (proxy *httputil.ReverseProxy) { return nil }
+
+func NamedValueResult() (proxy httputil.ReverseProxy) { return }
+
+func NamedGroupedResults() (first, second *httputil.ReverseProxy) { return }
