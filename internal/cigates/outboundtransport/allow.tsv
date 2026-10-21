@@ -11,3 +11,7 @@ internal/auth/oauth_client_metadata.go	NewClientMetadataFetcher	client-copy	1	a 
 internal/contextfabric/directread/queryapi_client.go	NewHTTPGraphQLClientWithHTTP	client-copy	1	a copy of outboundhttp.WithTransport(httpClient), which has a transport (TestSuppliedQueryClientsWithoutATransportGetOne)
 internal/contextfabric/directread/queryapi_client.go	NewHTTPQueryClientWithHTTP	client-copy	1	a copy of outboundhttp.WithTransport(httpClient), which has a transport (TestSuppliedQueryClientsWithoutATransportGetOne)
 internal/contextfabric/directread/registry_watch.go	NewRegistryWatch	client-copy	1	a copy of outboundhttp.WithTransport(cfg.HTTPClient), which has a transport (TestASuppliedRegistryClientWithoutATransportGetsOne)
+internal/outboundhttp/outboundhttp.go	WithTransport	client-parameter	1	the helper itself: a client without a transport is returned as a copy with SharedTransport()
+internal/auth/oauth_client_metadata.go	NewClientMetadataFetcher	client-parameter	1	the supplied client goes through outboundhttp.WithTransport (TestASuppliedMetadataClientWithoutATransportNeverDialsTheEnvironmentProxy)
+internal/contextfabric/directread/queryapi_client.go	NewHTTPGraphQLClientWithHTTP	client-parameter	1	the supplied client goes through outboundhttp.WithTransport (TestSuppliedQueryClientsWithoutATransportGetOne)
+internal/contextfabric/directread/queryapi_client.go	NewHTTPQueryClientWithHTTP	client-parameter	1	the supplied client goes through outboundhttp.WithTransport (TestSuppliedQueryClientsWithoutATransportGetOne)
