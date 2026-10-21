@@ -97,6 +97,9 @@ func apiCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []co
 }
 
 func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHouseComponents, error) {
+	if err := config.ValidateClickHouseDSNScheme(request.config.ClickHouseDSN); err != nil {
+		return clickHouseComponents{}, err
+	}
 	tlsConfig, err := runtimeclickhouse.TLSConfigFromCABundle(request.config.ClickHouseCACertPath)
 	if err != nil {
 		return clickHouseComponents{}, err

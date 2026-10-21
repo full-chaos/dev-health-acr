@@ -68,6 +68,9 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 		if cfg.ClickHouseDSN, err = SecretValue(lookup, "ACR_CLICKHOUSE_DSN"); err != nil {
 			return err
 		}
+		if err = ValidateClickHouseDSNScheme(cfg.ClickHouseDSN); err != nil {
+			return err
+		}
 	}
 	cfg.ClickHouseCACertPath = stringValue(lookup, "ACR_CLICKHOUSE_CA_BUNDLE", "")
 	if cfg.ClickHouseMaxBytesToRead, err = uint64Value(lookup, "ACR_CLICKHOUSE_MAX_BYTES_TO_READ", DefaultClickHouseMaxBytesToRead); err != nil {
@@ -178,8 +181,8 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 	case strings.TrimSpace(cfg.PostgresDSN) == "":
 		return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
-	case validateClickHouseDSNScheme(cfg.ClickHouseDSN) != nil:
-		return validateClickHouseDSNScheme(cfg.ClickHouseDSN)
+	case ValidateClickHouseDSNScheme(cfg.ClickHouseDSN) != nil:
+		return ValidateClickHouseDSNScheme(cfg.ClickHouseDSN)
 	case !hasActiveEvidenceIDKey(cfg):
 		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key when backing stores are required")
 	case strings.TrimSpace(cfg.DeviceVerificationURL) == "":
@@ -199,9 +202,9 @@ func validateHostedRuntime(cfg Config) error {
 	}
 }
 
-// validateClickHouseDSNScheme refuses an http or https DSN: the ClickHouse HTTP driver sends through the environment
-// proxy. The error never carries the DSN.
-func validateClickHouseDSNScheme(dsn string) error {
+// ValidateClickHouseDSNScheme refuses an http or https DSN: the ClickHouse HTTP driver sends through the environment
+// proxy. It holds for every DSN that is set, whatever else is configured; the error never carries the DSN.
+func ValidateClickHouseDSNScheme(dsn string) error {
 	parsed, err := url.Parse(strings.TrimSpace(dsn))
 	if err != nil {
 		return nil

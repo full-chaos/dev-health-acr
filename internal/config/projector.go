@@ -342,11 +342,9 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 		if required.clickhouse && strings.TrimSpace(c.ClickHouseDSN) == "" {
 			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 		}
-		if required.clickhouse {
-			if err := validateClickHouseDSNScheme(c.ClickHouseDSN); err != nil {
-				return err
-			}
-		}
+	}
+	if err := ValidateClickHouseDSNScheme(c.ClickHouseDSN); err != nil {
+		return err
 	}
 	// r3 P1 finding 1 (class sweep): gated on required.projection -- priors
 	// never runs the projection coordinator loop, so a shared operator

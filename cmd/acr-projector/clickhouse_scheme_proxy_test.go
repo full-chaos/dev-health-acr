@@ -29,4 +29,3 @@ func TestAnHTTPClickHouseDSNNeverReachesTheEnvironmentProxy(t *testing.T) {
 		}
 	}).AssertNothingReached(t)
 }
-
