@@ -45,6 +45,10 @@ func TestEndExclusiveRangeBoundsDayGrainByLessThan(t *testing.T) {
 		if !exclusive && (hasLess || !hasLessEqual) {
 			t.Errorf("explicit range: the inclusive `AND day <= toDate(` must stay; statements:\n%s", statements)
 		}
+		hasMicro := strings.Contains(statements, "INTERVAL 1 MICROSECOND")
+		if exclusive != hasMicro || (!exclusive && !strings.Contains(statements, "day <= toDate({time_end")) {
+			t.Errorf("exclusive=%v: freshness as-of date: micro adjustment present=%v; statements:\n%s", exclusive, hasMicro, statements)
+		}
 		if !strings.Contains(statements, "day >= toDate(") {
 			t.Errorf("start bound lost: %s", statements)
 		}

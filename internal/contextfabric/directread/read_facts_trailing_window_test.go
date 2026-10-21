@@ -68,3 +68,29 @@ func TestTrailingReadHandsProvidersAnExclusiveEndAndExplicitRangeDoesNot(t *test
 		}
 	}
 }
+
+func TestTrailingReadReachesTheProviderQueryWithAnExclusiveEnd(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		window    *RequestWindow
+		exclusive bool
+	}{
+		{"trailing", &RequestWindow{Mode: WindowTrailing, Days: 7}, true},
+		{"range", &RequestWindow{Mode: WindowRange, Start: ptrTime(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)), End: ptrTime(time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC))}, false},
+	} {
+		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+			return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
+		}}
+		reader := newTestFactsReader(t, graphOfOrgA(), provider)
+		request := FactsRequest{Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: repoA.CanonicalID}}, Window: c.window}
+		if _, err := reader.Read(requestContext(), unrestrictedA(), request); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if len(provider.queries) == 0 {
+			t.Fatalf("%s: the provider was not queried", c.name)
+		}
+		if got := provider.queries[len(provider.queries)-1].TimeEndExclusive; got != c.exclusive {
+			t.Errorf("%s: provider FactQuery.TimeEndExclusive = %v, want %v", c.name, got, c.exclusive)
+		}
+	}
+}

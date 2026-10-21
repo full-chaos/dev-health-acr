@@ -270,8 +270,9 @@ func unsupportedTimeResult(reason string) contextfabric.FactProviderResult {
 func (b factTimeBound) neutral() readers.TimeBound {
 	end := b.end
 	if b.active && b.endExclusive {
-		// The readers module only has inclusive end predicates (<=): its last instant is one microsecond before an
-		// exclusive end, the DateTime64(6) step.
+		// The readers module has only inclusive end predicates (<=), so it is handed the last instant before an
+		// exclusive end. Its bindings format times to milliseconds (dev-health-go clickhouse/bindings.go), so the
+		// bound it sends is 23:59:59.999: a DateTime64(6) row in (23:59:59.999, 24:00:00) is dropped.
 		end = end.Add(-time.Microsecond)
 	}
 	return readers.TimeBound{Active: b.active, HasStart: b.hasStart, Start: b.start, End: end}
