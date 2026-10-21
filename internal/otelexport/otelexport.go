@@ -48,6 +48,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/version"
@@ -159,16 +160,17 @@ func New(ctx context.Context, cfg Config) (*Exporter, error) {
 	})
 }
 
+// WithNoProxy only: the OTEL_EXPORTER_OTLP_* variables stay honoured, but grpc must not read HTTP(S)_PROXY.
 func newGRPCExporters(ctx context.Context) (sdktrace.SpanExporter, sdkmetric.Exporter, sdklog.Exporter, error) {
-	spans, err := otlptracegrpc.New(ctx)
+	spans, err := otlptracegrpc.New(ctx, otlptracegrpc.WithDialOption(grpc.WithNoProxy()))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("otlp trace exporter: %w", err)
 	}
-	metrics, err := otlpmetricgrpc.New(ctx)
+	metrics, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithDialOption(grpc.WithNoProxy()))
 	if err != nil {
 		return nil, nil, nil, errors.Join(fmt.Errorf("otlp metric exporter: %w", err), spans.Shutdown(ctx))
 	}
-	logs, err := otlploggrpc.New(ctx)
+	logs, err := otlploggrpc.New(ctx, otlploggrpc.WithDialOption(grpc.WithNoProxy()))
 	if err != nil {
 		return nil, nil, nil, errors.Join(fmt.Errorf("otlp log exporter: %w", err), spans.Shutdown(ctx), metrics.Shutdown(ctx))
 	}
