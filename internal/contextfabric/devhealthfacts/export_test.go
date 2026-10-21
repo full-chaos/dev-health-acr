@@ -93,6 +93,27 @@ func TeamLinkCandidatesPerVersionStatementForTest() string {
 	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(factTimeBound{})
 }
 
+// TeamLinkCandidateVariantForTest is one candidate statement form a
+// measurement row compares against the served one.
+type TeamLinkCandidateVariantForTest struct {
+	Name      string
+	Statement string
+}
+
+// TeamLinkCandidateVariantsForTest are the served candidate statement and the
+// forms that may hold less DISTINCT state; a measurement row only.
+func TeamLinkCandidateVariantsForTest() []TeamLinkCandidateVariantForTest {
+	predicate := teamLinkCandidatesPredicate(factTimeBound{})
+	served := teamLinkCandidatesStatement(factTimeBound{})
+	return []TeamLinkCandidateVariantForTest{
+		{Name: "A-served", Statement: served},
+		{Name: "B-threads1", Statement: readers.WithSettings(served, readers.Settings{MaxThreads: 1})},
+		{Name: "B2-threads2", Statement: readers.WithSettings(served, readers.Settings{MaxThreads: 2})},
+		{Name: "C-groupUniqArray", Statement: `SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp WHERE ` + predicate},
+		{Name: "D-distinct-sort-key", Statement: `SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + predicate + `)`},
+	}
+}
+
 // TeamLinkCandidatesTableForTest is the external table the team project link
 // rows read their candidates from.
 func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
