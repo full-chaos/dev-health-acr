@@ -1,6 +1,42 @@
 package contextfabric
 
-import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+import (
+	"log/slog"
+	"sync/atomic"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// limitationDisclosureSkipRecorder is told, with the recogniser id of the
+// sentence, each time appendBoundedLimitations has to leave a disclosure out.
+// appendBoundedLimitations has no context and no telemetry handle (it has
+// dozens of callers), so the metric hangs off this one process-level hook;
+// the Warn line is written regardless of whether a recorder is installed.
+var limitationDisclosureSkipRecorder atomic.Pointer[func(recogniser string)]
+
+// SetLimitationDisclosureSkipRecorder installs the recorder and returns a
+// function that puts the previous one back.
+func SetLimitationDisclosureSkipRecorder(record func(recogniser string)) (restore func()) {
+	var next *func(recogniser string)
+	if record != nil {
+		next = &record
+	}
+	previous := limitationDisclosureSkipRecorder.Swap(next)
+	return func() { limitationDisclosureSkipRecorder.Store(previous) }
+}
+
+// recordLimitationDisclosureSkipped writes the Warn for one skipped
+// disclosure. Content-safe: the recogniser id and the list length, never the
+// sentence.
+func recordLimitationDisclosureSkipped(addition string, listLength int) {
+	recogniser := serviceLimitationRecogniserID(addition)
+	slog.Default().Warn("context fabric limitation disclosure skipped",
+		"cf_limitation_skipped_recogniser", SanitizeLogAttr(recogniser),
+		"cf_limitations_len", listLength)
+	if record := limitationDisclosureSkipRecorder.Load(); record != nil {
+		(*record)(recogniser)
+	}
+}
 
 // withRetrievalDegradation returns limitations carrying the
 // retrieval-degradation disclosure, DISPLACING the last model-authored
@@ -95,7 +131,14 @@ func appendBoundedLimitations(limitations []string, additions []string) (compose
 			// branch rather than an assumption because the alternative is
 			// silently returning an over-cap list, and skipping the
 			// addition at least leaves a valid answer.
-			// TestServiceDisclosuresCannotFillTheCap pins the premise.
+			// TestServiceDisclosuresCannotFillTheCap pins the premise. The
+			// premise is about the vocabulary; a list can still be full of
+			// entries that only LOOK service-authored (a synthesizer behind
+			// the port that does not strip them, or a stored answer from
+			// before they were stripped), and then the addition is a
+			// disclosure the reader never sees. That is a failure path,
+			// so it is signalled, not skipped in silence.
+			recordLimitationDisclosureSkipped(addition, len(composed))
 			continue
 		}
 		shortened := append([]string(nil), composed[:index]...)

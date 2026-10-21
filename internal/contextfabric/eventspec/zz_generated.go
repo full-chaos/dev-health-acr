@@ -73,6 +73,7 @@ var ByID = map[string]Event{
 	"contextfabric.interpreted_time_bound":                InterpretedTimeBound,
 	"contextfabric.item_accounting_disagreement":          ItemAccountingDisagreement,
 	"contextfabric.kind_carry":                            KindCarry,
+	"contextfabric.limitation_disclosure_skipped":         LimitationDisclosureSkipped,
 	"contextfabric.membership_cardinality":                MembershipCardinality,
 	"contextfabric.model_rows_stripped":                   ModelRowsStripped,
 	"contextfabric.observation_cover":                     ObservationCover,
@@ -4652,6 +4653,50 @@ func (f KindCarryFields) SlogArgs() []any {
 		"redeemed_kind", contextfabric.SanitizeLogAttr(f.RedeemedKind),
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
+	}
+}
+
+// LimitationDisclosureSkippedFields is contextfabric.limitation_disclosure_skipped's generated typed construction interface
+// (CHAOS-5516): one Go field per Field LimitationDisclosureSkipped.Fields declares in spec.go.
+type LimitationDisclosureSkippedFields struct {
+	CfLimitationSkippedRecogniser string
+	CfLimitationsLen              int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every LimitationDisclosureSkippedFields uniformly, set ONLY by NewLimitationDisclosureSkippedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewLimitationDisclosureSkippedFields is the generated constructor for LimitationDisclosureSkippedFields -- every
+// field LimitationDisclosureSkipped.Fields declares is a required parameter.
+func NewLimitationDisclosureSkippedFields(cfLimitationSkippedRecogniser string, cfLimitationsLen int) LimitationDisclosureSkippedFields {
+	return LimitationDisclosureSkippedFields{
+		CfLimitationSkippedRecogniser: cfLimitationSkippedRecogniser,
+		CfLimitationsLen:              cfLimitationsLen,
+		constructed:                   true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewLimitationDisclosureSkippedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f LimitationDisclosureSkippedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns LimitationDisclosureSkipped's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f LimitationDisclosureSkippedFields) SlogArgs() []any {
+	return []any{
+		"cf_limitation_skipped_recogniser", contextfabric.SanitizeLogAttr(f.CfLimitationSkippedRecogniser),
+		"cf_limitations_len", f.CfLimitationsLen,
 	}
 }
 

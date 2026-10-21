@@ -330,6 +330,8 @@ func goVarName(e Event) string {
 		return "DriverSourceStateCorrected"
 	case ServiceLimitationLookalikesDropped.ID:
 		return "ServiceLimitationLookalikesDropped"
+	case LimitationDisclosureSkipped.ID:
+		return "LimitationDisclosureSkipped"
 	case DriverIdentityCollisions.ID:
 		return "DriverIdentityCollisions"
 	case EvidenceLabelFallback.ID:

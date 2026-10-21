@@ -57,8 +57,16 @@ type SlogEngineTelemetry struct {
 // below, the outcomes it names: answer reuse (RecordAnswerReuse) and the
 // requirement outcome rows of the served investigation
 // (RecordCompletenessAuthority). A nil instruments leaves the sink log-only.
+//
+// It also points the process-level limitation-disclosure skip hook at the
+// instruments (appendBoundedLimitations has no telemetry handle; see
+// limitation_displacement.go). The hook is process-wide and the last
+// instruments installed win, which is the one production telemetry.
 func (t SlogEngineTelemetry) WithMetrics(metrics *hostedmetrics.Instruments) SlogEngineTelemetry {
 	t.metrics = metrics
+	if metrics != nil {
+		SetLimitationDisclosureSkipRecorder(func(string) { metrics.LimitationDisclosureSkipped(context.Background()) })
+	}
 	return t
 }
 

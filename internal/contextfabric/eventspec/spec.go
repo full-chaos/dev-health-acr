@@ -2377,6 +2377,22 @@ var ServiceLimitationLookalikesDropped = Event{
 	},
 }
 
+// LimitationDisclosureSkipped is the Warn line of a service disclosure that could not be added to a full limitation list because every entry looked service-authored; written once per skipped sentence, never carries the sentence.
+var LimitationDisclosureSkipped = Event{
+	ID:                       "contextfabric.limitation_disclosure_skipped",
+	Msg:                      "context fabric limitation disclosure skipped",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         64,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"cf_limitation_skipped_recogniser"},
+	BoundedAggregation:       "one line per skipped disclosure; a request composes limitations at a fixed set of lever and disclosure sites, each of which adds at most a few sentences, so a request writes well under 64 of these.",
+	Fields: []Field{
+		{Key: "cf_limitation_skipped_recogniser", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cf_limitations_len", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // DriverSourceStateCorrected is the Info line of how many drivers had a supplied source state corrected from the facts their claims ground to; written only when the count is above zero.
 var DriverSourceStateCorrected = Event{
 	ID:                       "contextfabric.driver_source_state_corrected",
@@ -5533,6 +5549,7 @@ var All = []Event{
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
 	ServiceLimitationLookalikesDropped,
+	LimitationDisclosureSkipped,
 	DriverIdentityCollisions,
 	EvidenceLabelFallback,
 	CoverageEntriesCapped,
