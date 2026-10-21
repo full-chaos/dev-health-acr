@@ -28,17 +28,13 @@ const (
 	// candidateVersionsFloor is the memory a statement may add beyond the
 	// slope when only the number of row versions grows.
 	candidateVersionsFloor = uint64(2 << 20)
-	// candidateVersionsMoved owned linked issues are also stored under a
-	// second repository: one issue, two sort-key rows.
-	candidateVersionsMoved = 1_000
 )
 
 // The team link candidates are one entry per distinct issue, not per stored row
-// version or repository: with every owned linked issue stored in 10 and then 20
-// unmerged versions, and some also under a second repository, the candidate
-// array holds one entry per issue, the statement's peak memory stays at the
-// slope of the 10-version read, and its ids are the set the per-version
-// statement read.
+// version: with every owned linked issue stored in 10 and then 20 unmerged
+// versions, the candidate array holds one entry per issue, the statement's peak
+// memory stays at the slope of the 10-version read, and its ids are the set the
+// per-version statement read.
 func TestTeamLinkCandidatesFollowDistinctIssuesNotRowVersionsOnRealClickHouse(t *testing.T) {
 	if raceDetectorEnabled {
 		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
@@ -83,9 +79,6 @@ SELECT concat('other-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
 SELECT ?, concat('other-', repeat('x', 96), '-', toString(number)), toUInt32(number + 900000), 1, 'native', '', ?, ? FROM numbers(1000)`,
 		repoUUID("repo-reached"), at, org)
-	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
-SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, ? FROM numbers(?)`,
-		repoUUID("repo-moved"), org, at, project, at, uint64(candidateVersionsMoved))
 	version := func(v int) {
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
 SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, addSeconds(?, ?) FROM numbers(?)`,
@@ -140,15 +133,6 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 		}
 		if len(distinct) != candidateVersionsIssues {
 			t.Fatalf("%s: %d distinct candidates, want the %d owned linked issues (no unlinked or other-project issue)", label, len(distinct), candidateVersionsIssues)
-		}
-		var perRepository []string
-		if err := readers.QueryOrgScopedNamed(ctx, query, "TeamLinkCandidatesDifferential", devhealthfacts.TeamLinkCandidatesSortKeyDistinctWithoutDedupStatementForTest(), org, []string{teamID}, func(row readers.RowScanner) error {
-			return row.Scan(&perRepository)
-		}); err != nil {
-			t.Fatalf("%s: control candidates: %v: %s", label, err, readFailureCause(err))
-		}
-		if len(perRepository) != candidateVersionsIssues+candidateVersionsMoved {
-			t.Fatalf("%s: control: the sort-key DISTINCT without arrayDistinct held %d entries, want %d (the issues under two repositories once per repository): the fixture no longer tests the dedup", label, len(perRepository), candidateVersionsIssues+candidateVersionsMoved)
 		}
 	}
 	version(0)

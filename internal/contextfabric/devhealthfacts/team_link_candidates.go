@@ -40,14 +40,15 @@ func teamLinkCandidatesPredicate(bound factTimeBound) string {
       AND cp.project_id IN ` + teamOwnedProjectKeyCandidatesSQL("ids", bound)
 }
 
-// teamLinkCandidatesStatement returns the distinct candidates as one array
-// row: one entry per issue however many unmerged versions it has, and one row
-// stays within the client's result row cap. The DISTINCT names the sort key
+// teamLinkCandidatesStatement returns the candidates as one array row: one
+// entry per (repository, issue) however many unmerged versions it has, and one
+// row stays within the client's result row cap. The DISTINCT names the sort key
 // (org_id, repo_id, work_item_id), so the server reads it in order and holds
 // no set of every candidate id (52 MB vs 94 MB at 96k all-inside links, at 1
-// thread as at 4); arrayDistinct drops an issue stored under two repositories.
+// thread as at 4). An issue stored under two repositories comes twice;
+// teamLinkCandidatesExternalTable sends it once.
 func teamLinkCandidatesStatement(bound factTimeBound) string {
-	return `SELECT arrayDistinct(groupArray(work_item_id)) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound) + `)`
+	return `SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound) + `)`
 }
 
 // withTeamLinkCandidates reads the teams' link candidates once and returns ctx
