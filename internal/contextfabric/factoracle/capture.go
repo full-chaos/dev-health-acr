@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -93,19 +94,33 @@ func openVenueClickHouse(cfg VenueConfig) (clickhouse.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("venue ClickHouse DSN file is not readable")
 	}
-	opts, err := clickhouse.ParseDSN(strings.TrimSpace(string(dsn)))
+	opts, err := venueClickHouseOptions(strings.TrimSpace(string(dsn)), cfg.ClickHouseAddr)
 	if err != nil {
-		return nil, fmt.Errorf("venue ClickHouse DSN does not parse")
+		return nil, err
 	}
-	if cfg.ClickHouseAddr != "" {
-		opts.Addr = []string{cfg.ClickHouseAddr}
-	}
-	opts.DialTimeout = 10 * time.Second
 	conn, err := clickhouse.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("venue ClickHouse connection could not be opened")
 	}
 	return conn, nil
+}
+
+func venueClickHouseOptions(dsn, addr string) (*clickhouse.Options, error) {
+	opts, err := clickhouse.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("venue ClickHouse DSN does not parse")
+	}
+	if addr != "" {
+		opts.Addr = []string{addr}
+	}
+	opts.DialTimeout = 10 * time.Second
+	// clickhouse-go's http transport defaults to the environment proxy.
+	opts.HTTPProxyURL = nil
+	opts.TransportFunc = func(t *http.Transport) (http.RoundTripper, error) {
+		t.Proxy = nil
+		return t, nil
+	}
+	return opts, nil
 }
 
 // LiveRun is one live run on the venue.
