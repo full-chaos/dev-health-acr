@@ -163,3 +163,23 @@ func (p *captureProxy) close() Capture {
 	defer p.mu.Unlock()
 	return p.capture
 }
+
+// MustAttemptDial panics unless err is the failure of a real network attempt at Target: a nil error, or an error
+// from a code path that returned before dialing, would let the capture pass without proving anything.
+func MustAttemptDial(err error) {
+	if err == nil {
+		panic("the request to the unreachable target succeeded: it did not go where the test points it")
+	}
+	var op *net.OpError
+	var dns *net.DNSError
+	if errors.As(err, &op) || errors.As(err, &dns) {
+		return
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"upstream.invalid", "no such host", "dial", "lookup", "connection refused", "unavailable", "deadline exceeded", "transport"} {
+		if strings.Contains(text, marker) {
+			return
+		}
+	}
+	panic(fmt.Sprintf("the request failed before any network attempt: %v", err))
+}

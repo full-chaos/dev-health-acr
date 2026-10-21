@@ -18,12 +18,14 @@ func TestTheQueryClientsNeverDialTheEnvironmentProxy(t *testing.T) {
 			if err != nil {
 				panic(err)
 			}
-			_, _ = query.Execute(ctx, call)
+			_, err = query.Execute(ctx, call)
+			proxycapture.MustAttemptDial(err)
 			graphql, err := directread.NewHTTPGraphQLClientWithHTTP(proxycapture.Target, time.Second, supplied)
 			if err != nil {
 				panic(err)
 			}
-			_, _ = graphql.Execute(ctx, call)
+			_, err = graphql.Execute(ctx, call)
+			proxycapture.MustAttemptDial(err)
 		}
 	}).AssertNothingReached(t)
 }

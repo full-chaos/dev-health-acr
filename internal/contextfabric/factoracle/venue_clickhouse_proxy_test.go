@@ -27,7 +27,7 @@ func TestTheVenueClickHouseClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 			panic(err)
 		}
 		defer conn.Close()
-		_ = conn.Ping(ctx)
+		proxycapture.MustAttemptDial(conn.Ping(ctx))
 	}).AssertNothingReached(t)
 }
 
