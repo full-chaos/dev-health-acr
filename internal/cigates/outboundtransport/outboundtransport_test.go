@@ -254,6 +254,11 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 				kinds = append(kinds, "client-copy")
 			}
 		}
+		for _, result := range n.Results {
+			if call, ok := ast.Unparen(result).(*ast.CallExpr); ok && isReverseProxyRef(info.Types[result].Type) && !isBuiltinCall(info, call) {
+				kinds = append(kinds, "reverseproxy-result")
+			}
+		}
 		return kinds
 	case *ast.SendStmt:
 		if isClientCopy(info, n.Value) {
@@ -299,6 +304,15 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 						kinds = append(kinds, "client-parameter")
 					}
 				}
+				if isReverseProxyRef(info.Types[field.Type].Type) {
+					names := len(field.Names)
+					if names == 0 {
+						names = 1
+					}
+					for i := 0; i < names; i++ {
+						kinds = append(kinds, "reverseproxy-parameter")
+					}
+				}
 			}
 		}
 		if n.Results != nil {
@@ -322,7 +336,7 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 			if isNamed(info.Types[field.Type].Type, "Client") {
 				kinds = append(kinds, "client-by-value")
 			}
-			if isReverseProxy(info.Types[field.Type].Type) {
+			if isReverseProxyRef(info.Types[field.Type].Type) {
 				kinds = append(kinds, "reverseproxy-no-transport")
 			}
 		}
@@ -331,28 +345,28 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		if isNamed(info.Types[n.Type].Type, "Client") {
 			return []string{"client-by-value"}
 		}
-		if isReverseProxy(info.Types[n.Type].Type) {
+		if isReverseProxyRef(info.Types[n.Type].Type) {
 			return []string{"reverseproxy-no-transport"}
 		}
 	case *ast.ArrayType:
 		if isNamed(info.Types[n.Elt].Type, "Client") {
 			return []string{"client-by-value"}
 		}
-		if isReverseProxy(info.Types[n.Elt].Type) {
+		if isReverseProxyRef(info.Types[n.Elt].Type) {
 			return []string{"reverseproxy-no-transport"}
 		}
 	case *ast.MapType:
 		if isNamed(info.Types[n.Key].Type, "Client") || isNamed(info.Types[n.Value].Type, "Client") {
 			return []string{"client-by-value"}
 		}
-		if isReverseProxy(info.Types[n.Key].Type) || isReverseProxy(info.Types[n.Value].Type) {
+		if isReverseProxyRef(info.Types[n.Key].Type) || isReverseProxyRef(info.Types[n.Value].Type) {
 			return []string{"reverseproxy-no-transport"}
 		}
 	case *ast.ChanType:
 		if isNamed(info.Types[n.Value].Type, "Client") {
 			return []string{"client-by-value"}
 		}
-		if isReverseProxy(info.Types[n.Value].Type) {
+		if isReverseProxyRef(info.Types[n.Value].Type) {
 			return []string{"reverseproxy-no-transport"}
 		}
 	case *ast.ValueSpec:
@@ -360,7 +374,7 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		if n.Type != nil && len(n.Values) == 0 && isNamed(info.Types[n.Type].Type, "Client") {
 			kinds = append(kinds, "client-no-transport")
 		}
-		if n.Type != nil && len(n.Values) == 0 && isReverseProxy(info.Types[n.Type].Type) {
+		if n.Type != nil && len(n.Values) == 0 && isReverseProxyRef(info.Types[n.Type].Type) {
 			kinds = append(kinds, "reverseproxy-no-transport")
 		}
 		for _, value := range n.Values {
@@ -688,6 +702,9 @@ func isNamed(t types.Type, name string) bool {
 
 func isReverseProxy(t types.Type) bool { return isNamedIn(t, "net/http/httputil", "ReverseProxy") }
 
+// isReverseProxyRef: the type is httputil.ReverseProxy or a pointer to it.
+func isReverseProxyRef(t types.Type) bool { return isReverseProxy(derefPointer(t)) }
+
 func isNamedIn(t types.Type, path, name string) bool {
 	if t == nil {
 		return false
@@ -888,4 +905,13 @@ func uniqueStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+func isBuiltinCall(info *types.Info, call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	_, builtin := info.Uses[ident].(*types.Builtin)
+	return builtin
 }
