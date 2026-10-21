@@ -88,3 +88,43 @@ func TestOwnModelTurnedOffRefusalReachesTheToolCaller(t *testing.T) {
 		t.Fatalf("the model seam was used %d times", n)
 	}
 }
+
+// investigate_with_interpretation is recommended to a model that can run
+// prompts/get, and its description says the client path needs no plan feature
+// and no model configuration. The gate refuses that path for an organization
+// whose saved model configuration it cannot use, so what the server tells a
+// caller up front must name those refusals, in the tool description and in the
+// initialize instructions alike.
+func TestCallerModelPathGuidanceNamesTheRefusalsOfAnUnusableOwnModel(t *testing.T) {
+	stack := newDTStackWithModelConfigs(t, api.EntitlementFunc(func(_ context.Context, _ string, entitlement string) (bool, error) {
+		return entitlement == "agent_context_runtime" || entitlement == "acr_service_model", nil
+	}), newTurnedOffModelConfigs(t))
+	cs, _ := stack.session([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"})
+
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := []string{"own_model_gate_closed", "ai_features_turned_off", "byo_no_investigate_config", "own_model_turned_off"}
+	description := ""
+	for _, tool := range listed.Tools {
+		if tool.Name == "investigate_with_interpretation" {
+			description = tool.Description
+		}
+	}
+	if description == "" {
+		t.Fatal("investigate_with_interpretation not listed")
+	}
+	instructions := cs.InitializeResult().Instructions
+	for _, reason := range reasons {
+		if !strings.Contains(description, reason) {
+			t.Errorf("investigate_with_interpretation description does not name %s: %s", reason, description)
+		}
+		if !strings.Contains(instructions, reason) {
+			t.Errorf("initialize instructions do not name %s: %s", reason, instructions)
+		}
+	}
+	if !strings.Contains(instructions, "investigate_with_interpretation is refused with the organization's reason") {
+		t.Errorf("initialize instructions do not say the caller-model tool is refused with the organization's reason: %s", instructions)
+	}
+}

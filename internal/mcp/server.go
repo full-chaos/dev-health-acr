@@ -274,6 +274,9 @@ func modelCallerLead(caller *CallerContext, investigate bool) string {
 			b.WriteString("If you can run prompts/get, use investigate_with_interpretation with synthesis \"client\".\n")
 		}
 	}
+	if investigate && hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+		b.WriteString("investigate_with_interpretation is refused with the organization's reason when its saved model configuration cannot be used (own_model_gate_closed, ai_features_turned_off, byo_no_investigate_config, own_model_turned_off).\n")
+	}
 	if investigate && hostedToolEnabled(caller, toolInvestigateQuestion) {
 		b.WriteString("investigate_question spends the service's or your organization's model budget: use it only if you have no model of your own.\n")
 	}
@@ -330,7 +333,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
 		b.WriteString("- investigate_question (callers with no model of their own; spends the service's or your organization's model budget): you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words. To write the answer on your own model, pass synthesis \"client\": the service skips its own answer writing and returns synthesis_input; fetch the prompt synthesize_answer with prompts/get and run it with synthesis_input.input as the user message. The stored result then carries facts and evidence only. This tool runs on the service's model, or on the organization's own model configuration when it has one; an organization with its own configuration runs on it unless it turned acr_service_model off (reason ai_features_turned_off); one with no configuration runs on the service's model only with both acr_service_model and the platform admin grant platform_model_fallback, otherwise it gets reason service_model_not_entitled; a saved configuration behind a closed plan gate gets reason own_model_gate_closed; saved keys for other uses only get reason byo_no_investigate_config; a saved configuration an organization admin turned off gets reason own_model_turned_off unless it holds both acr_service_model and platform_model_fallback.")
 		if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
-			b.WriteString(" Then use investigate_with_interpretation with synthesis \"client\".")
+			b.WriteString(" With no model configuration of the organization, then use investigate_with_interpretation with synthesis \"client\"; for a saved configuration that gets one of the other reasons, that tool is refused with the same reason.")
 		}
 		b.WriteString("\n")
 	}
