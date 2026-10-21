@@ -148,23 +148,31 @@ func New(ctx context.Context, cfg Config) (*Exporter, error) {
 	if !cfg.Enabled {
 		return &Exporter{config: cfg}, nil
 	}
-	spans, err := otlptracegrpc.New(ctx)
+	spans, metrics, logs, err := newGRPCExporters(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("otlp trace exporter: %w", err)
-	}
-	metrics, err := otlpmetricgrpc.New(ctx)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("otlp metric exporter: %w", err), spans.Shutdown(ctx))
-	}
-	logs, err := otlploggrpc.New(ctx)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("otlp log exporter: %w", err), spans.Shutdown(ctx), metrics.Shutdown(ctx))
+		return nil, err
 	}
 	return NewWithExporters(ctx, cfg, Exporters{
 		Spans:   spans,
 		Metrics: sdkmetric.NewPeriodicReader(metrics, sdkmetric.WithInterval(30*time.Second)),
 		Logs:    logs,
 	})
+}
+
+func newGRPCExporters(ctx context.Context) (sdktrace.SpanExporter, sdkmetric.Exporter, sdklog.Exporter, error) {
+	spans, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("otlp trace exporter: %w", err)
+	}
+	metrics, err := otlpmetricgrpc.New(ctx)
+	if err != nil {
+		return nil, nil, nil, errors.Join(fmt.Errorf("otlp metric exporter: %w", err), spans.Shutdown(ctx))
+	}
+	logs, err := otlploggrpc.New(ctx)
+	if err != nil {
+		return nil, nil, nil, errors.Join(fmt.Errorf("otlp log exporter: %w", err), spans.Shutdown(ctx), metrics.Shutdown(ctx))
+	}
+	return spans, metrics, logs, nil
 }
 
 // NewWithExporters builds an Exporter over the given sinks.
