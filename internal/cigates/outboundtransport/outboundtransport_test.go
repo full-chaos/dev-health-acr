@@ -30,6 +30,9 @@
 //	value-overwrite      an assignment to `*p` for a pointer to net/http.Client or net/http.Transport (or such a range target):
 //	                     the whole value is replaced, which no field rule sees
 //	client-instantiate   a generic function or type instantiated with the non-pointer net/http.Client (zero[http.Client]())
+//	reverseproxy-no-transport  a composite literal of net/http/httputil.ReverseProxy whose Transport is absent or nil, and any
+//	                     call to httputil.NewSingleHostReverseProxy (its proxy has a nil Transport, which dials through
+//	                     http.DefaultTransport and so the environment proxy)
 //	default-transport    any use of net/http.DefaultTransport
 //	default-transport-assign  an assignment to net/http.DefaultTransport: FORBIDDEN, no allow row admits it (the transport
 //	                     helpers fall back to net/http's defaults when it is replaced, so repository code must never replace it)
@@ -207,6 +210,10 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 				if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
 					kinds = append(kinds, "proxy")
 				}
+			case isNamedIn(tv.Type, "net/http/httputil", "ReverseProxy"):
+				if value, ok := fieldValue(n, "Transport", -1); !ok || isNil(info, value) {
+					kinds = append(kinds, "reverseproxy-no-transport")
+				}
 			}
 		}
 		for _, element := range n.Elts {
@@ -220,6 +227,9 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		return kinds
 	case *ast.CallExpr:
 		var kinds []string
+		if fn := calledFunc(info, n); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "net/http/httputil" && fn.Name() == "NewSingleHostReverseProxy" {
+			kinds = append(kinds, "reverseproxy-no-transport")
+		}
 		if ident, ok := n.Fun.(*ast.Ident); ok && len(n.Args) == 1 {
 			if builtin, ok := info.Uses[ident].(*types.Builtin); ok && builtin.Name() == "new" && isNamed(info.Types[n.Args[0]].Type, "Client") {
 				kinds = append(kinds, "client-no-transport")
@@ -631,6 +641,10 @@ var forbiddenKinds = map[string]bool{"default-transport-assign": true}
 
 // isNamed: the type is exactly net/http.<name> (not a pointer to it).
 func isNamed(t types.Type, name string) bool {
+	return isNamedIn(t, "net/http", name)
+}
+
+func isNamedIn(t types.Type, path, name string) bool {
 	if t == nil {
 		return false
 	}
@@ -639,7 +653,7 @@ func isNamed(t types.Type, name string) bool {
 		return false
 	}
 	obj := named.Obj()
-	return obj.Pkg() != nil && obj.Pkg().Path() == "net/http" && obj.Name() == name
+	return obj.Pkg() != nil && obj.Pkg().Path() == path && obj.Name() == name
 }
 
 func derefPointer(t types.Type) types.Type {
