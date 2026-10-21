@@ -93,6 +93,27 @@ func TeamLinkCandidatesPerVersionStatementForTest() string {
 	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(factTimeBound{})
 }
 
+// TeamLinkCandidateFormForTest is one candidate statement form a measurement
+// row compares against the served one.
+type TeamLinkCandidateFormForTest struct {
+	Name      string
+	Statement string
+}
+
+// TeamLinkCandidateFormsForTest are the served candidate statement and the
+// forms that may hold less DISTINCT state; a measurement row only.
+func TeamLinkCandidateFormsForTest() []TeamLinkCandidateFormForTest {
+	predicate := teamLinkCandidatesPredicate(factTimeBound{})
+	groupBy := `SELECT groupArray(work_item_id) FROM (SELECT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + predicate + ` GROUP BY cp.work_item_id)`
+	return []TeamLinkCandidateFormForTest{
+		{Name: "A-served", Statement: teamLinkCandidatesStatement(factTimeBound{})},
+		{Name: "D-distinct-sort-key", Statement: `SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + predicate + `)`},
+		{Name: "E1-group-by-threads1", Statement: readers.WithSettings(groupBy, readers.Settings{MaxThreads: 1})},
+		{Name: "E4-group-by", Statement: groupBy},
+		{Name: "C1-groupUniqArray-threads1", Statement: readers.WithSettings(`SELECT groupUniqArray(cp.work_item_id) FROM work_items AS cp WHERE `+predicate, readers.Settings{MaxThreads: 1})},
+	}
+}
+
 // TeamLinkCandidatesTableForTest is the external table the team project link
 // rows read their candidates from.
 func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
