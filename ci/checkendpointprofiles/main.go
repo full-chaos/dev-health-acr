@@ -117,8 +117,10 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -297,7 +299,7 @@ func validateAgainstSchema(schemaPath string, document any, label string, errs *
 	if err := json.Unmarshal(schemaBytes, &schemaTyped); err != nil {
 		return fmt.Errorf("parsing schema %s: %w", schemaPath, err)
 	}
-	resolved, err := schemaTyped.Resolve(&jsonschema.ResolveOptions{})
+	resolved, err := schemaTyped.Resolve(&jsonschema.ResolveOptions{Loader: siblingSchemaLoader(schemaPath, schemaTyped.ID)})
 	if err != nil {
 		return fmt.Errorf("resolving schema %s: %w", schemaPath, err)
 	}
@@ -310,6 +312,57 @@ func validateAgainstSchema(schemaPath string, document any, label string, errs *
 		}
 	}
 	return nil
+}
+
+// siblingSchemaLoader serves a $ref that points at another ops-owned schema
+// file. ops' credential-classes.schema.json borrows two properties from
+// jsonschema/endpoint-auth-profile.v1.schema.json, addressed relative to its
+// own $id, so a standalone compile cannot resolve it and the first pin that
+// carries the $ref could not be adopted (the schemas are fetched, not vendored).
+//
+// The loader is deliberately narrow, so it can only fail closed: a URI is
+// loaded only when it lies under the directory of the root schema's own $id,
+// and is then read from the same relative path beside the root schema file. A
+// URI under any other base, a path that climbs out of that base, and a file
+// that was not fetched are all errors that name the reference; none is skipped.
+func siblingSchemaLoader(schemaPath, rootID string) jsonschema.Loader {
+	return func(uri *url.URL) (*jsonschema.Schema, error) {
+		base, err := url.Parse(rootID)
+		if err != nil || rootID == "" || base.Host == "" {
+			return nil, fmt.Errorf("schema reference %s cannot be loaded: %s has no absolute $id to resolve it against", uri, schemaPath)
+		}
+		baseDir := path.Dir(base.Path) + "/"
+		if uri.Scheme != base.Scheme || uri.Host != base.Host || !strings.HasPrefix(uri.Path, baseDir) {
+			return nil, fmt.Errorf("schema reference %s is outside the $id base %s%s%s of %s and is not loaded", uri, base.Scheme+"://", base.Host, baseDir, schemaPath)
+		}
+		rel := path.Clean(strings.TrimPrefix(uri.Path, baseDir))
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
+			return nil, fmt.Errorf("schema reference %s escapes the $id base of %s", uri, schemaPath)
+		}
+		schemaDir := filepath.Dir(schemaPath)
+		file := filepath.Join(schemaDir, filepath.FromSlash(rel))
+		// A fetched file may be a symlink; the file read must still lie under
+		// the root schema's directory, or the gate would validate against a
+		// schema that is not the one the $ref names and report nothing.
+		if real, err := filepath.EvalSymlinks(file); err == nil {
+			realDir, dirErr := filepath.EvalSymlinks(schemaDir)
+			if dirErr != nil {
+				return nil, fmt.Errorf("schema reference %s: resolving the directory of %s: %w", uri, schemaPath, dirErr)
+			}
+			if r, relErr := filepath.Rel(realDir, real); relErr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+				return nil, fmt.Errorf("schema reference %s resolves through a symlink to %s, outside the directory of %s", uri, real, schemaPath)
+			}
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("schema reference %s needs %s, which was not found beside %s (add it to the sparse checkout of the ops contract): %w", uri, rel, schemaPath, err)
+		}
+		var ref jsonschema.Schema
+		if err := json.Unmarshal(data, &ref); err != nil {
+			return nil, fmt.Errorf("parsing referenced schema %s: %w", file, err)
+		}
+		return &ref, nil
+	}
 }
 
 // credentialClassVocabulary reduces the ops-owned credential-class document

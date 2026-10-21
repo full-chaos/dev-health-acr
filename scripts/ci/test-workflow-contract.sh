@@ -587,6 +587,32 @@ check_endpoint_profile_gate_step() {
   fi
 }
 
+# ops' credential-classes.schema.json $refs jsonschema/endpoint-auth-profile
+# .v1.schema.json. The gate compiles the schema from the files the sparse
+# checkout delivers, so a list that carries the schema but not the file it
+# references turns the next ops re-pin into a resolve failure that every
+# earlier run hid (the pin predates the $ref).
+check_ops_contract_sparse_list_carries_referenced_schemas() {
+  local file="$1" block
+  block="$(awk '
+    /path: \.ops-contract/ { grab=1 }
+    grab && /sparse-checkout: \|/ { inlist=1; next }
+    inlist && /sparse-checkout-cone-mode/ { exit }
+    inlist { print }
+  ' "$file")"
+  if [ -z "$block" ]; then
+    printf 'no sparse-checkout list found for the ops-contract checkout in %s\n' "$file" >&2
+    return 1
+  fi
+  local want
+  for want in contracts/auth/v1/credential-classes.schema.json contracts/auth/v1/jsonschema/endpoint-auth-profile.v1.schema.json contracts/auth/v1/jsonschema/principal.v1.schema.json contracts/auth/v1/endpoint-profile.schema.json; do
+    if ! grep -qxF "            $want" <<<"$block"; then
+      printf 'the ops-contract sparse-checkout list does not carry %s -- the credential-classes schema references it, so the next ops re-pin fails to resolve\n' "$want" >&2
+      return 1
+    fi
+  done
+}
+
 # A pin that accepts a branch name is not a pin: the sparse checkout would
 # follow ops's moving default branch with no acr commit recording it. The
 # workflow must reject the shape BEFORE resolving the ref.
@@ -1412,6 +1438,7 @@ run_all_checks() {
   check_endpoint_profile_gate_step "$file"
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
+  check_ops_contract_sparse_list_carries_referenced_schemas "$file"
   check_race_runner_uses_variable "$file"
   check_first_stage_runner_uses_variable "$file"
   check_routed_jobs_fork_guarded "$file"
@@ -2207,6 +2234,23 @@ gate_input_removed="$tmpdir/gate-input-removed.yml"
 awk '/ACR_CREDENTIAL_CLASSES_SCHEMA:/ { next } { print }' "$workflow" > "$gate_input_removed"
 assert_check_fails 'dropped ACR_CREDENTIAL_CLASSES_SCHEMA from the gate step' \
   check_endpoint_profile_gate_step "$gate_input_removed"
+
+# (n2) drop the referenced schema from the sparse list while keeping the
+# schema that references it: the gate then cannot resolve the $ref.
+sparse_ref_removed="$tmpdir/sparse-ref-removed.yml"
+grep -vF 'jsonschema/endpoint-auth-profile.v1.schema.json' "$workflow" > "$sparse_ref_removed"
+assert_check_fails 'dropped the endpoint-auth-profile schema from the ops-contract sparse list' \
+  check_ops_contract_sparse_list_carries_referenced_schemas "$sparse_ref_removed"
+
+sparse_closure_removed="$tmpdir/sparse-closure-removed.yml"
+grep -vF 'contracts/auth/v1/endpoint-profile.schema.json' "$workflow" > "$sparse_closure_removed"
+assert_check_fails 'dropped endpoint-profile.schema.json, which the referenced schema itself references, from the ops-contract sparse list' \
+  check_ops_contract_sparse_list_carries_referenced_schemas "$sparse_closure_removed"
+
+sparse_transitive_removed="$tmpdir/sparse-transitive-removed.yml"
+grep -vF 'jsonschema/principal.v1.schema.json' "$workflow" > "$sparse_transitive_removed"
+assert_check_fails 'dropped the schema the referenced schema itself references from the ops-contract sparse list' \
+  check_ops_contract_sparse_list_carries_referenced_schemas "$sparse_transitive_removed"
 
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
