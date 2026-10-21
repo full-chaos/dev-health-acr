@@ -1922,7 +1922,16 @@ jobs:
             contracts/auth/v1/endpoint-profile.schema.json
             contracts/auth/v1/credential-classes.json
             contracts/auth/v1/credential-classes.schema.json
+            contracts/auth/v1/jsonschema/endpoint-auth-profile.v1.schema.json
+            contracts/auth/v1/jsonschema/principal.v1.schema.json
           sparse-checkout-cone-mode: false
+      # endpoint-auth-profile.v1.schema.json and principal.v1.schema.json
+      # joined this list because ops' credential-classes.schema.json $refs the
+      # first (class_disambiguator kind and name) and that file $refs the
+      # second, from the first pin that carries 1af9d26d. The gate resolves
+      # those $refs from the files fetched beside the schema and refuses to
+      # run when one is missing, so the list has to carry the whole closure
+      # before the pin moves.
       # credential-classes.schema.json joined this list at the merge-gate
       # round: the gate validated the endpoint-profile inventory against its
       # schema but loaded the credential-class document only to harvest ids,
