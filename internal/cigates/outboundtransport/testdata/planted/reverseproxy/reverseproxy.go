@@ -57,3 +57,36 @@ func AssignUnproven(proxy *httputil.ReverseProxy, next http.RoundTripper) {
 func Address(proxy *httputil.ReverseProxy) {
 	_ = &proxy.Transport
 }
+
+func PointerParameter(proxy *httputil.ReverseProxy, w http.ResponseWriter, r *http.Request) {
+	proxy.ServeHTTP(w, r)
+}
+
+func ValueParameter(proxy httputil.ReverseProxy, w http.ResponseWriter, r *http.Request) {
+	proxy.ServeHTTP(w, r)
+}
+
+func GroupedParameters(first, second *httputil.ReverseProxy) {}
+
+type PointerHolder struct{ Proxy *httputil.ReverseProxy }
+
+var packagePointer *httputil.ReverseProxy
+
+func PointerVar() {
+	var proxy *httputil.ReverseProxy
+	_ = proxy
+}
+
+func UnnamedResult(from func() *httputil.ReverseProxy) *httputil.ReverseProxy {
+	return from()
+}
+
+func ValueResult(from func() httputil.ReverseProxy) httputil.ReverseProxy {
+	return from()
+}
+
+func PointerSlice() []*httputil.ReverseProxy { return nil }
+
+func PointerMap() map[string]*httputil.ReverseProxy { return nil }
+
+func PointerChan() chan *httputil.ReverseProxy { return nil }
