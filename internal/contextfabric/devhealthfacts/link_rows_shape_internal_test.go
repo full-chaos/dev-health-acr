@@ -51,7 +51,7 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 
 func TestTeamLinkCandidatesReadTheLinkedIdsOfTheOwnedProjectsOnce(t *testing.T) {
 	statement := teamLinkCandidatesStatement(factTimeBound{})
-	for _, want := range []string{"SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "cityHash64(cp.work_item_id) IN " + linkedWorkItemIDHashesSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
+	for _, want := range []string{"SELECT arrayDistinct(groupArray(work_item_id)) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "cityHash64(cp.work_item_id) IN " + linkedWorkItemIDHashesSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team link candidates lack %q:\n%s", want, statement)
 		}

@@ -93,6 +93,14 @@ func TeamLinkCandidatesPerVersionStatementForTest() string {
 	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(factTimeBound{})
 }
 
+// TeamLinkCandidatesSortKeyDistinctWithoutDedupStatementForTest is the
+// candidate statement without its arrayDistinct: one entry per (repo_id,
+// work_item_id). A control only: it repeats an issue stored under two
+// repositories.
+func TeamLinkCandidatesSortKeyDistinctWithoutDedupStatementForTest() string {
+	return `SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(factTimeBound{}) + `)`
+}
+
 // TeamLinkCandidatesTableForTest is the external table the team project link
 // rows read their candidates from.
 func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {

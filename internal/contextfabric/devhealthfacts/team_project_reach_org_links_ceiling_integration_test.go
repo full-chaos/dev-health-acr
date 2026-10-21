@@ -212,10 +212,10 @@ func linkRowStatementsSince(t *testing.T, ctx context.Context, direct clickhouse
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), `+statementthreads.UnboundThreadsCount+`, max(position(query, 'SELECT DISTINCT cp.work_item_id AS work_item_id FROM work_items AS cp') > 0) FROM system.query_log
+	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), `+statementthreads.UnboundThreadsCount+`, max(position(query, ?) > 0) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.team_project_ownership')) AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr'))
-GROUP BY normalized_query_hash`, markMicros)
+GROUP BY normalized_query_hash`, teamLinkCandidatesMarker, markMicros)
 	if err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
