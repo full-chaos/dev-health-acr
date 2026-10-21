@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 // Internal identity header names (ops internalidentity.go:29-34).
@@ -443,7 +444,7 @@ func NewHTTPGraphQLClientWithHTTP(baseURL string, timeout time.Duration, httpCli
 		return nil, err
 	}
 	if httpClient != nil {
-		copied := *httpClient
+		copied := *outboundhttp.WithTransport(httpClient)
 		copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		c.client = &copied
 	}
@@ -496,7 +497,7 @@ func NewHTTPQueryClientWithHTTP(baseURL string, timeout time.Duration, httpClien
 		return nil, err
 	}
 	if httpClient != nil {
-		copied := *httpClient
+		copied := *outboundhttp.WithTransport(httpClient)
 		copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		c.client = &copied
 	}

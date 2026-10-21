@@ -59,6 +59,8 @@ import (
 
 	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/xeipuuv/gojsonschema"
+
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 const (
@@ -248,7 +250,7 @@ func newProvider(apiKey, baseURL, model string) (llm.Provider, error) {
 		APIKey:      llm.NewSecret(apiKey),
 		BaseURL:     baseURL,
 		Model:       model,
-		HTTPClient:  &http.Client{},
+		HTTPClient:  &http.Client{Transport: outboundhttp.SharedTransport()},
 		Temperature: llm.TemperatureOmit,
 		OutputCap:   llm.OutputCapOmit,
 	})

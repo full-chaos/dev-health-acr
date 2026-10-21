@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 // Registry watch limits.
@@ -116,6 +117,7 @@ func NewRegistryWatch(cfg RegistryWatchConfig) (*RegistryWatch, error) {
 	if w.client == nil {
 		w.client = &http.Client{Transport: &http.Transport{Proxy: nil, DisableCompression: true}}
 	} else {
+		w.client = outboundhttp.WithTransport(w.client)
 		copied := *w.client
 		w.client = &copied
 	}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 // Window is the one extract window: [Start, End), both UTC midnights.
@@ -476,9 +477,9 @@ func (t SeedTarget) query(ctx context.Context, database, statement string, body 
 		return "", err
 	}
 	req.SetBasicAuth(t.User, t.Password)
-	client := t.Client
+	client := outboundhttp.WithTransport(t.Client)
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Transport: outboundhttp.SharedTransport()}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

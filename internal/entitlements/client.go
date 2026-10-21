@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 const entitlementSchemaVersion = "acr_entitlement.v1"
@@ -242,8 +244,7 @@ func newTransport(config Config) (*http.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
+	transport := outboundhttp.Transport()
 	if config.ProxyURL != nil {
 		transport.Proxy = http.ProxyURL(config.ProxyURL)
 	}

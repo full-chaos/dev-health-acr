@@ -21,6 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -802,9 +803,9 @@ func (p *VenuePlanes) post(ctx context.Context, tool string, arguments any) (raw
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	client := p.Client
+	client := outboundhttp.WithTransport(p.Client)
 	if client == nil {
-		client = &http.Client{Timeout: 150 * time.Second}
+		client = &http.Client{Timeout: 150 * time.Second, Transport: outboundhttp.SharedTransport()}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
