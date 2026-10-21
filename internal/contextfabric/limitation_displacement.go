@@ -7,34 +7,45 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// limitationDisclosureSkipRecorder is told, with the recogniser id of the
-// sentence, each time appendBoundedLimitations has to leave a disclosure out.
-// appendBoundedLimitations has no context and no telemetry handle (it has
-// dozens of callers), so the metric hangs off this one process-level hook;
-// the Warn line is written regardless of whether a recorder is installed.
-var limitationDisclosureSkipRecorder atomic.Pointer[func(recogniser string)]
-
-// SetLimitationDisclosureSkipRecorder installs the recorder and returns a
-// function that puts the previous one back.
-func SetLimitationDisclosureSkipRecorder(record func(recogniser string)) (restore func()) {
-	var next *func(recogniser string)
-	if record != nil {
-		next = &record
-	}
-	previous := limitationDisclosureSkipRecorder.Swap(next)
-	return func() { limitationDisclosureSkipRecorder.Store(previous) }
+// limitationDisclosureSkipSink is where RecordLimitationDisclosureSkipped
+// writes: the production logger and the metric recorder. appendBoundedLimitations
+// has no context and no telemetry handle (it has dozens of callers), so both
+// hang off this one process-level sink. Production installs it once, from the
+// hosted runtime's telemetry wiring, with the configured logger; until then
+// the Warn goes to the default logger.
+type limitationDisclosureSkipSink struct {
+	logger *slog.Logger
+	record func(recogniser string)
 }
 
-// recordLimitationDisclosureSkipped writes the Warn for one skipped
-// disclosure. Content-safe: the recogniser id and the list length, never the
-// sentence.
-func recordLimitationDisclosureSkipped(addition string, listLength int) {
+var limitationDisclosureSkipSinkValue atomic.Pointer[limitationDisclosureSkipSink]
+
+// SetLimitationDisclosureSkipSink installs the logger and the recorder (either
+// may be nil) and returns a function that puts the previous sink back.
+func SetLimitationDisclosureSkipSink(logger *slog.Logger, record func(recogniser string)) (restore func()) {
+	previous := limitationDisclosureSkipSinkValue.Swap(&limitationDisclosureSkipSink{logger: logger, record: record})
+	return func() { limitationDisclosureSkipSinkValue.Store(previous) }
+}
+
+// RecordLimitationDisclosureSkipped writes the Warn for one skipped
+// disclosure and tells the recorder. Content-safe: the recogniser id and the
+// list length, never the sentence. Exported so the wiring that installs the
+// sink can be tested end to end.
+func RecordLimitationDisclosureSkipped(addition string, listLength int) {
 	recogniser := serviceLimitationRecogniserID(addition)
-	slog.Default().Warn("context fabric limitation disclosure skipped",
+	logger := slog.Default()
+	var record func(string)
+	if sink := limitationDisclosureSkipSinkValue.Load(); sink != nil {
+		if sink.logger != nil {
+			logger = sink.logger
+		}
+		record = sink.record
+	}
+	logger.Warn("context fabric limitation disclosure skipped",
 		"cf_limitation_skipped_recogniser", SanitizeLogAttr(recogniser),
 		"cf_limitations_len", listLength)
-	if record := limitationDisclosureSkipRecorder.Load(); record != nil {
-		(*record)(recogniser)
+	if record != nil {
+		record(recogniser)
 	}
 }
 
@@ -138,7 +149,7 @@ func appendBoundedLimitations(limitations []string, additions []string) (compose
 			// before they were stripped), and then the addition is a
 			// disclosure the reader never sees. That is a failure path,
 			// so it is signalled, not skipped in silence.
-			recordLimitationDisclosureSkipped(addition, len(composed))
+			RecordLimitationDisclosureSkipped(addition, len(composed))
 			continue
 		}
 		shortened := append([]string(nil), composed[:index]...)

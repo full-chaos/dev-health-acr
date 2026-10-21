@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,9 +14,8 @@ import (
 )
 
 // skipRecorder captures what appendBoundedLimitations reports when it has to
-// leave a disclosure out, and the Warn line written for it. It replaces the
-// package default logger and the recorder hook for one test, so the tests that
-// use it must not run in parallel.
+// leave a disclosure out, and the Warn line written for it, by installing its
+// own sink for one test; the tests that use it must not run in parallel.
 type skipRecorder struct {
 	mu          sync.Mutex
 	recognisers []string
@@ -25,17 +25,13 @@ type skipRecorder struct {
 func installSkipRecorder(t *testing.T) *skipRecorder {
 	t.Helper()
 	rec := &skipRecorder{}
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&rec.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	restore := SetLimitationDisclosureSkipRecorder(func(recogniser string) {
+	logger := slog.New(slog.NewTextHandler(&rec.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	restore := SetLimitationDisclosureSkipSink(logger, func(recogniser string) {
 		rec.mu.Lock()
 		defer rec.mu.Unlock()
 		rec.recognisers = append(rec.recognisers, recogniser)
 	})
-	t.Cleanup(func() {
-		restore()
-		slog.SetDefault(previousLogger)
-	})
+	t.Cleanup(restore)
 	return rec
 }
 
@@ -55,6 +51,9 @@ func TestSkippedLeverDisclosureIsWarnedAndCounted(t *testing.T) {
 
 	composed, displaced := appendBoundedLimitations(full, []string{sentence})
 
+	if !slices.Equal(composed, full) {
+		t.Fatalf("the skipped addition changed the list that is served")
+	}
 	if displaced != 0 || len(composed) != len(full) || hasRetrievalDegradedLimitation(composed) {
 		t.Fatalf("premise changed: displaced=%d len=%d degraded=%t; the test is about the skip branch", displaced, len(composed), hasRetrievalDegradedLimitation(composed))
 	}
