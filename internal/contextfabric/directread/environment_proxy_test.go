@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 func TestASuppliedRegistryClientWithoutATransportGetsOne(t *testing.T) {
@@ -12,7 +14,7 @@ func TestASuppliedRegistryClientWithoutATransportGetsOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if watch.client.Transport == nil {
+	if watch.client.Transport != http.RoundTripper(outboundhttp.SharedTransport()) {
 		t.Fatal("a supplied registry client with no transport would dial through http.DefaultTransport and its environment proxy")
 	}
 	if supplied.Transport != nil {
@@ -34,7 +36,7 @@ func TestSuppliedQueryClientsWithoutATransportGetOne(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if client.client.Transport == nil {
+		if client.client.Transport != http.RoundTripper(outboundhttp.SharedTransport()) {
 			t.Fatalf("%s: a supplied client with no transport would dial through http.DefaultTransport and its environment proxy", name)
 		}
 		if supplied.Transport != nil {

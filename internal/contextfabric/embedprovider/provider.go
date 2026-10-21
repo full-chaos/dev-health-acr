@@ -3,6 +3,7 @@ package embedprovider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 // Embedder is the contextfabric.Embedder implementation over an
@@ -404,6 +406,12 @@ func newClientOptions(cfg Config) []option.RequestOption {
 	return []option.RequestOption{
 		credential,
 		option.WithBaseURL(cfg.BaseURL),
+		// Without a client of its own the SDK sends through http.DefaultClient, whose transport takes HTTP_PROXY /
+		// HTTPS_PROXY from the environment: the embed API key would reach that proxy. No redirect is followed either.
+		option.WithHTTPClient(&http.Client{
+			Transport:     outboundhttp.SharedTransport(),
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}),
 		option.WithMaxRetries(cfg.MaxTransportRetries),
 		option.WithMiddleware(modelprovider.SanitizeProviderErrorBody),
 	}
