@@ -550,8 +550,9 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		ctx = contextfabric.WithInvestmentUnits(ctx, *plan.units)
 	}
 	bundle, err := r.reader.Read(ctx, principal, admitted, contextfabric.CanonicalFactRequest{
-		Question:     contextfabric.InterpretedQuestion{TimeContext: plan.time},
-		Requirements: requirements,
+		Question:         contextfabric.InterpretedQuestion{TimeContext: plan.time},
+		TimeEndExclusive: plan.timeEndExclusive,
+		Requirements:     requirements,
 	})
 	if err != nil {
 		response.Status = StatusUnavailable
@@ -682,12 +683,13 @@ func validateUnits(request FactsRequest, plan readPlan) (*contextfabric.Investme
 
 // readPlan is a validated request.
 type readPlan struct {
-	kinds    []contextfabric.FactKind
-	subjects []contextfabric.SubjectRef
-	time     contextfabric.TimeContext
-	tables   string
-	units    *contextfabric.InvestmentUnitsRequest
-	echo     EffectiveRead
+	kinds            []contextfabric.FactKind
+	subjects         []contextfabric.SubjectRef
+	time             contextfabric.TimeContext
+	timeEndExclusive bool
+	tables           string
+	units            *contextfabric.InvestmentUnitsRequest
+	echo             EffectiveRead
 }
 
 func (r *FactsReader) validate(request FactsRequest, capabilities map[contextfabric.FactKind]contextfabric.FactCapability) (readPlan, error) {
@@ -761,6 +763,7 @@ func (r *FactsReader) validate(request FactsRequest, capabilities map[contextfab
 		return plan, err
 	}
 	plan.time, plan.echo.Window = timeContext, window
+	plan.timeEndExclusive = request.Window != nil && request.Window.Mode == WindowTrailing
 	return plan, nil
 }
 

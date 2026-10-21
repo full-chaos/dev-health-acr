@@ -1,6 +1,7 @@
 package devhealthfacts
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -189,6 +190,9 @@ type factTimeBound struct {
 	hasStart bool
 	start    time.Time
 	end      time.Time
+	// endExclusive says end is the first instant outside the window, not its last (a trailing read_facts window ends
+	// at today 00:00 UTC). Unset keeps the inclusive predicates unchanged.
+	endExclusive bool
 }
 
 // resolveTimeBound is the single decision every Tier A and Tier B provider
@@ -217,7 +221,7 @@ func resolveTimeBound(query contextfabric.FactQuery) (bound factTimeBound, resul
 		if query.Time.Start == nil || query.Time.End == nil {
 			return factTimeBound{}, unsupportedTimeResult(noHistoryUnsupportedReason), true
 		}
-		return factTimeBound{active: true, hasStart: true, start: query.Time.Start.UTC(), end: query.Time.End.UTC()},
+		return factTimeBound{active: true, hasStart: true, start: query.Time.Start.UTC(), end: query.Time.End.UTC(), endExclusive: query.TimeEndExclusive},
 			contextfabric.FactProviderResult{}, false
 	case contextfabric.TemporalObservedTime:
 		return factTimeBound{}, unsupportedTimeResult(observedTimeUnsupportedReason), true
@@ -264,7 +268,13 @@ func unsupportedTimeResult(reason string) contextfabric.FactProviderResult {
 // about factTimeBound (retentionState, effectiveGrain, resolveTimeBound,
 // refuseHistoricalFact -- all Fact/contextfabric-specific) stays here.
 func (b factTimeBound) neutral() readers.TimeBound {
-	return readers.TimeBound{Active: b.active, HasStart: b.hasStart, Start: b.start, End: b.end}
+	end := b.end
+	if b.active && b.endExclusive {
+		// The readers module only has inclusive end predicates (<=): its last instant is one microsecond before an
+		// exclusive end, the DateTime64(6) step.
+		end = end.Add(-time.Microsecond)
+	}
+	return readers.TimeBound{Active: b.active, HasStart: b.hasStart, Start: b.start, End: end}
 }
 
 // dayPredicate bounds a DATE-grained column (the rollup tables' `day`).
@@ -272,12 +282,26 @@ func (b factTimeBound) neutral() readers.TimeBound {
 // against a Date column at that column's own grain -- which is exactly the
 // day-grain effect the answer's temporal label reports.
 func (b factTimeBound) dayPredicate(column string) string {
+	if b.active && b.endExclusive {
+		predicate := fmt.Sprintf(" AND %s < toDate({%s:DateTime64(6,'UTC')})", column, boundEndParam)
+		if b.hasStart {
+			predicate += fmt.Sprintf(" AND %s >= toDate({%s:DateTime64(6,'UTC')})", column, boundStartParam)
+		}
+		return predicate
+	}
 	return b.neutral().DayPredicate(column)
 }
 
 // timestampPredicate bounds a DateTime64 column (computed_at, created_at,
 // submitted_at, and the interval columns Tier B derives from).
 func (b factTimeBound) timestampPredicate(column string) string {
+	if b.active && b.endExclusive {
+		predicate := fmt.Sprintf(" AND %s < {%s:DateTime64(6,'UTC')}", column, boundEndParam)
+		if b.hasStart {
+			predicate += fmt.Sprintf(" AND %s >= {%s:DateTime64(6,'UTC')}", column, boundStartParam)
+		}
+		return predicate
+	}
 	return b.neutral().TimestampPredicate(column)
 }
 
@@ -292,6 +316,9 @@ func (b factTimeBound) timestampPredicate(column string) string {
 // PERIOD row -- there, a row outside the window genuinely describes a
 // different period and must be excluded.
 func (b factTimeBound) existencePredicate(column string) string {
+	if b.active && b.endExclusive {
+		return fmt.Sprintf(" AND %s < {%s:DateTime64(6,'UTC')}", column, boundEndParam)
+	}
 	return b.neutral().ExistencePredicate(column)
 }
 

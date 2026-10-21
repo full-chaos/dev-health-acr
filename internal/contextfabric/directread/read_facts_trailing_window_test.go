@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 func TestTrailingWindowEndsAtTodayMidnightUTC(t *testing.T) {
@@ -43,5 +45,26 @@ func TestTrailingWindowStillRefusesBeyondMaxAndKeepsRangeAndAsOf(t *testing.T) {
 	_, effective, err = reader.window(&RequestWindow{Mode: WindowAsOf, AsOf: &asOf}, 365)
 	if err != nil || effective.AsOf == nil || !effective.AsOf.Equal(asOf) {
 		t.Fatalf("as_of changed: %+v, %v", effective, err)
+	}
+}
+
+func TestTrailingReadHandsProvidersAnExclusiveEndAndExplicitRangeDoesNot(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		window    *RequestWindow
+		exclusive bool
+	}{
+		{"trailing", &RequestWindow{Mode: WindowTrailing, Days: 7}, true},
+		{"range", &RequestWindow{Mode: WindowRange, Start: ptrTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)), End: ptrTime(time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC))}, false},
+	} {
+		reader := &FactsReader{now: func() time.Time { return time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC) }}
+		plan, err := reader.validate(FactsRequest{Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: "repository:r"}}, Window: c.window},
+			map[contextfabric.FactKind]contextfabric.FactCapability{contextfabric.FactHealth: {}})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if plan.timeEndExclusive != c.exclusive {
+			t.Errorf("%s: timeEndExclusive = %v, want %v", c.name, plan.timeEndExclusive, c.exclusive)
+		}
 	}
 }

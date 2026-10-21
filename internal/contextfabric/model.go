@@ -436,6 +436,9 @@ type CanonicalFactRequest struct {
 	Subjects     []SubjectRef        `json:"subjects"`
 	Cohort       *Cohort             `json:"cohort,omitempty"`
 	Requirements []FactRequirement   `json:"requirements"`
+	// TimeEndExclusive says the range window in Question.TimeContext is [Start, End): its End is a UTC midnight that
+	// is not part of the window. Internal; set only by a trailing read_facts window.
+	TimeEndExclusive bool `json:"-"`
 	// RequestedRepositoryScope is the caller-owned repository scope carried
 	// into fact providers. It is copied from InvestigationRequest's
 	// RequestedScope.RepositorySlugs at each production request-construction
