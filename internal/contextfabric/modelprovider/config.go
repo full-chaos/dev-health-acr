@@ -158,6 +158,12 @@ type Config struct {
 	// MaxOutputTokens is the output cap where a client sends one; see
 	// EnvMaxOutputTokens. Zero means DefaultMaxOutputTokens.
 	MaxOutputTokens int
+	// PromptCache marks the interpret and synthesize system prompts as a
+	// cacheable prefix on an Anthropic client. ConfigFromEnv turns it on (the
+	// deployment's own platform credential); a per-organization BYO Config
+	// leaves it off, since a BYO key caches per organization and a
+	// low-traffic organization would pay the write surcharge without a read.
+	PromptCache bool
 	// AllowInsecureBaseURL permits a plaintext http:// BaseURL; see
 	// EnvAllowInsecureBaseURL.
 	AllowInsecureBaseURL bool
@@ -398,6 +404,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		FallbackModel: envString(lookup, EnvFallbackModel, ""),
 		PhrasingModel: envString(lookup, EnvPhrasingModel, ""),
 		APIKey:        llm.NewSecret(apiKey),
+		PromptCache:   true,
 	}
 	if cfg.Timeout, err = envDuration(lookup, EnvTimeout, DefaultTimeout); err != nil {
 		return Config{}, err

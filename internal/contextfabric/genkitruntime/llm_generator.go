@@ -73,6 +73,7 @@ const (
 	llmReplyCutMessage    = "context fabric model reply hit the output cap"
 	llmFormatPathMessage  = "context fabric model answer format path"
 	llmSeedDroppedMessage = "context fabric model call sent without its seed"
+	llmCallMessage        = "llm.call"
 	llmDrawRejectedReason = "context fabric model reply failed the output schema"
 )
 
@@ -127,6 +128,7 @@ type llmGenerator struct {
 	synthesis       outputSchema
 	phrasing        outputSchema
 	maxOutputTokens int
+	promptCache     bool
 	logger          *slog.Logger
 }
 
@@ -146,7 +148,7 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 			return nil, fmt.Errorf("llm client keyed %q calls model %q", model, client.Model())
 		}
 	}
-	gen := llmGenerator{clients: clients, maxOutputTokens: config.MaxOutputTokens, logger: config.Logger}
+	gen := llmGenerator{clients: clients, maxOutputTokens: config.MaxOutputTokens, promptCache: config.PromptCache, logger: config.Logger}
 	if gen.maxOutputTokens == 0 {
 		gen.maxOutputTokens = DefaultMaxOutputTokens
 	}
@@ -226,6 +228,9 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 		// call, picked by the client before the call.
 		call.System = request.System
 		call.Format = &llm.JSONFormat{Name: outputFormatName, Schema: schema.anthropicWire()}
+		if g.promptCache && cachesSystemPrompt(operation) {
+			call.Cache = llm.CacheSystem
+		}
 	} else {
 		// Chat Completions: the request Genkit sent, byte for byte. No schema
 		// on the wire (a JSON object answer) and the schema as text at the
@@ -260,6 +265,7 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 			"output_tokens", outputTokens, "max_output_tokens", g.maxOutputTokens)
 	}
 	usage := llmUsage(result.Usage)
+	g.logCall(ctx, operation, client, result)
 	if result.StopReason == llmRefusalStopReason {
 		g.logger.InfoContext(ctx, llmRefusedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "outcome", "model_refusal",
@@ -274,6 +280,37 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 		reply = restoreStrictReply(schema.wire, reply)
 	}
 	return reply, usage, nil
+}
+
+// cachesSystemPrompt is whether an operation's system prompt is a large
+// constant worth caching. The phrase prompt is below every model's minimum.
+func cachesSystemPrompt(operation string) bool {
+	return operation == "interpret" || operation == "synthesize"
+}
+
+// logCall writes the one Info line of an answered model call: counts and
+// format path only, never prompt or reply text. A cache count the provider did
+// not report is left off the line.
+func (g llmGenerator) logCall(ctx context.Context, operation string, client llm.Provider, result llm.Result) {
+	count := func(value *int) int {
+		if value == nil {
+			return 0
+		}
+		return *value
+	}
+	args := []any{"operation", contextfabric.SanitizeLogAttr(operation),
+		"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())),
+		"model", contextfabric.SanitizeLogAttr(client.Model()),
+		"input_tokens", count(result.Usage.InputTokens), "output_tokens", count(result.Usage.OutputTokens),
+		"format_path", contextfabric.SanitizeLogAttr(result.FormatPath),
+		"format_reason", contextfabric.SanitizeLogAttr(result.FormatReason)}
+	if result.Usage.CacheCreationInputTokens != nil {
+		args = append(args, "cache_creation_input_tokens", *result.Usage.CacheCreationInputTokens)
+	}
+	if result.Usage.CachedInputTokens != nil {
+		args = append(args, "cached_input_tokens", *result.Usage.CachedInputTokens)
+	}
+	g.logger.InfoContext(ctx, llmCallMessage, args...)
 }
 
 func llmUsage(usage llm.Usage) contextfabric.ModelUsage {

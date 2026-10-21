@@ -632,7 +632,11 @@ type Config struct {
 	// otherwise get. Set on the fallback runtime, which by design answers
 	// once after the primary has spent its draws.
 	SingleDraw bool
-	Fallback   contextfabric.ModelRuntime
+	// PromptCache asks an Anthropic client to cache the system prompt of the
+	// interpret and synthesize calls. It is set only for the deployment's own
+	// platform credential; an organization's own key leaves it off.
+	PromptCache bool
+	Fallback    contextfabric.ModelRuntime
 	// MaxOutputTokens is the output cap a shared-client call asks for where
 	// its client sends one; zero means DefaultMaxOutputTokens.
 	MaxOutputTokens int
