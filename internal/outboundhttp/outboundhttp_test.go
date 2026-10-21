@@ -1,8 +1,11 @@
 package outboundhttp
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/proxycapture"
@@ -50,7 +53,15 @@ func TestTransportSurvivesAReplacedDefaultTransport(t *testing.T) {
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	http.DefaultTransport = replacedDefaultTransport{}
+	var logged bytes.Buffer
+	previousLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	transport := Transport()
+	line := logged.String()
+	if strings.Count(line, "\n") != 1 || !strings.Contains(line, "level=WARN") || !strings.Contains(line, "DefaultTransport") || !strings.Contains(line, "outboundhttp.replacedDefaultTransport") {
+		t.Fatalf("the fallback must log one WARN line naming the replaced DefaultTransport type, got %q", line)
+	}
 	if transport == nil || transport.Proxy != nil || transport.DialContext == nil || transport.MaxIdleConns != 100 {
 		t.Fatalf("Transport() over a replaced DefaultTransport = %+v, want net/http's default settings with no proxy", transport)
 	}
