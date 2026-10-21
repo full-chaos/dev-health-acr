@@ -211,6 +211,7 @@ func runtimeConfig(cfg Config, model string, fallback contextfabric.ModelRuntime
 		Fallback:        fallback,
 		MaxOutputTokens: cfg.MaxOutputTokens,
 		Telemetry:       cfg.Telemetry,
+		PromptCache:     cfg.PromptCache,
 		// CHAOS-5380: copied straight through, unconditionally, exactly
 		// like Telemetry above it -- a nil here keeps genkitruntime's own
 		// documented slog.Default() fallback rather than a
