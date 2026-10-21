@@ -178,6 +178,8 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 	case strings.TrimSpace(cfg.PostgresDSN) == "":
 		return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
+	case validateClickHouseDSNScheme(cfg.ClickHouseDSN) != nil:
+		return validateClickHouseDSNScheme(cfg.ClickHouseDSN)
 	case !hasActiveEvidenceIDKey(cfg):
 		return errors.New("ACR_EVIDENCE_ID_ACTIVE_KID and ACR_EVIDENCE_ID_KEYS must configure an active evidence key when backing stores are required")
 	case strings.TrimSpace(cfg.DeviceVerificationURL) == "":
@@ -195,6 +197,19 @@ func validateHostedRuntime(cfg Config) error {
 	default:
 		return nil
 	}
+}
+
+// validateClickHouseDSNScheme refuses an http or https DSN: the ClickHouse HTTP driver sends through the environment
+// proxy. The error never carries the DSN.
+func validateClickHouseDSNScheme(dsn string) error {
+	parsed, err := url.Parse(strings.TrimSpace(dsn))
+	if err != nil {
+		return nil
+	}
+	if scheme := strings.ToLower(parsed.Scheme); scheme == "http" || scheme == "https" {
+		return errors.New("ACR_CLICKHOUSE_DSN must use the native protocol (clickhouse:// or tcp://): http and https are not accepted because the ClickHouse HTTP driver sends through the environment proxy")
+	}
+	return nil
 }
 
 func isAbsoluteDeviceVerificationURL(value string) bool {

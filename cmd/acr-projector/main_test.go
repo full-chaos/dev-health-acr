@@ -106,7 +106,7 @@ func TestRebuildFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen(
 	t.Setenv("ACR_ENVIRONMENT", "development")
 	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
 	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
-	t.Setenv("ACR_CLICKHOUSE_DSN", "https://nouser:nopass@127.0.0.1:1")
+	t.Setenv("ACR_CLICKHOUSE_DSN", "clickhouse://nouser:nopass@127.0.0.1:1")
 	// rebuild forces cfg.ProjectionEnabled=true itself (see rebuild's own
 	// doc comment), so a canonical environment for it also needs the org
 	// allowlist -- unrelated to this fix, just what rebuild always required.
@@ -128,7 +128,7 @@ func TestRollbackFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen
 	t.Setenv("ACR_ENVIRONMENT", "development")
 	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
 	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
-	t.Setenv("ACR_CLICKHOUSE_DSN", "https://nouser:nopass@127.0.0.1:1")
+	t.Setenv("ACR_CLICKHOUSE_DSN", "clickhouse://nouser:nopass@127.0.0.1:1")
 	// rollback forces cfg.ProjectionEnabled=true itself, same as rebuild.
 	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS", "org-1")
 	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")

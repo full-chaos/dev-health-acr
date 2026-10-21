@@ -16,7 +16,7 @@ import (
 func projectionEnvironment(extra map[string]string) map[string]string {
 	env := map[string]string{
 		"ACR_ENVIRONMENT":                       "production",
-		"ACR_CLICKHOUSE_DSN":                    "https://clickhouse.internal",
+		"ACR_CLICKHOUSE_DSN":                    "clickhouse://clickhouse.internal",
 		"ACR_POSTGRES_DSN":                      "postgres://db/acr",
 		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
 		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true",
