@@ -1,0 +1,439 @@
+// Package outboundtransport is the CI guard that every outbound HTTP client of production code dials with a transport
+// of its own and never through a proxy taken from the process environment (HTTP_PROXY, HTTPS_PROXY, NO_PROXY).
+//
+// A client with no Transport uses http.DefaultTransport, whose Proxy is http.ProxyFromEnvironment: an ambient proxy
+// variable then receives every request the client sends, credential headers included (a plain-http target is sent to
+// the proxy in full). Which client carries a credential cannot be decided statically, so the rule covers every client.
+//
+// The walk is by TYPE (go/packages + go/types) over the module, once for every GOOS of the release matrix
+// (releasebuild.Matrix: the sidecar ships for darwin and windows too); an import alias or a dot import cannot hide a
+// site. A SITE is
+//
+//	client-no-transport  a composite literal of net/http.Client whose Transport is absent or nil, new(net/http.Client),
+//	                     or a var declared with the non-pointer type net/http.Client and no value
+//	transport-nil        an assignment of nil to the Transport field of a net/http.Client
+//	default-transport    any use of net/http.DefaultTransport
+//	default-client       any use of net/http.DefaultClient or the package functions Get, Head, Post, PostForm
+//	proxy                any use of net/http.ProxyFromEnvironment, net/http.ProxyURL or httpproxy.FromEnvironment, and a
+//	                     Proxy field of a net/http.Transport set (in a literal or by assignment) to anything but nil
+//
+// Every site needs a row in allow.tsv (file, symbol, kind, count, reason): the transport helpers themselves and the
+// documented customer-machine clients that honour a proxy on purpose. An unlisted site, a count that differs and a
+// row that matches nothing FAIL. Production code takes its transport from outboundhttp.SharedTransport or
+// outboundhttp.Transport.
+//
+// NOT covered, stated: a client built inside a dependency outside the module (an SDK's own default client, such as the
+// LLM clients of dev-health-go); a production file outside every release build (pinned by name, the test fails when
+// that set changes).
+package outboundtransport
+
+import (
+	"bufio"
+	"fmt"
+	"go/ast"
+	"go/types"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"golang.org/x/tools/go/packages"
+
+	"github.com/full-chaos/dev-health-acr/internal/releasebuild"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
+)
+
+const (
+	modulePath   = "github.com/full-chaos/dev-health-acr"
+	fixturesBase = modulePath + "/internal/cigates/outboundtransport/testdata/planted"
+	allowFile    = "allow.tsv"
+)
+
+// pinnedOutOfScope: the production .go files no release build contains; none holds an HTTP client. They build only
+// under a tag: race, or the compiled lifecycle fixtures of the acr-mcp and sidecar tests.
+var pinnedOutOfScope = []string{
+	"cmd/acr-mcp/lifecycle_compiled_fixture.go",
+	"internal/contracts/v1/answer_bound_race.go",
+	"internal/sidecar/credential_keyring_compiled_lifecycle_fixture.go",
+	"internal/sidecar/credential_lifecycle_lock_compiled_fixture_unix.go",
+	"internal/sidecar/credential_lifecycle_lock_compiled_fixture_unsupported.go",
+}
+
+type site struct{ file, symbol, kind string }
+
+type allowRow struct {
+	count  int
+	reason string
+}
+
+func TestEveryOutboundClientHasATransportWithoutTheEnvironmentProxy(t *testing.T) {
+	root := repopath.Root(t)
+	found, problems, loaded := scan(t, root, []string{"./..."})
+	if len(found) == 0 {
+		t.Fatal("the walk found no site at all: the transport helpers alone are sites, so the walk did not run")
+	}
+	problems = append(problems, compare(found, readAllow(t, allowFile))...)
+	problems = append(problems, scopeProblems(outsideBuild(t, root, loaded), pinnedOutOfScope)...)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if len(problems) > 0 {
+		t.Log("fix: give the client Transport: outboundhttp.SharedTransport() (or outboundhttp.Transport() to change a field of it); a documented, deliberate proxy gets an allow.tsv row with its reason")
+	}
+}
+
+// scan loads the packages matching patterns (non-test files) for every release target and returns every site with
+// the largest count seen in one build, the load problems, and the files loaded. The targets load concurrently.
+func scan(t *testing.T, root string, patterns []string) (map[site]int, []string, map[string]bool) {
+	t.Helper()
+	targets := releaseTargets()
+	results := make([]targetScan, len(targets))
+	var wait sync.WaitGroup
+	for i, target := range targets {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			results[i] = scanTarget(root, patterns, target)
+		}()
+	}
+	wait.Wait()
+	found := map[site]int{}
+	var problems []string
+	loaded := map[string]bool{}
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatalf("packages.Load: %v", result.err)
+		}
+		problems = append(problems, result.problems...)
+		for name := range result.loaded {
+			loaded[name] = true
+		}
+		for key, count := range result.counts {
+			if count > found[key] {
+				found[key] = count
+			}
+		}
+	}
+	sort.Strings(problems)
+	return found, uniqueStrings(problems), loaded
+}
+
+type targetScan struct {
+	counts   map[site]int
+	problems []string
+	loaded   map[string]bool
+	err      error
+}
+
+func scanTarget(root string, patterns []string, target [2]string) targetScan {
+	cfg := &packages.Config{
+		Dir:  root,
+		Env:  append(os.Environ(), "GOOS="+target[0], "GOARCH="+target[1]),
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return targetScan{err: err}
+	}
+	result := targetScan{counts: map[site]int{}, loaded: map[string]bool{}}
+	for _, pkg := range pkgs {
+		for _, loadErr := range pkg.Errors {
+			result.problems = append(result.problems, fmt.Sprintf("LOAD error in %s (%s/%s): %v", pkg.PkgPath, target[0], target[1], loadErr))
+		}
+		for _, name := range pkg.CompiledGoFiles {
+			result.loaded[name] = true
+		}
+		if pkg.TypesInfo == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			rel, relErr := filepath.Rel(root, pkg.Fset.Position(file.Pos()).Filename)
+			if relErr != nil {
+				return targetScan{err: relErr}
+			}
+			rel = filepath.ToSlash(rel)
+			for _, declaration := range file.Decls {
+				symbol := declSymbol(declaration)
+				ast.Inspect(declaration, func(node ast.Node) bool {
+					for _, kind := range kindsOf(pkg.TypesInfo, node) {
+						result.counts[site{rel, symbol, kind}]++
+					}
+					return true
+				})
+			}
+		}
+	}
+	return result
+}
+
+// kindsOf is the site kinds one node is.
+func kindsOf(info *types.Info, node ast.Node) []string {
+	switch n := node.(type) {
+	case *ast.CompositeLit:
+		tv, ok := info.Types[n]
+		if !ok {
+			return nil
+		}
+		switch {
+		case isNamed(tv.Type, "Client"):
+			if value, ok := fieldValue(n, "Transport", 0); !ok || isNil(info, value) {
+				return []string{"client-no-transport"}
+			}
+		case isNamed(tv.Type, "Transport"):
+			if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
+				return []string{"proxy"}
+			}
+		}
+	case *ast.CallExpr:
+		if ident, ok := n.Fun.(*ast.Ident); ok && len(n.Args) == 1 {
+			if builtin, ok := info.Uses[ident].(*types.Builtin); ok && builtin.Name() == "new" && isNamed(info.Types[n.Args[0]].Type, "Client") {
+				return []string{"client-no-transport"}
+			}
+		}
+	case *ast.ValueSpec:
+		if n.Type != nil && len(n.Values) == 0 && isNamed(info.Types[n.Type].Type, "Client") {
+			return []string{"client-no-transport"}
+		}
+	case *ast.AssignStmt:
+		var kinds []string
+		for i, lhs := range n.Lhs {
+			selector, ok := lhs.(*ast.SelectorExpr)
+			if !ok || i >= len(n.Rhs) || len(n.Lhs) != len(n.Rhs) {
+				continue
+			}
+			owner := derefPointer(info.Types[selector.X].Type)
+			switch {
+			case selector.Sel.Name == "Transport" && isNamed(owner, "Client") && isNil(info, n.Rhs[i]):
+				kinds = append(kinds, "transport-nil")
+			case selector.Sel.Name == "Proxy" && isNamed(owner, "Transport") && !isNil(info, n.Rhs[i]):
+				kinds = append(kinds, "proxy")
+			}
+		}
+		return kinds
+	case *ast.Ident:
+		obj := info.Uses[n]
+		if obj == nil || obj.Pkg() == nil || obj.Pkg().Scope().Lookup(obj.Name()) != obj {
+			return nil
+		}
+		switch obj.Pkg().Path() {
+		case "net/http":
+			switch obj.Name() {
+			case "DefaultTransport":
+				return []string{"default-transport"}
+			case "DefaultClient", "Get", "Head", "Post", "PostForm":
+				return []string{"default-client"}
+			case "ProxyFromEnvironment", "ProxyURL":
+				return []string{"proxy"}
+			}
+		case "golang.org/x/net/http/httpproxy":
+			if obj.Name() == "FromEnvironment" {
+				return []string{"proxy"}
+			}
+		}
+	}
+	return nil
+}
+
+// isNamed: the type is exactly net/http.<name> (not a pointer to it).
+func isNamed(t types.Type, name string) bool {
+	if t == nil {
+		return false
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == "net/http" && obj.Name() == name
+}
+
+func derefPointer(t types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	if pointer, ok := types.Unalias(t).(*types.Pointer); ok {
+		return pointer.Elem()
+	}
+	return t
+}
+
+// fieldValue is the value the literal gives the field: by key, or (an unkeyed literal) by position when position >= 0.
+func fieldValue(lit *ast.CompositeLit, field string, position int) (ast.Expr, bool) {
+	for i, element := range lit.Elts {
+		keyed, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			if i == position {
+				return element, true
+			}
+			continue
+		}
+		if key, ok := keyed.Key.(*ast.Ident); ok && key.Name == field {
+			return keyed.Value, true
+		}
+	}
+	return nil, false
+}
+
+func isNil(info *types.Info, expression ast.Expr) bool {
+	tv, ok := info.Types[expression]
+	return ok && tv.IsNil()
+}
+
+func declSymbol(declaration ast.Decl) string {
+	switch d := declaration.(type) {
+	case *ast.FuncDecl:
+		if d.Recv != nil && len(d.Recv.List) == 1 {
+			return receiverName(d.Recv.List[0].Type) + "." + d.Name.Name
+		}
+		return d.Name.Name
+	case *ast.GenDecl:
+		if len(d.Specs) > 0 {
+			switch spec := d.Specs[0].(type) {
+			case *ast.ValueSpec:
+				if len(spec.Names) > 0 {
+					return "var " + spec.Names[0].Name
+				}
+			case *ast.TypeSpec:
+				return "type " + spec.Name.Name
+			}
+		}
+	}
+	return "package-level"
+}
+
+func receiverName(expression ast.Expr) string {
+	switch e := expression.(type) {
+	case *ast.StarExpr:
+		return receiverName(e.X)
+	case *ast.Ident:
+		return e.Name
+	case *ast.IndexExpr:
+		return receiverName(e.X)
+	}
+	return "?"
+}
+
+// compare is the verdict of the found sites against the allow rows, as sorted text.
+func compare(found map[site]int, rows map[site]allowRow) []string {
+	var problems []string
+	for key, count := range found {
+		row, ok := rows[key]
+		switch {
+		case !ok:
+			problems = append(problems, fmt.Sprintf("UNLISTED site: %s %s %s (x%d)", key.file, key.symbol, key.kind, count))
+		case row.count != count:
+			problems = append(problems, fmt.Sprintf("COUNT differs: %s %s %s: allow.tsv %d, code %d", key.file, key.symbol, key.kind, row.count, count))
+		case strings.TrimSpace(row.reason) == "":
+			problems = append(problems, fmt.Sprintf("NO REASON: %s %s %s", key.file, key.symbol, key.kind))
+		}
+	}
+	for key := range rows {
+		if _, ok := found[key]; !ok {
+			problems = append(problems, fmt.Sprintf("STALE row: %s %s %s", key.file, key.symbol, key.kind))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+func readAllow(t *testing.T, name string) map[site]allowRow {
+	t.Helper()
+	handle, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	rows := map[site]allowRow{}
+	scanner := bufio.NewScanner(handle)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for line := 1; scanner.Scan(); line++ {
+		text := scanner.Text()
+		if text == "" || strings.HasPrefix(text, "#") {
+			continue
+		}
+		fields := strings.Split(text, "\t")
+		if len(fields) != 5 {
+			t.Fatalf("%s:%d: want 5 tab-separated fields (file, symbol, kind, count, reason), got %d", name, line, len(fields))
+		}
+		count, err := strconv.Atoi(fields[3])
+		if err != nil || count < 1 {
+			t.Fatalf("%s:%d: count %q is not a positive integer", name, line, fields[3])
+		}
+		key := site{fields[0], fields[1], fields[2]}
+		if _, dup := rows[key]; dup {
+			t.Fatalf("%s:%d: duplicate row %v", name, line, key)
+		}
+		rows[key] = allowRow{count: count, reason: fields[4]}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+// outsideBuild is every production .go file of the module that no loaded build contains (another GOOS, a build tag).
+func outsideBuild(t *testing.T, root string, loaded map[string]bool) []string {
+	t.Helper()
+	var outside []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "testdata":
+				return filepath.SkipDir
+			}
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") && !loaded[path] {
+			rel, _ := filepath.Rel(root, path)
+			outside = append(outside, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(outside)
+	return outside
+}
+
+func scopeProblems(outside, pinned []string) []string {
+	if strings.Join(outside, " ") != strings.Join(pinned, " ") {
+		return []string{fmt.Sprintf("SCOPE LIMIT changed: production files outside every release build are %v, pinned %v (add the file with its reason, or move it into a build)", outside, pinned)}
+	}
+	return nil
+}
+
+// releaseTargets is one GOOS/GOARCH pair per GOOS releasebuild.Matrix ships (its first architecture). A file built for
+// one architecture only would not be loaded and so lands in the out-of-scope list, which is pinned.
+func releaseTargets() [][2]string {
+	seen := map[string]bool{}
+	var targets [][2]string
+	for _, target := range releasebuild.Matrix() {
+		if !seen[target.GOOS] {
+			seen[target.GOOS] = true
+			targets = append(targets, [2]string{target.GOOS, target.GOARCH})
+		}
+	}
+	return targets
+}
+
+func uniqueStrings(values []string) []string {
+	var out []string
+	for i, value := range values {
+		if i == 0 || value != values[i-1] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
