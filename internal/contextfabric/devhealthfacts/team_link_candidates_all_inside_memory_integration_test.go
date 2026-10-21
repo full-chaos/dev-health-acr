@@ -164,7 +164,11 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
 SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, ? FROM numbers(?)`,
 		repoUUID("repo-moved"), org, at, project, at, uint64(candidateAllInsideMoved))
-	oracle := slices.Compact(slices.Sorted(slices.Values(read(devhealthfacts.TeamLinkCandidatesPerVersionStatementForTest()))))
+	perVersion := read(devhealthfacts.TeamLinkCandidatesPerVersionStatementForTest())
+	if len(perVersion) != candidateAllInsideIssues+candidateAllInsideMoved {
+		t.Fatalf("moved issues: the per-version oracle read %d entries, want %d (the second-repository rows did not reach the predicate)", len(perVersion), candidateAllInsideIssues+candidateAllInsideMoved)
+	}
+	oracle := slices.Compact(slices.Sorted(slices.Values(perVersion)))
 	served := read(devhealthfacts.TeamLinkCandidatesStatementForTest())
 	if got := slices.Sorted(slices.Values(slices.Clone(served))); !slices.Equal(got, oracle) {
 		t.Fatalf("moved issues: the candidate statement returned %d entries, not the per-version oracle's %d distinct ids, each once", len(got), len(oracle))
