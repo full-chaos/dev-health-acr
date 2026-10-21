@@ -64,6 +64,29 @@ func TestSchemaRefToASiblingSchemaFileIsResolvedAndApplied(t *testing.T) {
 	}
 }
 
+func TestSchemaRefThroughASymlinkToAFileOutsideTheSchemaDirectoryFailsTheGate(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "sub", "root.schema.json")
+	writeFile(t, root, refRootSchema)
+	// The linked file allows a value the real sibling schema forbids.
+	writeFile(t, filepath.Join(dir, "outside.schema.json"), strings.Replace(refSharedSchema, `["jwt_header_typ", "none"]`, `["not_a_kind"]`, 1))
+	if err := os.MkdirAll(filepath.Join(dir, "sub", "jsonschema"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "outside.schema.json"), filepath.Join(dir, "sub", "jsonschema", "shared.v1.schema.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	var errs []string
+	err := validateAgainstSchema(root, map[string]any{"kind": "not_a_kind"}, "REF", &errs)
+	if err == nil {
+		t.Fatalf("a $ref satisfied through a symlink to a file outside the schema directory was accepted; errs=%v", errs)
+	}
+	if !strings.Contains(err.Error(), "shared.v1.schema.json") {
+		t.Fatalf("the error must name the reference: %v", err)
+	}
+}
+
 func TestSchemaRefToAMissingSiblingFileFailsTheGate(t *testing.T) {
 	root := seedRefFixture(t, false)
 
@@ -88,8 +111,12 @@ func TestSchemaRefOutsideTheSchemasOwnIDBaseFailsTheGate(t *testing.T) {
 	}
 
 	var errs []string
-	if err := validateAgainstSchema(root, map[string]any{"kind": "none"}, "REF", &errs); err == nil {
+	err := validateAgainstSchema(root, map[string]any{"kind": "none"}, "REF", &errs)
+	if err == nil {
 		t.Fatalf("a $ref to a URI outside the schema's own $id base must not be loaded from disk; errs=%v", errs)
+	}
+	if !strings.Contains(err.Error(), "elsewhere.test") {
+		t.Fatalf("the error must name the reference: %v", err)
 	}
 }
 
@@ -100,8 +127,12 @@ func TestSchemaRefCannotEscapeTheSchemaDirectory(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "outside.v1.schema.json"), refSharedSchema)
 
 	var errs []string
-	if err := validateAgainstSchema(root, map[string]any{"kind": "none"}, "REF", &errs); err == nil {
+	err := validateAgainstSchema(root, map[string]any{"kind": "none"}, "REF", &errs)
+	if err == nil {
 		t.Fatalf("a $ref that climbs out of the schema's $id base must be refused; errs=%v", errs)
+	}
+	if !strings.Contains(err.Error(), "outside.v1.schema.json") {
+		t.Fatalf("the error must name the reference: %v", err)
 	}
 }
 

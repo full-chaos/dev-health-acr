@@ -339,7 +339,20 @@ func siblingSchemaLoader(schemaPath, rootID string) jsonschema.Loader {
 		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
 			return nil, fmt.Errorf("schema reference %s escapes the $id base of %s", uri, schemaPath)
 		}
-		file := filepath.Join(filepath.Dir(schemaPath), filepath.FromSlash(rel))
+		schemaDir := filepath.Dir(schemaPath)
+		file := filepath.Join(schemaDir, filepath.FromSlash(rel))
+		// A fetched file may be a symlink; the file read must still lie under
+		// the root schema's directory, or the gate would validate against a
+		// schema that is not the one the $ref names and report nothing.
+		if real, err := filepath.EvalSymlinks(file); err == nil {
+			realDir, dirErr := filepath.EvalSymlinks(schemaDir)
+			if dirErr != nil {
+				return nil, fmt.Errorf("schema reference %s: resolving the directory of %s: %w", uri, schemaPath, dirErr)
+			}
+			if r, relErr := filepath.Rel(realDir, real); relErr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+				return nil, fmt.Errorf("schema reference %s resolves through a symlink to %s, outside the directory of %s", uri, real, schemaPath)
+			}
+		}
 		data, err := os.ReadFile(file)
 		if err != nil {
 			return nil, fmt.Errorf("schema reference %s needs %s, which was not found beside %s (add it to the sparse checkout of the ops contract): %w", uri, rel, schemaPath, err)

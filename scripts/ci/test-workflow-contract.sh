@@ -605,7 +605,7 @@ check_ops_contract_sparse_list_carries_referenced_schemas() {
     return 1
   fi
   local want
-  for want in contracts/auth/v1/credential-classes.schema.json contracts/auth/v1/jsonschema/endpoint-auth-profile.v1.schema.json contracts/auth/v1/jsonschema/principal.v1.schema.json; do
+  for want in contracts/auth/v1/credential-classes.schema.json contracts/auth/v1/jsonschema/endpoint-auth-profile.v1.schema.json contracts/auth/v1/jsonschema/principal.v1.schema.json contracts/auth/v1/endpoint-profile.schema.json; do
     if ! grep -qxF "            $want" <<<"$block"; then
       printf 'the ops-contract sparse-checkout list does not carry %s -- the credential-classes schema $refs it, so the next ops re-pin fails to resolve\n' "$want" >&2
       return 1
@@ -2241,6 +2241,11 @@ sparse_ref_removed="$tmpdir/sparse-ref-removed.yml"
 grep -vF 'jsonschema/endpoint-auth-profile.v1.schema.json' "$workflow" > "$sparse_ref_removed"
 assert_check_fails 'dropped the endpoint-auth-profile schema from the ops-contract sparse list' \
   check_ops_contract_sparse_list_carries_referenced_schemas "$sparse_ref_removed"
+
+sparse_closure_removed="$tmpdir/sparse-closure-removed.yml"
+grep -vF 'contracts/auth/v1/endpoint-profile.schema.json' "$workflow" > "$sparse_closure_removed"
+assert_check_fails 'dropped endpoint-profile.schema.json, which the referenced schema itself references, from the ops-contract sparse list' \
+  check_ops_contract_sparse_list_carries_referenced_schemas "$sparse_closure_removed"
 
 sparse_transitive_removed="$tmpdir/sparse-transitive-removed.yml"
 grep -vF 'jsonschema/principal.v1.schema.json' "$workflow" > "$sparse_transitive_removed"
