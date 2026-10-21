@@ -40,16 +40,20 @@ func teamLinkCandidatesPredicate(bound factTimeBound) string {
       AND cp.project_id IN ` + teamOwnedProjectKeyCandidatesSQL("ids", bound)
 }
 
-// teamLinkCandidatesStatement returns the candidates as one array row: one
-// entry per (repository, issue) however many unmerged versions it has, and one
-// row stays within the client's result row cap. The DISTINCT names the sort key
-// (org_id, repo_id, work_item_id), so the server reads it in order and holds
-// no set of every candidate id (52 MB vs 94 MB at 96k all-inside links, at 1
-// thread as at 4). An issue stored under two repositories comes twice;
-// teamLinkCandidatesExternalTable sends it once.
+// teamLinkCandidatesStatement returns the distinct candidates as one array
+// row: one entry per issue however many unmerged versions or repositories it
+// has, and one row stays within the client's result row cap. The ids are
+// grouped on one thread: a DISTINCT keeps a set per stream and a final set
+// (94 MB at 96k all-inside links, at 1 thread as at 4), a DISTINCT on the sort
+// key opens every overlapping part at once (117 MB at 20 versions of 24k), and
+// four aggregating threads each hold every id when every part holds them all;
+// one grouping thread holds 48 MB and 16 MB there.
 func teamLinkCandidatesStatement(bound factTimeBound) string {
-	return `SELECT groupArray(work_item_id) FROM (SELECT DISTINCT cp.org_id, cp.repo_id, cp.work_item_id AS work_item_id FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(bound) + `)`
+	return readers.WithSettings(`SELECT groupArray(work_item_id) FROM (SELECT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE `+teamLinkCandidatesPredicate(bound)+` GROUP BY cp.work_item_id)`, readers.Settings{MaxThreads: teamLinkCandidatesMaxThreads})
 }
+
+// teamLinkCandidatesMaxThreads is the candidate statement's thread count.
+const teamLinkCandidatesMaxThreads = uint64(1)
 
 // withTeamLinkCandidates reads the teams' link candidates once and returns ctx
 // carrying them as the external table teamProjectLinkRowsSQL reads. ok is

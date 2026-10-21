@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
@@ -23,10 +25,10 @@ const (
 	// a second repository: one issue, two sort-key rows.
 	candidateAllInsideMoved = 1_000
 	// candidateAllInsideBound is the candidate statement's own bound where
-	// every link is inside the owned projects: the sort-key DISTINCT measured
-	// 51.55 MB unmerged and 52.02 MB merged at 96k (lowest of three reads),
-	// times 1.15 plus 2 MiB. The DISTINCT over work_item_id alone held a set
-	// of every id: 89.96 / 93.95 MB.
+	// every link is inside the owned projects: 52.02 MB (the lowest-memory
+	// sort-key DISTINCT measured at 96k, lowest of three reads) times 1.15
+	// plus 2 MiB. The one-thread grouping served measured 48.69 MB unmerged and
+	// 48.33 MB merged; the DISTINCT over work_item_id held 94.02 / 94.45 MB.
 	candidateAllInsideBound = uint64(59 << 20)
 )
 
@@ -37,8 +39,8 @@ func candidateAllInsideWithinBound(peak uint64) bool {
 // Where every link of 96k is inside the owned projects, the team link
 // candidate statement returns the per-version statement's ids, each once, and
 // its peak stays under its own bound, unmerged and merged, through the client
-// the hosted API uses. An issue stored under a second repository comes once
-// per repository, and the external table the link rows read holds it once.
+// the hosted API uses. An issue also stored under a second repository still
+// comes once, and the external table the link rows read holds it once.
 func TestTeamLinkCandidateStatementStaysUnderItsBoundWhereEveryLinkIsInsideTheOwnedProjectsOnRealClickHouse(t *testing.T) {
 	if raceDetectorEnabled {
 		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
@@ -136,31 +138,36 @@ SELECT ?, concat('owned-', repeat('x', 96), '-', toString(number)), toUInt32(num
 			t.Errorf("%s: team link candidate statement peaked at %d bytes where every link is inside the owned projects, want at most %d", mode, lowest, candidateAllInsideBound)
 		}
 	}
+	// EXPLAIN goes through the native connection: the API client refuses any
+	// statement that is not a plain read. Log only.
 	var plan []string
-	if err := readers.QueryOrgScopedNamed(ctx, query, "ExplainTeamLinkCandidates", "EXPLAIN PIPELINE "+devhealthfacts.TeamLinkCandidatesStatementForTest(), org, []string{teamID}, func(row readers.RowScanner) error {
-		var line string
-		if err := row.Scan(&line); err != nil {
-			return err
-		}
-		if strings.Contains(line, "Distinct") {
-			plan = append(plan, strings.TrimSpace(line))
-		}
-		return nil
-	}); err != nil {
+	explainCtx := clickhouse.Context(ctx,
+		clickhouse.WithParameters(clickhouse.Parameters{"org_id": org, "ids": "['" + teamID + "']"}),
+		clickhouse.WithSettings(clickhouse.Settings{"max_threads": contextpacket.StatementMaxThreads}))
+	if rows, err := direct.Query(explainCtx, "EXPLAIN PIPELINE "+devhealthfacts.TeamLinkCandidatesStatementForTest()); err != nil {
 		t.Logf("ALL-INSIDE explain of the team link candidate statement unavailable (log only): %v", err)
+	} else {
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Logf("ALL-INSIDE explain scan (log only): %v", err)
+				break
+			}
+			if strings.Contains(line, "Distinct") || strings.Contains(line, "Aggregat") || strings.Contains(line, "Resize") {
+				plan = append(plan, strings.TrimSpace(line))
+			}
+		}
+		rows.Close()
 	}
-	t.Logf("ALL-INSIDE team link candidate statement DISTINCT steps: %s", strings.Join(plan, " | "))
+	t.Logf("ALL-INSIDE team link candidate statement grouping steps: %s", strings.Join(plan, " | "))
 
 	exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id, completed_at, last_synced)
 SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 'open', '', ?, '', 'linear', ?, NULL, ? FROM numbers(?)`,
 		repoUUID("repo-moved"), org, at, project, at, uint64(candidateAllInsideMoved))
 	oracle := slices.Compact(slices.Sorted(slices.Values(read(devhealthfacts.TeamLinkCandidatesPerVersionStatementForTest()))))
 	served := read(devhealthfacts.TeamLinkCandidatesStatementForTest())
-	if len(served) != candidateAllInsideIssues+candidateAllInsideMoved {
-		t.Fatalf("moved issues: the candidate statement returned %d entries, want %d (one per repository and issue)", len(served), candidateAllInsideIssues+candidateAllInsideMoved)
-	}
-	if got := slices.Compact(slices.Sorted(slices.Values(slices.Clone(served)))); !slices.Equal(got, oracle) {
-		t.Fatalf("moved issues: the candidate statement's ids (%d distinct) are not the per-version oracle's %d", len(got), len(oracle))
+	if got := slices.Sorted(slices.Values(slices.Clone(served))); !slices.Equal(got, oracle) {
+		t.Fatalf("moved issues: the candidate statement returned %d entries, not the per-version oracle's %d distinct ids, each once", len(got), len(oracle))
 	}
 	table, err := devhealthfacts.TeamLinkCandidatesTableForTest(served)
 	if err != nil {
