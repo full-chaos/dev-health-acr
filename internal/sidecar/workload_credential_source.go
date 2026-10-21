@@ -38,7 +38,8 @@ const (
 type WorkloadCredentialSourceOptions struct {
 	// HTTPClient performs the token-exchange request. Nil uses a client
 	// that refuses redirects over outboundhttp.SharedTransport() (no proxy
-	// from the environment).
+	// from the environment); a supplied client with no transport gets
+	// SharedTransport on a copy.
 	HTTPClient *http.Client
 	// TokenEndpoint is the hosted ACR token endpoint (ACR_TOKEN_ENDPOINT),
 	// e.g. https://acr-api.internal.example/api/v1/oauth/token. Required.
@@ -88,13 +89,14 @@ func NewWorkloadCredentialSource(options WorkloadCredentialSourceOptions) (Crede
 	if strings.TrimSpace(options.SubjectTokenFile) == "" {
 		return nil, errors.New("acr: workload credential source requires a subject token file")
 	}
-	client := options.HTTPClient
+	client := outboundhttp.WithTransport(options.HTTPClient)
 	if client == nil {
 		// The default client refuses redirects -- the subject token in the
 		// request body must never be forwarded to a retargeted host -- and
 		// never dials through a proxy from the environment. A
-		// caller-supplied HTTPClient is trusted as-is (never mutated here)
-		// rather than second-guessed.
+		// caller-supplied HTTPClient keeps its own redirect policy (never
+		// mutated here); one with no transport gets SharedTransport on a
+		// copy.
 		client = &http.Client{Transport: outboundhttp.SharedTransport(), CheckRedirect: refuseRedirect}
 	}
 	now := options.Now

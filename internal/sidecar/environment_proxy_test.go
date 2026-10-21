@@ -2,6 +2,7 @@ package sidecar
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,5 +33,10 @@ func TestTheDefaultWorkloadExchangeClientNeverDialsTheEnvironmentProxy(t *testin
 			panic(err)
 		}
 		_, _ = source()
+		supplied, err := NewWorkloadCredentialSource(WorkloadCredentialSourceOptions{TokenEndpoint: endpoint, SubjectTokenFile: tokenFile, Timeout: 5 * time.Second, HTTPClient: &http.Client{}})
+		if err != nil {
+			panic(err)
+		}
+		_, _ = supplied()
 	}).AssertNothingReached(t)
 }

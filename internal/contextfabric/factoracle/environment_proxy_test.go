@@ -2,6 +2,7 @@ package factoracle
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,5 +23,7 @@ func TestTheDefaultOracleClientsNeverDialTheEnvironmentProxy(t *testing.T) {
 		}
 		_, _, _, _ = (&VenuePlanes{URL: proxycapture.Target, TokenFile: tokenFile}).post(ctx, "read_facts", map[string]any{})
 		_, _ = SeedTarget{BaseURL: proxycapture.Target, User: "oracle", Password: proxycapture.Canary}.query(ctx, "", "SELECT 1", nil)
+		_, _, _, _ = (&VenuePlanes{URL: proxycapture.Target, TokenFile: tokenFile, Client: &http.Client{}}).post(ctx, "read_facts", map[string]any{})
+		_, _ = SeedTarget{BaseURL: proxycapture.Target, User: "oracle", Password: proxycapture.Canary, Client: &http.Client{}}.query(ctx, "", "SELECT 1", nil)
 	}).AssertNothingReached(t)
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -90,7 +91,7 @@ func newPublicTransport() *http.Transport {
 // NewClientMetadataFetcher builds a fetcher over the given client. Redirects
 // are always refused and the overall request time is always bounded.
 func NewClientMetadataFetcher(client *http.Client) *HTTPClientMetadataFetcher {
-	copied := *client
+	copied := *outboundhttp.WithTransport(client)
 	copied.Timeout = clientMetadataTimeout
 	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &HTTPClientMetadataFetcher{client: &copied, now: time.Now, cache: make(map[string]cachedClientMetadata)}

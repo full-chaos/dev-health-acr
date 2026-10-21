@@ -477,7 +477,7 @@ func (t SeedTarget) query(ctx context.Context, database, statement string, body 
 		return "", err
 	}
 	req.SetBasicAuth(t.User, t.Password)
-	client := t.Client
+	client := outboundhttp.WithTransport(t.Client)
 	if client == nil {
 		client = &http.Client{Transport: outboundhttp.SharedTransport()}
 	}
