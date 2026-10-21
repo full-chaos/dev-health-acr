@@ -12,7 +12,7 @@ pins=(
   'docker.io/docker/dockerfile:1.20|sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d'
   'docker.io/library/golang:1.27.3-alpine3.23|sha256:895e5feab11a4b3774d24ee3c9579028456b82ad37f42a9eb6f82adaf776a201'
   'gcr.io/distroless/static-debian12:nonroot|sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a'
-  'cgr.dev/chainguard/git:latest|sha256:03f3087e2927fca74992c16360777ec780810c243780508e72a303b7a4d9dbe8'
+  'cgr.dev/chainguard/git:latest|sha256:62087eb4f17f6d09e27f4eace690f264e091bbbf0f99c8882dc5b8eae4013bab'
   'docker.io/tonistiigi/binfmt:qemu-v10.2.3|sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0'
   'docker.io/moby/buildkit:v0.31.0|sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1'
   'docker.io/aquasec/trivy:0.69.3|sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
