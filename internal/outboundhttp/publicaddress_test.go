@@ -3,6 +3,7 @@ package outboundhttp
 import (
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,9 @@ func TestRefuseNonPublicAddressHook(t *testing.T) {
 		err := RefuseNonPublicAddress("tcp", address, nil)
 		if (err != nil) != wantRefused || (err != nil && !errors.Is(err, ErrNonPublicAddress)) {
 			t.Errorf("RefuseNonPublicAddress(%q) = %v, want refused=%v", address, err, wantRefused)
+		}
+		if err != nil && address != "" && strings.Contains(err.Error(), address) {
+			t.Errorf("RefuseNonPublicAddress(%q) names the address: %v", address, err)
 		}
 	}
 }

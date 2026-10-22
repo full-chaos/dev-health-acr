@@ -1,7 +1,9 @@
 package modelprovider
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
 	"context"
 	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
@@ -119,5 +121,28 @@ func TestThePublicEndpointRuleFollowsTheConfig(t *testing.T) {
 				t.Fatal("a platform call must use the shared transport")
 			}
 		})
+	}
+}
+
+// A refused call fails as the model client's own sanitized transport error:
+// none of its printed forms (the text, %v, %+v, %s) names the address, the port
+// or the url the organization stored. The client keeps the dialled scheme://host
+// in a nested url.Error that only an error-chain walk reaches; nothing prints it.
+func TestARefusedCallsPrintedErrorNamesNeitherAddressNorURL(t *testing.T) {
+	address, accepted := loopbackListener(t)
+	host, port, _ := net.SplitHostPort(address)
+	err := callOnce(t, byoConfig("https://"+address+"/v1", true))
+	if err == nil {
+		t.Fatal("a public-only call to a loopback base_url succeeded")
+	}
+	if accepted.Load() != 0 {
+		t.Fatalf("the listener accepted %d connections, want 0", accepted.Load())
+	}
+	for _, printed := range []string{err.Error(), fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Sprintf("%s", err)} {
+		for _, secret := range []string{host, port, address, "/v1", "sk-synthetic-public-only-0000"} {
+			if strings.Contains(printed, secret) {
+				t.Fatalf("the printed error holds %q: %s", secret, printed)
+			}
+		}
 	}
 }
