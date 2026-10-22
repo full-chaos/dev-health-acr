@@ -273,7 +273,8 @@ fi
 grep -q '"$mcp_image" workspace' "${repo_root}/scripts/container/verify.sh"
 
 # 13. Compilation must run network-isolated after module download; only
-# the module-download step may reach the network.
+# the module-download step and the two checksum-pinned git-lfs ADDs of the
+# MCP root (git-lfs-apks stage) may reach the network.
 test "$(grep -c -- '--network=none' "${repo_root}/Dockerfile")" -eq 1
 
 # 14. Runtime probes must drop all Linux capabilities and block privilege
@@ -543,6 +544,11 @@ bash "${repo_root}/scripts/container/test-trivy-db-provenance.sh"
 # use is pruned before the final scratch target.
 grep -q 'FROM scratch AS acr-mcp' "${repo_root}/Dockerfile"
 grep -q 'rm -f /mcp-root/usr/bin/sh /mcp-root/usr/bin/dash' "${repo_root}/Dockerfile"
+grep -qE '^ADD --checksum=sha256:[0-9a-f]{64} https://packages\.wolfi\.dev/os/x86_64/git-lfs-3\.8\.0-r4\.apk /amd64\.apk$' "${repo_root}/Dockerfile"
+grep -qE '^ADD --checksum=sha256:[0-9a-f]{64} https://packages\.wolfi\.dev/os/aarch64/git-lfs-3\.8\.0-r4\.apk /arm64\.apk$' "${repo_root}/Dockerfile"
+grep -q 'apk version -t' "${repo_root}/Dockerfile"
+grep -q -- '--no-logfile' "${repo_root}/Dockerfile"
+test "$(grep -c 'assert_git_lfs_fixed .* MCP' "${repo_root}/scripts/container/verify.sh")" -eq 1
 if grep -q 'documented base-image exception' "${repo_root}/docs/container-images.md"; then
   printf 'MCP documentation must not retain a runtime shell exception\n' >&2
   exit 1

@@ -57,6 +57,7 @@ GitHub action commit SHA):
 | Go builder | `golang:1.27.3-alpine3.23@sha256:895e5feab11a4b3774d24ee3c9579028456b82ad37f42a9eb6f82adaf776a201` |
 | API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a` |
 | MCP runtime | `cgr.dev/chainguard/git:latest@sha256:62087eb4f17f6d09e27f4eace690f264e091bbbf0f99c8882dc5b8eae4013bab` |
+| MCP runtime git-lfs overlay | `git-lfs-3.8.0-r4.apk` from `packages.wolfi.dev/os`, SHA-256 `53b4e4371ffd6ac3bc98a1c45924be53063403958dd8b87dc8fcfaf08b16aa86` (x86_64) and `50a675c1408678f2f342eeb9af59fce9e0e5ba69cf5755230fbb20d8f3bc023f` (aarch64) |
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
@@ -70,6 +71,30 @@ GitHub action commit SHA):
 | Compose E2E Mailpit helper | `axllent/mailpit:latest@sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a` |
 | Compose E2E TLS proxy | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` |
 | Context Fabric graph backend (ADR 0009, profile-gated) | `falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3` (FalkorDB 4.20.2, module ver 42002, Redis 8.6.3) |
+
+The pinned MCP runtime base still ships `git-lfs` 3.8.0-r3, which Trivy reports
+as a HIGH finding fixed in 3.8.0-r4. The `acr-mcp-root` stage therefore installs
+the two `git-lfs-3.8.0-r4.apk` files above over the copied base with
+`apk --root /mcp-root --no-scripts --no-network --allow-untrusted`, so the
+installed-package database the scanner reads reports r4. Each file is fetched by
+`ADD --checksum` and the build fails if its SHA-256 differs; that checksum is the
+trust anchor, which is why the install passes `--allow-untrusted` and never reads
+a repository index. Both digests were taken from `packages.wolfi.dev/os` and
+match the bytes served by `apk.cgr.dev/chainguard`; each file's control-segment
+SHA-1 matches the `C:` field of the signed Wolfi `APKINDEX`. `git-lfs` stays in
+the image instead of being removed because a mounted workspace whose own Git
+config enables an LFS filter needs it for `git status`. The smoke gate
+(`assert_git_lfs_fixed` in `scripts/container/verify.sh`) reads the installed
+package database of the exported MCP filesystem and fails when `git-lfs` is
+missing, has no binary, or is older than 3.8.0-r4 (only plain `<n>.<n>.<n>-r<n>`
+versions are ordered; any other form fails). The overlay `RUN` itself fails the
+build when the base already ships `git-lfs` 3.8.0-r4 or newer, ordered by
+`apk version -t`, so a base bump can never be silently downgraded; that failure
+is the signal to delete the `git-lfs-apks` stage and the `RUN`. The two
+packages are fetched from `packages.wolfi.dev`, which, like `cgr.dev`, is
+outside the `ACR_IMAGE_MIRROR_PREFIX` mirror: a cold or no-cache build needs
+that host reachable. `apk` runs with `--no-logfile` so no timestamped
+`/var/log/apk.log` lands in the image.
 
 CI action refs are commit-SHA pinned: `actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0`,
 `actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16`,
