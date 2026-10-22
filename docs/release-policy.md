@@ -20,7 +20,9 @@ The workflow supports three entry points:
 1. Pushing to `main`. The protected branch and merge permissions are the
    authorization boundary. The release starts when that push's `ci` run
    completes (`workflow_run`), and its `ci-reference` job reads that run's
-   `verify` job once: a failed `verify` refuses the release by name. The run is
+   `verify` job: a failed `verify` refuses the release by name, and a `verify`
+   that still reads as not finished is re-read every 30 seconds for at most 10
+   minutes, each re-read logged, before the release is refused. The run is
    named `Release <full-sha>`, the commit it releases, because a
    `workflow_run` run's own head sha is the tip of `main`, which may have moved
    on (`promote-main-image-aliases.yml` reads the commit from that name). The

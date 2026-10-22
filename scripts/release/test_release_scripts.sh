@@ -292,6 +292,165 @@ mutant promote-head-sha 's/"$RELEASE_EVENT" == workflow_run/"$RELEASE_EVENT" == 
 mutant no-commit-artifact 's/^          name: release-commit$/          name: release-commit-x/' release
 mutant promote-no-crosscheck 's/\[\[ "$recorded" == "$SOURCE_SHA" \]\]/true/' promote
 mutant promote-push-only "s/(github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'push')/github.event.workflow_run.event == 'push'/" promote
+
+# The ci-reference step reads its triggering ci run's `verify` job. These cases
+# run the step's real script body (cut out of the workflow) against stubbed
+# gh/sleep/date on a fake clock, with the facts of release run 39816145235: the
+# jobs endpoint answered verify=queued right after the ci run completed. A
+# non-terminal read must be retried, loudly and for a bounded time; a terminal
+# non-success must still refuse at once.
+extract_ci_reference_step() {
+  awk '
+    /^      - name: Require same-sha ci verify to have succeeded$/ {s=1; next}
+    s && /^        run: \|$/ {r=1; next}
+    r && /^          / {sub(/^          /, ""); print; next}
+    r && /^$/ {print ""; next}
+    r {exit}
+  ' "$1"
+}
+ciref_bin="$tmp/ciref-bin"
+mkdir -p "$ciref_bin"
+cat > "$ciref_bin/gh" <<'CIREF_GH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CIREF_STATE/gh.log"
+filter=""; prev=""
+for a in "$@"; do
+  if [[ "$prev" == --jq ]]; then filter="$a"; fi
+  prev="$a"
+done
+case "$2" in
+  */jobs\?*)
+    n="$(( $(cat "$CIREF_STATE/n" 2>/dev/null || echo 0) + 1 ))"
+    printf '%s\n' "$n" > "$CIREF_STATE/n"
+    f="$CIREF_STATE/jobs.$n"
+    [[ -f "$f" ]] || f="$CIREF_STATE/jobs.last"
+    jq -c "$filter" "$f" ;;
+  *) printf 'unexpected gh call: %s\n' "$*" >&2; exit 99 ;;
+esac
+CIREF_GH
+cat > "$ciref_bin/sleep" <<'CIREF_SLEEP'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$CIREF_STATE/sleep.log"
+printf '%s\n' "$(( $(cat "$CIREF_STATE/clock" 2>/dev/null || echo 0) + $1 ))" > "$CIREF_STATE/clock"
+CIREF_SLEEP
+cat > "$ciref_bin/date" <<'CIREF_DATE'
+#!/usr/bin/env bash
+if [[ "$1" == +%s ]]; then printf '%s\n' "$(( 1800000000 + $(cat "$CIREF_STATE/clock" 2>/dev/null || echo 0) ))"; exit 0; fi
+exec /usr/bin/date "$@"
+CIREF_DATE
+chmod 755 "$ciref_bin/gh" "$ciref_bin/sleep" "$ciref_bin/date"
+
+# ciref_run SCRIPT NAME TRIGGER_HEAD_SHA STATE...: each STATE is the next jobs
+# answer, status:conclusion of the verify job or `none` for a run with no verify
+# job; the last one repeats. Sets rc and leaves out/err/gh.log/sleep.log in the
+# case directory $ciref_dir.
+ciref_commit=6f3b161587e199a2ef67790f04ed1e82e56f6629
+ciref_run() {
+  local script="$1" name="$2" head="$3" i=0 st status conclusion body
+  shift 3
+  ciref_dir="$tmp/ciref-$name"
+  rm -rf "$ciref_dir"; mkdir -p "$ciref_dir"
+  : > "$ciref_dir/gh.log"; : > "$ciref_dir/sleep.log"
+  for st in "$@"; do
+    i=$((i + 1))
+    if [[ "$st" == none ]]; then
+      body='{"jobs":[{"name":"lint","status":"completed","conclusion":"success"}]}'
+    else
+      status="${st%%:*}"; conclusion="${st#*:}"
+      if [[ "$conclusion" != null ]]; then conclusion="\"$conclusion\""; fi
+      body="{\"jobs\":[{\"name\":\"lint\",\"status\":\"completed\",\"conclusion\":\"success\"},{\"name\":\"verify\",\"status\":\"$status\",\"conclusion\":$conclusion}]}"
+    fi
+    printf '%s\n' "$body" > "$ciref_dir/jobs.$i"
+    printf '%s\n' "$body" > "$ciref_dir/jobs.last"
+  done
+  rc=0
+  PATH="$ciref_bin:$PATH" CIREF_STATE="$ciref_dir" GH_TOKEN=x REPO=full-chaos/dev-health-acr \
+    COMMIT="$ciref_commit" WAIT_SECONDS=3600 TRIGGER_RUN_ID=39811868867 TRIGGER_HEAD_SHA="$head" \
+    bash "$script" > "$ciref_dir/out" 2> "$ciref_dir/err" || rc=$?
+}
+ciref_reads() { grep -c 'jobs?per_page=100' "$ciref_dir/gh.log" || true; }
+ciref_sleeps() { grep -c . "$ciref_dir/sleep.log" || true; }
+
+ciref_case=""
+check_ci_reference() {
+  local wf="$1" script="$tmp/ciref-step.sh" conclusion
+  extract_ci_reference_step "$wf" > "$script"
+  test -s "$script" || return 1
+
+  # A: run 39816145235. queued twice, then success: must pass, loudly.
+  ciref_case="A"
+  ciref_run "$script" a "$ciref_commit" queued:null queued:null completed:success
+  test "$rc" -eq 0 || return 1
+  test "$(ciref_reads)" -eq 3 || return 1
+  test "$(ciref_sleeps)" -eq 2 || return 1
+  grep -qF "ci reference retry: attempt 1 read a non-terminal state: ci run 39811868867 job verify: status=queued conclusion=; waited 0s of 600s" "$ciref_dir/out" || return 1
+  grep -qF "ci reference retry: attempt 2 read a non-terminal state: ci run 39811868867 job verify: status=queued conclusion=; waited 30s of 600s" "$ciref_dir/out" || return 1
+  grep -qF "ci reference OK after retry: attempt 3, waited 60s: ci run 39811868867 job verify: status=completed conclusion=success (commit $ciref_commit)" "$ciref_dir/out" || return 1
+
+  # A2: no verify job in the first answer, then in_progress, then success.
+  ciref_case="A2"
+  ciref_run "$script" a2 "$ciref_commit" none in_progress:null completed:success
+  test "$rc" -eq 0 || return 1
+  test "$(ciref_reads)" -eq 3 || return 1
+  grep -qF "ci reference retry: attempt 1 read a non-terminal state: ci run 39811868867 has no job named verify yet; waited 0s of 600s" "$ciref_dir/out" || return 1
+  grep -qF "ci reference OK after retry: attempt 3" "$ciref_dir/out" || return 1
+
+  # A3: success on the first read passes with no retry and no wait.
+  ciref_case="A3"
+  ciref_run "$script" a3 "$ciref_commit" completed:success
+  test "$rc" -eq 0 || return 1
+  test "$(ciref_reads)" -eq 1 || return 1
+  test "$(ciref_sleeps)" -eq 0 || return 1
+  grep -qF "ci reference OK: ci run 39811868867 job verify: status=completed conclusion=success (commit $ciref_commit)" "$ciref_dir/out" || return 1
+  if grep -qF retry "$ciref_dir/out"; then return 1; fi
+
+  # B: still non-terminal at the bound: refused, after exactly 600 s of waiting.
+  ciref_case="B"
+  ciref_run "$script" b "$ciref_commit" queued:null
+  test "$rc" -eq 1 || return 1
+  test "$(ciref_reads)" -eq 21 || return 1
+  test "$(ciref_sleeps)" -eq 20 || return 1
+  grep -qF "ci reference TIMEOUT after 600s, 21 reads, last state non-terminal: ci run 39811868867 job verify: status=queued conclusion= (commit $ciref_commit)" "$ciref_dir/err" || return 1
+
+  # C and D: a finished verify that did not succeed is refused at the first read.
+  ciref_case="C and D"
+  for conclusion in failure cancelled skipped timed_out neutral; do
+    ciref_run "$script" "c-$conclusion" "$ciref_commit" "completed:$conclusion"
+    test "$rc" -eq 1 || return 1
+    test "$(ciref_reads)" -eq 1 || return 1
+    test "$(ciref_sleeps)" -eq 0 || return 1
+    grep -qF "ci reference FAILED: ci run 39811868867 job verify: status=completed conclusion=$conclusion" "$ciref_dir/err" || return 1
+  done
+  # A failure that follows a retry is refused too.
+  ciref_run "$script" c-after "$ciref_commit" queued:null completed:failure
+  test "$rc" -eq 1 || return 1
+  test "$(ciref_reads)" -eq 2 || return 1
+  grep -qF "ci reference FAILED" "$ciref_dir/err" || return 1
+
+  # E: the triggering run is for another sha: refused before any API read.
+  ciref_case="E"
+  ciref_run "$script" e 4317bf7f57020d514f6e813bf6bfcb3361c590f1 completed:success
+  test "$rc" -eq 1 || return 1
+  test "$(ciref_reads)" -eq 0 || return 1
+  grep -qF "is for 4317bf7f57020d514f6e813bf6bfcb3361c590f1, not $ciref_commit" "$ciref_dir/err" || return 1
+
+  # F: the run never shows a verify job: refused at the bound.
+  ciref_case="F"
+  ciref_run "$script" f "$ciref_commit" none
+  test "$rc" -eq 1 || return 1
+  test "$(ciref_reads)" -eq 21 || return 1
+  grep -qF "ci reference TIMEOUT after 600s, 21 reads, last state non-terminal: ci run 39811868867 has no job named verify yet" "$ciref_dir/err" || return 1
+}
+check_ci_reference "$release_workflow" || { printf 'ci reference case %s failed\n' "$ciref_case" >&2; exit 1; }
+ciref_mutant() { # NAME SED-EXPR
+  local out="$tmp/ciref-mutant-$1.yml"
+  sed "$2" "$release_workflow" > "$out"
+  cmp -s "$release_workflow" "$out" && { printf 'ci reference control %s did not change the file\n' "$1" >&2; exit 1; }
+  if check_ci_reference "$out"; then printf 'ci reference control %s passed and must fail\n' "$1" >&2; exit 1; fi
+}
+ciref_mutant no-retry 's/^            WAIT_SECONDS=600$/            WAIT_SECONDS=0/'
+ciref_mutant accepts-failure 's/\[ "$conclusion" = success \]/[ -n "$conclusion" ]/'
+ciref_mutant silent-retry '/echo "ci reference retry:/d'
 grep -F 'tag="$commit"' "$release_workflow" >/dev/null
 grep -F -- '--derive-main-version "$commit"' "$release_workflow" >/dev/null
 grep -F -- '--version "$VERSION"' "$release_workflow" >/dev/null
