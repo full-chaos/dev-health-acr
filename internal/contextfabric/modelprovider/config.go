@@ -207,6 +207,11 @@ type Config struct {
 	// the platform endpoint, which may be a local server). Like Telemetry it is
 	// set by the caller, not read from the environment, and not validated.
 	PublicEndpointsOnly bool
+	// OrgID is OPTIONAL and only labels the one Warn line a refused
+	// public-only dial emits (its first eight characters, never the whole
+	// id). Set by the per-organization caller; not read from the
+	// environment and not validated.
+	OrgID string
 	// AllowNonPublicBYOEndpoint is the deployment's own opt-out of the rule
 	// above for per-organization BYO Configs (internal/runtime/hosted reads
 	// it from the environment). It is read from the deployment-default Config

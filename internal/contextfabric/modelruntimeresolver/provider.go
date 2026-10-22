@@ -21,7 +21,9 @@ import (
 // the configuration accepts only https before it can reach this resolver.
 func NewModelProviderBuild(defaults modelprovider.Config) Build {
 	return func(ctx context.Context, resolved contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
-		return modelprovider.New(ctx, orgModelProviderConfig(defaults, resolved))
+		cfg := orgModelProviderConfig(defaults, resolved)
+		cfg.OrgID = buildOrgID(ctx)
+		return modelprovider.New(ctx, cfg)
 	}
 }
 

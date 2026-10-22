@@ -207,7 +207,7 @@ func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.
 	// is a bounded local operation, not a per-caller network call.
 	key := orgID + "\x00" + strconv.FormatInt(resolved.Generation, 10)
 	value, _, _ := r.group.Do(key, func() (any, error) {
-		runtime, buildErr := r.Build(ctx, resolved)
+		runtime, buildErr := r.Build(withBuildOrgID(ctx, orgID), resolved)
 		if buildErr != nil {
 			buildErr = wrapUnavailable(orgID, buildErr)
 		}

@@ -180,9 +180,9 @@ func newModelHTTPClient(cfg Config) *http.Client {
 	// outbound-transport guard proves each one non-nil.
 	switch {
 	case cfg.PublicEndpointsOnly && cfg.APIKey.Configured():
-		return &http.Client{Timeout: cfg.Timeout, Transport: outboundhttp.SharedPublicTransport()}
+		return &http.Client{Timeout: cfg.Timeout, Transport: refusalLogging{next: outboundhttp.SharedPublicTransport(), logger: cfg.Logger, orgID: cfg.OrgID}}
 	case cfg.PublicEndpointsOnly:
-		return &http.Client{Timeout: cfg.Timeout, Transport: withoutAuthorization{next: outboundhttp.SharedPublicTransport()}}
+		return &http.Client{Timeout: cfg.Timeout, Transport: withoutAuthorization{next: refusalLogging{next: outboundhttp.SharedPublicTransport(), logger: cfg.Logger, orgID: cfg.OrgID}}}
 	case cfg.APIKey.Configured():
 		return &http.Client{Timeout: cfg.Timeout, Transport: outboundhttp.SharedTransport()}
 	}

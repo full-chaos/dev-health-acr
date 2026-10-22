@@ -114,6 +114,14 @@ func TestThePublicEndpointRuleFollowsTheConfig(t *testing.T) {
 			if stripped != tc.keyless {
 				t.Fatalf("strips the Authorization header = %v, want %v", stripped, tc.keyless)
 			}
+			if logged, ok := transport.(refusalLogging); ok {
+				if !tc.public {
+					t.Fatal("a platform call must not carry the refusal logger")
+				}
+				transport = logged.next
+			} else if tc.public {
+				t.Fatal("a public-only call must carry the refusal logger")
+			}
 			if got := transport == http.RoundTripper(outboundhttp.SharedPublicTransport()); got != tc.public {
 				t.Fatalf("public-only transport = %v, want %v", got, tc.public)
 			}
