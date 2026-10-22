@@ -33,7 +33,10 @@ type opsStandIn struct {
 	// "gate_closed" (that 404 plus the byo_llm gate-closed reason header),
 	// "no_investigate" (that 404 plus the reason that the org's saved BYO
 	// keys are for other purposes only) or "turned_off" (that 404 plus the
-	// reason that an org admin turned the saved configuration off).
+	// reason that an org admin turned the saved configuration off), or one of
+	// the saved configurations whose base_url the route test of the key
+	// refusal sends: "saved_key_in_base_url", "saved_userinfo_in_base_url" and
+	// the clean control "saved_api_version_base_url".
 	llmConfig string
 }
 
@@ -52,6 +55,13 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch s.llmConfig {
 		case "saved":
 			_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": "acr_llm_config.v1", "org_id": orgID, "provider": "openai", "model": "org-model", "base_url": "", "api_key": "sk-org-standin", "version": "v1"})
+		case "saved_key_in_base_url", "saved_userinfo_in_base_url", "saved_api_version_base_url":
+			baseURL := map[string]string{
+				"saved_key_in_base_url":      "https://own.example.invalid/v1?token=sk-org-standin",
+				"saved_userinfo_in_base_url": "https://user:pass@own.example.invalid/v1",
+				"saved_api_version_base_url": "https://own.example.invalid/v1?api-version=2024-02-01",
+			}[s.llmConfig]
+			_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": "acr_llm_config.v1", "org_id": orgID, "provider": "openai", "model": "org-model", "base_url": baseURL, "api_key": "sk-org-standin", "version": "v1"})
 		case "gate_closed":
 			w.Header().Set("X-Org-Llm-Config", "none")
 			w.Header().Set("X-Org-Llm-Config-Reason", "byo_llm_gate_closed")

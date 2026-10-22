@@ -56,7 +56,7 @@ func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(str
 		if logger != nil {
 			logger.Info("context fabric org model config source", "source", contextfabric.SanitizeLogAttr(orgLLMConfigSourceOps))
 		}
-		return opsOrgModelConfigs{source: source, generations: &versionGenerations{}}, nil
+		return opsOrgModelConfigs{source: source, generations: &versionGenerations{}, logger: logger}, nil
 	case orgLLMConfigSourceOff:
 		if _, local := entitlement.(localEntitlement); !serviceModelOpen && !local {
 			return nil, fmt.Errorf("%s=%s needs ACR_MCP_SERVICE_MODEL_DEFAULT=on: with no per-organization source a saved BYO configuration cannot be told from none, so the platform model could answer it", EnvOrgLLMConfigSource, orgLLMConfigSourceOff)
@@ -76,6 +76,7 @@ func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(str
 type opsOrgModelConfigs struct {
 	source      orgLLMConfigSource
 	generations *versionGenerations
+	logger      *slog.Logger
 }
 
 // versionGenerations turns ops' opaque version (a digest over the org's
@@ -110,6 +111,10 @@ func (v *versionGenerations) generationFor(orgID, version string) int64 {
 func (o opsOrgModelConfigs) ResolveOrgModelConfig(ctx context.Context, orgID string) (contextfabric.ResolvedOrgModelConfig, bool, error) {
 	config, found, err := o.source.OrgLLMConfig(ctx, orgID)
 	if err != nil || !found {
+		var refused *entitlements.BaseURLRefusedError
+		if errors.As(err, &refused) && o.logger != nil {
+			o.logger.WarnContext(ctx, "context fabric org model config refused", "org_id", contextfabric.SanitizeLogAttr(orgID), "reason", contextfabric.SanitizeLogAttr(refused.Reason))
+		}
 		return contextfabric.ResolvedOrgModelConfig{}, false, err
 	}
 	if !config.APIKey.Configured() && config.BaseURL == "" {
