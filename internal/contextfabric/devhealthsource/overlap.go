@@ -60,6 +60,14 @@ import (
 // defaultReprojectOverlap is the trailing window re-read once caught up.
 const defaultReprojectOverlap = 15 * time.Minute
 
+// DefaultWindowPassInterval is the pause between the end of a window pass and
+// the start of the next. A pass reads every table once per page, so passes that
+// follow each other at once keep the read rate of the window at its maximum
+// for as long as the frontier is within overlap + slack of now. The late-row
+// bound is unchanged (the pass's lower edge still derives from its own start);
+// a late row is projected up to this much later.
+const DefaultWindowPassInterval = 5 * time.Minute
+
 // overlapWindowPagesPerCall bounds how many pages of incrementalBatchCap rows
 // one call walks. Each page is an ordinary keyset read at the ordinary page
 // size: one statement per table with LIMIT incrementalBatchCap+1. A single
@@ -125,6 +133,7 @@ type windowPass struct {
 	walking   bool        // a pass is in progress
 	pages     int         // pages the current pass has read
 	rows      int         // source rows the current pass has read
+	nextStart time.Time   // no new pass starts before this (sourcePlan.windowInterval); zero = no pacing
 }
 
 // pastEdge reports whether c sorts after the keyset position edge, in the
@@ -363,13 +372,18 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
 	// landed behind its position meanwhile, so when it completes a new pass
-	// starts at once. A pass started by THIS call has not: when it completes,
-	// the call ends and the next tick starts the next pass.
+	// starts at once, unless an interval between passes is set: then the call
+	// ends and the next pass waits for it. A pass started by THIS call has not
+	// been passed: when it completes, the call ends and the next tick starts
+	// the next pass (after the interval, when set).
 	resumed := pass.walking
 	if !pass.walking {
 		if pass.low.After(state.Since) {
 			// Closed: nothing at or behind the frontier can still land late.
 			p.window.setPass(p.windowScope, pass)
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		if now.Before(pass.nextStart) {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
 		start()
@@ -446,10 +460,15 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			pass.low = edge
 		}
 		pass.walking = false
+		if p.windowInterval > 0 {
+			// From the clock at the pass's end, not the call's start: the reads
+			// of the pass can take longer than the interval itself.
+			pass.nextStart = p.clock().Add(p.windowInterval)
+		}
 		if resumed && !completed {
 			p.logEndedPass(ctx, orgID, pass, now)
 		}
-		if completed || !resumed || pass.low.After(state.Since) {
+		if completed || !resumed || pass.low.After(state.Since) || p.windowInterval > 0 {
 			p.window.setPass(p.windowScope, pass)
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
@@ -576,11 +595,16 @@ func (p sourcePlan) logEndedPass(ctx context.Context, orgID string, pass windowP
 	if p.logger == nil {
 		return
 	}
-	p.logger.InfoContext(ctx, endedPassMessage,
+	attrs := []any{
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"pass_seconds", int64(now.Sub(pass.passStart).Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
 		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
-		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)))
+		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)),
+	}
+	if !pass.nextStart.IsZero() {
+		attrs = append(attrs, "next_pass_not_before", contextfabric.SanitizeLogAttr(pass.nextStart.UTC().Format(time.RFC3339Nano)))
+	}
+	p.logger.InfoContext(ctx, endedPassMessage, attrs...)
 }
 
 // reportWindowPass is ProjectionWindowPass for both sources: the state of the

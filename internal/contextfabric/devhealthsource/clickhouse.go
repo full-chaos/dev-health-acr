@@ -238,6 +238,8 @@ type ClickHouseProjectionSource struct {
 	overlap     time.Duration
 	window      *windowMemo
 	windowPages int
+	// windowInterval is the pause between window passes (WithWindowPassInterval).
+	windowInterval time.Duration
 
 	// readByteLimit is the client's max_bytes_to_read
 	// (ACR_CLICKHOUSE_MAX_BYTES_TO_READ); a read that names rows by key sizes
@@ -322,7 +324,7 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, window: newWindowMemo()}, nil
+	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, window: newWindowMemo()}, nil
 }
 
 // WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
@@ -336,12 +338,25 @@ func (s *ClickHouseProjectionSource) WithOverlap(d time.Duration) (*ClickHousePr
 	return s, nil
 }
 
+// WithWindowPassInterval sets the pause between the end of one trailing-window
+// pass and the start of the next. Zero starts the next pass at once.
+func (s *ClickHouseProjectionSource) WithWindowPassInterval(d time.Duration) (*ClickHouseProjectionSource, error) {
+	if d < 0 {
+		return nil, fmt.Errorf("devhealthsource: window pass interval must be >= 0, got %s", d)
+	}
+	s.windowInterval = d
+	return s, nil
+}
+
 // ReadByteLimit is the client max_bytes_to_read this source sizes its
 // key-named reads from; zero means the client default.
 func (s *ClickHouseProjectionSource) ReadByteLimit() uint64 { return s.readByteLimit }
 
 // Overlap is the trailing re-read window this source walks once caught up.
 func (s *ClickHouseProjectionSource) Overlap() time.Duration { return s.overlap }
+
+// WindowPassInterval is the pause between trailing-window passes.
+func (s *ClickHouseProjectionSource) WindowPassInterval() time.Duration { return s.windowInterval }
 
 func (s *ClickHouseProjectionSource) overlapDuration() time.Duration { return s.overlap }
 func (s *ClickHouseProjectionSource) windowMemo() *windowMemo        { return s.window }
@@ -498,6 +513,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
 		},
 		overlap:              s.overlapDuration(),
+		windowInterval:       s.windowInterval,
 		window:               s.windowMemo(),
 		windowPagesPerCall:   s.windowPages,
 		observe:              s.logOrphanedWorkItems,
