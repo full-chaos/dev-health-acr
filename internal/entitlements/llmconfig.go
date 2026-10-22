@@ -191,7 +191,9 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		if response.Header.Get(llmConfigMarkerHeader) != llmConfigMarkerNone {
+		// The marker and the reason are each one value: a repeated header is
+		// an unknown answer, never read by its first value.
+		if markers := response.Header.Values(llmConfigMarkerHeader); len(markers) != 1 || markers[0] != llmConfigMarkerNone || len(response.Header.Values(llmConfigReasonHeader)) > 1 {
 			return OrgLLMConfig{}, false, errUnavailable
 		}
 		switch response.Header.Get(llmConfigReasonHeader) {
