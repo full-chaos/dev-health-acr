@@ -57,7 +57,7 @@ func TestLateIgnoredRowFoundByTheOverlapReReadIsCounted(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	late := at.Add(-10 * time.Minute)
 	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", late, created)}
-	source, err := newUnpacedClickHouseSource(&fakeClient{tables: dependencyTablesOnly(t, at, rows)})
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: dependencyTablesOnly(t, at, rows)})
 	if err != nil {
 		t.Fatalf("new source: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestIgnoredRowsOfAnOverlapWalkAreNotRejudgedByTheNextPass(t *testing.T) {
 	created := frontier.Add(-24 * time.Hour)
 	late := frontier.Add(-10 * time.Minute)
 	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", late, created)}
-	source, err := newUnpacedClickHouseSource(&fakeClient{tables: dependencyTablesOnly(t, frontier, rows)})
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: dependencyTablesOnly(t, frontier, rows)})
 	if err != nil {
 		t.Fatalf("new source: %v", err)
 	}

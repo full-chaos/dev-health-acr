@@ -187,7 +187,7 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 	old := now.Add(-45 * 24 * time.Hour)
 
 	devHealth := func(t *testing.T, orgID, repoID string) *ingestHarness {
-		src, err := newUnpacedClickHouseSource(query)
+		src, err := devhealthsource.NewClickHouseProjectionSource(query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,7 +200,7 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 		return h
 	}
 	teamsProjects := func(t *testing.T, orgID string) *ingestHarness {
-		src, err := newUnpacedTeamsProjectsSource(query, true)
+		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,6 +223,44 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 			t.Fatalf("the backfilled work item was SKIPPED: %v", second.items)
 		}
 		requireProviderTime(t, "work item", got.ObservedAt, old)
+	})
+
+	// The default source pauses between window passes. A row stamped inside
+	// the overlap that lands after pass 1 ended waits for the next pass: not
+	// projected inside the pause, projected by the first pass after it.
+	t.Run("work_items: a row stamped behind the frontier that lands after a pass waits for the next pass", func(t *testing.T) {
+		t.Parallel()
+		h := devHealth(t, "72630000-0000-4000-8000-0000000000f1", "72630000-0000-4000-8000-0000000000f2")
+		src, ok := h.src.(*devhealthsource.ClickHouseProjectionSource)
+		if !ok {
+			t.Fatalf("source is %T", h.src)
+		}
+		if got := src.WindowPassInterval(); got != devhealthsource.DefaultWindowPassInterval {
+			t.Fatalf("the source pauses %s between passes, want the default %s", got, devhealthsource.DefaultWindowPassInterval)
+		}
+		clock := now
+		src.SetClockForTest(func() time.Time { return clock })
+		h.workItem("WI-frontier", hourAgo, now.Add(-10*time.Minute))
+		first := h.drain("")
+		if _, ok := first.items["issue WI-frontier"]; !ok {
+			t.Fatalf("first drain missed the frontier row: %v", first.items)
+		}
+		// Stamped inside the 15m overlap (and the pass window), landing only now.
+		h.workItem("WI-late", old, now.Add(-25*time.Minute+10*time.Second))
+		clock = now.Add(time.Minute)
+		if inside := h.drain(first.cursor); len(inside.items) != 0 {
+			t.Fatalf("a window pass ran inside the pause: %v", inside.items)
+		}
+		clock = now.Add(devhealthsource.DefaultWindowPassInterval + time.Second)
+		after := h.drain(first.cursor)
+		got, ok := after.items["issue WI-late"]
+		if !ok {
+			t.Fatalf("the late row was not projected by the pass after the pause: %v", after.items)
+		}
+		requireProviderTime(t, "late work item", got.ObservedAt, old)
+		if keysetPosition(t, after.cursor) != keysetPosition(t, first.cursor) {
+			t.Fatalf("the window batch moved the cursor position (%q -> %q)", first.cursor, after.cursor)
+		}
 	})
 
 	t.Run("work_items_hierarchy: a backfilled parent link", func(t *testing.T) {
