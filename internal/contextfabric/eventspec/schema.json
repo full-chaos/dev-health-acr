@@ -7015,6 +7015,29 @@
     ]
   },
   {
+    "id": "contextfabric.limitation_disclosure_skipped",
+    "msg": "context fabric limitation disclosure skipped",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "cf_limitation_skipped_recogniser"
+    ],
+    "bounded_aggregation": "one line per skipped disclosure; a request composes limitations at a fixed set of lever and disclosure sites, each of which adds at most a few sentences, so a request writes well under 64 of these.",
+    "max_lines_per_scope": 64,
+    "fields": [
+      {
+        "key": "cf_limitation_skipped_recogniser",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cf_limitations_len",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.membership_cardinality",
     "msg": "context fabric membership cardinality",
     "level": "info",

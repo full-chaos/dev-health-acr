@@ -28,11 +28,12 @@ const (
 	ClickHouseNearMemoryCapName  = "acr_clickhouse_statement_near_memory_cap_total"
 	ClickHousePeakUnobservedName = "acr_clickhouse_statement_peak_unobserved_total"
 	OutcomeRowsEvictedName       = "acr_outcome_rows_evicted_total"
+	LimitationSkippedName        = "acr_limitation_disclosure_skipped_total"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -73,6 +74,7 @@ type Instruments struct {
 	nearMemoryCap      metric.Int64Counter
 	peakUnobserved     metric.Int64Counter
 	outcomeRowsEvicted metric.Int64Counter
+	limitationSkipped  metric.Int64Counter
 	vocab              Vocabularies
 }
 
@@ -104,6 +106,7 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		investigationLat:   histogram(InvestigationLatencyName, "Investigation request latency by terminal status."),
 		peakUnobserved:     counter(ClickHousePeakUnobservedName, "ClickHouse statements that finished with no peak memory value from the server."),
 		outcomeRowsEvicted: counter(OutcomeRowsEvictedName, "Served lever applications that evicted an outcome row at the row cap, by lever."),
+		limitationSkipped:  counter(LimitationSkippedName, "Service disclosures left out of a served answer because the limitation list was full of service-looking entries."),
 		nearMemoryCap:      counter(ClickHouseNearMemoryCapName, "ClickHouse statements that finished above half of their memory cap."),
 		vocab:              vocab,
 	}
@@ -235,4 +238,13 @@ func (i *Instruments) OutcomeRowEvicted(ctx context.Context, lever string) {
 		return
 	}
 	i.outcomeRowsEvicted.Add(ctx, 1, metric.WithAttributes(attribute.String("lever", bucket(lever, evictionLevers))))
+}
+
+// LimitationDisclosureSkipped records one service disclosure that could not be
+// placed in a full limitation list and was left out of the served answer.
+func (i *Instruments) LimitationDisclosureSkipped(ctx context.Context) {
+	if i == nil {
+		return
+	}
+	i.limitationSkipped.Add(ctx, 1)
 }

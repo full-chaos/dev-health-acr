@@ -411,6 +411,11 @@ func contextFabricEngineTelemetry(options Options) contextfabric.EngineTelemetry
 	if options.EngineTelemetry != nil {
 		return options.EngineTelemetry
 	}
+	var record func(string)
+	if metrics := options.Metrics; metrics != nil {
+		record = func(string) { metrics.LimitationDisclosureSkipped(context.Background()) }
+	}
+	contextfabric.SetLimitationDisclosureSkipSink(options.Logger, record)
 	return contextfabric.NewSlogEngineTelemetry(options.Logger).WithMetrics(options.Metrics)
 }
 
