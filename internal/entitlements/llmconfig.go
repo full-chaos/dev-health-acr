@@ -66,24 +66,27 @@ type OrgLLMConfig struct {
 	Model    string
 	BaseURL  string
 	APIKey   llm.Secret
+	// PromptCache is the org's opt-in to the Anthropic prompt cache; ops omits
+	// it for an org that has not opted in.
+	PromptCache bool
 	// Version changes when the org's stored settings change (ops: the
 	// newest updated_at, RFC 3339 with nanoseconds).
 	Version string
 }
 
 func (c OrgLLMConfig) view() map[string]any {
-	return map[string]any{"provider": c.Provider, "model": c.Model, "base_url": c.BaseURL, "api_key": "[REDACTED]", "version": c.Version}
+	return map[string]any{"provider": c.Provider, "model": c.Model, "base_url": c.BaseURL, "api_key": "[REDACTED]", "prompt_cache": c.PromptCache, "version": c.Version}
 }
 
 func (c OrgLLMConfig) String() string {
-	return fmt.Sprintf("OrgLLMConfig{Provider:%q Model:%q BaseURL:%q APIKey:[REDACTED] Version:%q}", c.Provider, c.Model, c.BaseURL, c.Version)
+	return fmt.Sprintf("OrgLLMConfig{Provider:%q Model:%q BaseURL:%q APIKey:[REDACTED] PromptCache:%t Version:%q}", c.Provider, c.Model, c.BaseURL, c.PromptCache, c.Version)
 }
 
 func (c OrgLLMConfig) GoString() string { return c.String() }
 
 func (c OrgLLMConfig) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("provider", c.Provider), slog.String("model", c.Model),
-		slog.String("base_url", c.BaseURL), slog.String("api_key", "[REDACTED]"), slog.String("version", c.Version))
+		slog.String("base_url", c.BaseURL), slog.String("api_key", "[REDACTED]"), slog.Bool("prompt_cache", c.PromptCache), slog.String("version", c.Version))
 }
 
 func (c OrgLLMConfig) MarshalJSON() ([]byte, error) { return json.Marshal(c.view()) }
@@ -95,6 +98,7 @@ type llmConfigResponse struct {
 	Model         string `json:"model"`
 	BaseURL       string `json:"base_url"`
 	APIKey        string `json:"api_key"`
+	PromptCache   bool   `json:"prompt_cache"`
 	Version       string `json:"version"`
 }
 
@@ -226,7 +230,7 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	}
 	return OrgLLMConfig{
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),
-		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), Version: parsed.Version,
+		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), PromptCache: parsed.PromptCache, Version: parsed.Version,
 	}, true, nil
 }
 

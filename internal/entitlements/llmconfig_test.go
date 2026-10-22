@@ -70,6 +70,57 @@ func TestOrgLLMConfigServesTheOpsConfig(t *testing.T) {
 	}
 }
 
+func TestOrgLLMConfigCarriesThePromptCacheOptIn(t *testing.T) {
+	cases := []struct {
+		name      string
+		overrides map[string]any
+		want      bool
+		wantFound bool
+	}{
+		{"opted in", map[string]any{"prompt_cache": true}, true, true},
+		{"explicitly off", map[string]any{"prompt_cache": false}, false, true},
+		{"field omitted", nil, false, true},
+		{"a string is a contract break: unavailable", map[string]any{"prompt_cache": "yes"}, false, false},
+		{"a number is a contract break: unavailable", map[string]any{"prompt_cache": 1}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _ := llmConfigServer(t, http.StatusOK, llmBody(tc.overrides))
+			client, err := entitlements.New(clientConfig(t, server, entitlements.Config{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+			if found != tc.wantFound || (err != nil) == tc.wantFound {
+				t.Fatalf("found = %v err = %v", found, err)
+			}
+			if config.PromptCache != tc.want {
+				t.Fatalf("PromptCache = %v, want %v", config.PromptCache, tc.want)
+			}
+		})
+	}
+}
+
+func TestOrgLLMConfigShowsThePromptCacheOptInAndStillHidesTheKey(t *testing.T) {
+	config := entitlements.OrgLLMConfig{Provider: "anthropic", Model: "m", APIKey: llm.NewSecret("sk-ant-SECRET-VALUE"), PromptCache: true, Version: "v"}
+	var logs strings.Builder
+	slog.New(slog.NewJSONHandler(&logs, nil)).Info("m", "config", config)
+	encoded, _ := json.Marshal(config)
+	for form, want := range map[string]string{
+		fmt.Sprintf("%v", config):  "PromptCache:true",
+		fmt.Sprintf("%#v", config): "PromptCache:true",
+		logs.String():              `"prompt_cache":true`,
+		string(encoded):            `"prompt_cache":true`,
+	} {
+		if !strings.Contains(form, want) {
+			t.Fatalf("the opt-in %q is not shown: %s", want, form)
+		}
+		if strings.Contains(form, "SECRET") {
+			t.Fatalf("the key was printed: %s", form)
+		}
+	}
+}
+
 func TestOrgLLMConfigMapsEachStatus(t *testing.T) {
 	cases := []struct {
 		name       string

@@ -42,14 +42,17 @@ type ResolvedOrgModelConfig struct {
 	Model         string
 	FallbackModel string
 	Credential    llm.Secret `json:"-"`
-	Generation    int64
-	UpdatedAt     time.Time
+	// PromptCache is the organization's own opt-in to the Anthropic prompt
+	// cache; it is not a secret and never inherits the deployment default.
+	PromptCache bool
+	Generation  int64
+	UpdatedAt   time.Time
 }
 
 // String redacts Credential -- see the type's doc comment.
 func (r ResolvedOrgModelConfig) String() string {
-	return fmt.Sprintf("ResolvedOrgModelConfig{Provider:%q BaseURL:%q Model:%q FallbackModel:%q Credential:%s Generation:%d UpdatedAt:%s}",
-		r.Provider, r.BaseURL, r.Model, r.FallbackModel, redactedCredentialPlaceholder, r.Generation, r.UpdatedAt)
+	return fmt.Sprintf("ResolvedOrgModelConfig{Provider:%q BaseURL:%q Model:%q FallbackModel:%q Credential:%s PromptCache:%t Generation:%d UpdatedAt:%s}",
+		r.Provider, r.BaseURL, r.Model, r.FallbackModel, redactedCredentialPlaceholder, r.PromptCache, r.Generation, r.UpdatedAt)
 }
 
 // GoString redacts Credential for the %#v format verb -- see the type's doc
@@ -58,8 +61,8 @@ func (r ResolvedOrgModelConfig) String() string {
 // from Stringer, and Go's default %#v rendering of a struct prints every
 // exported field verbatim, Credential included).
 func (r ResolvedOrgModelConfig) GoString() string {
-	return fmt.Sprintf("contextfabric.ResolvedOrgModelConfig{Provider:%q, BaseURL:%q, Model:%q, FallbackModel:%q, Credential:%q, Generation:%d, UpdatedAt:%#v}",
-		r.Provider, r.BaseURL, r.Model, r.FallbackModel, redactedCredentialPlaceholder, r.Generation, r.UpdatedAt)
+	return fmt.Sprintf("contextfabric.ResolvedOrgModelConfig{Provider:%q, BaseURL:%q, Model:%q, FallbackModel:%q, Credential:%q, PromptCache:%t, Generation:%d, UpdatedAt:%#v}",
+		r.Provider, r.BaseURL, r.Model, r.FallbackModel, redactedCredentialPlaceholder, r.PromptCache, r.Generation, r.UpdatedAt)
 }
 
 // LogValue redacts Credential for log/slog -- see the type's doc comment.
@@ -70,6 +73,7 @@ func (r ResolvedOrgModelConfig) LogValue() slog.Value {
 		slog.String("model", SanitizeLogAttr(r.Model)),
 		slog.String("fallback_model", SanitizeLogAttr(r.FallbackModel)),
 		slog.String("credential", redactedCredentialPlaceholder),
+		slog.Bool("prompt_cache", r.PromptCache),
 		slog.Int64("generation", r.Generation),
 		slog.Time("updated_at", r.UpdatedAt),
 	)
@@ -87,9 +91,10 @@ func (r ResolvedOrgModelConfig) MarshalJSON() ([]byte, error) {
 		Model         string    `json:"model"`
 		FallbackModel string    `json:"fallback_model,omitempty"`
 		Credential    string    `json:"credential"`
+		PromptCache   bool      `json:"prompt_cache"`
 		Generation    int64     `json:"generation"`
 		UpdatedAt     time.Time `json:"updated_at"`
-	}{r.Provider, r.BaseURL, r.Model, r.FallbackModel, redactedCredentialPlaceholder, r.Generation, r.UpdatedAt})
+	}{r.Provider, r.BaseURL, r.Model, r.FallbackModel, redactedCredentialPlaceholder, r.PromptCache, r.Generation, r.UpdatedAt})
 }
 
 const redactedCredentialPlaceholder = "[REDACTED]"

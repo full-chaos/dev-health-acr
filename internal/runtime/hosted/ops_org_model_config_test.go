@@ -88,6 +88,21 @@ func TestOpsOrgModelConfigsMapsTheOpsAnswer(t *testing.T) {
 	}
 }
 
+func TestOpsOrgModelConfigsCarryThePromptCacheOptIn(t *testing.T) {
+	for _, optedIn := range []bool{true, false} {
+		source := &fakeOrgLLMSource{found: true, config: entitlements.OrgLLMConfig{
+			Provider: "anthropic", Model: "claude-haiku-5-5", APIKey: llm.NewSecret("sk-ant-x"), PromptCache: optedIn, Version: "v1",
+		}}
+		resolved, ok, err := (opsOrgModelConfigs{source: source, generations: &versionGenerations{}}).ResolveOrgModelConfig(context.Background(), "org")
+		if err != nil || !ok {
+			t.Fatalf("ok = %v err = %v", ok, err)
+		}
+		if resolved.PromptCache != optedIn {
+			t.Errorf("opted in = %v, resolved PromptCache = %v", optedIn, resolved.PromptCache)
+		}
+	}
+}
+
 // TestGenerationMovesOnlyWhenOpsVersionChanges pins the cache key: ops'
 // version is an opaque digest, so the generation is a per-organization
 // counter that keeps its value for the same version and only grows.

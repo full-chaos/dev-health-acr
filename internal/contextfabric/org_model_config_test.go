@@ -18,6 +18,7 @@ func sampleResolvedOrgModelConfig() ResolvedOrgModelConfig {
 		Model:         "acme-large",
 		FallbackModel: "acme-large-fallback",
 		Credential:    llm.NewSecret("sk-acme-live-super-secret-value"),
+		PromptCache:   true,
 		Generation:    42,
 		UpdatedAt:     time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC),
 	}
@@ -85,5 +86,28 @@ func TestResolvedOrgModelConfig_MarshalJSON_redactsCredential(t *testing.T) {
 	}
 	if decoded["credential"] != redactedCredentialPlaceholder {
 		t.Fatalf(`decoded["credential"] = %v, want %q`, decoded["credential"], redactedCredentialPlaceholder)
+	}
+}
+
+func TestResolvedOrgModelConfig_showsThePromptCacheOptInAcrossEveryFormatVerb(t *testing.T) {
+	config := sampleResolvedOrgModelConfig()
+	var logs bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logs, nil)).Info("resolved", "config", config)
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for form, want := range map[string]string{
+		fmt.Sprintf("%v", config):  "PromptCache:true",
+		fmt.Sprintf("%#v", config): "PromptCache:true",
+		logs.String():              `"prompt_cache":true`,
+		string(encoded):            `"prompt_cache":true`,
+	} {
+		if !strings.Contains(form, want) {
+			t.Errorf("%q is not shown: %s", want, form)
+		}
+		if strings.Contains(form, config.Credential.Reveal()) {
+			t.Errorf("the credential leaked: %s", form)
+		}
 	}
 }

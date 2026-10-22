@@ -161,8 +161,9 @@ type Config struct {
 	// PromptCache marks the interpret and synthesize system prompts as a
 	// cacheable prefix on an Anthropic client. ConfigFromEnv turns it on (the
 	// deployment's own platform credential); a per-organization BYO Config
-	// leaves it off, since a BYO key caches per organization and a
-	// low-traffic organization would pay the write surcharge without a read.
+	// carries it only when that organization opted in, since a BYO key caches
+	// per organization and a low-traffic organization would pay the write
+	// surcharge without a read.
 	PromptCache bool
 	// AllowInsecureBaseURL permits a plaintext http:// BaseURL; see
 	// EnvAllowInsecureBaseURL.
