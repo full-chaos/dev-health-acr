@@ -33,7 +33,7 @@ func TestIngestTimeCursor(t *testing.T) {
 	createProjectMembershipPresenceView(t, ctx, direct)
 	now := time.Now().UTC().Truncate(time.Second)
 	newHarness := func(t *testing.T, orgID, repoID string, overlap time.Duration, logs *bytes.Buffer) *ingestHarness {
-		src, err := devhealthsource.NewClickHouseProjectionSource(query)
+		src, err := newUnpacedClickHouseSource(query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,7 +231,7 @@ func TestIngestTimeCursor(t *testing.T) {
 		const overlap = 15 * time.Minute
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000a", "72630000-0000-4000-8000-0000000000aa", overlap, nil)
 		counting := &countingQueryClient{inner: query}
-		counted, err := devhealthsource.NewClickHouseProjectionSource(counting)
+		counted, err := newUnpacedClickHouseSource(counting)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -267,7 +267,7 @@ func TestIngestTimeCursor(t *testing.T) {
 		const overlap = 15 * time.Minute
 		h := newHarness(t, "72630000-0000-4000-8000-000000000010", "72630000-0000-4000-8000-0000000000ae", overlap, nil)
 		counting := &countingQueryClient{inner: query}
-		counted, err := devhealthsource.NewClickHouseProjectionSource(counting)
+		counted, err := newUnpacedClickHouseSource(counting)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -375,7 +375,7 @@ SELECT ?, ?, concat('dep-', leftPad(toString(number), 3, '0')), 'success', 'prod
 	t.Run("a failed apply does not consume a late row: teams/projects overlap window", func(t *testing.T) {
 		t.Parallel()
 		const orgID = "72630000-0000-4000-8000-000000000022"
-		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+		src, err := newUnpacedTeamsProjectsSource(query, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -461,7 +461,7 @@ SELECT ?, ?, concat('dep-', leftPad(toString(number), 3, '0')), 'success', 'prod
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
 		h.workItem("WI-landed-while-down", now.Add(-3*time.Hour), now.Add(-15*time.Minute))
-		restarted, err := devhealthsource.NewClickHouseProjectionSource(query)
+		restarted, err := newUnpacedClickHouseSource(query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -549,7 +549,7 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		// read pages 1-2) and behind the frontier's own stamp, landing after
 		// the pass went past it.
 		h.workItem("WI-burst-00300-late", now.Add(-3*time.Hour), burst.Add(-time.Second))
-		restarted, err := devhealthsource.NewClickHouseProjectionSource(query)
+		restarted, err := newUnpacedClickHouseSource(query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -582,7 +582,7 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 	} {
 		t.Run("equal ingest stamps page to the end: "+tc.name, func(t *testing.T) {
 			t.Parallel()
-			src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+			src, err := newUnpacedTeamsProjectsSource(query, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -663,7 +663,7 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 		t.Parallel()
 		const orgID, repoID = "72630000-0000-4000-8000-000000000009", "72630000-0000-4000-8000-0000000000a9"
 		logs := &bytes.Buffer{}
-		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+		src, err := newUnpacedTeamsProjectsSource(query, true)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -71,7 +71,7 @@ func newIngestColumnsFixture(t *testing.T, orgID string, client contextpacket.Cl
 	if client == nil {
 		client = query
 	}
-	src, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	src, err := newUnpacedTeamsProjectsSource(client, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestIngestColumnsSwitchResetsTheCursorOnce(t *testing.T) {
 		t.Fatalf("legacy cursor space = %q", got)
 	}
 
-	upgraded, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	upgraded, err := newUnpacedTeamsProjectsSource(query, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ SELECT concat('WI-', toString(number)), ?, ?, 'issue', 'open', '', '', 'linear',
 	}
 
 	counting := &countingQueryClient{inner: query}
-	upgraded, err := devhealthsource.NewTeamsProjectsSource(counting, true)
+	upgraded, err := newUnpacedTeamsProjectsSource(counting, true)
 	if err != nil {
 		t.Fatal(err)
 	}

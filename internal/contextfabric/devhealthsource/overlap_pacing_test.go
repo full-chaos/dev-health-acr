@@ -250,3 +250,24 @@ func TestPassEndedLineNamesWhenTheNextPassMayStart(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcesPauseBetweenWindowPassesByDefault(t *testing.T) {
+	t.Parallel()
+	clickhouse, err := NewClickHouseProjectionSource(keysetRows{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	teams, err := NewTeamsProjectsSource(keysetRows{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := clickhouse.WindowPassInterval(); got != DefaultWindowPassInterval {
+		t.Errorf("the ClickHouse source pauses %s between window passes by default, want %s", got, DefaultWindowPassInterval)
+	}
+	if got := teams.WindowPassInterval(); got != DefaultWindowPassInterval {
+		t.Errorf("the teams/projects source pauses %s between window passes by default, want %s", got, DefaultWindowPassInterval)
+	}
+	if got := clickhouse.plan("").windowInterval; got != DefaultWindowPassInterval {
+		t.Errorf("the ClickHouse plan pauses %s, want %s", got, DefaultWindowPassInterval)
+	}
+}

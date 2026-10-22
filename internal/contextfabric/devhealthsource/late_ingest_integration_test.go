@@ -187,7 +187,7 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 	old := now.Add(-45 * 24 * time.Hour)
 
 	devHealth := func(t *testing.T, orgID, repoID string) *ingestHarness {
-		src, err := devhealthsource.NewClickHouseProjectionSource(query)
+		src, err := newUnpacedClickHouseSource(query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,7 +200,7 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 		return h
 	}
 	teamsProjects := func(t *testing.T, orgID string) *ingestHarness {
-		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+		src, err := newUnpacedTeamsProjectsSource(query, true)
 		if err != nil {
 			t.Fatal(err)
 		}
