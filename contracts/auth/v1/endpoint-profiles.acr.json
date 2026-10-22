@@ -807,7 +807,7 @@
       ],
       "class_disambiguator": {
         "kind": "content_type",
-        "name": "application/json"
+        "name": "application/x-www-form-urlencoded"
       }
     },
     {

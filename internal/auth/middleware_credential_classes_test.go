@@ -252,3 +252,44 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	return w.buf.Write(p)
 }
+
+type lookupCountingStore struct {
+	storage.CredentialStore
+	lookups atomic.Int32
+}
+
+func (s *lookupCountingStore) FindByTokenHash(ctx context.Context, hash string) (contractsv1.ClientCredential, error) {
+	s.lookups.Add(1)
+	return s.CredentialStore.FindByTokenHash(ctx, hash)
+}
+
+// svc_acr_ is the credential acr presents to ops (ops validates it on /api/v1/internal/acr/*); acr never accepts it.
+// A well-formed lookalike (the prefix and a 32-byte secret) is refused at the head like any non-fcacr_ bearer: 401, no
+// store lookup, the wrapped handler not reached. The endpoint-profile rows therefore list no internal_svc_acr_token.
+func TestMiddlewareRefusesTheOpsServiceCredentialSvcAcr(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	store := &lookupCountingStore{CredentialStore: newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore())}
+	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewMemoryLimiter(time.Minute, 100, 3))
+	var reached atomic.Bool
+	handler := authenticator.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	token := "svc_acr_" + strings.Repeat("A", 43)
+	if IsTokenShapeValid(token) {
+		t.Fatal("precondition: the lookalike must not have the shape of an fcacr_ credential")
+	}
+	response := callFrom(handler, "192.0.2.10:4000", "Bearer "+token)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("svc_acr_ bearer = %d, want 401", response.Code)
+	}
+	if reached.Load() {
+		t.Fatal("a svc_acr_ bearer reached the wrapped handler")
+	}
+	if n := store.lookups.Load(); n != 0 {
+		t.Fatalf("a svc_acr_ bearer caused %d credential lookup(s), want none: it is refused on its shape", n)
+	}
+	if !strings.Contains(response.Body.String(), "Missing or invalid ACR credential") {
+		t.Fatalf("answer = %q, want the malformed-bearer answer", response.Body.String())
+	}
+}
