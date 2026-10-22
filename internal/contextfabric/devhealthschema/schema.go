@@ -853,6 +853,54 @@ var EngineFull = map[string]string{
 	"work_unit_issue_size":      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
 }
 
+// EngineFullAlternates returns the further engine_full strings that live may
+// report for table besides the canonical one in EngineFull (CHAOS-10668, part
+// of CHAOS-8863), for a table whose sorting key is changing in ops.
+//
+// It is a function and not a second schema map on purpose: no fixture reads
+// it. The fixture DDL is always rendered from the canonical string in
+// EngineFull (TestDeclarationExposesNoSecondSource), so no test built on the
+// fixtures exercises an alternate. Only the live comparison uses it. The
+// live-schema-parity job reads the ops default branch, so a sorting-key change
+// lands there before acr can be rolled: both strings must pass until the
+// canonical string is moved to the new one (CHAOS-10669). Each string is
+// written out verbatim, never built from another one, and only a table that
+// EngineFull declares may have one.
+//
+// work_item_metrics_daily: ops migration 141 appends row_view to the sorting
+// key with MODIFY ORDER BY, which leaves the primary key at its old prefix, so
+// live reports both PRIMARY KEY and ORDER BY (the same shape as
+// operational_incidents above).
+func EngineFullAlternates(table string) []string {
+	switch table {
+	case "work_item_metrics_daily":
+		return []string{
+			"ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192",
+		}
+	}
+	return nil
+}
+
+// EngineFullMatchesLive reports whether live, the engine_full that a server
+// reports for table, is the canonical string in EngineFull or one of the
+// strings of EngineFullAlternates. A table EngineFull does not declare never
+// matches.
+func EngineFullMatchesLive(table, live string) bool {
+	canonical, ok := EngineFull[table]
+	if !ok {
+		return false
+	}
+	if live == canonical {
+		return true
+	}
+	for _, accepted := range EngineFullAlternates(table) {
+		if live == accepted {
+			return true
+		}
+	}
+	return false
+}
+
 // AcceptsColumnType reports whether typ is the canonical type of the column or
 // one of its declared alternates.
 func AcceptsColumnType(table, column, typ string) bool {
