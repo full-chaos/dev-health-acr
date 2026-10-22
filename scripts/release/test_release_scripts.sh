@@ -322,6 +322,9 @@ case "$2" in
   */jobs\?*)
     n="$(( $(cat "$CIREF_STATE/n" 2>/dev/null || echo 0) + 1 ))"
     printf '%s\n' "$n" > "$CIREF_STATE/n"
+    if [[ -f "$CIREF_STATE/slow.$n" ]]; then
+      printf '%s\n' "$(( $(cat "$CIREF_STATE/clock" 2>/dev/null || echo 0) + $(cat "$CIREF_STATE/slow.$n") ))" > "$CIREF_STATE/clock"
+    fi
     f="$CIREF_STATE/jobs.$n"
     [[ -f "$f" ]] || f="$CIREF_STATE/jobs.last"
     jq -c "$filter" "$f" ;;
@@ -343,7 +346,8 @@ chmod 755 "$ciref_bin/gh" "$ciref_bin/sleep" "$ciref_bin/date"
 # ciref_run SCRIPT NAME TRIGGER_HEAD_SHA STATE...: each STATE is the next jobs
 # answer, status:conclusion of the verify job or `none` for a run with no verify
 # job; the last one repeats. Sets rc and leaves out/err/gh.log/sleep.log in the
-# case directory $ciref_dir.
+# case directory $ciref_dir. ciref_slow, when set, is a list of N:SECONDS: the
+# Nth jobs answer takes that long on the fake clock.
 ciref_commit=6f3b161587e199a2ef67790f04ed1e82e56f6629
 ciref_run() {
   local script="$1" name="$2" head="$3" i=0 st status conclusion body
@@ -351,6 +355,7 @@ ciref_run() {
   ciref_dir="$tmp/ciref-$name"
   rm -rf "$ciref_dir"; mkdir -p "$ciref_dir"
   : > "$ciref_dir/gh.log"; : > "$ciref_dir/sleep.log"
+  for st in ${ciref_slow:-}; do printf '%s\n' "${st#*:}" > "$ciref_dir/slow.${st%%:*}"; done
   for st in "$@"; do
     i=$((i + 1))
     if [[ "$st" == none ]]; then
@@ -427,6 +432,26 @@ check_ci_reference() {
   test "$(ciref_reads)" -eq 2 || return 1
   grep -qF "ci reference FAILED" "$ciref_dir/err" || return 1
 
+  # G: the 20th answer is slow (29 s on the clock): the wait must still stop at
+  # the 600 s bound, so the last pause is clamped to what is left and the pass
+  # on the next read lands at 600 s, never at 629 s.
+  ciref_case="G"
+  ciref_slow="20:29" ciref_run "$script" g "$ciref_commit" queued:null queued:null queued:null queued:null queued:null \
+    queued:null queued:null queued:null queued:null queued:null queued:null queued:null queued:null queued:null queued:null \
+    queued:null queued:null queued:null queued:null queued:null completed:success
+  test "$rc" -eq 0 || return 1
+  test "$(ciref_reads)" -eq 21 || return 1
+  test "$(cat "$ciref_dir/clock")" -le 600 || return 1
+  test "$(tail -1 "$ciref_dir/sleep.log")" -eq 1 || return 1
+  if grep -qvE '^([1-9]|[12][0-9]|30)$' "$ciref_dir/sleep.log"; then return 1; fi
+  grep -qF "ci reference OK after retry: attempt 21, waited 600s:" "$ciref_dir/out" || return 1
+  # G2: never finishing, with the same slow answer: refused, and no later than
+  # 600 s plus the one answer in flight.
+  ciref_slow="20:29" ciref_run "$script" g2 "$ciref_commit" queued:null
+  test "$rc" -eq 1 || return 1
+  test "$(cat "$ciref_dir/clock")" -le 629 || return 1
+  grep -qF "ci reference TIMEOUT after 600s," "$ciref_dir/err" || return 1
+
   # E: the triggering run is for another sha: refused before any API read.
   ciref_case="E"
   ciref_run "$script" e 4317bf7f57020d514f6e813bf6bfcb3361c590f1 completed:success
@@ -450,6 +475,7 @@ ciref_mutant() { # NAME SED-EXPR
 }
 ciref_mutant no-retry 's/^            WAIT_SECONDS=600$/            WAIT_SECONDS=0/'
 ciref_mutant accepts-failure 's/\[ "$conclusion" = success \]/[ -n "$conclusion" ]/'
+ciref_mutant no-clamp 's/^            sleep "$pause"$/            sleep 30/'
 ciref_mutant silent-retry '/echo "ci reference retry:/d'
 grep -F 'tag="$commit"' "$release_workflow" >/dev/null
 grep -F -- '--derive-main-version "$commit"' "$release_workflow" >/dev/null
@@ -486,6 +512,7 @@ test "$(job_needs ci-reference)" = "    needs: [preflight]"
 test "$(job_needs supply-chain)" = "    needs: [preflight, ci-reference]"
 test "$(job_needs build-leg)" = "    needs: [preflight, ci-reference]"
 test "$(job_needs build)" = "    needs: [preflight, supply-chain, build-leg]"
+test "$(job_needs container)" = "    needs: [preflight, mirror-preflight, ci-reference]"
 # CHAOS-6403: Syft is a checksum-verified release binary, never compiled in CI;
 # no QEMU in release.yml; each leg builds once.
 if grep -E 'go run [^ ]*anchore/syft' "$release_workflow"; then exit 1; fi

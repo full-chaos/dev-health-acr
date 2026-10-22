@@ -363,7 +363,9 @@ jobs:
             fi
             echo "ci reference retry: attempt $attempt read a non-terminal state: $state; waited $(( now - started ))s of ${WAIT_SECONDS}s"
             attempt=$(( attempt + 1 ))
-            sleep 30
+            pause=30
+            if [ $(( deadline - now )) -lt "$pause" ]; then pause=$(( deadline - now )); fi
+            sleep "$pause"
           done
 
   # Supply-chain checks, parallel with the legs (no tests: see ci-reference).
@@ -548,7 +550,7 @@ jobs:
     # bootstrap race here that ci.yml's own mirror-preflight closes for the
     # ci workflow -- Release and Mirror images both trigger on the same
     # `push`, with no cross-workflow `needs`.
-    needs: [preflight, mirror-preflight]
+    needs: [preflight, mirror-preflight, ci-reference]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
