@@ -120,10 +120,48 @@ assert_no_shell() {
   fi
 }
 
+# The MCP root carries git-lfs 3.8.0-r4 or newer (CVE-2026-111943 is fixed in
+# r4). The installed-package database is read from the exported filesystem; a
+# database that cannot be read, a row without a git-lfs binary, or no git-lfs
+# row at all fails instead of passing. `sort -V` does not order apk versions
+# that carry suffixes such as _rc or _p the way apk does, so only plain
+# <number>(.<number>)*-r<number> versions are compared and anything else fails.
+assert_git_lfs_fixed() {
+  local export_tar="$1"
+  local label="$2"
+  local minimum="3.8.0-r4"
+  local database installed listing sorted
+  database="$(mktemp "${tmp_dir}/apk-installed.XXXXXX")"
+  tar -xOf "$export_tar" usr/lib/apk/db/installed >"$database" || {
+    printf '%s runtime package database is unreadable\n' "$label" >&2
+    exit 1
+  }
+  installed="$(awk '$0 == "P:git-lfs" { found = 1; next } found && /^V:/ { print substr($0, 3); exit } /^$/ { found = 0 }' "$database")"
+  [[ -n "$installed" ]] || {
+    printf '%s runtime package database lists no git-lfs package\n' "$label" >&2
+    exit 1
+  }
+  [[ "$installed" =~ ^[0-9]+(\.[0-9]+)*-r[0-9]+$ ]] || {
+    printf '%s runtime carries git-lfs %s, a version this check cannot order\n' "$label" "$installed" >&2
+    exit 1
+  }
+  listing="$(tar_entries "$export_tar")"
+  grep -Eq '(^|/)usr/bin/git-lfs$' "$listing" || {
+    printf '%s runtime lists git-lfs %s but ships no usr/bin/git-lfs\n' "$label" "$installed" >&2
+    exit 1
+  }
+  sorted="$(printf '%s\n%s\n' "$minimum" "$installed" | sort -V)"
+  [[ "${sorted%%$'\n'*}" == "$minimum" ]] || {
+    printf '%s runtime carries git-lfs %s, older than %s\n' "$label" "$installed" "$minimum" >&2
+    exit 1
+  }
+}
+
 assert_no_package_manager "$api_export" API
 assert_no_shell "$api_export" API
 assert_no_package_manager "$mcp_export" MCP
 assert_no_shell "$mcp_export" MCP
+assert_git_lfs_fixed "$mcp_export" MCP
 
 # Sentinel content scans extract the full export to a temp file rather
 # than piping into `grep -aFq`, for the same SIGPIPE/pipefail reason as
