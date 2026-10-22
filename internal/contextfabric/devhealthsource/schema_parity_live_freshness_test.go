@@ -241,8 +241,9 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 
 // assertPresenceViewColumnsAreFresh compares the project_membership_presence
 // view's column names and order in system.columns with the aliases of the
-// declared view DDL. Column types are not compared: they derive from the
-// declared base columns, which the checks above cover.
+// declared view DDL. Column types are NOT compared or pinned: the base
+// columns the view reads are covered above, but a literal output such as
+// source is not.
 func assertPresenceViewColumnsAreFresh(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client) {
 	t.Helper()
 	rows, err := query.Query(ctx,
