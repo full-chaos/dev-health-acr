@@ -137,6 +137,7 @@ func contextFabricModelDefaults(lookup func(string) (string, bool), logger *slog
 			Timeout: modelprovider.DefaultTimeout, MaxAttempts: modelprovider.DefaultMaxAttempts,
 			MaxTransportRetries:             modelprovider.DefaultMaxTransportRetries,
 			MaxSynthesisResynthesisAttempts: synthesisResynthesisAttemptsFromEnv(lookup, logger),
+			AllowNonPublicBYOEndpoint:       byoAllowNonPublicBaseURLFromEnv(lookup, logger),
 		}, nil
 	}
 	// Configured() is already true, so newContextFabricModelRuntime (called
@@ -152,6 +153,7 @@ func contextFabricModelDefaults(lookup func(string) (string, bool), logger *slog
 	// here explicitly -- the same pattern contextFabricModelConfigFromEnv
 	// uses for the deployment-default runtime.
 	cfg.MaxSynthesisResynthesisAttempts = synthesisResynthesisAttemptsFromEnv(lookup, logger)
+	cfg.AllowNonPublicBYOEndpoint = byoAllowNonPublicBaseURLFromEnv(lookup, logger)
 	return cfg, nil
 }
 

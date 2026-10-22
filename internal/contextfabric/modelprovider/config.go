@@ -198,6 +198,20 @@ type Config struct {
 	// leaves the primary's genkitruntime.Config field at its own zero value
 	// too, which genkitruntime.New then defaults to 1 (today's behavior).
 	MaxSynthesisResynthesisAttempts int
+	// PublicEndpointsOnly makes every model call dial only publicly routable
+	// addresses: the dialer refuses a loopback, private, link-local, shared,
+	// reserved or otherwise non-public address after DNS resolution, so a
+	// hostname that resolves to one, a rebound name and a redirect hop are
+	// refused too. A per-organization BYO Config sets it (the organization
+	// chose the endpoint); ConfigFromEnv leaves it false (the operator chose
+	// the platform endpoint, which may be a local server). Like Telemetry it is
+	// set by the caller, not read from the environment, and not validated.
+	PublicEndpointsOnly bool
+	// AllowNonPublicBYOEndpoint is the deployment's own opt-out of the rule
+	// above for per-organization BYO Configs (internal/runtime/hosted reads
+	// it from the environment). It is read from the deployment-default Config
+	// only; it changes nothing about a call made with this Config itself.
+	AllowNonPublicBYOEndpoint bool
 }
 
 // validate enforces the bounds this package owns. genkitruntime.New

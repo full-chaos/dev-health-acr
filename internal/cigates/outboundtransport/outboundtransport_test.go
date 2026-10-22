@@ -528,8 +528,10 @@ func isValueOverwrite(info *types.Info, expression ast.Expr) bool {
 // approvedTransportConstructors are the functions whose result is a non-nil RoundTripper that never uses an
 // environment proxy, whatever their arguments: the transport helpers.
 var approvedTransportConstructors = map[string]bool{
-	modulePath + "/internal/outboundhttp.Transport":       true,
-	modulePath + "/internal/outboundhttp.SharedTransport": true,
+	modulePath + "/internal/outboundhttp.Transport":             true,
+	modulePath + "/internal/outboundhttp.SharedTransport":       true,
+	modulePath + "/internal/outboundhttp.PublicTransport":       true,
+	modulePath + "/internal/outboundhttp.SharedPublicTransport": true,
 }
 
 const maxProofDepth = 8

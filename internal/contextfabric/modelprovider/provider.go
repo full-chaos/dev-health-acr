@@ -174,11 +174,18 @@ func newLLMClients(cfg Config, models ...string) (genkitruntime.LLMClients, erro
 // shared client would otherwise send its own placeholder bearer, and an
 // endpoint configured without a credential has never been sent one.
 func newModelHTTPClient(cfg Config) *http.Client {
-	if cfg.APIKey.Configured() {
+	// A custom RoundTripper is used by the shared client as it is, so the
+	// credential-free one must carry no ambient proxy itself, as the client
+	// does for its own. The four literals name their transport in place: the
+	// outbound-transport guard proves each one non-nil.
+	switch {
+	case cfg.PublicEndpointsOnly && cfg.APIKey.Configured():
+		return &http.Client{Timeout: cfg.Timeout, Transport: outboundhttp.SharedPublicTransport()}
+	case cfg.PublicEndpointsOnly:
+		return &http.Client{Timeout: cfg.Timeout, Transport: withoutAuthorization{next: outboundhttp.SharedPublicTransport()}}
+	case cfg.APIKey.Configured():
 		return &http.Client{Timeout: cfg.Timeout, Transport: outboundhttp.SharedTransport()}
 	}
-	// A custom RoundTripper is used by the shared client as it is, so this
-	// one must carry no ambient proxy itself, as the client does for its own.
 	return &http.Client{Timeout: cfg.Timeout, Transport: withoutAuthorization{next: outboundhttp.SharedTransport()}}
 }
 

@@ -38,6 +38,8 @@ type opsStandIn struct {
 	// refusal sends: "saved_key_in_base_url", "saved_userinfo_in_base_url" and
 	// the clean control "saved_api_version_base_url".
 	llmConfig string
+	// baseURL is the base_url of the "saved_with_base_url" configuration.
+	baseURL string
 }
 
 func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +64,8 @@ func (s opsStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"saved_api_version_base_url": "https://own.example.invalid/v1?api-version=2024-02-01",
 			}[s.llmConfig]
 			_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": "acr_llm_config.v1", "org_id": orgID, "provider": "openai", "model": "org-model", "base_url": baseURL, "api_key": "sk-org-standin", "version": "v1"})
+		case "saved_with_base_url":
+			_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": "acr_llm_config.v1", "org_id": orgID, "provider": "openai", "model": "org-model", "base_url": s.baseURL, "api_key": "sk-org-standin", "version": "v1"})
 		case "gate_closed":
 			w.Header().Set("X-Org-Llm-Config", "none")
 			w.Header().Set("X-Org-Llm-Config-Reason", "byo_llm_gate_closed")
@@ -160,6 +164,19 @@ func (c countedModelSide) SynthesizeAnswer(ctx context.Context, principal storag
 // the organization's own model and the deployment model are counted apart.
 func opsBackedRouteRig(t *testing.T, ops opsStandIn) (*clientRouteRig, *modelSides) {
 	t.Helper()
+	sides := &modelSides{calls: map[string]int{}}
+	rig := opsBackedRouteRigWith(t, ops, func(model contextfabric.ModelRuntime) (contextfabric.ModelRuntime, modelruntimeresolver.Build) {
+		return countedModelSide{side: "deployment", sides: sides, inner: model}, func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
+			return countedModelSide{side: "own", sides: sides, inner: model}, nil
+		}
+	})
+	return rig, sides
+}
+
+// opsBackedRouteRigWith is opsBackedRouteRig with the deployment model and the
+// per-organization build supplied by the caller.
+func opsBackedRouteRigWith(t *testing.T, ops opsStandIn, models func(model contextfabric.ModelRuntime) (contextfabric.ModelRuntime, modelruntimeresolver.Build)) *clientRouteRig {
+	t.Helper()
 	server := httptest.NewServer(ops)
 	t.Cleanup(server.Close)
 	baseURL, err := url.Parse(server.URL)
@@ -178,19 +195,16 @@ func opsBackedRouteRig(t *testing.T, ops opsStandIn) (*clientRouteRig, *modelSid
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	sides := &modelSides{calls: map[string]int{}}
 	configs := opsClientConfigs{client: client}
 	fixture := singleSubjectFixture()
 	fixture.runtime = func(model contextfabric.ModelRuntime) contextfabric.ModelRuntime {
-		return modelruntimeresolver.New(countedModelSide{side: "deployment", sides: sides, inner: model}, configs,
-			func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
-				return countedModelSide{side: "own", sides: sides, inner: model}, nil
-			})
+		deployment, build := models(model)
+		return modelruntimeresolver.New(deployment, configs, build)
 	}
 	rig := newClientRouteRig(t, fixture)
 	rig.app.runtime.Entitlements = client
 	rig.app.runtime.OrgModelConfigs = configs
-	return rig, sides
+	return rig
 }
 
 func boolRef(value bool) *bool { return &value }
