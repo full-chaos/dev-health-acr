@@ -2141,7 +2141,13 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// a scan of every claim can report a LATER claim's group -- one
 		// that was never evaluated -- which would make the documented
 		// "1 versus >1" reading wrong in exactly the case it diagnoses.
-		setDiagnostics(err)
+		diagnosed := err
+		if schemaOnlyRejection {
+			// The raw cause of a schema-only draw is not a rejection and names
+			// no rule: the typed rejection returned below is what the line reads.
+			diagnosed = schemaOnlySynthesisRejection(err)
+		}
+		setDiagnostics(diagnosed)
 		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
@@ -2197,7 +2203,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			// rejection, never as a bound violation that was not the one
 			// Genkit actually caught. Mirrors InterpretQuestion's identical
 			// override.
-			rejection = contextfabric.NewSynthesisRejection(contextfabric.RejectionReasonUnclassified, fmt.Errorf("%w: %w: %w", contextfabric.ErrSynthesisRejected, contextfabric.ErrModelOutput, err))
+			rejection = schemaOnlySynthesisRejection(err)
 		}
 		return contextfabric.SynthesisDraft{}, receipt, rejection
 	}
@@ -2212,6 +2218,13 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// closure was diagnosable only when it did not save the answer.
 	setGroundingSignal(draft)
 	return draft, receipt, nil
+}
+
+// schemaOnlySynthesisRejection types the rejection of a draw only Genkit's
+// output-schema check refused: its reason is that check, never a rule of this
+// package that did not fire.
+func schemaOnlySynthesisRejection(cause error) error {
+	return contextfabric.NewSynthesisRejection(contextfabric.RejectionReasonOutputSchemaMismatch, fmt.Errorf("%w: %w: %w", contextfabric.ErrSynthesisRejected, contextfabric.ErrModelOutput, cause))
 }
 
 // PhraseStructureOffers (CHAOS-4171 PR2) implements
