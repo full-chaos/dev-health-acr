@@ -35,7 +35,8 @@ func TestGenerateBaseURLKeyOracle(t *testing.T) {
 	defer func() { hostResolver = orig }()
 
 	keys := []string{"abc", "abcdefg", "sk-12345", "SK-MixedCase-0123456789", "sk-synth-test-0123456789ABCDEF", "synthetic/key+with=special/chars==",
-		"pct%25key-0123456789", "key-with-\u00e9-\u00fc-0123456789", "sk-" + strings.Repeat("synthetic0123456789", 10)}
+		"pct%25key-0123456789", "key-with-\u00e9-\u00fc-0123456789", "sk-" + strings.Repeat("synthetic0123456789", 10),
+		"abcd", "abcde", "abcdef", "\u00e9\u00fc", "Ab+/", "0123", "?>?>?>?>?>", "?>?>?>?"}
 	type row [4]any
 	var rows []row
 	add := func(ki int, url string) {
@@ -126,7 +127,7 @@ func TestGenerateBaseURLKeyOracle(t *testing.T) {
 		add(2, url)
 	}
 	doc := map[string]any{
-		"ops_commit": "69e7179d70573959df2586f1d8ba090e30fccb01",
+		"ops_commit": "6fd3446cbc5e48bf19adb903e77eb2a53570c284",
 		"keys":       keys,
 		"columns":    []string{"key_index", "base_url", "ops_key_hit", "ops_refuses_userinfo"},
 		"rows":       rows,

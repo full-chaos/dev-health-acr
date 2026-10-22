@@ -1,12 +1,15 @@
 package entitlements
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const (
@@ -130,16 +133,87 @@ func TestBaseURLCarriesKeyThroughPercentEscapes(t *testing.T) {
 	}
 }
 
-// A key under eight bytes is matched in its raw form only, as in ops.
-func TestAShortKeyIsMatchedRawOnly(t *testing.T) {
-	if got := keyLeakForms("abcdefg"); len(got) != 1 || got[0] != "abcdefg" {
-		t.Fatalf("forms of a 7-byte key = %v, want the raw form only", got)
+// A derived form (escaped, hex, base64) of a key of any length counts when it
+// is at least eight characters, as in ops: a 4-byte key is caught in hex (8
+// characters), a 3-byte key has no derived form that long, and an empty key
+// has no form at all.
+func TestAShortKeysDerivedFormsOfEightCharsAreMatched(t *testing.T) {
+	for _, tc := range []struct {
+		key      string
+		baseURL  string
+		wantHit  bool
+		describe string
+	}{
+		{"abcd", "https://p.example.invalid/" + hex.EncodeToString([]byte("abcd")), true, "4-byte key in hex (8 chars)"},
+		{"abcd", "https://p.example.invalid/" + strings.ToUpper(hex.EncodeToString([]byte("abcd"))), true, "4-byte key in upper-case hex"},
+		{"abcd", "https://p.example.invalid/" + percentEscapeAll(hex.EncodeToString([]byte("abcd"))), true, "4-byte key in hex, percent-escaped"},
+		{"abcd", "https://p.example.invalid/abcd", true, "4-byte key raw"},
+		{"abc", "https://p.example.invalid/" + hex.EncodeToString([]byte("abc")), false, "3-byte key in hex (6 chars) is not a form"},
+		{"abcd", "https://p.example.invalid/" + hex.EncodeToString([]byte("abc")), false, "another key's hex is not a leak"},
+		{"abcdefg", "https://p.example.invalid/" + hex.EncodeToString([]byte("abcdefg")), true, "7-byte key in hex (14 chars)"},
+		{"abcdefg", "https://p.example.invalid/YWJjZGVmZw", true, "7-byte key in base64 (10 chars)"},
+		{"a b ", "https://p.example.invalid/a+b+", false, "4-byte key query-escaped to 4 chars is not a form"},
+		{"a b ", "https://p.example.invalid/a b ", true, "4-byte key raw with spaces"},
+	} {
+		if got := baseURLRefusal(tc.baseURL, tc.key) == baseURLRefusalKey; got != tc.wantHit {
+			t.Errorf("%s: refused = %v, want %v (%s)", tc.describe, got, tc.wantHit, tc.baseURL)
+		}
 	}
-	if baseURLRefusal("https://p.example.invalid/"+hex.EncodeToString([]byte("abcdefg")), "abcdefg") != "" {
-		t.Fatal("the hex form of a short key is not a leak form")
+	if got := keyLeakForms("abc"); len(got) != 1 || got[0] != "abc" {
+		t.Fatalf("forms of a 3-byte key = %v, want the raw form only", got)
 	}
 	if got := keyLeakForms(""); got != nil {
 		t.Fatalf("forms of an empty key = %v, want none", got)
+	}
+}
+
+// oldKeyLeakForms is keyLeakForms before the short-key rule: a key under eight
+// bytes had its raw form only, every other key all its forms. A key of eight
+// bytes or more must keep exactly those forms.
+func oldKeyLeakForms(apiKey string) []string {
+	forms := []string{strings.ToLower(apiKey)}
+	if len(apiKey) < 8 {
+		return forms
+	}
+	derived := []string{url.QueryEscape(apiKey), url.PathEscape(apiKey), hex.EncodeToString([]byte(apiKey))}
+	for shift := 0; shift < 3; shift++ {
+		raw := append(make([]byte, shift), apiKey...)
+		for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+			text := enc.EncodeToString(raw)
+			start := []int{0, 2, 3}[shift]
+			if len(text) > start+2 {
+				derived = append(derived, text[start:len(text)-2])
+			}
+		}
+	}
+	for _, form := range derived {
+		forms = append(forms, strings.ToLower(form))
+	}
+	return forms
+}
+
+func TestKeysOfEightBytesOrMoreKeepEveryFormTheyHad(t *testing.T) {
+	alphabet := "sk-ant-ABCdef0123456789_+/=%. \u00e9"
+	for length := 8; length <= 64; length++ {
+		key := strings.Repeat(alphabet, length)[:length]
+		for !utf8.ValidString(key) {
+			key = key[:len(key)-1]
+		}
+		got, want := map[string]bool{}, map[string]bool{}
+		for _, form := range keyLeakForms(key) {
+			got[form] = true
+		}
+		for _, form := range oldKeyLeakForms(key) {
+			want[form] = true
+		}
+		if len(got) != len(want) {
+			t.Fatalf("key of %d bytes: %d forms, was %d", len(key), len(got), len(want))
+		}
+		for form := range want {
+			if !got[form] {
+				t.Fatalf("key of %d bytes lost the form %q", len(key), form)
+			}
+		}
 	}
 }
 
@@ -180,6 +254,44 @@ func TestARefusalNamesNeitherTheURLNorTheKey(t *testing.T) {
 	for _, text := range []string{err.Error(), strings.ToLower(err.Error())} {
 		if strings.Contains(text, "http") || strings.Contains(text, "sk-") {
 			t.Fatalf("refusal text %q holds a url or key shape", text)
+		}
+	}
+}
+
+// referenceDerivedForms are the hex and base64 spellings of a key, derived here
+// from the encodings themselves and not from keyLeakForms. (A percent-escaped
+// spelling is the raw key once the url is decoded, so it is always a hit.)
+func referenceDerivedForms(key string) []string {
+	forms := []string{hex.EncodeToString([]byte(key))}
+	for shift, start := range []int{0, 2, 3} {
+		raw := append(make([]byte, shift), key...)
+		for _, text := range []string{base64.RawStdEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw)} {
+			if len(text) > start+2 {
+				forms = append(forms, text[start:len(text)-2])
+			}
+		}
+	}
+	return forms
+}
+
+// For a key of any length 1 to 12, a url that holds exactly one hex or base64
+// spelling of the key is refused if and only if that spelling is at least
+// eight characters (or holds the raw key anyway). Keys with sextets 62 and 63
+// make the base64 url alphabet differ from the std one.
+func TestDerivedFormsOfEveryKeyLengthFollowTheEightCharRule(t *testing.T) {
+	for _, source := range []string{"Qz9xK2mPvL3a", "?>?>?>?>?>?>"} {
+		for length := 1; length <= len(source); length++ {
+			key := source[:length]
+			for _, form := range referenceDerivedForms(key) {
+				if form == "" {
+					continue
+				}
+				baseURL := "https://p.example.invalid/" + form
+				want := len(form) >= 8 || strings.Contains(strings.ToLower(form), strings.ToLower(key))
+				if got := baseURLRefusal(baseURL, key) == baseURLRefusalKey; got != want {
+					t.Errorf("key %q (%d bytes), spelling %q (%d chars): refused = %v, want %v", key, length, form, len(form), got, want)
+				}
+			}
 		}
 	}
 }
