@@ -92,8 +92,24 @@ CMD ["serve"]
 
 FROM cgr.dev/chainguard/git:latest@sha256:62087eb4f17f6d09e27f4eace690f264e091bbbf0f99c8882dc5b8eae4013bab AS acr-mcp-base
 
+FROM scratch AS git-lfs-apks
+ADD --checksum=sha256:53b4e4371ffd6ac3bc98a1c45924be53063403958dd8b87dc8fcfaf08b16aa86 https://packages.wolfi.dev/os/x86_64/git-lfs-3.8.0-r4.apk /amd64.apk
+ADD --checksum=sha256:50a675c1408678f2f342eeb9af59fce9e0e5ba69cf5755230fbb20d8f3bc023f https://packages.wolfi.dev/os/aarch64/git-lfs-3.8.0-r4.apk /arm64.apk
+
 FROM build AS acr-mcp-root
+ARG TARGETARCH
 COPY --from=acr-mcp-base / /mcp-root
+# The pinned base ships git-lfs r3 (HIGH finding, fixed in r4); this fails once the base ships r4 or newer, which is the signal to delete the stage and this RUN.
+RUN --mount=type=bind,from=git-lfs-apks,target=/git-lfs-apks <<'EOF'
+set -eu
+base="$(awk '$0 == "P:git-lfs" { found = 1; next } found && /^V:/ { print substr($0, 3); exit }' /mcp-root/lib/apk/db/installed)"
+if [ -z "$base" ] || [ "$(apk version -t "$base" 3.8.0-r4)" != "<" ]; then
+  echo "acr-mcp base ships git-lfs '${base}', not older than 3.8.0-r4: delete the git-lfs-apks stage and this RUN" >&2
+  exit 1
+fi
+apk --root /mcp-root --no-logfile --no-scripts --no-cache --no-network --allow-untrusted --repositories-file /dev/null \
+  add "/git-lfs-apks/${TARGETARCH}.apk"
+EOF
 RUN rm -f /mcp-root/usr/bin/sh /mcp-root/usr/bin/dash && \
     printf '[safe]\n\tdirectory = /workspace\n' > /mcp-root/etc/gitconfig
 
