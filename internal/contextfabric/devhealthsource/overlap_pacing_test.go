@@ -190,3 +190,63 @@ func TestAPeekDoesNotStartThePause(t *testing.T) {
 		t.Fatalf("the pass that was due did not start after a peek")
 	}
 }
+
+// The pause counts from the end of the pass. Reads that take longer than the
+// interval must not leave the pause already over when the pass ends.
+func TestThePauseStartsWhenThePassEndsNotWhenTheCallStarted(t *testing.T) {
+	t.Parallel()
+	r := pacedRig(t, pacingInterval)
+	r.windowSkew = pacingInterval + time.Minute
+	for i := 1; i <= 40; i++ {
+		was := r.pass()
+		r.advance()
+		r.runTick()
+		if was.walking && !r.pass().walking {
+			break
+		}
+	}
+	if r.pass().walking {
+		t.Fatalf("precondition: no pass ended in 40 ticks")
+	}
+	r.windowSkew = 0
+	ended := r.now
+	if due := r.pass().nextStart; due.Before(ended.Add(pacingInterval - churnTick)) {
+		t.Fatalf("the pause ends at %s, %s after the pass ended; want the interval %s", due, due.Sub(ended), pacingInterval)
+	}
+	before := r.windowReads
+	for r.now.Before(ended.Add(pacingInterval - 2*churnTick)) {
+		r.advance()
+		r.runTick()
+	}
+	if r.windowReads != before {
+		t.Fatalf("%d window statements ran inside the pause that follows the pass", r.windowReads-before)
+	}
+}
+
+// The "pass ended" line names when the next pass may start, and only when a
+// pause is set.
+func TestPassEndedLineNamesWhenTheNextPassMayStart(t *testing.T) {
+	t.Parallel()
+	for _, interval := range []time.Duration{0, pacingInterval} {
+		r := pacedRig(t, interval)
+		var line map[string]any
+		for i := 1; i <= 40 && line == nil; i++ {
+			r.advance()
+			r.trickle(i)
+			line = r.runTick().ended
+		}
+		if line == nil {
+			t.Fatalf("interval %s: no \"pass ended\" line in 40 ticks", interval)
+		}
+		got, has := line["next_pass_not_before"]
+		if interval == 0 {
+			if has {
+				t.Fatalf("interval 0: line carries next_pass_not_before=%v", got)
+			}
+			continue
+		}
+		if want := r.pass().nextStart.UTC().Format(time.RFC3339Nano); got != want {
+			t.Fatalf("next_pass_not_before = %v, want %s", got, want)
+		}
+	}
+}

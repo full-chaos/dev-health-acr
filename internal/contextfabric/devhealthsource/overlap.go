@@ -372,8 +372,10 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
 	// landed behind its position meanwhile, so when it completes a new pass
-	// starts at once. A pass started by THIS call has not: when it completes,
-	// the call ends and the next tick starts the next pass.
+	// starts at once, unless an interval between passes is set: then the call
+	// ends and the next pass waits for it. A pass started by THIS call has not
+	// been passed: when it completes, the call ends and the next tick starts
+	// the next pass (after the interval, when set).
 	resumed := pass.walking
 	if !pass.walking {
 		if pass.low.After(state.Since) {
@@ -459,7 +461,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		}
 		pass.walking = false
 		if p.windowInterval > 0 {
-			pass.nextStart = now.Add(p.windowInterval)
+			// From the clock at the pass's end, not the call's start: the reads
+			// of the pass can take longer than the interval itself.
+			pass.nextStart = p.clock().Add(p.windowInterval)
 		}
 		if resumed && !completed {
 			p.logEndedPass(ctx, orgID, pass, now)
@@ -591,11 +595,16 @@ func (p sourcePlan) logEndedPass(ctx context.Context, orgID string, pass windowP
 	if p.logger == nil {
 		return
 	}
-	p.logger.InfoContext(ctx, endedPassMessage,
+	attrs := []any{
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"pass_seconds", int64(now.Sub(pass.passStart).Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
 		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
-		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)))
+		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)),
+	}
+	if !pass.nextStart.IsZero() {
+		attrs = append(attrs, "next_pass_not_before", contextfabric.SanitizeLogAttr(pass.nextStart.UTC().Format(time.RFC3339Nano)))
+	}
+	p.logger.InfoContext(ctx, endedPassMessage, attrs...)
 }
 
 // reportWindowPass is ProjectionWindowPass for both sources: the state of the

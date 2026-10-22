@@ -66,6 +66,9 @@ type churnRig struct {
 	// windowReads counts statements that start behind the checkpoint's own
 	// position: the trailing-window walk, as opposed to the paged read.
 	windowReads int
+	// windowSkew moves the injected clock forward on every window statement,
+	// as a slow ClickHouse would.
+	windowSkew time.Duration
 }
 
 func newChurnRig(t *testing.T, start time.Time) *churnRig {
@@ -76,6 +79,7 @@ func newChurnRig(t *testing.T, start time.Time) *churnRig {
 		}
 		if frontier, err := decodeCursor(r.cursor); err == nil && since.Before(frontier.Since) {
 			r.windowReads++
+			r.now = r.now.Add(r.windowSkew)
 		}
 	}
 	r.plan = sourcePlan{
@@ -116,6 +120,7 @@ type churnTickResult struct {
 	paged, window int
 	yield         map[string]any // the "pass continues" line of this tick, if any
 	open          map[string]any // the line of a tick that ended with the pass open, whatever its level
+	ended         map[string]any // the "pass ended" line of this tick, if any
 }
 
 func (r *churnRig) runTick() churnTickResult {
@@ -157,6 +162,9 @@ func (r *churnRig) runTick() churnTickResult {
 		var decoded map[string]any
 		if json.Unmarshal([]byte(line), &decoded) == nil && strings.Contains(fmt.Sprint(decoded["msg"]), "overlap window pass continues") {
 			out.yield = decoded
+		}
+		if strings.Contains(fmt.Sprint(decoded["msg"]), "overlap window pass ended") {
+			out.ended = decoded
 		}
 		if _, aged := decoded["pass_age_seconds"]; aged {
 			out.open = decoded
