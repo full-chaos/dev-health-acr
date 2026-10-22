@@ -283,9 +283,9 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 		"admitted/no_credential_not_counted": 1,
 	}
 	awaitReasonCounts(t, e, attacker, want)
-	if lines := requestLines(t, e, other); len(lines) != 1 || lines[0]["gate_reason"] != acrmcp.HTTPGateReasonVerified {
-		t.Fatalf("other address lines = %v, want one verified", lines)
-	}
+	awaitReasonCounts(t, e, other, map[string]int{
+		acrmcp.HTTPGateAdmitted + "/" + acrmcp.HTTPGateReasonVerified: 1,
+	})
 }
 
 // A bearer verified in the over-budget slot and rejected after the edge
