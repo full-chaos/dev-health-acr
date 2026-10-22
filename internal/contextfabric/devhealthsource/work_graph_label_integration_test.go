@@ -14,8 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
-const workGraphEdgesDDL = `CREATE TABLE work_graph_edges (edge_id String, source_type String, source_id String, target_type String, target_id String, edge_type String, repo_id UUID, provider String, provenance String, confidence Float64, evidence Nullable(String), discovered_at DateTime64(3), last_synced DateTime64(3), org_id String) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, edge_id)`
-
 const (
 	wgOrg      = "10000000-0000-4000-8000-000000000001"
 	wgRepo     = "20000000-0000-4000-8000-000000000002"
@@ -107,7 +105,7 @@ func workGraphLabelsFor(t *testing.T, ctx context.Context, query contextpacket.C
 func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
+	for _, statement := range devhealthschema.DDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -170,7 +168,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	ctx := context.Background()
 	rawQuery, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
-	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
+	for _, statement := range devhealthschema.DDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -184,7 +182,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 		}
 	}
 	if noiseRows > 0 {
-		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
+		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise edges: %v", err)
 		}
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
@@ -340,7 +338,7 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	for _, statement := range append(devhealthschema.DDL(), workGraphEdgesDDL) {
+	for _, statement := range devhealthschema.DDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

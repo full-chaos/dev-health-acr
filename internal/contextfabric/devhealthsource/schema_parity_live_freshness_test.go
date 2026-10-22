@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,7 @@ func TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse(t *testing.T) {
 		assertDeclaredOrderMatchesLive(t, table, columns, livePositions[table])
 	}
 
+	assertPresenceViewColumnsAreFresh(t, ctx, query)
 	assertEngineAndSortingKeyAreFresh(t, ctx, query)
 	assertDeclaredProjectionsAreFresh(t, ctx, query)
 }
@@ -234,5 +236,34 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate system.tables rows: %v", err)
+	}
+}
+
+// assertPresenceViewColumnsAreFresh compares the project_membership_presence
+// view's column names and order in system.columns with the aliases of the
+// declared view DDL. Column types are not compared: they derive from the
+// declared base columns, which the checks above cover.
+func assertPresenceViewColumnsAreFresh(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client) {
+	t.Helper()
+	rows, err := query.Query(ctx,
+		"SELECT name FROM system.columns WHERE database = currentDatabase() AND table = 'project_membership_presence' ORDER BY position",
+		nil)
+	if err != nil {
+		t.Fatalf("query live system.columns for the presence view: %v", err)
+	}
+	defer rows.Close()
+	var live []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan presence view column: %v", err)
+		}
+		live = append(live, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate presence view columns: %v", err)
+	}
+	if got, want := strings.Join(live, ","), strings.Join(devhealthschema.ProjectMembershipPresenceViewColumnNames(), ","); got != want {
+		t.Errorf("live project_membership_presence columns are %q but devhealthschema declares %q", got, want)
 	}
 }
