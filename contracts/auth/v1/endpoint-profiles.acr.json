@@ -80,8 +80,6 @@
       "public_rationale": null,
       "accepted_credential_classes": [
         "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange",
         "acr_web_assertion"
       ],
       "primary_validator": {
@@ -121,7 +119,11 @@
       "disclosure_behavior": "writeError() envelope (ErrorEnvelope: schema_version, request_id, error{code,message,http_status,retryable,details}); no raw internal error crosses the boundary.",
       "gaps": [
         "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:80 is gated by it was not traced; not determined."
-      ]
+      ],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
     },
     {
       "id": "POST /api/v1/agent-context/context-packets [dev-health-acr-api]",
@@ -138,8 +140,6 @@
       "public_rationale": null,
       "accepted_credential_classes": [
         "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange",
         "acr_web_assertion"
       ],
       "primary_validator": {
@@ -181,7 +181,11 @@
         "Whether/how RequireRepository is invoked for this specific handler was not independently re-traced beyond the shared protectedRuntimeHandler wrapper in this pass -- see internal/auth/middleware.go:187-205 for the mechanism if a CI gate needs the per-route call site.",
         "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:81 reaches was not traced; not determined.",
         "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:81 is gated by it was not traced; not determined."
-      ]
+      ],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
     },
     {
       "id": "GET /api/v1/agent-context/evidence/{evidence_ref_id} [dev-health-acr-api]",
@@ -198,8 +202,6 @@
       "public_rationale": null,
       "accepted_credential_classes": [
         "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange",
         "acr_web_assertion"
       ],
       "primary_validator": {
@@ -239,7 +241,11 @@
       "disclosure_behavior": "writeError() closed envelope; 403 feature_not_enabled on entitlement denial, distinct from 401 invalid_token.",
       "gaps": [
         "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:82 reaches was not traced; not determined."
-      ]
+      ],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
     },
     {
       "id": "POST /api/v1/agent-context/episodes [dev-health-acr-api]",
@@ -255,9 +261,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
@@ -302,8 +306,6 @@
       "public_rationale": null,
       "accepted_credential_classes": [
         "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange",
         "acr_web_assertion"
       ],
       "primary_validator": {
@@ -341,7 +343,11 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeContextFabricError() -- classified, bounded envelope; a recovered panic (errContextFabricPanic) carries NO panic-value data into the response or logs by design.",
-      "gaps": []
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
     },
     {
       "id": "GET /api/v1/context-fabric/investigations/{result_id} [dev-health-acr-api]",
@@ -358,8 +364,6 @@
       "public_rationale": null,
       "accepted_credential_classes": [
         "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange",
         "acr_web_assertion"
       ],
       "primary_validator": {
@@ -399,7 +403,11 @@
       "disclosure_behavior": "writeContextFabricError() closed envelope.",
       "gaps": [
         "Cross-org result_id enumeration protection depends on InvestigationResultStore.Get's own org-scoping (internal/contextfabric/pginvestigation) -- read AGENTS.md's description of it but did not re-trace the store implementation in this pass."
-      ]
+      ],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
     },
     {
       "id": "GET /api/v1/context-fabric/data/catalog [dev-health-acr-api]",
@@ -415,9 +423,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
@@ -461,9 +467,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
@@ -507,9 +511,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
@@ -552,9 +554,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
@@ -598,9 +598,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7075 graphql_query direct data route (CHAOS-7036 D.8, E.5); bearer fcacr_ credential only.",
@@ -644,9 +642,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
@@ -808,7 +804,11 @@
           "key_source": null,
           "verified_by": "acr:internal/auth/middleware.go:132"
         }
-      ]
+      ],
+      "class_disambiguator": {
+        "kind": "content_type",
+        "name": "application/json"
+      }
     },
     {
       "id": "POST /api/v1/oauth/device_approval [dev-health-acr-api]",
@@ -881,9 +881,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "selfLifecycleHandler = authenticator.Middleware (bearer only, allowWebAssertions=false) + ProtectedHandler(rate limit only) -- NO RequireScope call. Self-service rotation only needs a valid credential; it operates on the CALLER'S OWN principal.CredentialID, so no additional scope check is layered on.",
@@ -927,9 +925,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
@@ -973,9 +969,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "internal_svc_acr_token",
-        "acr_workload_identity_exchange"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "Same selfLifecycleHandler as rotate and revoke -- bearer only, no explicit scope requirement.",
