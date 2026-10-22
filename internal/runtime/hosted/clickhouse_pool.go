@@ -12,7 +12,7 @@ import (
 // a new TCP+TLS+hello (about 3 round trips) on the next burst.
 const (
 	ClickHousePoolMaxOpenConns    = 8
-	ClickHousePoolMaxIdleConns    = ClickHousePoolMaxOpenConns
+	ClickHousePoolMaxIdleConns    = 1
 	ClickHousePoolConnMaxLifetime = 30 * time.Minute
 )
 
