@@ -153,6 +153,7 @@ var extractTables = []tableSpec{
 		"items_completed": ruleKeep, "wip_count_end_of_day": ruleKeep, "cycle_time_p50_hours": ruleKeep, "cycle_time_p90_hours": ruleKeep,
 		"lead_time_p50_hours": ruleKeep, "lead_time_p90_hours": ruleKeep, "wip_age_p50_hours": ruleKeep, "wip_age_p90_hours": ruleKeep,
 		"bug_completed_ratio": ruleKeep, "story_points_completed": ruleKeep, "computed_at": ruleKeep, "org_id": ruleOrg,
+		"row_view": ruleKeep,
 	}},
 	{Table: tableEstimateCoverageMetricsDaily, Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
 		"day": ruleKeep, "provider": ruleKeep, "work_scope_id": ruleWorkScope, "team_id": ruleTeam, "estimated_count": ruleKeep,
