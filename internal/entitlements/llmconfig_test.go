@@ -397,3 +397,40 @@ func TestOrgLLMConfigRepeatedMarkerOrReasonHeaderFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// A short key is held to the same rule as a long one for every form of eight
+// characters or more: a 4-byte key echoed in hex is refused through the real
+// client, a 3-byte key (no derived form that long) is served.
+func TestOrgLLMConfigRefusesAShortKeyEchoedInHex(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		key     string
+		baseURL string
+		refused bool
+	}{
+		{"4-byte key in hex", "abcd", "https://h.example.invalid/v1/" + hex.EncodeToString([]byte("abcd")), true},
+		{"4-byte key in upper-case hex, escaped", "abcd", "https://h.example.invalid/v1/" + strings.ToUpper(hex.EncodeToString([]byte("abcd"))), true},
+		{"7-byte key in base64", "abcdefg", "https://h.example.invalid/v1/YWJjZGVmZw", true},
+		{"3-byte key in hex", "abc", "https://h.example.invalid/v1/" + hex.EncodeToString([]byte("abc")), false},
+		{"4-byte key, another key's hex", "abcd", "https://h.example.invalid/v1/" + hex.EncodeToString([]byte("abce")), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _ := llmConfigServer(t, http.StatusOK, llmBody(map[string]any{"api_key": tc.key, "base_url": tc.baseURL}))
+			client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+			var refused *entitlements.BaseURLRefusedError
+			if tc.refused {
+				if found || !errors.As(err, &refused) || refused.Reason != "base_url_carries_key" || !errors.Is(err, entitlements.ErrLLMConfigUnusable) {
+					t.Fatalf("found = %v err = %v, want an unusable configuration refused for base_url_carries_key", found, err)
+				}
+				return
+			}
+			if err != nil || !found {
+				t.Fatalf("found = %v err = %v, want the configuration served", found, err)
+			}
+		})
+	}
+}
