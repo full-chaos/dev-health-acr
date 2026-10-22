@@ -49,6 +49,12 @@ func llmBody(overrides map[string]any) string {
 	return string(raw)
 }
 
+// withRawMembers puts raw JSON members first in the body, so a test can send
+// what a map cannot: a duplicate key or a literal null.
+func withRawMembers(members string, overrides map[string]any) string {
+	return "{" + members + "," + strings.TrimPrefix(llmBody(overrides), "{")
+}
+
 func TestOrgLLMConfigServesTheOpsConfig(t *testing.T) {
 	server, calls, path := llmConfigServer(t, http.StatusOK, llmBody(nil))
 	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{}))
@@ -83,6 +89,14 @@ func TestOrgLLMConfigCarriesThePromptCacheOptIn(t *testing.T) {
 		{"a string is a contract break: unavailable", map[string]any{"prompt_cache": "yes"}, false, false},
 		{"a number is a contract break: unavailable", map[string]any{"prompt_cache": 1}, false, false},
 	}
+	raw := []struct {
+		name string
+		body string
+	}{
+		{"null is a contract break: unavailable", withRawMembers(`"prompt_cache":null`, nil)},
+		{"a duplicate key is a contract break even when both say off", withRawMembers(`"prompt_cache":false`, map[string]any{"prompt_cache": false})},
+		{"a duplicate key that turns the cache on later is a contract break", withRawMembers(`"prompt_cache":false`, map[string]any{"prompt_cache": true})},
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			server, _, _ := llmConfigServer(t, http.StatusOK, llmBody(tc.overrides))
@@ -96,6 +110,18 @@ func TestOrgLLMConfigCarriesThePromptCacheOptIn(t *testing.T) {
 			}
 			if config.PromptCache != tc.want {
 				t.Fatalf("PromptCache = %v, want %v", config.PromptCache, tc.want)
+			}
+		})
+	}
+	for _, tc := range raw {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _ := llmConfigServer(t, http.StatusOK, tc.body)
+			client, err := entitlements.New(clientConfig(t, server, entitlements.Config{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := client.OrgLLMConfig(context.Background(), llmOrg); found || err == nil {
+				t.Fatalf("found = %v err = %v, want unavailable", found, err)
 			}
 		})
 	}
@@ -141,6 +167,10 @@ func TestOrgLLMConfigMapsEachStatus(t *testing.T) {
 		{"no model is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"model": " "}), false, false, true},
 		{"no version is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"version": ""}), false, false, true},
 		{"an unknown field is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"extra": 1}), false, false, true},
+		{"a duplicate key is a contract break: unavailable", http.StatusOK, withRawMembers(`"model":"other-model"`, nil), false, false, true},
+		{"a null key is a contract break: unavailable", http.StatusOK, llmBody(map[string]any{"api_key": json.RawMessage("null")}), false, false, true},
+		{"trailing JSON is a contract break: unavailable", http.StatusOK, llmBody(nil) + ` {}`, false, false, true},
+		{"a truncated body is a contract break: unavailable", http.StatusOK, strings.TrimSuffix(llmBody(nil), "}"), false, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

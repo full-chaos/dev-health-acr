@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-go/llm"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -212,10 +213,8 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	if err != nil {
 		return OrgLLMConfig{}, false, errUnavailable
 	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var parsed llmConfigResponse
-	if err := decoder.Decode(&parsed); err != nil {
+	parsed, err := decodeLLMConfig(payload)
+	if err != nil {
 		return OrgLLMConfig{}, false, errUnavailable
 	}
 	switch {
@@ -232,6 +231,42 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),
 		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), PromptCache: parsed.PromptCache, Version: parsed.Version,
 	}, true, nil
+}
+
+// decodeLLMConfig reads the body member by member, as decodeResponse does: an
+// unknown member, a repeated member, a null and trailing JSON are each a
+// contract break, never a value that quietly reads as off or empty.
+func decodeLLMConfig(payload []byte) (llmConfigResponse, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return llmConfigResponse{}, errors.New("invalid llm config object")
+	}
+	var parsed llmConfigResponse
+	targets := map[string]any{
+		"schema_version": &parsed.SchemaVersion, "org_id": &parsed.OrgID, "provider": &parsed.Provider,
+		"model": &parsed.Model, "base_url": &parsed.BaseURL, "api_key": &parsed.APIKey,
+		"prompt_cache": &parsed.PromptCache, "version": &parsed.Version,
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, isName := token.(string)
+		target, known := targets[name]
+		if err != nil || !isName || !known || seen[name] {
+			return llmConfigResponse{}, errors.New("invalid llm config member")
+		}
+		seen[name] = true
+		if err := decodeRequiredValue(decoder, target); err != nil {
+			return llmConfigResponse{}, err
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return llmConfigResponse{}, errors.New("invalid llm config object")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return llmConfigResponse{}, errors.New("trailing JSON")
+	}
+	return parsed, nil
 }
 
 func llmConfigURL(baseURL *url.URL, orgID string) string {
