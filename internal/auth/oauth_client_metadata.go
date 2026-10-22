@@ -9,11 +9,9 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/netip"
 	"reflect"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
@@ -35,10 +33,7 @@ const (
 	clientMetadataCacheMax = 256
 )
 
-var (
-	ErrClientMetadataUnavailable = errors.New("client metadata document unavailable")
-	errClientMetadataAddress     = errors.New("client metadata host resolves to a non-public address")
-)
+var ErrClientMetadataUnavailable = errors.New("client metadata document unavailable")
 
 // ClientMetadataError is a fetch refusal and its class, one of the
 // oauthvocab client refusals. It matches ErrClientMetadataUnavailable.
@@ -76,7 +71,7 @@ func NewPublicClientMetadataFetcher() *HTTPClientMetadataFetcher {
 // newPublicTransport is the production transport: no proxy, and a dial-time
 // Control hook that refuses every non-public address after DNS resolution.
 func newPublicTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: clientMetadataTimeout, Control: refuseNonPublicAddress}
+	dialer := &net.Dialer{Timeout: clientMetadataTimeout, Control: outboundhttp.RefuseNonPublicAddress}
 	return &http.Transport{
 		Proxy:                 nil,
 		DialContext:           dialer.DialContext,
@@ -116,7 +111,7 @@ func (f *HTTPClientMetadataFetcher) Fetch(ctx context.Context, clientID string) 
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := f.client.Do(request)
-	if errors.Is(err, errClientMetadataAddress) {
+	if errors.Is(err, outboundhttp.ErrNonPublicAddress) {
 		return OAuthClientMetadata{}, clientMetadataFailure(oauthvocab.ClientRefusalPrivateAddress)
 	}
 	if err != nil {
@@ -211,76 +206,4 @@ func cloneClientMetadata(metadata OAuthClientMetadata) OAuthClientMetadata {
 		metadata.TokenEndpointAuthMethodsSupported = append(make([]string, 0, len(metadata.TokenEndpointAuthMethodsSupported)), metadata.TokenEndpointAuthMethodsSupported...)
 	}
 	return metadata
-}
-
-// refuseNonPublicAddress runs after DNS resolution, on the address actually
-// dialled, so a name that resolves to a private address is refused too.
-func refuseNonPublicAddress(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return errClientMetadataAddress
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil || !PublicAddress(ip) {
-		return errClientMetadataAddress
-	}
-	return nil
-}
-
-// PublicAddress reports whether an address is publicly routable: not
-// loopback, private, link-local, multicast, unspecified, shared (100.64/10),
-// an IANA-reserved documentation/benchmarking/discard range, or any of
-// those in an IPv4-mapped or IPv4-compatible IPv6 form (Go's Unmap only
-// converts the IPv4-mapped ::ffff:0:0/96 form; the deprecated
-// IPv4-compatible ::0:0/96 form -- e.g. ::10.0.0.1 for private 10.0.0.1 --
-// is unwrapped separately below).
-func PublicAddress(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	if embedded, ok := ipv4CompatibleAddress(ip); ok {
-		ip = embedded
-	}
-	if !ip.IsValid() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return false
-	}
-	for _, prefix := range nonPublicPrefixes {
-		if prefix.Contains(ip) {
-			return false
-		}
-	}
-	return true
-}
-
-// ipv4CompatibleAddress unwraps the deprecated IPv4-compatible IPv6 form
-// (RFC 4291 §2.5.5.1: the high 96 bits zero, distinct from the IPv4-mapped
-// ::ffff:0:0/96 form Unmap already handles) to the IPv4 address it embeds.
-func ipv4CompatibleAddress(ip netip.Addr) (netip.Addr, bool) {
-	if !ip.Is6() {
-		return netip.Addr{}, false
-	}
-	bytes := ip.As16()
-	for _, b := range bytes[:12] {
-		if b != 0 {
-			return netip.Addr{}, false
-		}
-	}
-	return netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]}), true
-}
-
-var nonPublicPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("192.0.2.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("198.51.100.0/24"),
-	netip.MustParsePrefix("203.0.113.0/24"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("100::/64"),
-	netip.MustParsePrefix("2001:2::/48"),
-	netip.MustParsePrefix("2001:10::/28"),
-	netip.MustParsePrefix("2001:20::/28"),
-	netip.MustParsePrefix("3fff::/20"),
-	netip.MustParsePrefix("2001:db8::/32"),
 }

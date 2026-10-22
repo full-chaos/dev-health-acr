@@ -64,5 +64,8 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		// low-traffic organization that did not ask for the cache would pay
 		// its write surcharge without a read.
 		PromptCache: resolved.PromptCache && resolved.Provider == string(llm.KindAnthropic),
+		// The organization chose its endpoint, so the call dials public
+		// addresses only, unless the deployment opted out for all of them.
+		PublicEndpointsOnly: !defaults.AllowNonPublicBYOEndpoint,
 	}
 }
