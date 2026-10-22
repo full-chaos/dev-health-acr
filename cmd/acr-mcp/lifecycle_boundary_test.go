@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -121,6 +122,11 @@ func newBoundaryServer(t *testing.T, first, second string, recorder *boundaryRec
 	return server
 }
 
+// credentialShapedValue matches any value that carries a credential-class prefix
+// (ACR client, internal service, ingest, license) or has the shape of a signed
+// token, whatever its secret part.
+var credentialShapedValue = regexp.MustCompile(`(fcacr|svc_acr|svc_worker|fcpush|dhlic)_[A-Za-z0-9._-]{8,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+
 // subjectSentinel builds a workload-token-shaped value at run time.
 func subjectSentinel(t *testing.T) string {
 	t.Helper()
@@ -200,7 +206,7 @@ func TestLifecycleRunReachesOnlyTheConfiguredHostedAPIWithOnlyTheACRCredential(t
 		"POST /api/v1/auth/credentials/self/revoke": true,
 	}
 	public := map[string]bool{"/api/v1/oauth/device_authorization": true, "/api/v1/oauth/token": true}
-	forbiddenHeaders := []string{"X-Org-Id", "X-Acr-Web-Assertion", "X-Api-Key", "X-Signature-256", "X-Hub-Signature-256", "Cookie", "Proxy-Authorization"}
+	allowedHeaders := map[string]bool{"Accept": true, "Accept-Encoding": true, "Authorization": true, "Content-Length": true, "Content-Type": true, "User-Agent": true, "X-Acr-Client-Version": true}
 	seen := map[string]bool{}
 	for _, request := range recorder.snapshot() {
 		key := request.method + " " + request.path
@@ -216,10 +222,8 @@ func TestLifecycleRunReachesOnlyTheConfiguredHostedAPIWithOnlyTheACRCredential(t
 			t.Errorf("%s carried an Authorization header that is neither ACR credential of this run", key)
 		}
 		for _, name := range request.headerNames {
-			for _, forbidden := range forbiddenHeaders {
-				if name == forbidden {
-					t.Errorf("%s carried the %s header", key, forbidden)
-				}
+			if !allowedHeaders[name] {
+				t.Errorf("%s carried the %s header, which is outside the closed header set", key, name)
 			}
 		}
 		if strings.Contains(request.headerValues, subject) || strings.Contains(request.body, subject) {
@@ -243,6 +247,9 @@ func TestLifecycleRunReachesOnlyTheConfiguredHostedAPIWithOnlyTheACRCredential(t
 			if strings.Contains(output, secret) {
 				t.Errorf("command output %d contains the %s", index, name)
 			}
+		}
+		if match := credentialShapedValue.FindString(output); match != "" {
+			t.Errorf("command output %d contains a credential-shaped value of class prefix %q", index, strings.SplitN(match, "_", 2)[0])
 		}
 	}
 }
