@@ -2537,9 +2537,10 @@ func formatSynthesisDrawClauses(draws []synthesisDraw) string {
 // formatSynthesisDraws: the claimed-fact count of each draw's raw output, "?"
 // for a draw whose text never decoded.
 // formatSynthesisDrawReasons renders "1:claim_value_contradicts_canonical,2:none",
-// index-aligned with formatSynthesisDraws: the validator rule that refused
-// each rejected draw ("none" for a draw that was admitted), so a retry is
-// never silent about why it ran.
+// index-aligned with formatSynthesisDraws: the rule that refused each rejected
+// draw (a validator rule, or output_schema_mismatch for a draft the schema
+// check refused), or an error_* class when no rule judged the draw ("none" for
+// a draw that was admitted), so a retry is never silent about why it ran.
 func formatSynthesisDrawReasons(draws []synthesisDraw) string {
 	parts := make([]string, 0, len(draws))
 	for _, draw := range draws {
