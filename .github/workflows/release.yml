@@ -307,7 +307,10 @@ jobs:
           COMMIT: ${{ needs.preflight.outputs.commit }}
           WAIT_SECONDS: "3600"
           # Set only when this release was started by the ci run's completion:
-          # that run is the reference, read once, never polled for.
+          # that run is the reference and is never searched for. Its jobs are
+          # still re-read while verify is not yet terminal, for at most 600 s:
+          # release run 39816145235 read verify=queued 44 s after the ci run
+          # had completed with success, and refused a green commit.
           TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
           TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
@@ -315,9 +318,11 @@ jobs:
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "ci reference: commit is not a full sha: '$COMMIT'" >&2; exit 1; }
           if [ -n "$TRIGGER_RUN_ID" ]; then
             [ "$TRIGGER_HEAD_SHA" = "$COMMIT" ] || { echo "ci reference: triggering run $TRIGGER_RUN_ID is for $TRIGGER_HEAD_SHA, not $COMMIT" >&2; exit 1; }
-            WAIT_SECONDS=0
+            WAIT_SECONDS=600
           fi
-          deadline=$(( $(date +%s) + WAIT_SECONDS ))
+          started="$(date +%s)"
+          deadline=$(( started + WAIT_SECONDS ))
+          attempt=1
           while :; do
             if [ -n "$TRIGGER_RUN_ID" ]; then
               run_id="$TRIGGER_RUN_ID"
@@ -339,7 +344,11 @@ jobs:
                 state="ci run $run_id job verify: status=$status conclusion=$conclusion"
                 if [ "$status" = completed ]; then
                   if [ "$conclusion" = success ]; then
-                    echo "ci reference OK: $state (commit $COMMIT)"
+                    if [ "$attempt" -gt 1 ]; then
+                      echo "ci reference OK after retry: attempt $attempt, waited $(( $(date +%s) - started ))s: $state (commit $COMMIT)"
+                    else
+                      echo "ci reference OK: $state (commit $COMMIT)"
+                    fi
                     exit 0
                   fi
                   echo "ci reference FAILED: $state (commit $COMMIT); tests did not pass, refusing to release" >&2
@@ -347,12 +356,16 @@ jobs:
                 fi
               fi
             fi
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "ci reference TIMEOUT after ${WAIT_SECONDS}s: $state (commit $COMMIT)" >&2
+            now="$(date +%s)"
+            if [ "$now" -ge "$deadline" ]; then
+              echo "ci reference TIMEOUT after ${WAIT_SECONDS}s, $attempt reads, last state non-terminal: $state (commit $COMMIT)" >&2
               exit 1
             fi
-            echo "ci reference waiting: $state"
-            sleep 30
+            echo "ci reference retry: attempt $attempt read a non-terminal state: $state; waited $(( now - started ))s of ${WAIT_SECONDS}s"
+            attempt=$(( attempt + 1 ))
+            pause=30
+            if [ $(( deadline - now )) -lt "$pause" ]; then pause=$(( deadline - now )); fi
+            sleep "$pause"
           done
 
   # Supply-chain checks, parallel with the legs (no tests: see ci-reference).
@@ -537,7 +550,7 @@ jobs:
     # bootstrap race here that ci.yml's own mirror-preflight closes for the
     # ci workflow -- Release and Mirror images both trigger on the same
     # `push`, with no cross-workflow `needs`.
-    needs: [preflight, mirror-preflight]
+    needs: [preflight, mirror-preflight, ci-reference]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

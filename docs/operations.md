@@ -710,6 +710,15 @@ in passes of ordinary 200-row pages (the ClickHouse client's `max_result_rows`
 is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
 pass that does not reach the window's end stops at the last fully read row and
 resumes there on the next tick, so depth never drops a row, it only delays it.
+When a pass ends, the next one starts no earlier than
+`ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL` later (default `5m`; `0`
+starts the next pass at once, the previous behavior and the rollback). A pass
+reads every table once per page, so passes that follow each other at once keep
+the window read rate at its maximum for as long as rows keep landing; with the
+pause a late or re-stamped row is projected up to that interval later, and the
+lateness the window absorbs (`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`) is
+unchanged. Rows beyond the cursor are read by the ordinary paged read on every
+tick and are not delayed.
 Every pass ends: its upper edge is the cursor position (the frontier) at the
 moment the pass started. Rows after that edge belong to the ordinary paged
 read, so a writer that lands rows faster than the walk reads them cannot keep

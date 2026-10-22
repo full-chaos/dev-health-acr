@@ -27,6 +27,10 @@ const (
 	envContextFabricOrgDiscovery  = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY"
 	envContextFabricOrgActivity   = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW"
 	envContextFabricOverlap       = "ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP"
+	envContextFabricWindowPass    = "ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL"
+	// defaultProjectorWindowPassInterval mirrors
+	// devhealthsource.DefaultWindowPassInterval; a test pins the two equal.
+	defaultProjectorWindowPassInterval = 5 * time.Minute
 	// defaultProjectorOverlap mirrors devhealthsource's defaultReprojectOverlap
 	// (CHAOS-7263): the trailing window re-read once caught up.
 	defaultProjectorOverlap    = 15 * time.Minute
@@ -116,6 +120,12 @@ type ProjectorConfig struct {
 	// row whose ingest stamp landed just behind the cursor is still projected
 	// (CHAOS-7263).
 	Overlap time.Duration
+	// WindowPassInterval (ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL,
+	// default 5m, 0 = a new window pass starts as soon as the last one ends) is
+	// the pause between the end of one trailing-window pass and the start of the
+	// next. A late or re-stamped row is projected up to this much later; the
+	// lateness the window absorbs (Overlap) is unchanged.
+	WindowPassInterval time.Duration
 	// OrgDiscoveryDenyIDs (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS)
 	// names organizations discovery must never admit. It filters the
 	// DISCOVERED set only: OrgIDs is an always-include allowlist, so an
@@ -259,6 +269,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	if cfg.Overlap, err = durationValue(lookup, envContextFabricOverlap, defaultProjectorOverlap); err != nil {
 		return ProjectorConfig{}, err
 	}
+	if cfg.WindowPassInterval, err = durationValue(lookup, envContextFabricWindowPass, defaultProjectorWindowPassInterval); err != nil {
+		return ProjectorConfig{}, err
+	}
 	if cfg.OrgActivityWindow, err = durationValue(lookup, envContextFabricOrgActivity, defaultProjectorOrgActivityWindow); err != nil {
 		return ProjectorConfig{}, err
 	}
@@ -370,6 +383,9 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 	if required.projection && c.Overlap <= 0 {
 		return fmt.Errorf("%s must be > 0 (the trailing re-read window that recovers late-landing rows)", envContextFabricOverlap)
 	}
+	if required.projection && c.WindowPassInterval < 0 {
+		return fmt.Errorf("%s must not be negative (0 starts the next window pass at once)", envContextFabricWindowPass)
+	}
 	if required.projection && c.OrgActivityWindow < 0 {
 		return fmt.Errorf("%s must not be negative (0 disables the activity condition)", envContextFabricOrgActivity)
 	}
@@ -387,7 +403,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 		"projection_enabled", c.ProjectionEnabled,
 		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
 		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
-		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(),
+		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(), "window_pass_interval", c.WindowPassInterval.String(),
 		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "episode_writeback_enabled", c.EpisodeWriteback,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}

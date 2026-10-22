@@ -435,12 +435,18 @@ func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg con
 	if _, err := clickhouseSource.WithOverlap(cfg.Overlap); err != nil {
 		return nil, nil, err
 	}
+	if _, err := clickhouseSource.WithWindowPassInterval(cfg.WindowPassInterval); err != nil {
+		return nil, nil, err
+	}
 	teamsProjectsSource, err := devhealthsource.NewTeamsProjectsSource(client, cfg.TeamsProjectsEnabled)
 	if err != nil {
 		return nil, nil, err
 	}
 	teamsProjectsSource.WithLogger(logger)
 	if _, err := teamsProjectsSource.WithOverlap(cfg.Overlap); err != nil {
+		return nil, nil, err
+	}
+	if _, err := teamsProjectsSource.WithWindowPassInterval(cfg.WindowPassInterval); err != nil {
 		return nil, nil, err
 	}
 	return clickhouseSource, teamsProjectsSource, nil
