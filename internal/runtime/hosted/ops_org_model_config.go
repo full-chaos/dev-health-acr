@@ -116,7 +116,7 @@ func (o opsOrgModelConfigs) ResolveOrgModelConfig(ctx context.Context, orgID str
 		return contextfabric.ResolvedOrgModelConfig{}, false, errors.Join(entitlements.ErrLLMConfigUnusable, errors.New("no credential for a hosted provider endpoint"))
 	}
 	return contextfabric.ResolvedOrgModelConfig{
-		Provider: config.Provider, BaseURL: config.BaseURL, Model: config.Model, Credential: config.APIKey,
+		Provider: config.Provider, BaseURL: config.BaseURL, Model: config.Model, Credential: config.APIKey, PromptCache: config.PromptCache,
 		// The cache key of the org's built runtime: it moves whenever ops'
 		// version (a digest over the stored rows) changes.
 		Generation: o.generations.generationFor(orgID, config.Version),

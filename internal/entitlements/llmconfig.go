@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-go/llm"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -66,24 +67,27 @@ type OrgLLMConfig struct {
 	Model    string
 	BaseURL  string
 	APIKey   llm.Secret
+	// PromptCache is the org's opt-in to the Anthropic prompt cache; ops omits
+	// it for an org that has not opted in.
+	PromptCache bool
 	// Version changes when the org's stored settings change (ops: the
 	// newest updated_at, RFC 3339 with nanoseconds).
 	Version string
 }
 
 func (c OrgLLMConfig) view() map[string]any {
-	return map[string]any{"provider": c.Provider, "model": c.Model, "base_url": c.BaseURL, "api_key": "[REDACTED]", "version": c.Version}
+	return map[string]any{"provider": c.Provider, "model": c.Model, "base_url": c.BaseURL, "api_key": "[REDACTED]", "prompt_cache": c.PromptCache, "version": c.Version}
 }
 
 func (c OrgLLMConfig) String() string {
-	return fmt.Sprintf("OrgLLMConfig{Provider:%q Model:%q BaseURL:%q APIKey:[REDACTED] Version:%q}", c.Provider, c.Model, c.BaseURL, c.Version)
+	return fmt.Sprintf("OrgLLMConfig{Provider:%q Model:%q BaseURL:%q APIKey:[REDACTED] PromptCache:%t Version:%q}", c.Provider, c.Model, c.BaseURL, c.PromptCache, c.Version)
 }
 
 func (c OrgLLMConfig) GoString() string { return c.String() }
 
 func (c OrgLLMConfig) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("provider", c.Provider), slog.String("model", c.Model),
-		slog.String("base_url", c.BaseURL), slog.String("api_key", "[REDACTED]"), slog.String("version", c.Version))
+		slog.String("base_url", c.BaseURL), slog.String("api_key", "[REDACTED]"), slog.Bool("prompt_cache", c.PromptCache), slog.String("version", c.Version))
 }
 
 func (c OrgLLMConfig) MarshalJSON() ([]byte, error) { return json.Marshal(c.view()) }
@@ -95,6 +99,7 @@ type llmConfigResponse struct {
 	Model         string `json:"model"`
 	BaseURL       string `json:"base_url"`
 	APIKey        string `json:"api_key"`
+	PromptCache   bool   `json:"prompt_cache"`
 	Version       string `json:"version"`
 }
 
@@ -208,10 +213,8 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	if err != nil {
 		return OrgLLMConfig{}, false, errUnavailable
 	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var parsed llmConfigResponse
-	if err := decoder.Decode(&parsed); err != nil {
+	parsed, err := decodeLLMConfig(payload)
+	if err != nil {
 		return OrgLLMConfig{}, false, errUnavailable
 	}
 	switch {
@@ -226,8 +229,44 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	}
 	return OrgLLMConfig{
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),
-		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), Version: parsed.Version,
+		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), PromptCache: parsed.PromptCache, Version: parsed.Version,
 	}, true, nil
+}
+
+// decodeLLMConfig reads the body member by member, as decodeResponse does: an
+// unknown member, a repeated member, a null and trailing JSON are each a
+// contract break, never a value that quietly reads as off or empty.
+func decodeLLMConfig(payload []byte) (llmConfigResponse, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return llmConfigResponse{}, errors.New("invalid llm config object")
+	}
+	var parsed llmConfigResponse
+	targets := map[string]any{
+		"schema_version": &parsed.SchemaVersion, "org_id": &parsed.OrgID, "provider": &parsed.Provider,
+		"model": &parsed.Model, "base_url": &parsed.BaseURL, "api_key": &parsed.APIKey,
+		"prompt_cache": &parsed.PromptCache, "version": &parsed.Version,
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, isName := token.(string)
+		target, known := targets[name]
+		if err != nil || !isName || !known || seen[name] {
+			return llmConfigResponse{}, errors.New("invalid llm config member")
+		}
+		seen[name] = true
+		if err := decodeRequiredValue(decoder, target); err != nil {
+			return llmConfigResponse{}, err
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return llmConfigResponse{}, errors.New("invalid llm config object")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return llmConfigResponse{}, errors.New("trailing JSON")
+	}
+	return parsed, nil
 }
 
 func llmConfigURL(baseURL *url.URL, orgID string) string {

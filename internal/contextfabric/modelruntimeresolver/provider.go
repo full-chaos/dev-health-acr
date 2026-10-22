@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // NewModelProviderBuild returns a Build that constructs a per-organization
@@ -59,5 +60,9 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		// decision line, and therefore its retry attempts, through the
 		// SAME collected sink the deployment-default runtime uses.
 		Logger: defaults.Logger,
+		// The organization's own opt-in, never the deployment default: a
+		// low-traffic organization that did not ask for the cache would pay
+		// its write surcharge without a read.
+		PromptCache: resolved.PromptCache && resolved.Provider == string(llm.KindAnthropic),
 	}
 }
