@@ -359,6 +359,8 @@ type TeamsProjectsSource struct {
 	// overlap and window (CHAOS-7263): the trailing late-arrival re-read.
 	overlap time.Duration
 	window  *windowMemo
+	// windowInterval is the pause between window passes (WithWindowPassInterval).
+	windowInterval time.Duration
 
 	// ingest caches whether the ingest columns exist (ingest_probe.go).
 	ingest ingestProbe
@@ -1209,7 +1211,7 @@ func NewTeamsProjectsSource(client contextpacket.ClickHouseQueryClient, enabled 
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, window: newWindowMemo()}, nil
+	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, window: newWindowMemo()}, nil
 }
 
 // WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
@@ -1222,8 +1224,21 @@ func (s *TeamsProjectsSource) WithOverlap(d time.Duration) (*TeamsProjectsSource
 	return s, nil
 }
 
+// WithWindowPassInterval sets the pause between the end of one trailing-window
+// pass and the start of the next. Zero starts the next pass at once.
+func (s *TeamsProjectsSource) WithWindowPassInterval(d time.Duration) (*TeamsProjectsSource, error) {
+	if d < 0 {
+		return nil, fmt.Errorf("devhealthsource: window pass interval must be >= 0, got %s", d)
+	}
+	s.windowInterval = d
+	return s, nil
+}
+
 // Overlap is the trailing re-read window this source walks once caught up.
 func (s *TeamsProjectsSource) Overlap() time.Duration { return s.overlap }
+
+// WindowPassInterval is the pause between trailing-window passes.
+func (s *TeamsProjectsSource) WindowPassInterval() time.Duration { return s.windowInterval }
 
 func (s *TeamsProjectsSource) overlapDuration() time.Duration { return s.overlap }
 func (s *TeamsProjectsSource) windowMemo() *windowMemo        { return s.window }
@@ -1337,6 +1352,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		logger:          s.logger,
 		now:             s.now,
 		overlap:         s.overlapDuration(),
+		windowInterval:  s.windowInterval,
 		window:          s.windowMemo(),
 		reconcile:       teamsReconcileQuery(&teamAuthorizationLedger{}),
 		reconcilePeriod: teamOwnershipReconcilePeriod,

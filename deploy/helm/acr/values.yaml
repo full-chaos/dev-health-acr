@@ -448,6 +448,9 @@ contextFabric:
     # named in both is projected.
     orgDiscoveryDenyIds: []
     pollInterval: "15s"
+    # The pause between trailing-window passes is the projector's code default
+    # (5m). To override it, set ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL
+    # on the projector; 0 starts the next pass at once (the previous behavior).
     concurrency: 4
     teamsProjectsEnabled: false
     podAnnotations: {}

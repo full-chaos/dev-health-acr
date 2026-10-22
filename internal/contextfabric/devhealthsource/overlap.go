@@ -60,6 +60,14 @@ import (
 // defaultReprojectOverlap is the trailing window re-read once caught up.
 const defaultReprojectOverlap = 15 * time.Minute
 
+// DefaultWindowPassInterval is the pause between the end of a window pass and
+// the start of the next. A pass reads every table once per page, so passes that
+// follow each other at once keep the read rate of the window at its maximum
+// for as long as the frontier is within overlap + slack of now. The late-row
+// bound is unchanged (the pass's lower edge still derives from its own start);
+// a late row is projected up to this much later.
+const DefaultWindowPassInterval = 5 * time.Minute
+
 // overlapWindowPagesPerCall bounds how many pages of incrementalBatchCap rows
 // one call walks. Each page is an ordinary keyset read at the ordinary page
 // size: one statement per table with LIMIT incrementalBatchCap+1. A single
@@ -125,6 +133,7 @@ type windowPass struct {
 	walking   bool        // a pass is in progress
 	pages     int         // pages the current pass has read
 	rows      int         // source rows the current pass has read
+	nextStart time.Time   // no new pass starts before this (sourcePlan.windowInterval); zero = no pacing
 }
 
 // pastEdge reports whether c sorts after the keyset position edge, in the
@@ -372,6 +381,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			p.window.setPass(p.windowScope, pass)
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
+		if now.Before(pass.nextStart) {
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
 		start()
 	}
 	tables := p.tables
@@ -446,10 +458,13 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			pass.low = edge
 		}
 		pass.walking = false
+		if p.windowInterval > 0 {
+			pass.nextStart = now.Add(p.windowInterval)
+		}
 		if resumed && !completed {
 			p.logEndedPass(ctx, orgID, pass, now)
 		}
-		if completed || !resumed || pass.low.After(state.Since) {
+		if completed || !resumed || pass.low.After(state.Since) || p.windowInterval > 0 {
 			p.window.setPass(p.windowScope, pass)
 			return contextfabric.ProjectionBatch{}, false, nil
 		}

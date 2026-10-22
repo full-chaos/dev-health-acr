@@ -16,9 +16,19 @@ import (
 )
 
 // liveKeysetRows is keysetRows that a writer keeps appending to between ticks.
-type liveKeysetRows struct{ rows keysetRows }
+type liveKeysetRows struct {
+	rows    keysetRows
+	onQuery func(since time.Time)
+}
 
 func (s *liveKeysetRows) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if s.onQuery != nil {
+		for _, binding := range bindings {
+			if binding.Name == "since_us" {
+				s.onQuery(time.UnixMicro(binding.Value.(int64)).UTC())
+			}
+		}
+	}
 	return s.rows.Query(ctx, statement, bindings)
 }
 
@@ -53,10 +63,21 @@ type churnRig struct {
 	seq       int
 	projected map[string]int // row key -> tick of the batch that carried it
 	logs      bytes.Buffer
+	// windowReads counts statements that start behind the checkpoint's own
+	// position: the trailing-window walk, as opposed to the paged read.
+	windowReads int
 }
 
 func newChurnRig(t *testing.T, start time.Time) *churnRig {
 	r := &churnRig{t: t, store: &liveKeysetRows{}, now: start, projected: map[string]int{}}
+	r.store.onQuery = func(since time.Time) {
+		if r.cursor == "" {
+			return
+		}
+		if frontier, err := decodeCursor(r.cursor); err == nil && since.Before(frontier.Since) {
+			r.windowReads++
+		}
+	}
 	r.plan = sourcePlan{
 		client: keysetRows{}, source: "overlap_churn_test", version: ClickHouseSourceVersion,
 		tables: []entityTable{{name: "repos", query: func(ctx context.Context, _ contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {

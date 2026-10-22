@@ -99,6 +99,9 @@ type sourcePlan struct {
 	windowScope string
 	// windowPagesPerCall overrides overlapWindowPagesPerCall when > 0.
 	windowPagesPerCall int
+	// windowInterval is the pause between the end of one window pass and the
+	// start of the next. Zero starts the next pass at once.
+	windowInterval time.Duration
 	// windowTables, when set, is the table set the overlap walk reads instead
 	// of tables: the same producers bound to throwaway run telemetry. The
 	// walk re-reads rows the paged path already read and counted; counting
