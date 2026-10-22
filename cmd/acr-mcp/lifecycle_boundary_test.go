@@ -123,9 +123,9 @@ func newBoundaryServer(t *testing.T, first, second string, recorder *boundaryRec
 }
 
 // credentialShapedValue matches any value that carries a credential-class prefix
-// (ACR client, internal service, ingest, license) or has the shape of a signed
+// (ACR client, internal service and auth-session, ingest, license) or has the shape of a signed
 // token, whatever its secret part.
-var credentialShapedValue = regexp.MustCompile(`(fcacr|svc_acr|svc_worker|fcpush|dhlic)_[A-Za-z0-9._-]{8,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+var credentialShapedValue = regexp.MustCompile(`(fcacr|svc_acr|svc_worker|svc_authsess|fcpush|dhlic)_[A-Za-z0-9._-]{8,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 
 // subjectSentinel builds a workload-token-shaped value at run time.
 func subjectSentinel(t *testing.T) string {

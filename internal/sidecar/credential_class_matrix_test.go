@@ -59,6 +59,7 @@ func nonACRCredentialClasses() []matrixClass {
 		{"opaque_refresh_credential", func(*testing.T) string { return matrixSecret(7) }},
 		{"internal_svc_acr_token", func(*testing.T) string { return "svc_acr_" + matrixSecret(8) }},
 		{"internal_svc_worker_token", func(*testing.T) string { return "svc_worker_" + matrixSecret(9) }},
+		{"internal_svc_authsess_token", func(*testing.T) string { return "svc_authsess_" + matrixSecret(13) }},
 		{"external_push_ingest_token", func(*testing.T) string { return "fcpush_" + matrixSecret(10) }},
 		{"license_key", func(*testing.T) string { return "dhlic_" + matrixSecret(11) + "." + matrixSecret(12) }},
 	}
