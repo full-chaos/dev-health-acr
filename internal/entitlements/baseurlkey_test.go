@@ -40,7 +40,7 @@ func TestBaseURLKeyRulesMatchTheOpsOracle(t *testing.T) {
 	if err := json.Unmarshal(raw, &oracle); err != nil {
 		t.Fatal(err)
 	}
-	if len(oracle.OpsCommit) != 40 || len(oracle.Keys) < 6 || len(oracle.Rows) < 400 {
+	if len(oracle.OpsCommit) != 40 || len(oracle.Keys) < 9 || len(oracle.Rows) < 500 {
 		t.Fatalf("oracle is not the recorded one: commit %q, %d keys, %d rows", oracle.OpsCommit, len(oracle.Keys), len(oracle.Rows))
 	}
 	var hits, misses, userinfoRefusals int
@@ -149,6 +149,9 @@ func TestUserinfoIsRefusedWhateverItHolds(t *testing.T) {
 		"https://u@p.example.invalid/v1",
 		"https://:@p.example.invalid/v1",
 		"https://a@b@p.example.invalid/v1",
+		"//user:pass@p.example.invalid/v1",
+		"//u@p.example.invalid/v1",
+		"  //u@p.example.invalid/v1",
 	} {
 		if got := baseURLRefusal(baseURL, ""); got != baseURLRefusalUserinfo {
 			t.Fatalf("%q: refusal = %q, want %q", baseURL, got, baseURLRefusalUserinfo)
@@ -159,6 +162,8 @@ func TestUserinfoIsRefusedWhateverItHolds(t *testing.T) {
 		"https://p.example.invalid/a@b",
 		"https://p.example.invalid/v1?next=a@b",
 		"https://p.example.invalid/v1#a@b",
+		"//p.example.invalid/v1",
+		"//p.example.invalid/v1?next=a@b",
 		"",
 	} {
 		if got := baseURLRefusal(baseURL, "sk-live-0123456789"); got != "" {

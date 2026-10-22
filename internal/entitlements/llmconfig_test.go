@@ -175,6 +175,7 @@ func TestOrgLLMConfigRefusesABaseURLThatCarriesTheKey(t *testing.T) {
 		{"base64 key", "https://h.example.invalid/v1/" + text[:len(text)-2], "base_url_carries_key"},
 		{"key escaped twice", "https://h.example.invalid/v1/" + escaped(escaped(key)), "base_url_carries_key"},
 		{"userinfo that is not the key", "https://user:pass@h.example.invalid/v1", "base_url_carries_userinfo"},
+		{"protocol-relative userinfo", "//user:pass@h.example.invalid/v1", "base_url_carries_userinfo"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

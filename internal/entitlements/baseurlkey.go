@@ -45,12 +45,17 @@ func baseURLRefusal(baseURL, apiKey string) string {
 }
 
 // baseURLHasUserinfo is whether the authority of baseURL (the text after the
-// scheme's // up to the first of / ? #) holds an @. It does not parse the url,
-// so a url net/url would not parse is judged the same way.
+// // that follows the scheme, or that starts a protocol-relative url, up to the
+// first of / ? #) holds an @. It does not parse the url, so a url net/url would
+// not parse is judged the same way.
 func baseURLHasUserinfo(baseURL string) bool {
-	_, rest, found := strings.Cut(strings.TrimSpace(baseURL), ":")
-	if !found || !strings.HasPrefix(rest, "//") {
-		return false
+	rest := strings.TrimSpace(baseURL)
+	if !strings.HasPrefix(rest, "//") {
+		_, after, found := strings.Cut(rest, ":")
+		if !found || !strings.HasPrefix(after, "//") {
+			return false
+		}
+		rest = after
 	}
 	authority := rest[2:]
 	if end := strings.IndexAny(authority, "/?#"); end >= 0 {

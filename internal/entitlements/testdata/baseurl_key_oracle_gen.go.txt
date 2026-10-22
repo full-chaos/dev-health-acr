@@ -34,7 +34,8 @@ func TestGenerateBaseURLKeyOracle(t *testing.T) {
 	hostResolver = func(context.Context, string) ([]net.IP, error) { return []net.IP{net.ParseIP("93.184.216.34")}, nil }
 	defer func() { hostResolver = orig }()
 
-	keys := []string{"abc", "abcdefg", "sk-12345", "SK-MixedCase-0123456789", "sk-synth-test-0123456789ABCDEF", "synthetic/key+with=special/chars=="}
+	keys := []string{"abc", "abcdefg", "sk-12345", "SK-MixedCase-0123456789", "sk-synth-test-0123456789ABCDEF", "synthetic/key+with=special/chars==",
+		"pct%25key-0123456789", "key-with-\u00e9-\u00fc-0123456789", "sk-" + strings.Repeat("synthetic0123456789", 10)}
 	type row [4]any
 	var rows []row
 	add := func(ki int, url string) {
@@ -64,6 +65,9 @@ func TestGenerateBaseURLKeyOracle(t *testing.T) {
 			if len(form) <= 16 {
 				ns = []int{0, 1, 2, 4, 5}
 			}
+			if len(key) > 64 {
+				ns = []int{0}
+			}
 			for li, n := range ns {
 				add(ki, place((fi+li)%5, layers(form, n)))
 			}
@@ -73,11 +77,16 @@ func TestGenerateBaseURLKeyOracle(t *testing.T) {
 			if len(key) <= 16 {
 				ns = []int{0, 1, 3, 4, 5}
 			}
+			if len(key) > 64 {
+				ns = []int{0}
+			}
 			for _, n := range ns {
 				add(ki, place(p, layers(key, n)))
 			}
 		}
-		add(ki, place(2, layers(key, 4)))
+		if len(key) <= 40 {
+			add(ki, place(2, layers(key, 4)))
+		}
 		if len(key) <= 16 {
 			add(ki, place(2, layers(key, 5)))
 		}
@@ -106,6 +115,13 @@ func TestGenerateBaseURLKeyOracle(t *testing.T) {
 		"https://h.example.invalid/v1#a@b",
 		"https://a@b@h.example.invalid/v1",
 		"https://user:" + layers("sk-12345", 1) + "@h.example.invalid/v1",
+		"//user:pass@h.example.invalid/v1",
+		"//u@h.example.invalid/v1",
+		"//h.example.invalid/v1",
+		"//h.example.invalid/v1?next=a@b",
+		"https://h.example.invalid/v1\t?x=1",
+		"https://h.example.invalid/\nv1",
+		"https://u@h.example.invalid/\tv1",
 	} {
 		add(2, url)
 	}
