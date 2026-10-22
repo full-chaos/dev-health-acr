@@ -420,12 +420,17 @@ func TestBoundedResynthesisWithNoDeadlineStillFollowsPreExistingFallbackComposit
 // 4452 vol.1 §10 D5 ("the reserved synthesis deadline ships in the same
 // slice ... or the terminal case is a 504 regardless"): a redraw checks the
 // caller's remaining request deadline first. Draw 1 rejects almost
-// instantly; the context's own deadline (40ms) leaves far less remaining
-// than Config.Timeout (1s, mustRuntime's default) -- nowhere near enough
-// for a full second attempt -- so the loop must stop BEFORE calling the
-// generator a second time and fall through to the existing fallback leg
-// immediately, while the deadline still has room left for it, reaching a
-// fallback that an unguarded loop would have suppressed.
+// instantly; the context's own deadline (2m) leaves less remaining than the
+// reservation (two Config.Timeout budgets of 90s, one redraw plus the
+// fallback) -- not enough for a second attempt AND the fallback -- so the
+// loop must stop BEFORE calling the generator a second time and fall
+// through to the existing fallback leg, reaching a fallback that an
+// unguarded loop would have suppressed.
+//
+// The test asserts the mechanism, not a wall-clock race: the deadline is far
+// longer than any scheduler or CI pause, and remaining < reserved holds
+// because the deadline is shorter than the reservation by construction, so
+// the outcome does not depend on how long draw 1 takes to start.
 func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
@@ -437,9 +442,17 @@ func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *te
 		err:     errors.New("fallback reached, as this test requires"),
 		receipt: validReceipt(contextfabric.ModelOperationSynthesize),
 	}
-	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling, Fallback: fallback})
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	const (
+		attemptTimeout = 90 * time.Second
+		budget         = 2 * time.Minute
+		reserved       = 2 * attemptTimeout
+	)
+	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: attemptTimeout, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling, Fallback: fallback})
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("test context carries no deadline -- the guard under test only runs against a deadline")
+	}
 
 	_, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
 	if err == nil {
@@ -456,11 +469,22 @@ func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *te
 	if got, ok := attrs["resynthesis_stopped_for_deadline"].(bool); !ok || !got {
 		t.Fatalf("resynthesis_stopped_for_deadline = %#v, want true", attrs["resynthesis_stopped_for_deadline"])
 	}
-	if _, ok := attrs["resynthesis_deadline_remaining_ms"]; !ok {
-		t.Fatalf("decision line missing resynthesis_deadline_remaining_ms: %#v", attrs)
+	remainingMS, ok := attrs["resynthesis_deadline_remaining_ms"].(int64)
+	if !ok {
+		t.Fatalf("resynthesis_deadline_remaining_ms = %#v, want an int64", attrs["resynthesis_deadline_remaining_ms"])
 	}
-	if _, ok := attrs["resynthesis_deadline_reserved_ms"]; !ok {
-		t.Fatalf("decision line missing resynthesis_deadline_reserved_ms: %#v", attrs)
+	reservedMS, ok := attrs["resynthesis_deadline_reserved_ms"].(int64)
+	if !ok {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want an int64", attrs["resynthesis_deadline_reserved_ms"])
+	}
+	if reservedMS != reserved.Milliseconds() {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %d, want %d (a redraw plus the fallback attempt, one Config.Timeout each)", reservedMS, reserved.Milliseconds())
+	}
+	if remainingMS > budget.Milliseconds() {
+		t.Fatalf("resynthesis_deadline_remaining_ms = %d, want at most the %d ms budget the caller's deadline was set to", remainingMS, budget.Milliseconds())
+	}
+	if remainingMS >= reservedMS {
+		t.Fatalf("resynthesis_deadline_remaining_ms = %d is not below resynthesis_deadline_reserved_ms = %d, yet the loop reports it stopped for the deadline", remainingMS, reservedMS)
 	}
 }
 
