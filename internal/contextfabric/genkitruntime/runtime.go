@@ -827,6 +827,11 @@ type decodeSynthesisRejection struct {
 	// different draws.
 	digest string
 	cause  error
+	// schemaStage is the output-schema check stage that refused the draw
+	// ("empty", "not_json", "schema" or "decode"); empty when the draw was
+	// refused for another reason. classifyModelError drops the stage from
+	// cause, so it is carried here for the draw log.
+	schemaStage string
 }
 
 func (e *decodeSynthesisRejection) Error() string { return e.cause.Error() }
@@ -2031,7 +2036,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			}
 		}
 		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
-		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: rejectedDigest, Claims: rejectedClaims, Clause: clause, Reason: contextfabric.SynthesisRejectionReasonOf(err)})
+		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: rejectedDigest, Claims: rejectedClaims, Clause: clause, Reason: synthesisDrawReason(err, localRejection)})
 	}
 	// A redraw that was rejected or failed in transport serves the valid
 	// zero-claim draft it followed: an honest degraded answer, never a failure
@@ -2487,8 +2492,10 @@ type synthesisDraw struct {
 	// reasons carry one.
 	Clause contractsv1.ContextFabricRejectedClause
 	// Reason is the closed rejection-reason word of a rejected draw (the
-	// rule that refused it); empty for a successful draw, rendered "none". Fixed identifiers only, never model content.
-	Reason contextfabric.SynthesisRejectionReason
+	// rule that refused it, or a closed error class when no rule judged the
+	// draw); empty for a successful draw, rendered "none". Fixed identifiers
+	// only, never model content. See synthesisDrawReason.
+	Reason string
 }
 
 // formatSynthesisDraws renders the sequence as "1:invalid_output,2:success",
@@ -2530,13 +2537,14 @@ func formatSynthesisDrawClauses(draws []synthesisDraw) string {
 // formatSynthesisDraws: the claimed-fact count of each draw's raw output, "?"
 // for a draw whose text never decoded.
 // formatSynthesisDrawReasons renders "1:claim_value_contradicts_canonical,2:none",
-// index-aligned with formatSynthesisDraws: the validator rule that refused
-// each rejected draw ("none" for a draw that was admitted), so a retry is
-// never silent about why it ran.
+// index-aligned with formatSynthesisDraws: the rule that refused each rejected
+// draw (a validator rule, or output_schema_mismatch for a draft the schema
+// check refused), or an error_* class when no rule judged the draw ("none" for
+// a draw that was admitted), so a retry is never silent about why it ran.
 func formatSynthesisDrawReasons(draws []synthesisDraw) string {
 	parts := make([]string, 0, len(draws))
 	for _, draw := range draws {
-		reason := string(draw.Reason)
+		reason := draw.Reason
 		if reason == "" {
 			reason = "none"
 		}
