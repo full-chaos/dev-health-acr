@@ -228,8 +228,8 @@ func assertEngineAndSortingKeyAreFresh(t *testing.T, ctx context.Context, query 
 		// FINAL semantics several providers rely on. It also covers
 		// PARTITION BY, ORDER BY and SETTINGS in the same string, so no
 		// facet of the physical definition is left unverified.
-		if declared, ok := devhealthschema.EngineFull[name]; ok && declared != engineFull {
-			t.Errorf("live %s is %q but devhealthschema says %q -- regenerate from system.tables.engine_full rather than authoring any part of it", name, engineFull, declared)
+		if declared, ok := devhealthschema.EngineFull[name]; ok && !devhealthschema.EngineFullMatchesLive(name, engineFull) {
+			t.Errorf("live %s is %q but devhealthschema says %q (also accepted: %q) -- regenerate from system.tables.engine_full rather than authoring any part of it", name, engineFull, declared, devhealthschema.EngineFullAlternates(name))
 		}
 	}
 	if err := rows.Err(); err != nil {
