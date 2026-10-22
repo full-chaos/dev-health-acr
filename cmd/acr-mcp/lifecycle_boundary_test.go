@@ -249,7 +249,7 @@ func TestLifecycleRunReachesOnlyTheConfiguredHostedAPIWithOnlyTheACRCredential(t
 			}
 		}
 		if match := credentialShapedValue.FindString(output); match != "" {
-			t.Errorf("command output %d contains a credential-shaped value of class prefix %q", index, strings.SplitN(match, "_", 2)[0])
+			t.Errorf("command output %d contains a credential-shaped value starting %q", index, match[:min(6, len(match))])
 		}
 	}
 }
