@@ -432,6 +432,14 @@
             }
           },
           "description": "CHAOS-5672: present only on a read of a stored clarification whose answerability needed the stored accepted reading and could not load it. Absent means the read did not need the reading or had it. semantic_state_absent: the row carries no reading; semantic_state_unreadable: the row carries a reading this build cannot read. Fresh composition never sets it."
+        },
+        "model_source": {
+          "type": "string",
+          "enum": [
+            "organization",
+            "platform"
+          ],
+          "description": "Whose model served the turn's service-side model calls: organization (the organization's own saved model) or platform (the deployment's own model). Present only when at least one service-side model call ran in the turn, including server synthesis over a caller-supplied interpretation. Absent when none ran: a refusal before any model, a deterministic-only turn, or caller-side synthesis with a supplied interpretation. One turn never mixes sources. A reused answer keeps the value of the turn that produced it."
         }
       },
       "required": [

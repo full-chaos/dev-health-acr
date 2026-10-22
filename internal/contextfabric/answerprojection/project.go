@@ -251,6 +251,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		// SemanticReading: a read's disclosure, never dropped
 		// by the projection, for the reason RefusalBasis rides Completeness.
 		SemanticReading: result.SemanticReading,
+		ModelSource:     result.ModelSource,
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
 		DriversOmitted:         driversOmitted,

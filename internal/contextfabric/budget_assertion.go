@@ -308,6 +308,10 @@ func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Princip
 	if mode == servedModeMeasureOnly {
 		telemetry = nil
 	}
+	var sourceErr error
+	if result, sourceErr = stampModelSource(ctx, result); sourceErr != nil {
+		return result, sourceErr
+	}
 	if plan != nil {
 		result = stampAnswerPlan(result, *plan)
 	}

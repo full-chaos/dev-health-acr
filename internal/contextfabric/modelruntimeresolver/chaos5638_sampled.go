@@ -52,7 +52,7 @@ var ErrRuntimeNotSampled = errors.New("modelruntimeresolver: resolved model runt
 // cache and the generation guard apply unchanged, so an ensemble cannot end up reading a different runtime from the one the
 // ordinary interpret path would have used for the same request.
 func (r *Resolver) InterpretQuestionForSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
-	runtime, err := r.runtimeFor(ctx, principal.OrgID)
+	runtime, source, err := r.runtimeSourced(ctx, principal.OrgID)
 	if err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, err
 	}
@@ -65,6 +65,7 @@ func (r *Resolver) InterpretQuestionForSample(ctx context.Context, principal sto
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{},
 			fmt.Errorf("%w (organization %q)", ErrRuntimeNotSampled, principal.OrgID)
 	}
+	contextfabric.RecordModelSource(ctx, source)
 	return sampled.InterpretQuestionForSample(ctx, principal, request, sample)
 }
 

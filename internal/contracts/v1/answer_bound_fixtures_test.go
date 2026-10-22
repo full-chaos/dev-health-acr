@@ -76,6 +76,10 @@ func answerBoundTable() []answerBound {
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				r.SemanticReading = &ContextFabricSemanticReading{Status: ContextFabricSemanticReadingUnavailable, Reason: ContextFabricSemanticReadingStateUnreadable}
 			}},
+		{Field: "ModelSource", Why: "optional closed enum, organization|platform; absent is the byte-minimal value and the longest member (organization) is the byte-maximal one. PastMax names a value outside the vocabulary, which the write validator must reject",
+			Min:     func(r *ContextFabricInvestigationResult) { r.ModelSource = "" },
+			Max:     func(r *ContextFabricInvestigationResult) { r.ModelSource = ContextFabricModelSourceOrganization },
+			PastMax: func(r *ContextFabricInvestigationResult) { r.ModelSource = "tenant" }},
 		{Field: "Reused", Why: "bool; `true` encodes ONE BYTE SHORTER than `false`, so the byte-minimal value is true -- minimal means smallest serialized, not smallest-looking",
 			Min: func(r *ContextFabricInvestigationResult) { r.Reused = true },
 			Max: func(r *ContextFabricInvestigationResult) { r.Reused = false }},
@@ -514,7 +518,8 @@ const irreducibleAnswerBytes = 1023
 // 521657911 -> 521729440 (+71529, CI-measured): the vocabulary gained commitment (+71189) and the census one record for team_project_ownership_commitment_v1 (+340).
 // 521729440 -> 521759242 (+29802): the coverage entry bound 100 -> 101, so the maximal coverage arrays each gain one entry.
 // 521759242 -> 521950245 (+191003, measured locally): the vocabulary gained file_hotspots and the coverage entry bound moved 101 -> 105, so the maximal coverage arrays each gain four entries.
-const maximalAnswerBytes = 521950245
+// 521950245 -> 521950275 (+30): the optional model_source at its longest member, organization, in the maximal document.
+const maximalAnswerBytes = 521950275
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -789,6 +794,7 @@ var expectedRejection = map[string]string{
 	// served-answer clause survived on its neighbour's message.
 	"RefusalBasis":            "cannot accompany status",
 	"SemanticReading":         "semantic_reading cannot accompany status",
+	"ModelSource":             "model_source \"tenant\" is not a vocabulary member",
 	"StatusCorrection":        "status_correction cannot accompany status",
 	"Cohort":                  "cohort violates v1 bounds",
 	"Completeness":            "outcomes exceeds v1 bounds",

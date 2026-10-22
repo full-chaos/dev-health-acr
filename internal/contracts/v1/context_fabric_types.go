@@ -2287,6 +2287,9 @@ type ContextFabricInvestigationResult struct {
 	// clarification whose answerability needed the stored accepted reading
 	// and could not load it. See context_fabric_semantic_reading.go.
 	SemanticReading *ContextFabricSemanticReading `json:"semantic_reading,omitempty"`
+	// ModelSource names whose model served the turn's service-side model
+	// calls. Absent when none ran. See context_fabric_model_source.go.
+	ModelSource ContextFabricModelSource `json:"model_source,omitempty"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public
