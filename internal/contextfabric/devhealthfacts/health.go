@@ -37,6 +37,9 @@ const healthSeverityFreshnessWindowDays = 14
 // historical as-of bound included, never a second, independently taken
 // instant.
 func freshnessAsOfDateSQL(timeBound factTimeBound) string {
+	if timeBound.active && timeBound.endExclusive {
+		return "toDate({" + boundEndParam + ":DateTime64(6,'UTC')} - INTERVAL 1 MICROSECOND)"
+	}
 	if timeBound.active {
 		return "toDate({" + boundEndParam + ":DateTime64(6,'UTC')})"
 	}

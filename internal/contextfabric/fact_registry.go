@@ -350,6 +350,7 @@ type FactQuery struct {
 	Subjects                 []SubjectRef
 	Cohort                   *Cohort
 	Time                     TimeContext
+	TimeEndExclusive         bool
 	RequestedRepositoryScope []string
 	Parameters               map[string]string
 }
@@ -1579,6 +1580,7 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 		Subjects:                 append([]SubjectRef(nil), subjects...),
 		Cohort:                   request.Cohort,
 		Time:                     request.Question.TimeContext,
+		TimeEndExclusive:         request.TimeEndExclusive,
 		RequestedRepositoryScope: requested,
 		Parameters:               parameters,
 	}, nil

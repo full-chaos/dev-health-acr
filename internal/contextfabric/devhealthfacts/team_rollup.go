@@ -378,6 +378,7 @@ func resolveRollupWindow(bound factTimeBound, evidence *contractsv1.ContextFabri
 		window := rollupWindow{hasEnd: true, end: bound.end, basis: "as_of"}
 		if bound.hasStart {
 			window.hasStart, window.start, window.basis = true, bound.start, "range"
+			window.endExclusive = bound.endExclusive
 		}
 		return window
 	case evidence != nil && evidence.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime:
