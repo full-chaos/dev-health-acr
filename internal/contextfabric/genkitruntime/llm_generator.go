@@ -401,6 +401,10 @@ func (g llmGenerator) Synthesize(ctx context.Context, request generationRequest)
 	}
 	if checkErr != nil {
 		rejection := &decodeSynthesisRejection{cause: classifyModelError(checkErr), digest: contextfabric.DigestModelValue([]byte(text))}
+		var mismatch *outputMismatch
+		if errors.As(checkErr, &mismatch) {
+			rejection.schemaStage = mismatch.stage
+		}
 		if decodeErr == nil {
 			rejection.output, rejection.parsed = output, true
 		}
