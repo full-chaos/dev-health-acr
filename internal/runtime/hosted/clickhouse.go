@@ -60,7 +60,7 @@ func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimecl
 	// exactly under the new pointer type.
 	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
 	maxResultRows := uint(clickHouseMaxResultRowsHeadroomFactor * clickHouseMaxResultRowsWorstCase)
-	return runtimeclickhouse.Options{
+	return ClickHousePoolOptions(runtimeclickhouse.Options{
 		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
 		// MaxResultRows must be set explicitly (never left nil/unset):
 		// dev-health-go's own Options default
@@ -85,7 +85,7 @@ func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimecl
 		// other reader's safety margin. The PR this shipped under carries
 		// the full per-query accounting.
 		MaxResultRows: &maxResultRows,
-	}
+	})
 }
 
 func apiCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
