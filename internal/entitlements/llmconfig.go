@@ -57,6 +57,7 @@ const (
 	llmConfigGateClosedReason    = "byo_llm_gate_closed"
 	llmConfigNoInvestigateReason = "byo_no_investigate_config"
 	llmConfigTurnedOffReason     = "byo_llm_turned_off"
+	llmConfigBaseURLKeyReason    = "byo_base_url_carries_key"
 )
 
 // OrgLLMConfig is one org's BYO LLM configuration as ops serves it. APIKey is
@@ -141,7 +142,9 @@ func (c *llmConfigCache) put(orgID string, entry llmConfigEntry) {
 // ErrLLMConfigGateClosed (a saved configuration behind a closed byo_llm gate); with
 // byo_no_investigate_config it is ErrLLMConfigNoInvestigateConfig (saved keys for
 // other purposes only); with byo_llm_turned_off it is ErrLLMConfigTurnedOff (a saved
-// configuration an org admin turned off). A 409 (a saved configuration whose stored key is
+// configuration an org admin turned off); with byo_base_url_carries_key it is a
+// BaseURLRefusedError (ops will not serve a stored base_url that carries the
+// org's own key), an ErrLLMConfigUnusable that is never cached. A 409 (a saved configuration whose stored key is
 // unreadable) is ErrLLMConfigUnusable. Everything else is unavailable (errUnavailable),
 // because the source cannot be read or has broken its contract: ops unreachable, a
 // 5xx, a 401 or 403 (the credential or its scope is refused), a 404 without the
@@ -198,6 +201,8 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 			return OrgLLMConfig{}, false, ErrLLMConfigNoInvestigateConfig
 		case llmConfigTurnedOffReason:
 			return OrgLLMConfig{}, false, ErrLLMConfigTurnedOff
+		case llmConfigBaseURLKeyReason:
+			return OrgLLMConfig{}, false, &BaseURLRefusedError{Reason: baseURLRefusalKey}
 		case "":
 			return OrgLLMConfig{}, false, nil
 		}
