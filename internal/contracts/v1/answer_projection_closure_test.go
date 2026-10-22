@@ -355,7 +355,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// SourceState enum: trusted-because-closed, never model prose.
 		// 255 -> 256 and 376 -> 377 -- the driver's source_state_note, a
 		// server-minted sentence from a fixed table.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 256},
+		// model_source: 256 -> 257 and 377 -> 378 -- one string leaf on each
+		// surface, a server-minted closed token (organization | platform),
+		// never model prose: trusted-because-closed.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 257},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -436,7 +439,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 372 -> 375 -- claimed_facts[].derived_from[].fact_id and .field
 		// (untrusted like fact_id/field) and claimed_facts[].operation (a
 		// closed arithmetic vocabulary).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 377},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 378},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -609,6 +612,11 @@ func trustedBecauseClosed(path string) bool {
 		// minted by RankCohort from a fixed formula-derived registry, the
 		// same standing as data_completeness/ranking_basis just above.
 		"score_meaning",
+		// "model_source" (ContextFabricModelSource) is validated against its
+		// own closed vocabulary (organization | platform) before a result is
+		// stored, and is set by the resolver from whose runtime it handed
+		// out -- never model prose.
+		"model_source",
 		// CHAOS-4398 PR2: "signal" (ContextFabricCohortMemberDriver.Signal,
 		// the 5-value RankingSignal* vocabulary) and "window" ("current"/
 		// "current_vs_prior") are both closed-vocabulary strings validated
