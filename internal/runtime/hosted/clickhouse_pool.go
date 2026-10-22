@@ -13,7 +13,7 @@ import (
 const (
 	ClickHousePoolMaxOpenConns    = 8
 	ClickHousePoolMaxIdleConns    = ClickHousePoolMaxOpenConns
-	ClickHousePoolConnMaxLifetime = time.Nanosecond
+	ClickHousePoolConnMaxLifetime = time.Millisecond
 )
 
 // ClickHousePoolOptions sets the shared warm-pool shape on a ClickHouse client's
