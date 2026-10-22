@@ -2,6 +2,8 @@ package entitlements_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -144,6 +147,95 @@ func TestOrgLLMConfigShowsThePromptCacheOptInAndStillHidesTheKey(t *testing.T) {
 		if strings.Contains(form, "SECRET") {
 			t.Fatalf("the key was printed: %s", form)
 		}
+	}
+}
+
+func TestOrgLLMConfigRefusesABaseURLThatCarriesTheKey(t *testing.T) {
+	const key = "sk-ant-SECRET-VALUE"
+	text := base64.RawStdEncoding.EncodeToString([]byte(key))
+	escaped := func(s string) string {
+		var out strings.Builder
+		for i := 0; i < len(s); i++ {
+			out.WriteString("%" + strings.ToUpper(hex.EncodeToString([]byte{s[i]})))
+		}
+		return out.String()
+	}
+	cases := []struct {
+		name    string
+		baseURL string
+		reason  string
+	}{
+		{"key in the query", "https://h.example.invalid/v1?token=" + key, "base_url_carries_key"},
+		{"key in the path", "https://h.example.invalid/v1/" + key, "base_url_carries_key"},
+		{"key in the fragment", "https://h.example.invalid/v1#" + key, "base_url_carries_key"},
+		{"key in a host label", "https://" + strings.ToLower(key) + ".h.example.invalid/v1", "base_url_carries_key"},
+		{"key as the userinfo password", "https://user:" + key + "@h.example.invalid/v1", "base_url_carries_key"},
+		{"query-escaped key", "https://h.example.invalid/v1?token=" + url.QueryEscape(key), "base_url_carries_key"},
+		{"hex key", "https://h.example.invalid/v1/" + hex.EncodeToString([]byte(key)), "base_url_carries_key"},
+		{"base64 key", "https://h.example.invalid/v1/" + text[:len(text)-2], "base_url_carries_key"},
+		{"key escaped twice", "https://h.example.invalid/v1/" + escaped(escaped(key)), "base_url_carries_key"},
+		{"userinfo that is not the key", "https://user:pass@h.example.invalid/v1", "base_url_carries_userinfo"},
+		{"protocol-relative userinfo", "//user:pass@h.example.invalid/v1", "base_url_carries_userinfo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _, _ := llmConfigServer(t, http.StatusOK, llmBody(map[string]any{"base_url": tc.baseURL}))
+			client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+			var refused *entitlements.BaseURLRefusedError
+			if found || !errors.Is(err, entitlements.ErrLLMConfigUnusable) || !errors.As(err, &refused) || refused.Reason != tc.reason {
+				t.Fatalf("found = %v err = %v, want an unusable configuration refused for %s", found, err, tc.reason)
+			}
+			if config != (entitlements.OrgLLMConfig{}) {
+				t.Fatalf("a refused configuration was returned: %v", config)
+			}
+			for _, secret := range []string{key, "h.example.invalid", "user:pass"} {
+				if strings.Contains(err.Error(), secret) || strings.Contains(fmt.Sprintf("%#v %+v", err, err), secret) {
+					t.Fatalf("the refusal holds %q: %v", secret, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOrgLLMConfigAcceptsABaseURLThatCarriesNoKey(t *testing.T) {
+	for _, baseURL := range []string{
+		"",
+		"https://api.anthropic.com",
+		"https://h.example.invalid/openai/deployments/d?api-version=2024-02-01",
+		"https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1",
+		"https://h.example.invalid/v1?next=a@b",
+	} {
+		server, _, _ := llmConfigServer(t, http.StatusOK, llmBody(map[string]any{"base_url": baseURL}))
+		client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		config, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+		if err != nil || !found || config.BaseURL != baseURL {
+			t.Fatalf("base_url %q: found = %v err = %v config base_url = %q, want it served", baseURL, found, err, config.BaseURL)
+		}
+	}
+}
+
+// A refusal is read again on the next turn: it is neither a served config nor
+// one of the refusals the client remembers for 15 s.
+func TestARefusedBaseURLIsNotCached(t *testing.T) {
+	server, calls, _ := llmConfigServer(t, http.StatusOK, llmBody(map[string]any{"base_url": "https://h.example.invalid/v1?token=sk-ant-SECRET-VALUE"}))
+	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, found, err := client.OrgLLMConfig(context.Background(), llmOrg); found || !errors.Is(err, entitlements.ErrLLMConfigUnusable) {
+			t.Fatalf("read %d: found = %v err = %v", i, found, err)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want every refused read to go to ops", calls.Load())
 	}
 }
 

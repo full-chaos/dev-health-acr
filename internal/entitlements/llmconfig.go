@@ -227,6 +227,9 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	case strings.TrimSpace(parsed.Version) == "":
 		return OrgLLMConfig{}, false, errUnavailable
 	}
+	if reason := baseURLRefusal(parsed.BaseURL, parsed.APIKey); reason != "" {
+		return OrgLLMConfig{}, false, &BaseURLRefusedError{Reason: reason}
+	}
 	return OrgLLMConfig{
 		Provider: strings.ToLower(strings.TrimSpace(parsed.Provider)), Model: strings.TrimSpace(parsed.Model),
 		BaseURL: strings.TrimSpace(parsed.BaseURL), APIKey: llm.NewSecret(parsed.APIKey), PromptCache: parsed.PromptCache, Version: parsed.Version,
