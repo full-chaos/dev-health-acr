@@ -127,7 +127,7 @@ func runChaos7127(t *testing.T, ctx context.Context, grant []string) chaos7127Ru
 
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{Logger: logger})
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(countTurnStatements(t, query)), contextfabric.FactRegistryOptions{Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}

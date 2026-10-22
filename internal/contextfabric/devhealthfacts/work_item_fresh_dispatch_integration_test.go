@@ -620,6 +620,7 @@ type freshLiveFixture struct {
 
 func newFreshLiveEngine(t *testing.T, client contextpacket.ClickHouseQueryClient, org, provider, project string, at time.Time, cap int) *freshLiveFixture {
 	t.Helper()
+	client = countTurnStatements(t, client)
 	projectID, _, err := identity.Derive(identity.KindProject, []string{provider, project}, nil)
 	if err != nil {
 		t.Fatal(err)

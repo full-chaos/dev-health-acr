@@ -203,17 +203,25 @@ func (g *projectCohortGraph) DiscoverContext(context.Context, storage.Principal,
 }
 
 type projectCohortModel struct {
-	facts contextfabric.CanonicalFactBundle
+	facts    contextfabric.CanonicalFactBundle
+	temporal contextfabric.TemporalIntent
 }
 
 func (m *projectCohortModel) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	receipt := freshLiveReceipt(contextfabric.ModelOperationInterpret)
-	receipt.QuestionFrame = &contextfabric.QuestionFrame{Goals: []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey}, SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Team Alpha"}, MemberKind: contextfabric.SubjectProject}}, Temporal: contextfabric.TemporalIntentCurrent}
+	receipt.QuestionFrame = &contextfabric.QuestionFrame{Goals: []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey}, SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Team Alpha"}, MemberKind: contextfabric.SubjectProject}}, Temporal: m.temporalIntent()}
 	receipt.QuestionFamily = contextfabric.QuestionFamilyScopedCohortStatus
 	receipt.ScopeAnchorKind = contextfabric.SubjectTeam
 	receipt.ScopeAnchorTerm = "Team Alpha"
 	receipt.RequestedSubjectKind = contextfabric.SubjectProject
 	return contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "projects_under_pressure", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, SubjectTerms: []string{"Team Alpha"}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}}}, receipt, nil
+}
+
+func (m *projectCohortModel) temporalIntent() contextfabric.TemporalIntent {
+	if m.temporal == "" {
+		return contextfabric.TemporalIntentCurrent
+	}
+	return m.temporal
 }
 
 func (m *projectCohortModel) SynthesizeAnswer(_ context.Context, _ storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
@@ -229,6 +237,11 @@ type projectCohortRun struct {
 }
 
 func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []projectCohortCell) projectCohortRun {
+	t.Helper()
+	return runProjectCohortInvestigationAs(t, ctx, cells, "")
+}
+
+func runProjectCohortInvestigationAs(t *testing.T, ctx context.Context, cells []projectCohortCell, temporal contextfabric.TemporalIntent) projectCohortRun {
 	t.Helper()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	// devhealthschema:not-a-production-replica rows are inserted into tables whose schema comes only from devhealthschema.DDL, never defined here
@@ -260,11 +273,11 @@ func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []pr
 	for _, cell := range cells {
 		members = append(members, projectSubject("linear", "proj-"+strings.ToLower(cell.key)))
 	}
-	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{Logger: logger})
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(countTurnStatements(t, query)), contextfabric.FactRegistryOptions{Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := &projectCohortModel{}
+	model := &projectCohortModel{temporal: temporal}
 	at := time.Now().UTC()
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter:  contextfabric.RuntimeQuestionInterpreter{Runtime: model, Requirements: registry},
