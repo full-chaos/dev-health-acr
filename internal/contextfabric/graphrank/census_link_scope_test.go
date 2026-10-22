@@ -223,22 +223,38 @@ func TestAReuseRecheckDoesNotCarryALinkAdmission(t *testing.T) {
 // TestALinkWalkThatOutlastsTheRoundBudgetIsNoCensus: a link walk still
 // running when the evidence round's deadline passes is a census error, never
 // a smaller count: nothing is committed and the round says the census is
-// incomplete.
+// incomplete. The round's budget is asserted on what the walk observes (a
+// deadline of at most one evidenceRoundDeadline, and a cut that is that
+// deadline), never on the wall time of the call, which also holds the
+// scheduler's delay.
 func TestALinkWalkThatOutlastsTheRoundBudgetIsNoCensus(t *testing.T) {
 	t.Parallel()
+	var walk struct {
+		hasDeadline bool
+		budget      time.Duration
+		cutBy       error
+	}
 	walkOutlastsTheBudget := func(deps *ResolveDeps) {
 		deps.LinkScopedWorkItems = func(ctx context.Context, _ contextfabric.RequestedScope) (map[string]string, bool, error) {
-			if _, ok := ctx.Deadline(); !ok {
+			deadline, ok := ctx.Deadline()
+			if !ok {
 				return nil, false, errors.New("the link walk ran without the round's deadline")
 			}
+			walk.hasDeadline, walk.budget = true, time.Until(deadline)
 			<-ctx.Done()
+			walk.cutBy = ctx.Err()
 			return map[string]string{linkScopeItem(0): "native"}, true, ctx.Err()
 		}
 	}
-	start := time.Now()
 	resolution, rounds, _ := resolveLinkScoped(t, storage.Principal{OrgID: "org_1"}, walkOutlastsTheBudget)
-	if elapsed := time.Since(start); elapsed > evidenceRoundDeadline+2*time.Second {
-		t.Fatalf("resolution took %s, want the round cut at its %s budget", elapsed, evidenceRoundDeadline)
+	if !walk.hasDeadline {
+		t.Fatal("the link walk ran without the round's deadline")
+	}
+	if walk.budget > evidenceRoundDeadline {
+		t.Fatalf("the link walk was handed %s of budget, want at most the round's %s", walk.budget, evidenceRoundDeadline)
+	}
+	if !errors.Is(walk.cutBy, context.DeadlineExceeded) {
+		t.Fatalf("the link walk was cut by %v, want the round's deadline", walk.cutBy)
 	}
 	for _, s := range resolution.Committed {
 		if s.Kind == contextfabric.SubjectWorkItem {
