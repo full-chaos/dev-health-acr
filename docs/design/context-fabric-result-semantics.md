@@ -106,7 +106,7 @@ The fix, concretely:
    attaches no rows (no single source fact). A derived claim whose inputs do
    not resolve is rejected as `claim_derivation_input_unknown`, one whose
    value is not reproduced as `claim_derivation_value_mismatch`. Each
-   rejected re-draw names its rule in `draw_rejected_reasons` (`output_schema_mismatch` for a draft the schema check refused; an `error_*` class when no rule judged the draw).
+   rejected re-draw names its rule in `draw_rejected_reasons` (`output_schema_mismatch` for a draft the schema check refused; an `error_*` class when no rule judged the draw). The same word is the `rejection_reason` of the terminal rejection when the last draw is refused by the schema check alone (never `unclassified`); a draw this package's own rule also refuses keeps that rule.
 
    **The closure the model is shown must equal the closure it is judged
    against (CHAOS-4522).** `synthesisSubjects` and the `allowedEvidence`
