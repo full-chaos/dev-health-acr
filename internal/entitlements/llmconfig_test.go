@@ -304,3 +304,96 @@ func TestOrgLLMConfigNeverPrintsTheKey(t *testing.T) {
 		}
 	}
 }
+
+// ops refuses to serve a stored base_url that carries the org's own key: it
+// answers the marked 404 with reason byo_base_url_carries_key. acr reads it as
+// the same refusal as a served url that carries the key: an unusable
+// configuration, never "no BYO" and never the platform model.
+func TestOrgLLMConfigReasonBaseURLCarriesKeyIsAnUnusableRefusalNotCached(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("X-Org-Llm-Config", "none")
+		w.Header().Set("X-Org-Llm-Config-Reason", "byo_base_url_carries_key")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"Not found"}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		config, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+		var refused *entitlements.BaseURLRefusedError
+		if found || !errors.Is(err, entitlements.ErrLLMConfigUnusable) || !errors.As(err, &refused) || refused.Reason != "base_url_carries_key" {
+			t.Fatalf("read %d: found = %v err = %v, want an unusable configuration refused for base_url_carries_key", i, found, err)
+		}
+		if errors.Is(err, entitlements.ErrLLMConfigGateClosed) || errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig) || errors.Is(err, entitlements.ErrLLMConfigTurnedOff) {
+			t.Fatalf("read %d: err = %v, want none of the remembered refusals", i, err)
+		}
+		if config != (entitlements.OrgLLMConfig{}) {
+			t.Fatalf("read %d: a refused configuration was returned: %v", i, config)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("ops calls = %d, want 2 (a refusal is read again on every turn)", got)
+	}
+}
+
+// A reason this build does not know stays unavailable, never an unusable
+// refusal: only the closed reason words map to a refusal.
+func TestOrgLLMConfigUnknownBaseURLReasonStaysUnavailable(t *testing.T) {
+	for _, reason := range []string{"byo_base_url_carries_userinfo", "byo_base_url_carries_key_x", "BYO_BASE_URL_CARRIES_KEY"} {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Org-Llm-Config", "none")
+			w.Header().Set("X-Org-Llm-Config-Reason", reason)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(server.Close)
+		client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+		var refused *entitlements.BaseURLRefusedError
+		if found || err == nil || errors.Is(err, entitlements.ErrLLMConfigUnusable) || errors.As(err, &refused) {
+			t.Fatalf("reason %q: found = %v err = %v, want unavailable and not a refusal", reason, found, err)
+		}
+	}
+}
+
+// The marker and the reason are each ONE value. A repeated header is not read
+// by its first value: which of two conflicting reasons an intermediary
+// forwarded first must never choose between a refusal and a platform-model
+// fallback, so any repeat is an unknown answer and fails closed.
+func TestOrgLLMConfigRepeatedMarkerOrReasonHeaderFailsClosed(t *testing.T) {
+	for name, headers := range map[string][][2]string{
+		"turned off then carries key":      {{"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config-Reason", "byo_llm_turned_off"}, {"X-Org-Llm-Config-Reason", "byo_base_url_carries_key"}},
+		"carries key then turned off":      {{"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config-Reason", "byo_base_url_carries_key"}, {"X-Org-Llm-Config-Reason", "byo_llm_turned_off"}},
+		"the same reason twice":            {{"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config-Reason", "byo_llm_gate_closed"}, {"X-Org-Llm-Config-Reason", "byo_llm_gate_closed"}},
+		"marker twice":                     {{"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config", "none"}},
+		"marker none then another value":   {{"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config", "saved"}},
+		"marker twice with a valid reason": {{"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config", "none"}, {"X-Org-Llm-Config-Reason", "byo_base_url_carries_key"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				for _, header := range headers {
+					w.Header().Add(header[0], header[1])
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			t.Cleanup(server.Close)
+			client, err := entitlements.New(clientConfig(t, server, entitlements.Config{MaxResponseBytes: 8192}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, found, err := client.OrgLLMConfig(context.Background(), llmOrg)
+			var refused *entitlements.BaseURLRefusedError
+			if found || err == nil || errors.Is(err, entitlements.ErrLLMConfigUnusable) || errors.As(err, &refused) ||
+				errors.Is(err, entitlements.ErrLLMConfigTurnedOff) || errors.Is(err, entitlements.ErrLLMConfigGateClosed) || errors.Is(err, entitlements.ErrLLMConfigNoInvestigateConfig) {
+				t.Fatalf("found = %v err = %v, want unavailable and no remembered or refusal class", found, err)
+			}
+		})
+	}
+}
