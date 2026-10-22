@@ -336,7 +336,7 @@ func TestChaos7073UnexpandedRegistryNeverExpandsScope(t *testing.T) {
 }
 
 // Window (decision K5 and design C.5): no window = current, echoed as
-// defaulted; trailing becomes a range by the server clock; limits refuse.
+// defaulted; trailing becomes [today-N, today) in UTC by the server clock; limits refuse.
 func TestChaos7073Window(t *testing.T) {
 	provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
@@ -358,7 +358,8 @@ func TestChaos7073Window(t *testing.T) {
 	}
 	query := provider.queries[len(provider.queries)-1]
 	wantEnd := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	if query.Time.Axis != contextfabric.TemporalRange || !query.Time.End.Equal(wantEnd) || !query.Time.Start.Equal(wantEnd.Add(-30*24*time.Hour)) {
+	trailingEnd := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	if query.Time.Axis != contextfabric.TemporalRange || !query.Time.End.Equal(trailingEnd) || !query.Time.Start.Equal(trailingEnd.AddDate(0, 0, -30)) {
 		t.Errorf("trailing sent %+v", query.Time)
 	}
 	if w := response.Request.Window; w.Mode != WindowTrailing || w.Start == nil || !w.Start.Equal(*query.Time.Start) {

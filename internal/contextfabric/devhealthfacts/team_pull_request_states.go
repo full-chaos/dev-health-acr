@@ -114,7 +114,7 @@ func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.
 	}
 	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequestStates", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "team_id", repoExpr: "repo", repoType: "String"},
-		append(boundReaderBindings(bound), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
+		append(bound.neutral().Bindings(), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
 		func(having string, limit int) string {
 			return `SELECT team_id, repo, ` + statePairsExpression() + `
 FROM (

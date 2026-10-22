@@ -1,9 +1,12 @@
 package hosted
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-go/llm"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -100,6 +103,36 @@ func TestOpsOrgModelConfigsCarryThePromptCacheOptIn(t *testing.T) {
 		if resolved.PromptCache != optedIn {
 			t.Errorf("opted in = %v, resolved PromptCache = %v", optedIn, resolved.PromptCache)
 		}
+	}
+}
+
+func TestARefusedBaseURLIsLoggedByReasonOnly(t *testing.T) {
+	for _, reason := range []string{"base_url_carries_key", "base_url_carries_userinfo"} {
+		var logs bytes.Buffer
+		source := &fakeOrgLLMSource{err: &entitlements.BaseURLRefusedError{Reason: reason}}
+		configs := opsOrgModelConfigs{source: source, generations: &versionGenerations{}, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+		_, ok, err := configs.ResolveOrgModelConfig(context.Background(), "org_a")
+		if ok || !errors.Is(err, entitlements.ErrLLMConfigUnusable) {
+			t.Fatalf("%s: ok = %v err = %v, want an unusable configuration", reason, ok, err)
+		}
+		var line map[string]any
+		if json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &line) != nil {
+			t.Fatalf("%s: want exactly one log line, got %q", reason, logs.String())
+		}
+		if line["msg"] != "context fabric org model config refused" || line["org_id"] != "org_a" || line["reason"] != reason || line["level"] != "WARN" {
+			t.Fatalf("%s: log line = %v", reason, line)
+		}
+		for key := range line {
+			if key != "time" && key != "level" && key != "msg" && key != "org_id" && key != "reason" {
+				t.Fatalf("%s: unexpected log field %q", reason, key)
+			}
+		}
+	}
+	var logs bytes.Buffer
+	other := &fakeOrgLLMSource{err: errors.Join(entitlements.ErrLLMConfigUnusable, errors.New("ops answered 409"))}
+	configs := opsOrgModelConfigs{source: other, generations: &versionGenerations{}, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	if _, _, err := configs.ResolveOrgModelConfig(context.Background(), "org_a"); !errors.Is(err, entitlements.ErrLLMConfigUnusable) || logs.Len() != 0 {
+		t.Fatalf("a configuration that is not a refused base_url: err = %v log = %q, want the error and no log line", err, logs.String())
 	}
 }
 
