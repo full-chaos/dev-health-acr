@@ -444,8 +444,8 @@ func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *te
 	}
 	const (
 		attemptTimeout = 90 * time.Second
-		budget         = 2 * time.Minute
-		reserved       = 2 * attemptTimeout
+		budget         = 40 * time.Second
+		reserved       = 45 * time.Second // composition reserve 5s + a redraw 20s + the fallback attempt 20s
 	)
 	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: attemptTimeout, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling, Fallback: fallback})
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
@@ -478,7 +478,7 @@ func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *te
 		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want an int64", attrs["resynthesis_deadline_reserved_ms"])
 	}
 	if reservedMS != reserved.Milliseconds() {
-		t.Fatalf("resynthesis_deadline_reserved_ms = %d, want %d (a redraw plus the fallback attempt, one Config.Timeout each)", reservedMS, reserved.Milliseconds())
+		t.Fatalf("resynthesis_deadline_reserved_ms = %d, want %d (composition reserve plus a redraw and the fallback attempt, one expected draw each)", reservedMS, reserved.Milliseconds())
 	}
 	if remainingMS > budget.Milliseconds() {
 		t.Fatalf("resynthesis_deadline_remaining_ms = %d, want at most the %d ms budget the caller's deadline was set to", remainingMS, budget.Milliseconds())
@@ -815,4 +815,83 @@ func splitCommaList(s string) []string {
 	}
 	out = append(out, s[start:])
 	return out
+}
+
+// fakeClock is read by the runtime as its clock and moved only by the
+// generator, so a draw takes exactly the time the generator says.
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) read() time.Time { return c.now }
+
+type slowDrawGenerator struct {
+	*drawSequenceGenerator
+	clock *fakeClock
+	took  time.Duration
+}
+
+func (g slowDrawGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	g.clock.now = g.clock.now.Add(g.took)
+	return g.drawSequenceGenerator.Synthesize(ctx, request)
+}
+
+// CHAOS-11023: prod ran Config.Timeout 45s with a fallback, so a redraw needed
+// 90s; 64s were left after a draw of about 11s and no redraw ran. The reserve
+// is the cost of a draw, not its ceiling.
+func TestBoundedResynthesisRedrawsWhenTheRemainingBudgetCoversTheDrawsOwnCost(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{invalidTitleSynthesisOutput(), claimedSynthesisOutput()}}
+	fallback := &trackedErroringFallback{err: errors.New("fallback must not be needed"), receipt: validReceipt(contextfabric.ModelOperationSynthesize)}
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	runtime := mustRuntime(t, slowDrawGenerator{gen, clock, 11 * time.Second}, Config{Logger: logger, Timeout: 45 * time.Second, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: 3, Fallback: fallback})
+	runtime.now = clock.read
+	ctx, cancel := context.WithTimeout(context.Background(), 64*time.Second)
+	defer cancel()
+
+	_, receipt, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success on the second draw (64s left, an 11s draw)", err)
+	}
+	if receipt.Outcome != "success" || gen.calls != 2 {
+		t.Fatalf("outcome = %q, generator.calls = %d, want success after 2 draws", receipt.Outcome, gen.calls)
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrs["resynthesis_deadline_reserved_ms"]; got != int64(49000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 49000 (5s + 22s + 22s)", got)
+	}
+}
+
+func TestBoundedResynthesisStillStopsBelowTheDrawsOwnCost(t *testing.T) {
+	t.Parallel()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{invalidTitleSynthesisOutput(), validSynthesisOutput()}}
+	fallback := &trackedErroringFallback{err: errors.New("fallback reached"), receipt: validReceipt(contextfabric.ModelOperationSynthesize)}
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	runtime := mustRuntime(t, slowDrawGenerator{gen, clock, 11 * time.Second}, Config{Timeout: 45 * time.Second, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: 3, Fallback: fallback})
+	runtime.now = clock.read
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	if _, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err == nil {
+		t.Fatal("SynthesizeAnswer() error = nil, want the fallback's error: 40s left is under the 49s a redraw plus a fallback needs")
+	}
+	if gen.calls != 1 {
+		t.Fatalf("generator.calls = %d, want 1", gen.calls)
+	}
+}
+
+func TestSynthesisRedrawReserveNeverExceedsTheOldGate(t *testing.T) {
+	t.Parallel()
+	for _, timeout := range []time.Duration{time.Second, 10 * time.Second, 45 * time.Second, 2 * time.Minute} {
+		for _, fallback := range []bool{false, true} {
+			for _, slowest := range []time.Duration{0, 8 * time.Second, 11 * time.Second, 90 * time.Second} {
+				old := timeout
+				if fallback {
+					old *= 2
+				}
+				if got := synthesisRedrawReserve(timeout, fallback, slowest); got > old || got <= 0 {
+					t.Fatalf("reserve(%s, fallback=%v, slowest=%s) = %s, want in (0, %s]", timeout, fallback, slowest, got, old)
+				}
+			}
+		}
+	}
 }
