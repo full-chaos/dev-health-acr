@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // scoreLiveTestImage mirrors falkordbImage from adapter_live_integration_test.go
@@ -37,17 +37,7 @@ const scoreLiveTestImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f4
 func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: scoreLiveTestImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start FalkorDB container: %v", err)
-	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	container := falkorfixture.Start(ctx, t, scoreLiveTestImage)
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatalf("container.Host() error = %v", err)
@@ -183,17 +173,7 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: scoreLiveTestImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start FalkorDB container: %v", err)
-	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	container := falkorfixture.Start(ctx, t, scoreLiveTestImage)
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatalf("container.Host() error = %v", err)

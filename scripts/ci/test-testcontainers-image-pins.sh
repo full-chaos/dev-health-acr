@@ -257,6 +257,30 @@ while IFS=: read -r file line rest; do
   esac
 done < <(git grep -nE 'Image:[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*,' -- '*.go' | grep -vE 'Image:[[:space:]]*"')
 
+# (d) falkorfixture.Start(<ctx>, <t>, "<image>" | <identifier>, ...) -- the shared FalkorDB fixture takes the
+# image as a parameter and sets it on the request without an `Image:` field, so (b)/(c) cannot see the pin;
+# the pin is checked at every call site instead. `^[^"/]*` skips string literals and comment lines.
+while IFS=: read -r file line rest; do
+  [ -n "$file" ] || continue
+  image="$(printf '%s' "$rest" | sed -E 's/.*falkorfixture\.Start\([^,]+,[^,]+,[[:space:]]*"([^"]+)".*/\1/')"
+  if [ -n "$image" ] && [ "$image" != "$rest" ]; then
+    check_literal "$file" "$line" "$image"
+    continue
+  fi
+  ident="$(printf '%s' "$rest" | sed -E 's/.*falkorfixture\.Start\([^,]+,[^,]+,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*)[,)].*/\1/')"
+  if [ -n "$ident" ] && [ "$ident" != "$rest" ]; then
+    dir="$(dirname "$file")"
+    value="$(resolve_identifier "$dir" "$ident" "$file" "$line")"
+    if [ -z "$value" ]; then
+      offenders+=("${file}:${line}: could not resolve identifier \"${ident}\" passed to falkorfixture.Start to a const/var string in ${dir} -- investigate manually")
+      continue
+    fi
+    check_literal "$file" "$line" "$value"
+    continue
+  fi
+  offenders+=("${file}:${line}: could not extract the image argument from a falkorfixture.Start(...) call -- investigate manually")
+done < <(git grep -nE '^[^"/]*falkorfixture\.Start\(' -- '*.go')
+
 if [ "${#offenders[@]}" -gt 0 ]; then
   printf '%s\n' "${offenders[@]}" >&2
   printf '\n%d testcontainers image reference(s) failed the pin/mirror check\n' "${#offenders[@]}" >&2

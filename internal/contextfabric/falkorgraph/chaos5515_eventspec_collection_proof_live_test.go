@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
@@ -27,7 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // newLaneLabeledFalkorDBAdapter starts its OWN FalkorDB testcontainer (the
@@ -40,19 +40,7 @@ import (
 func newLaneLabeledFalkorDBAdapter(t *testing.T, ctx context.Context, tracer graphrank.ResolutionTracer) *falkorgraph.Adapter {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-			Labels: map[string]string{
-				"lane":      "lane-thread-c-obs",
-				"component": "eventspec-collection-proof",
-			},
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "start FalkorDB container")
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+	container := falkorfixture.Start(ctx, t, falkordbImage, falkorfixture.WithLabels(map[string]string{"lane": "lane-thread-c-obs", "component": "eventspec-collection-proof"}))
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, "6379/tcp")

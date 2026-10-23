@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
@@ -29,7 +30,6 @@ import (
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
-	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -70,15 +70,7 @@ func TestWorkItemHostedInfoCollection(t *testing.T) {
 	if _, err = runner.Apply(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	graph, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3", ExposedPorts: []string{"6379/tcp"}, WaitingFor: chfixture.FalkorReady()}, Started: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := graph.Terminate(context.Background()); err != nil {
-			t.Error(err)
-		}
-	})
+	graph := falkorfixture.Start(ctx, t, "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3")
 	host, err := graph.Host(ctx)
 	if err != nil {
 		t.Fatal(err)

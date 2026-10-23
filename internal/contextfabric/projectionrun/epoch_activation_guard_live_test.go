@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
@@ -15,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // This file is the executed proof that no lifecycle path activates an epoch
@@ -119,15 +119,7 @@ type epochGuardHarness struct {
 func startEpochGuardFalkor(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: epochGuardFalkorImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "start FalkorDB container")
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+	container := falkorfixture.Start(ctx, t, epochGuardFalkorImage)
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, "6379/tcp")

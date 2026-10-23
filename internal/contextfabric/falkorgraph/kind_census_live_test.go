@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // TestLiveKindCensus runs CHAOS-5654's kind-scoped census on a real FalkorDB:
@@ -26,15 +26,7 @@ import (
 func TestLiveKindCensus(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "start FalkorDB container")
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+	container := falkorfixture.Start(ctx, t, falkordbImage)
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, "6379/tcp")

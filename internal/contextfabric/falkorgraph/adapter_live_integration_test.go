@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // falkordbImage is pinned by digest to the exact image/module version this
@@ -30,15 +30,7 @@ const falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1
 func newLiveAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "start FalkorDB container")
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+	container := falkorfixture.Start(ctx, t, falkordbImage)
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, "6379/tcp")
