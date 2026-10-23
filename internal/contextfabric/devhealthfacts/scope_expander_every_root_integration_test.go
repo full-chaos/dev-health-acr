@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -317,6 +318,9 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 					with = append(with, runPeak(statement.label, statement.table, statement.fragment, captured.statement, captured.bindings))
 					base = append(base, runPeak(statement.label+" without arrays", statement.table, statement.fragment, stripped, captured.bindings))
 				}
+				if err := wantEverySample(statement.label, with, base, 3); err != nil {
+					t.Fatal(err)
+				}
 				readings[statement.label] = reading{
 					with: slices.Min(with), base: slices.Min(base), withMid: medianOf(with), baseMid: medianOf(base),
 					withSpread: slices.Max(with) - slices.Min(with), baseSpread: slices.Max(base) - slices.Min(base),
@@ -369,6 +373,20 @@ const (
 )
 
 type reading struct{ with, base, withMid, baseMid, withSpread, baseSpread uint64 }
+
+func wantEverySample(label string, with, base []uint64, runs int) error {
+	if len(with) != runs || len(base) != runs {
+		return fmt.Errorf("%s: measurement did not happen: %d with-array and %d base reads, want %d each", label, len(with), len(base), runs)
+	}
+	for _, side := range [][]uint64{with, base} {
+		for i, peak := range side {
+			if peak == 0 {
+				return fmt.Errorf("%s: measurement did not happen: read %d recorded no peak (%v / %v)", label, i, with, base)
+			}
+		}
+	}
+	return nil
+}
 
 func medianOf(values []uint64) uint64 {
 	sorted := slices.Clone(values)

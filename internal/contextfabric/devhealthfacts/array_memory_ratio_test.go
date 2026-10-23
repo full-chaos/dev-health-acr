@@ -20,3 +20,18 @@ func TestArraysOverShareStillCatchesRealGrowth(t *testing.T) {
 		t.Fatalf("a 30%% growth in every read was not flagged: %+v", r)
 	}
 }
+
+func TestWantEverySampleFailsOnOneMissingRead(t *testing.T) {
+	if err := wantEverySample("s", []uint64{1, 2, 3}, []uint64{4, 5, 6}, 3); err != nil {
+		t.Fatalf("complete reads refused: %v", err)
+	}
+	if wantEverySample("s", []uint64{1, 0, 3}, []uint64{4, 5, 6}, 3) == nil {
+		t.Fatal("a with-array read with no peak was accepted")
+	}
+	if wantEverySample("s", []uint64{1, 2, 3}, []uint64{4, 5, 0}, 3) == nil {
+		t.Fatal("a base read with no peak was accepted")
+	}
+	if wantEverySample("s", []uint64{1, 2}, []uint64{4, 5, 6}, 3) == nil {
+		t.Fatal("a missing run was accepted")
+	}
+}
