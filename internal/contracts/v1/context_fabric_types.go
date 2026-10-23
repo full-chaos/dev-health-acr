@@ -725,7 +725,8 @@ func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string
 }
 
 // RowKeyedEvidenceRef reports whether ref names ONE source row by its own key:
-// a pull request or a work item (id opens with the repository UUID). Such a ref
+// a repository, pull request, work item, CI run, deployment or review.v2 (the id
+// opens with the repository UUID). Such a ref
 // is expanded from the row, authorized live against the caller's repository
 // grant, and needs no stored answer; every other kind names a subject that many
 // stored results cite and is expanded only in the scope of the answer that
@@ -740,7 +741,9 @@ func RowKeyedEvidenceRef(ref string) bool {
 		return false
 	}
 	switch ContextFabricEvidenceEntityType(entity) {
-	case ContextFabricEvidenceEntityPullRequest, ContextFabricEvidenceEntityWorkItem:
+	case ContextFabricEvidenceEntityPullRequest, ContextFabricEvidenceEntityWorkItem,
+		ContextFabricEvidenceEntityRepository, ContextFabricEvidenceEntityCI,
+		ContextFabricEvidenceEntityDeployment, ContextFabricEvidenceEntityReviewV2:
 		return true
 	}
 	return false
