@@ -292,8 +292,9 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 		// measure runs each statement as served (with the origin id arrays)
 		// and the same text with the arrays removed, same bindings, same
 		// organization size, interleaved three times: the minimum of each is
-		// the reading, and each variant's own spread is its run-to-run noise.
-		type reading struct{ with, base, withSpread, baseSpread uint64 }
+		// the slope reading, the median of each is the ratio reading (one low
+		// outlier in either variant moves a minimum but not a median), and
+		// each variant's own spread is its run-to-run noise.
 		measure := func() map[string]reading {
 			recorder.reset()
 			for _, tc := range fixture.cases() {
@@ -317,7 +318,7 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 					base = append(base, runPeak(statement.label+" without arrays", statement.table, statement.fragment, stripped, captured.bindings))
 				}
 				readings[statement.label] = reading{
-					with: slices.Min(with), base: slices.Min(base),
+					with: slices.Min(with), base: slices.Min(base), withMid: medianOf(with), baseMid: medianOf(base),
 					withSpread: slices.Max(with) - slices.Min(with), baseSpread: slices.Max(base) - slices.Min(base),
 				}
 			}
@@ -334,14 +335,11 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 				name    string
 				reading reading
 			}{{"small", small[label]}, {"large", large[label]}} {
-				if size.reading.base == 0 || size.reading.with == 0 {
+				if size.reading.baseMid == 0 || size.reading.withMid == 0 {
 					t.Fatalf("%s %s: measurement did not happen (%+v)", label, size.name, size.reading)
 				}
-				// Over the share AND beyond both the two variants' own
-				// run-to-run spread and the absolute floor: a few-MB statement
-				// swings past 15% on noise alone.
-				if float64(size.reading.with) > arrayMemoryShare*float64(size.reading.base) && size.reading.with > size.reading.base+max(arrayMemoryFloor, size.reading.withSpread+size.reading.baseSpread) {
-					t.Errorf("%s at the %s size: %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.reading.with, size.reading.base, arrayMemoryShare)
+				if arraysOverShare(size.reading) {
+					t.Errorf("%s at the %s size: median %d bytes with the origin arrays, %d without: over %.2fx", label, size.name, size.reading.withMid, size.reading.baseMid, arrayMemoryShare)
 				}
 			}
 			// The arrays' cost may not grow with the organization beyond the
@@ -351,7 +349,7 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 			largeDelta := int64(large[label].with) - int64(large[label].base)
 			noise := large[label].withSpread + large[label].baseSpread
 			ratioMargin := func(r reading) int64 {
-				return int64(max(arrayMemoryShare*float64(r.base), float64(r.base+max(arrayMemoryFloor, r.withSpread+r.baseSpread)))) - int64(r.with)
+				return int64(max(arrayMemoryShare*float64(r.baseMid), float64(r.baseMid+max(arrayMemoryFloor, r.withSpread+r.baseSpread)))) - int64(r.withMid)
 			}
 			slopeTolerance := statementMemorySlope*float64(max(smallDelta, 0)) + float64(noise) + float64(arrayMemoryFloor)
 			t.Logf("MARGIN %s small_ratio=%d large_ratio=%d slope=%d", label, ratioMargin(small[label]), ratioMargin(large[label]), int64(slopeTolerance)-largeDelta)
@@ -369,6 +367,20 @@ const (
 	arrayMemoryShare = 1.15
 	arrayMemoryFloor = uint64(2 << 20)
 )
+
+type reading struct{ with, base, withMid, baseMid, withSpread, baseSpread uint64 }
+
+func medianOf(values []uint64) uint64 {
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+	return sorted[len(sorted)/2]
+}
+
+// Over the share AND beyond both variants' own run-to-run spread and the
+// absolute floor, compared on medians.
+func arraysOverShare(r reading) bool {
+	return float64(r.withMid) > arrayMemoryShare*float64(r.baseMid) && r.withMid > r.baseMid+max(arrayMemoryFloor, r.withSpread+r.baseSpread)
+}
 
 func peakOf(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, table, fragment string, mark int64) uint64 {
 	t.Helper()
