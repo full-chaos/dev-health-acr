@@ -82,7 +82,7 @@ var sourceIngestStatements = map[string]string{
 	"deployments.v1":            joinedIngest("d", "deployments AS d"),
 	"work_items.v1":             `SELECT max(greatest(last_synced, ingested_at)), count() FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}` + ingestTail("greatest(last_synced, ingested_at)"),
 	"work_item_dependencies.v1": `SELECT max(d.last_synced), count() FROM work_item_dependencies AS d FINAL INNER JOIN work_items AS w FINAL ON d.source_work_item_id = w.work_item_id WHERE d.org_id = {org_id:String} AND w.org_id = {org_id:String} AND w.repo_id = {repo_id:UUID}` + ingestTail("d.last_synced"),
-	"work_graph.v1":             `SELECT max(last_synced), count() FROM work_graph_edges FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}` + ingestTail("last_synced"),
+	"work_graph.v1":             `SELECT max(last_synced), count() FROM work_graph_edges FINAL WHERE org_id = {org_id:String} AND ` + WorkGraphEdgeScopeSQL("") + ingestTail("last_synced"),
 	"incidents.v1":              `SELECT max(i.last_synced), count() FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id WHERE i.org_id = {org_id:String} AND m.org_id = {org_id:String} AND m.repo_id = {repo_id:UUID} AND m.is_active = 1 AND i.is_deleted = 0 AND m.valid_from <= coalesce(` + ingestAsOf + `, now64(6)) AND (m.valid_to IS NULL OR m.valid_to > coalesce(` + ingestAsOf + `, now64(6)))` + ingestTail("i.last_synced"),
 }
 
