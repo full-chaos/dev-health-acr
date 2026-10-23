@@ -82,7 +82,7 @@ func writeExchangeRequest(t *testing.T, dir string, seq int, nonce string) {
 
 func newTestResponder(t *testing.T, dir, baseURL string) *responder {
 	t.Helper()
-	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna")
+	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna", func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -916,6 +916,35 @@ func TestAnswerOnePublishesLargeIntegersExactlyWhileStrippingNulls(t *testing.T)
 	logs, _ := os.ReadFile(filepath.Join(dir, "_responder_logs", name+".log"))
 	if want := fmt.Sprintf("output_bytes=%d", len(resp.Output)); !strings.Contains(string(logs), want) {
 		t.Errorf("log %q lacks %q: output_bytes must count the published bytes", logs, want)
+func TestProviderRejectionReasonIsReportedWithoutRequestContent(t *testing.T) {
+	const secretPrompt = "PROMPT-CONTENT-MUST-NOT-APPEAR"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema for response_format 'synthesize':\n too many objects","type":"invalid_request_error","param":"response_format","code":"invalid_json_schema"}}`))
+	}))
+	defer srv.Close()
+	var reported []string
+	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", func(reason string) { reported = append(reported, reason) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.Close() }()
+
+	_, callErr := provider.Complete(t.Context(), llm.Request{Prompt: secretPrompt, Format: &llm.JSONFormat{Name: "x", Schema: map[string]any{"type": "object"}}})
+	if class, _ := llm.ClassOf(callErr); class != llm.ClassInvalidRequest {
+		t.Fatalf("call error class = %q (%v), want invalid_request: the report must not change how the client classifies the response", class, callErr)
+	}
+	if len(reported) != 1 {
+		t.Fatalf("reported %d reasons, want 1: %v", len(reported), reported)
+	}
+	for _, want := range []string{"http=400", "type=invalid_request_error", "code=invalid_json_schema", "param=response_format", "too many objects"} {
+		if !strings.Contains(reported[0], want) {
+			t.Errorf("reason %q lacks %q", reported[0], want)
+		}
+	}
+	if strings.Contains(reported[0], secretPrompt) || strings.Contains(reported[0], "\n") {
+		t.Errorf("reason %q carries request content or a raw newline", reported[0])
 	}
 }
 

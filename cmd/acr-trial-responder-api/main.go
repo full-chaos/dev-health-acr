@@ -183,7 +183,7 @@ func main() {
 		// No production launcher sets this.
 		baseURL = base
 	}
-	provider, err := newProvider(apiKey, baseURL, model)
+	provider, err := newProvider(apiKey, baseURL, model, func(reason string) { fmt.Fprintf(os.Stderr, "responder: provider rejected a request: %s\n", reason) })
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
 		os.Exit(1)
@@ -244,13 +244,13 @@ func resolveResponderEffort(raw string) (string, error) {
 // sent no temperature and no output cap; both stay unset here. The HTTP
 // client has no overall timeout: every call is bounded by the request
 // context (requestTimeout), which is longer than the llm default.
-func newProvider(apiKey, baseURL, model string) (llm.Provider, error) {
+func newProvider(apiKey, baseURL, model string, reportProviderError func(string)) (llm.Provider, error) {
 	return llm.NewCompatible(llm.Config{
 		Kind:        llm.KindLocal,
 		APIKey:      llm.NewSecret(apiKey),
 		BaseURL:     baseURL,
 		Model:       model,
-		HTTPClient:  &http.Client{Transport: outboundhttp.SharedTransport()},
+		HTTPClient:  &http.Client{Transport: reasonLogTransport{next: outboundhttp.SharedTransport(), report: reportProviderError}},
 		Temperature: llm.TemperatureOmit,
 		OutputCap:   llm.OutputCapOmit,
 	})
