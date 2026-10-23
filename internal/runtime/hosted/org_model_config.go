@@ -16,11 +16,15 @@ import (
 // wrapWithOrgModelRuntimeResolver wraps deploymentDefault (which may itself
 // be nil -- no deployment-default provider configured) with per-organization
 // resolution (CHAOS-3775) when orgConfigs is non-nil. When orgConfigs is
-// nil, it returns deploymentDefault completely unchanged, and a nil
-// resolver: pre-CHAOS-3775 behavior, bit for bit, is what a deployment with
-// no encryption key configured gets.
+// nil (a deployment with no encryption key configured), no organization ever
+// has its own model: a non-nil deploymentDefault is wrapped in a resolver
+// without per-organization support, so its calls run on the deployment model
+// exactly as before, record the platform as the model source, and honor a
+// withheld turn. A nil deploymentDefault passes through nil. The second return
+// value is nil in that case.
 //
-// The second return value is the SAME *modelruntimeresolver.Resolver
+// When orgConfigs is non-nil, the second return value is the SAME
+// *modelruntimeresolver.Resolver
 // wrapped into the first -- callers must apply the typed-nil-interface guard
 // this package's other optional-dependency wiring already uses before
 // assigning it into an interface-typed field.
