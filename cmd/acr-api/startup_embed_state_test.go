@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,7 +29,7 @@ func startupLine(t *testing.T, env map[string]string) (map[string]any, string) {
 
 func TestStartupLineDisclosesTheEmbedProviderState(t *testing.T) {
 	off, _ := startupLine(t, nil)
-	if off["embed_provider_configured"] != false || off["embed_provider"] != "" || off["embed_model"] != "" || off["embed_dimension"] != float64(0) || off["embed_key_present"] != false {
+	if off["embed_provider_configured"] != false || off["embed_provider"] != "" || off["embed_model"] != "" || off["embed_dimension"] != float64(0) || off["embed_key_present"] != false || off["embed_config_valid"] != true {
 		t.Fatalf("unset state is not explicit: %v", off)
 	}
 	on, raw := startupLine(t, map[string]string{
@@ -44,5 +46,36 @@ func TestStartupLineDisclosesTheEmbedProviderState(t *testing.T) {
 		if strings.Contains(raw, secret) {
 			t.Fatalf("startup line leaks %q: %s", secret, raw)
 		}
+	}
+}
+
+func TestStartupLineReadsTheKeyFileAndTrimsValues(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "embed-key")
+	if err := os.WriteFile(keyFile, []byte("filesecret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	line, raw := startupLine(t, map[string]string{
+		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":     " https://embed.example/v1 ",
+		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":     "  lmstudio ",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":        " qwen3-embedding ",
+		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION":    " 1024 ",
+		"ACR_CONTEXT_FABRIC_EMBED_API_KEY_FILE": keyFile,
+	})
+	if line["embed_key_present"] != true || line["embed_provider"] != "lmstudio" || line["embed_model"] != "qwen3-embedding" || line["embed_dimension"] != float64(1024) || line["embed_config_valid"] != true {
+		t.Fatalf("resolved state not disclosed: %v", line)
+	}
+	for _, secret := range []string{"filesecret", keyFile} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("startup line leaks %q: %s", secret, raw)
+		}
+	}
+	rejected, _ := startupLine(t, map[string]string{
+		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":  "http://embed.example/v1",
+		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":  "lmstudio",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "m",
+		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION": "8",
+	})
+	if rejected["embed_provider_configured"] != true || rejected["embed_config_valid"] != false {
+		t.Fatalf("a rejected configuration is not flagged: %v", rejected)
 	}
 }
