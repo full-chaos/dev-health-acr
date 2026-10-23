@@ -342,7 +342,7 @@ func start(t *testing.T) {
 	t.Helper()
 	chfixture.RequireContainers(t)
 	_, _ = testcontainers.GenericContainer(nil, testcontainers.GenericContainerRequest{})
-	_, _ = tcpostgres.Run(nil, "img")
+	_, _ = tcpostgres.RunContainer(nil)
 }
 `
 
@@ -352,7 +352,7 @@ func TestGuardRulesFireOnSyntheticSources(t *testing.T) {
 	}{
 		{"gated source is clean", "", gatedOK},
 		{"the startScopeClickHouse shape without Require", "G1", strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "", 1)},
-		{"Require after the start", "G1", strings.Replace(strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "", 1), "\t_, _ = tcpostgres.Run(nil, \"img\")\n", "\t_, _ = tcpostgres.Run(nil, \"img\")\n\tchfixture.RequireContainers(t)\n", 1)},
+		{"Require after the start", "G1", strings.Replace(strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "", 1), "\t_, _ = tcpostgres.RunContainer(nil)\n", "\t_, _ = tcpostgres.RunContainer(nil)\n\tchfixture.RequireContainers(t)\n", 1)},
 		{"Require inside an if", "G1", strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "\tif t != nil {\n\t\tchfixture.RequireContainers(t)\n\t}\n", 1)},
 		{"start taken as a value", "G1", strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "\tf := testcontainers.GenericContainer\n\t_ = f\n\tchfixture.RequireContainers(t)\n", 1)},
 		{"aliased module import", "G1", "package p\nimport pg \"github.com/testcontainers/testcontainers-go/modules/postgres\"\nfunc s() { _, _ = pg.Run(nil, \"img\") }\n"},
