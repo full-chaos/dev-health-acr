@@ -149,7 +149,7 @@ func scopedFalkor(t *testing.T, ctx context.Context, query *runtimeclickhouse.Cl
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: codexRoundFalkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: chfixture.FalkorReady(),
 		},
 		Started: true,
 	})

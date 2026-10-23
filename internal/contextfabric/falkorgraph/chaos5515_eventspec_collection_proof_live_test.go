@@ -28,7 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // newLaneLabeledFalkorDBAdapter starts its OWN FalkorDB testcontainer (the
@@ -44,7 +43,7 @@ func newLaneLabeledFalkorDBAdapter(t *testing.T, ctx context.Context, tracer gra
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: chfixture.FalkorReady(),
 			Labels: map[string]string{
 				"lane":      "lane-thread-c-obs",
 				"component": "eventspec-collection-proof",

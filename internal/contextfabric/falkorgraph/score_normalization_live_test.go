@@ -10,7 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // scoreLiveTestImage mirrors falkordbImage from adapter_live_integration_test.go
@@ -41,7 +40,7 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: scoreLiveTestImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: chfixture.FalkorReady(),
 		},
 		Started: true,
 	})
@@ -145,6 +144,8 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 	// container); if that ever stops holding, this test SHOULD fail loudly,
 	// not quietly downgrade to a skip.
 	if strongScore <= 1 || midScore <= 1 || weakScore <= 1 {
+		statuses, statusErr := adapter.api.indexes(ctx, key)
+		t.Logf("score diagnostics: candidates=%d index_statuses=%+v index_status_error=%v", len(candidates), statuses, statusErr)
 		t.Fatalf("live RediSearch raw scores were not all > 1 (strong=%v mid=%v weak=%v) -- this test requires realistic, unbounded-above scores to exercise the D11 defect's exact range", strongScore, midScore, weakScore)
 	}
 
@@ -185,7 +186,7 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: scoreLiveTestImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: chfixture.FalkorReady(),
 		},
 		Started: true,
 	})
