@@ -104,6 +104,8 @@ func serveFakeRESP(c net.Conn, answerFrom time.Time) {
 		switch {
 		case strings.Contains(req, "PING"):
 			_, _ = c.Write([]byte("+PONG\r\n"))
+		case strings.Contains(req, "GRAPH.QUERY"):
+			_, _ = c.Write([]byte("*0\r\n"))
 		case strings.Contains(req, "GRAPH.LIST"):
 			_, _ = c.Write([]byte("*0\r\n"))
 		case strings.Contains(req, "HELLO"), strings.Contains(req, "CLIENT"):

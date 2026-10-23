@@ -19,7 +19,7 @@ const (
 
 // FalkorReady is the wait strategy for a FalkorDB container. A host-mapped port is open as soon as the container
 // network is up, before the server answers, so a bare listening-port wait reports ready while the first command
-// still hangs. This strategy returns only after the server answers PING and GRAPH.LIST on the mapped port, logs
+// still hangs. This strategy returns only after the server answers PING, GRAPH.LIST and a GRAPH.QUERY on the mapped port, logs
 // every failed try, and fails with the last error when the budget ends.
 func FalkorReady() wait.Strategy {
 	return falkorServing{}
@@ -73,6 +73,9 @@ func probeFalkor(ctx context.Context, client *redis.Client, tryLimit time.Durati
 	}
 	if err := client.Do(tryCtx, "GRAPH.LIST").Err(); err != nil {
 		return fmt.Errorf("GRAPH.LIST: %w", err)
+	}
+	if err := client.Do(tryCtx, "GRAPH.QUERY", "acr-fixture-ready", "RETURN 1").Err(); err != nil {
+		return fmt.Errorf("GRAPH.QUERY: %w", err)
 	}
 	return nil
 }
