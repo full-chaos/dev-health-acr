@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -234,6 +235,8 @@ type projectCohortRun struct {
 	result contextfabric.InvestigationResult
 	logs   string
 	model  *projectCohortModel
+	// counted is the turn's statement-counting client.
+	counted contextpacket.ClickHouseQueryClient
 }
 
 func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []projectCohortCell) projectCohortRun {
@@ -242,6 +245,13 @@ func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []pr
 }
 
 func runProjectCohortInvestigationAs(t *testing.T, ctx context.Context, cells []projectCohortCell, temporal contextfabric.TemporalIntent) projectCohortRun {
+	t.Helper()
+	return runProjectCohortInvestigationWith(t, ctx, cells, temporal, false)
+}
+
+// runProjectCohortInvestigationWith is runProjectCohortInvestigationAs; withScopeExpander
+// wires the real scope expander (as hosted/open.go does) and records its expansions.
+func runProjectCohortInvestigationWith(t *testing.T, ctx context.Context, cells []projectCohortCell, temporal contextfabric.TemporalIntent, withScopeExpander bool) projectCohortRun {
 	t.Helper()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	// devhealthschema:not-a-production-replica rows are inserted into tables whose schema comes only from devhealthschema.DDL, never defined here
@@ -273,7 +283,12 @@ func runProjectCohortInvestigationAs(t *testing.T, ctx context.Context, cells []
 	for _, cell := range cells {
 		members = append(members, projectSubject("linear", "proj-"+strings.ToLower(cell.key)))
 	}
-	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(countTurnStatements(t, query)), contextfabric.FactRegistryOptions{Logger: logger})
+	counted := countTurnStatements(t, query)
+	options := contextfabric.FactRegistryOptions{Logger: logger}
+	if withScopeExpander {
+		options.ScopeExpander = recordScopeSpans(counted, devhealthfacts.NewScopeExpander(counted))
+	}
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(counted), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +314,7 @@ func runProjectCohortInvestigationAs(t *testing.T, ctx context.Context, cells []
 	if err != nil {
 		t.Fatalf("Engine.Investigate: %v\nlogs:\n%s", err, logBuffer.String())
 	}
-	return projectCohortRun{result: result, logs: logBuffer.String(), model: model}
+	return projectCohortRun{result: result, logs: logBuffer.String(), model: model, counted: counted}
 }
 
 func rankingOutcomeRow(t *testing.T, result contextfabric.InvestigationResult) contractsv1.ContextFabricPlanRequirementOutcomeRow {
