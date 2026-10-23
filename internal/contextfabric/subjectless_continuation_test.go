@@ -148,3 +148,46 @@ func TestAReceiptWithoutTheTermlessFlagSerializesUnchanged(t *testing.T) {
 		t.Fatalf("receipt json = %s, want no termless_named_subject key unless set", raw)
 	}
 }
+
+func TestAReferencedPriorResultIsAnExplicitContinuationToo(t *testing.T) {
+	outcome := termlessOutcome(QuestionFamilyOutcome{}, true, FrameInvariantI3)
+	request := InvestigationRequest{PriorKindReceipts: []BoundSubjectReceipt{{ResultID: "result_prior"}}}
+	if !termlessContinuation(outcome, request) {
+		t.Fatal("termlessContinuation = false, want true: referenced prior results are the same continuation clause reuseBypassReason reads")
+	}
+	if termlessContinuation(termlessOutcome(QuestionFamilyOutcome{}, true, FrameInvariantI4), request) {
+		t.Fatal("termlessContinuation = true for a gate rejected at another invariant")
+	}
+	notRejected := outcome
+	notRejected.Gate = FrameGate{Outcome: FrameGatePassed}
+	if termlessContinuation(notRejected, request) {
+		t.Fatal("termlessContinuation = true for a gate that passed")
+	}
+}
+
+// TestTheProductionPathCarriesTheTermlessFlagIntoTheOffer drives the real
+// chain resolveFrame -> receipt flag and gate -> familySampleFrom -> engine
+// offer, instead of setting the sample field by hand.
+func TestTheProductionPathCarriesTheTermlessFlagIntoTheOffer(t *testing.T) {
+	frame := decodeFrame(t, haikuTermlessFrame)
+	receipt := &ModelExecutionReceipt{QuestionFrame: &frame}
+	RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{}, receipt, ShapeOpen, nil)
+	if !receipt.TermlessNamedSubject || receipt.FrameGateOutcome != FrameGateRejectedInvalid || receipt.FrameFailedInvariant != FrameInvariantI3 {
+		t.Fatalf("receipt termless/gate/invariant = %v/%s/%s, want true/rejected_invalid/i3", receipt.TermlessNamedSubject, receipt.FrameGateOutcome, receipt.FrameFailedInvariant)
+	}
+	sample := familySampleFrom(InterpretedQuestion{}, *receipt)
+	if !sample.TermlessNamedSubject {
+		t.Fatal("familySampleFrom dropped the receipt's TermlessNamedSubject")
+	}
+	before := func(rig *anchorProbeRig) {
+		outcome := termlessOutcome(rig.interpreter.outcome, false, FrameInvariantI3)
+		outcome.WinningSample = sample
+		outcome.Gate = FrameGate{Outcome: receipt.FrameGateOutcome, FailedInvariant: receipt.FrameFailedInvariant}
+		rig.interpreter.outcome = outcome
+	}
+	_, one, two := followUpTurns(t, carryTurnOptions{before: before}, emptyProbeResponse())
+	served := two.result.SubjectResolution
+	if two.transitions[0].BoundAnchorCarry != BoundAnchorCarryFollowUpOffered || len(served.Candidates) != 1 || !reflect.DeepEqual(served.Candidates[0], rememberedAlphaOffer(one.result.ResultID)) {
+		t.Fatalf("carry/candidates = %s/%+v, want the remembered alpha offer", two.transitions[0].BoundAnchorCarry, served.Candidates)
+	}
+}
