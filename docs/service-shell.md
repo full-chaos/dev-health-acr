@@ -76,6 +76,7 @@ follow their DSNs. Plaintext and certificate-verified TLS are both supported in
 every environment. ClickHouse likewise follows its explicit DSN: native port
 9000 is the ordinary private-service default, while `secure=true` plus an
 optional CA bundle keeps certificate verification enabled when TLS is selected.
+The client keeps up to 8 warm connections (8 open, 8 idle, 30 minute lifetime) in both the API and the projector, so a statement over a high-latency link does not pay a new TCP and TLS handshake.
 
 Entitlement provider selection is automatic. A complete
 `ACR_DEV_HEALTH_ENTITLEMENT_URL` plus
