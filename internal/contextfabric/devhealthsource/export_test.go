@@ -664,3 +664,41 @@ func ReadCIRunsForTest(ctx context.Context, client contextpacket.ClickHouseQuery
 	}
 	return out, rows.Err()
 }
+
+const legacyCIRunCountStatement = `SELECT uniqExact(c.repo_id, c.run_id) FROM ci_pipeline_runs AS c FINAL
+INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
+WHERE c.org_id = {org_id:String}`
+
+// ReadCIRunCountForTest runs the CI run count statement: main's ("legacy"),
+// the current one ("current"), or main's with the repos join pruned to the
+// organization ("joinpruned"), and returns the count.
+func ReadCIRunCountForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, variant, orgID string) (uint64, error) {
+	var statement string
+	switch variant {
+	case "legacy":
+		statement = legacyCIRunCountStatement
+	case "current":
+		for _, st := range clickHouseKindCountStatements {
+			if st.kind == contractsv1.ContextFabricSubjectCIRun {
+				statement = st.sql
+			}
+		}
+	case "joinpruned":
+		statement = strings.Replace(legacyCIRunCountStatement, "INNER JOIN repos AS repo FINAL ON", "INNER JOIN (SELECT id, org_id FROM repos FINAL WHERE org_id = {org_id:String}) AS repo ON", 1)
+	}
+	if statement == "" {
+		return 0, fmt.Errorf("unknown CI run count variant %q", variant)
+	}
+	rows, err := client.Query(ctx, statement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var total uint64
+	for rows.Next() {
+		if err := rows.Scan(&total); err != nil {
+			return 0, err
+		}
+	}
+	return total, rows.Err()
+}

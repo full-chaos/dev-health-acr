@@ -110,6 +110,23 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 		}
 	}
 
+	var wantCount uint64
+	for _, variant := range []string{"legacy", "current", "joinpruned"} {
+		got, err := devhealthsource.ReadCIRunCountForTest(contextpacket.WithStatementReader(ctx, "ci-count-"+variant), reader, variant, ciRunsOrganization)
+		if err != nil {
+			t.Errorf("count %s: %v", variant, err)
+			continue
+		}
+		if variant == "legacy" {
+			wantCount = got
+			if got == 0 {
+				t.Fatal("main's count statement returned 0: the seed does not exercise it")
+			}
+		} else if got != wantCount {
+			t.Errorf("count %s = %d, main's = %d", variant, got, wantCount)
+		}
+	}
+
 	if err := admin.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("flush the query log: %v", err)
 	}
