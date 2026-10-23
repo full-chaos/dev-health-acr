@@ -365,10 +365,12 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		}
 		pass.low = edge.Add(-p.overlap - slack)
 	}
+	carry := newTableCarry(p.windowCarry)
 	start := func() {
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
 		pass.high = cursorState{Since: state.Since, After: state.After}
 		pass.pages, pass.rows = 0, 0
+		carry.reset()
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
 	// landed behind its position meanwhile, so when it completes a new pass
@@ -402,7 +404,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	for ; ; page++ {
 		if page == pagesPerCall {
 			p.window.setPass(p.windowScope, pass)
-			p.logOpenPass(ctx, orgID, pass, state, now, page)
+			p.logOpenPass(ctx, orgID, pass, state, now, page, carry.served)
 			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
@@ -415,7 +417,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		more := false
 		var bound pageBound
 		for _, table := range tables {
-			rows, truncated, err := readTable(ctx, table, p.client, orgID, pass.walk, incrementalBatchCap)
+			rows, truncated, err := p.windowRead(ctx, table, orgID, pass.walk, carry)
 			if err == nil {
 				err = p.boundRead(ctx, orgID, table.name, pass.walk, &bound, rows, truncated)
 			}
@@ -484,7 +486,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		p.window.record(p.windowScope, all, p.overlap)
 		// The walk read a page and stopped; it is unfinished until a call
 		// reaches the window's end, so the pass is not over.
-		p.logOpenPass(ctx, orgID, pass, state, now, page+1)
+		p.logOpenPass(ctx, orgID, pass, state, now, page+1, carry.served)
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -556,7 +558,7 @@ const (
 // logOpenPass writes the one line a call writes when it ends with the pass
 // still open: where the pass stands and how much of the window is left. It is
 // a warning only once the pass is overdue (overduePass).
-func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPass, frontier cursorState, now time.Time, pagesThisCall int) {
+func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPass, frontier cursorState, now time.Time, pagesThisCall, carriedReads int) {
 	if p.logger == nil {
 		return
 	}
@@ -576,7 +578,7 @@ func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPa
 	}
 	p.logger.Log(ctx, level, message,
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-		"pages_this_call", pagesThisCall, "page_rows", incrementalBatchCap,
+		"pages_this_call", pagesThisCall, "carried_reads", carriedReads, "page_rows", incrementalBatchCap,
 		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
 		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)),
 		"resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),

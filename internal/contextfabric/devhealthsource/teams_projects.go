@@ -327,15 +327,15 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v23"
 // provider/event times.
 func teamsProjectsTablesFor(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger, repoOwnership *repositoryOwnershipLedger, ingest bool) []entityTable {
 	return []entityTable{
-		{name: "teams", dimension: true, query: teamsQuery(teamAuth), subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}},
-		{name: "projects", dimension: true, query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
-		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence, ingest)},
-		{name: "work_item_team_attributions", query: workItemTeamsQuery(presence)},
-		{name: "team_project_ownership", query: projectTeamsQuery(omissions, ingest)},
+		{name: "teams", carry: true, dimension: true, query: teamsQuery(teamAuth), subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}},
+		{name: "projects", carry: true, dimension: true, query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
+		{name: "project_membership_presence", carry: true, query: subjectProjectMembershipsQuery(presence, ingest)},
+		{name: "work_item_team_attributions", carry: true, query: workItemTeamsQuery(presence)},
+		{name: "team_project_ownership", carry: true, query: projectTeamsQuery(omissions, ingest)},
 		// CHAOS-6561: repository -> team OWNED_BY_TEAM, the ownership edge
 		// team_repo_ownership carries (queryTeams reads the same table only
 		// for a team's authorization scope).
-		{name: "team_repo_ownership", query: repositoryTeamsQuery(repoOwnership)},
+		{name: "team_repo_ownership", carry: true, query: repositoryTeamsQuery(repoOwnership)},
 	}
 }
 
@@ -361,6 +361,8 @@ type TeamsProjectsSource struct {
 	window  *windowMemo
 	// windowInterval is the pause between window passes (WithWindowPassInterval).
 	windowInterval time.Duration
+	// windowCarry serves complete tables' next window pages from memory within one call (WithWindowCarry).
+	windowCarry bool
 
 	// ingest caches whether the ingest columns exist (ingest_probe.go).
 	ingest ingestProbe
@@ -1211,7 +1213,7 @@ func NewTeamsProjectsSource(client contextpacket.ClickHouseQueryClient, enabled 
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, window: newWindowMemo()}, nil
+	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, windowCarry: true, window: newWindowMemo()}, nil
 }
 
 // WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
@@ -1236,6 +1238,16 @@ func (s *TeamsProjectsSource) WithWindowPassInterval(d time.Duration) (*TeamsPro
 
 // Overlap is the trailing re-read window this source walks once caught up.
 func (s *TeamsProjectsSource) Overlap() time.Duration { return s.overlap }
+
+// WithWindowCarry turns on (the default) or off serving a complete table's
+// next window page from memory within one call.
+func (s *TeamsProjectsSource) WithWindowCarry(on bool) *TeamsProjectsSource {
+	s.windowCarry = on
+	return s
+}
+
+// WindowCarry reports whether complete tables are served from memory within one window call.
+func (s *TeamsProjectsSource) WindowCarry() bool { return s.windowCarry }
 
 // WindowPassInterval is the pause between trailing-window passes.
 func (s *TeamsProjectsSource) WindowPassInterval() time.Duration { return s.windowInterval }
@@ -1353,6 +1365,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		now:             s.now,
 		overlap:         s.overlapDuration(),
 		windowInterval:  s.windowInterval,
+		windowCarry:     s.windowCarry,
 		window:          s.windowMemo(),
 		reconcile:       teamsReconcileQuery(&teamAuthorizationLedger{}),
 		reconcilePeriod: teamOwnershipReconcilePeriod,

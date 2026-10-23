@@ -108,6 +108,8 @@ type sourcePlan struct {
 	// them again on every caught-up tick would grow cumulative counters
 	// (rows read, edges asserted) while nothing happened.
 	windowTables []entityTable
+	// windowCarry serves a complete table's next window page from memory within one call (window_carry.go).
+	windowCarry bool
 
 	// space is the cursor position space this plan encodes and accepts; empty
 	// means cursorSpaceIngest.

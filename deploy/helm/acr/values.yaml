@@ -451,6 +451,9 @@ contextFabric:
     # The pause between trailing-window passes is the projector's code default
     # (5m). To override it, set ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL
     # on the projector; 0 starts the next pass at once (the previous behavior).
+    # Within one call the window walk serves a complete table's next page from
+    # memory; ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_CARRY=false reads every table
+    # on every page (default true).
     concurrency: 4
     teamsProjectsEnabled: false
     podAnnotations: {}

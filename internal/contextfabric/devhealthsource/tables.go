@@ -24,7 +24,9 @@ type entityTable struct {
 	// from-zero build reads such a table whole before the fact walk when the
 	// first read did not return all of it (dimension_phase.go).
 	dimension bool
-	query     func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
+	// carry says the window walk may serve this table's next page from the rows of an earlier complete read within one call. Set only for tables the carry parity test passes.
+	carry bool
+	query func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
 	// subjectKinds names the ENTITY subject kinds this producer emits, and
 	// it is declared here rather than in any consumer because a consumer's
 	// copy is a second list that drifts. A relationship-only producer

@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -488,4 +489,106 @@ func IncidentPagesForTest(ctx context.Context, client contextpacket.ClickHouseQu
 		cursor = cursorState{Since: last.position(), After: last.sortKey}
 	}
 	return nil, fmt.Errorf("incident pages did not end")
+}
+
+// CarryCursorForTest is a keyset position handed to the carry parity seam.
+type CarryCursorForTest struct {
+	Since time.Time
+	After string
+}
+
+// CarryProducerForTest names a producer of the teams source and whether the
+// window walk may serve its next page from memory.
+type CarryProducerForTest struct {
+	Name  string
+	Carry bool
+}
+
+// CarryTrialForTest is one parity trial: the rows the carry serves against the
+// rows the statement returns.
+type CarryTrialForTest struct {
+	Skipped          bool
+	Equal            bool
+	Carried, Fetched []string
+}
+
+func carryProducersForTest() []entityTable {
+	return teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, true)
+}
+
+func carryProducerForTest(name string) (entityTable, error) {
+	for _, table := range carryProducersForTest() {
+		if table.name == name {
+			return table, nil
+		}
+	}
+	return entityTable{}, fmt.Errorf("no producer named %s", name)
+}
+
+// CarryProducersForTest lists the teams source's producers in registry order.
+func CarryProducersForTest() []CarryProducerForTest {
+	var out []CarryProducerForTest
+	for _, table := range carryProducersForTest() {
+		out = append(out, CarryProducerForTest{Name: table.name, Carry: table.carry})
+	}
+	return out
+}
+
+// CarryPositionsForTest reads the producer from the start and returns the
+// keyset position of every row it returns, ascending.
+func CarryPositionsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, name string, limit int) ([]CarryCursorForTest, error) {
+	table, err := carryProducerForTest(name)
+	if err != nil {
+		return nil, err
+	}
+	rows, _, err := readTable(ctx, table, client, orgID, cursorState{}, limit)
+	if err != nil {
+		return nil, err
+	}
+	sortCandidates(rows)
+	var out []CarryCursorForTest
+	for _, row := range rows {
+		point := CarryCursorForTest{Since: row.position(), After: row.sortKey}
+		if len(out) == 0 || out[len(out)-1] != point {
+			out = append(out, point)
+		}
+	}
+	return out, nil
+}
+
+// CarryTrialRunForTest reads the producer at c0; when that read is complete it
+// filters the rows with the window carry to c1 and compares them, value for
+// value, with a statement read at c1.
+func CarryTrialRunForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, name string, c0, c1 CarryCursorForTest, limit int) (CarryTrialForTest, error) {
+	table, err := carryProducerForTest(name)
+	if err != nil {
+		return CarryTrialForTest{}, err
+	}
+	from, to := cursorState{Since: c0.Since, After: c0.After}, cursorState{Since: c1.Since, After: c1.After}
+	first, truncated, err := readTable(ctx, table, client, orgID, from, limit)
+	if err != nil {
+		return CarryTrialForTest{}, err
+	}
+	if truncated {
+		return CarryTrialForTest{Skipped: true}, nil
+	}
+	table.carry = true
+	carry := newTableCarry(true)
+	carry.note(table, from, first, false)
+	carried, _ := carry.take(table, to)
+	fetched, fetchedTruncated, err := readTable(ctx, table, client, orgID, to, limit)
+	if err != nil {
+		return CarryTrialForTest{}, err
+	}
+	trial := CarryTrialForTest{Carried: keysForTest(carried), Fetched: keysForTest(fetched)}
+	trial.Equal = !fetchedTruncated && reflect.DeepEqual(carried, fetched)
+	return trial, nil
+}
+
+func keysForTest(rows []candidate) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = fmt.Sprintf("%s/%s/%s", row.table, row.position().UTC().Format(time.RFC3339Nano), row.sortKey)
+	}
+	return out
 }
