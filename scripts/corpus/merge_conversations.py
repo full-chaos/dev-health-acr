@@ -8,7 +8,11 @@ never hidden inside it).
 Fails loudly (exit 2, output still written) when: no summaries exist; a required rep is
 missing; a rep lacks a conversation another rep has; any turn is `not_measured`.
 
-Usage: merge_conversations.py --in DIR --out FILE [--reps N]
+A turn that expects a canonical id the operator reports absent from the live graph
+(`--absent-ids FILE`, one id per line) is `unscored` and counted apart as `marked_absent_turns`;
+ids in the file that no conversation expects are listed in `absent_ids_unused`.
+
+Usage: merge_conversations.py --in DIR --out FILE [--reps N] [--absent-ids FILE]
 """
 import argparse
 import json
@@ -27,7 +31,7 @@ def _shape_code(shape):
     return m.group(1) if m else "?"
 
 
-def merge(root, convs, reps):
+def merge(root, convs, reps, absent_ids=frozenset()):
     by_id = {c["id"]: c for c in convs}
     problems, rows = [], []
     for rep in range(1, reps + 1):
@@ -41,7 +45,7 @@ def merge(root, convs, reps):
             if cid not in got:
                 problems.append(f"rep{rep}: no record for {cid}")
                 continue
-            res = C.score_conversation(by_id[cid], got[cid]["turns"])
+            res = C.score_conversation(by_id[cid], got[cid]["turns"], absent_ids)
             rows.append({"id": cid, "shape": _shape_code(by_id[cid].get("shape")),
                          "rep": rep, "turns": res,
                          "redeemed": [r["redeemed"] for r in res if r["redeemed"] is not None]})
@@ -52,13 +56,17 @@ def merge(root, convs, reps):
             tally[t["verdict"]] += 1
             if t["identity"] in identity:
                 identity[t["identity"]] += 1
+    marked = sum(1 for r in rows for t in r["turns"] if t.get("why") == C.ABSENT_WHY)
+    named = {i for c in convs for t in c["turns"] for i in C.turn_ids(t)}
     scored = tally[C.AGREE] + tally[C.AGREE_WEAK] + tally[C.DISAGREE]
     if tally[C.NOT_MEASURED]:
         problems.append(f"{tally[C.NOT_MEASURED]} turn(s) not measured")
     if not rows:
         problems.append("no conversation replicates merged")
     return {"series": "conversation", "reps": reps, "denominator_scored_turns": scored,
-            "tally": tally, "identity": identity, "rows": rows, "problems": problems}
+            "tally": tally, "identity": identity, "marked_absent_turns": marked,
+            "absent_ids": sorted(absent_ids), "absent_ids_unused": sorted(absent_ids - named),
+            "rows": rows, "problems": problems}
 
 
 def render(out):
@@ -70,7 +78,8 @@ def render(out):
     t = out["tally"]
     lines.append(f"\nscored turns (own denominator): {out['denominator_scored_turns']}  "
                  f"agree={t['agree']} agree_weak={t['agree_weak']} disagree={t['disagree']}  "
-                 f"unscored={t['unscored']} not_measured={t['not_measured']}  "
+                 f"unscored={t['unscored']} not_measured={t['not_measured']} "
+                 f"marked_absent={out['marked_absent_turns']}  "
                  f"identity={out['identity']}")
     return "\n".join(lines)
 
@@ -80,13 +89,18 @@ def main(argv):
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--absent-ids", dest="absent", default=None)
     a = ap.parse_args(argv)
     import harness  # noqa: E402  (needs CORPUS_BASE only at post time)
     try:
         convs = harness.load_conversations()
     except harness.MissingConversations as e:
         sys.exit(str(e))
-    out = merge(a.inp, convs, a.reps)
+    try:
+        absent = C.load_absent_ids(a.absent) if a.absent else frozenset()
+    except (OSError, ValueError) as e:
+        sys.exit(f"--absent-ids: {e}")
+    out = merge(a.inp, convs, a.reps, absent)
     Path(a.out).write_text(json.dumps(out, indent=2))
     print(render(out))
     if out["problems"]:

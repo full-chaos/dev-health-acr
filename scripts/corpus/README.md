@@ -176,6 +176,8 @@ A corpus module may also supply `CONVERSATIONS`: authored multi-turn conversatio
 - `run_conversations.py <rep>` runs one replicate (turn N>1 posts `parentResultId` + `subjectHints` from turn N-1's result). Refuses a corpus with no `CONVERSATIONS`.
 - A turn with `redeem: {canonical_id}` selects that offered candidate from the previous turn. Every `clarify` turn must be followed by one: a clarification scores `agree` only when redeemed by a served answer with claimed facts for the declared subject.
 - `merge_conversations.py --in DIR --out FILE --reps 3` writes the verdict file and the report table; exits 2 on a missing rep, a missing conversation, or any `not_measured` turn.
+- Scoring reads both result shapes: the full result (`subject_resolution`, `claimed_facts`) and the MCP answer projection (`committed_subjects`, `clarification.candidates[].subject`, `completeness.claimed_facts_count`). Helpers: `validators.result_committed`, `result_offered_ids`, `result_claimed_n`. Fixtures in `testdata_mcp/` are synthetic copies of stored MCP answers.
+- `merge_conversations.py --absent-ids FILE` (one canonical id per line, `#` comments): a turn that expects an id the operator reports absent from the live graph is `unscored` (`expected_subject_absent_from_graph`) and counted apart as `marked_absent_turns`. A clarify turn and its redemption turn are marked together. A marked turn that did not run stays `not_measured` (only a `redeem_unavailable` turn after a marked clarify turn is marked with it). Ids no conversation expects are listed in `absent_ids_unused`.
 - `conversation_identity_check` (in `conversation.py`) adds `wrong_subject_carried` / `silent_substitution` per turn.
 
 ## Answer-quality axis (`quality_axis.py`)
