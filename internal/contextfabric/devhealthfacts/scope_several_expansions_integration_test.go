@@ -98,4 +98,8 @@ func TestTurnScopeStatementsOfATeamTurnThatExpandsSeveralKinds(t *testing.T) {
 		t.Fatalf("ReadFacts: %v", err)
 	}
 	scopeLineOf(t, counted, 2)
+	_, statements, chain := counted.(turnCountingClient).rec.scopeMetrics()
+	if chain >= 4 {
+		t.Fatalf("scope_chain = %d over %d scope statements, want < 4: the independent scope reads of one team turn run in series", chain, statements)
+	}
 }
