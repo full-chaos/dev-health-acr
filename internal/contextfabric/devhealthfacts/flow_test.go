@@ -69,7 +69,7 @@ func flowDailySeriesRow(key, day string, started, completed, wip int64) []any {
 // from the pre-existing latest-per-scope queries (flow_test.go's other
 // fixtures match "work_scope_id ORDER BY day DESC"), so a test can register
 // canned rows for one without corrupting the other's scan.
-const flowDailySeriesMatch = "work_scope_id, day ORDER BY computed_at DESC"
+const flowDailySeriesMatch = "work_scope_id, day ORDER BY (row_view = 'org') DESC, computed_at DESC"
 
 // TestFlowProviderTeamReadsScopeBreakdown is CHAOS-4364's core team shape:
 // work_item_metrics_daily's per-scope Rows breakdown.

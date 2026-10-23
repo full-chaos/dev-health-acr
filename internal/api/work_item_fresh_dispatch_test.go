@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -25,6 +27,7 @@ import (
 // encoder. Backend query rows and model drafts are controlled; no deployed
 // graph or ClickHouse measurement is claimed here.
 type freshTupleQueryClient struct {
+	mu          sync.Mutex
 	memberID    string
 	phases      []string
 	fail        string
@@ -57,8 +60,11 @@ func (c *freshTupleQueryClient) Query(_ context.Context, sql string, bindings []
 	if configured, ok := c.rowsByPhase[phase]; ok {
 		rows = configured
 	}
+	c.mu.Lock()
 	c.phases = append(c.phases, phase)
+	sort.Strings(c.phases)
 	c.queries = append(c.queries, freshTupleQuery{phase: phase, sql: sql, bindings: append([]contextpacket.ClickHouseBinding(nil), bindings...)})
+	c.mu.Unlock()
 	if c.fail == phase {
 		return nil, errors.New("controlled content read failure")
 	}
@@ -76,10 +82,12 @@ func (c *freshTupleQueryClient) Query(_ context.Context, sql string, bindings []
 	if c.fail == phase+"_partial" {
 		rowErr = errors.New("controlled failure after scanned content rows")
 	}
+	c.mu.Lock()
 	if c.scanned == nil {
 		c.scanned = map[string]int{}
 	}
-	return &freshTupleQueryRows{rows: rows, rowErr: rowErr, scanned: func() { c.scanned[phase]++ }}, nil
+	c.mu.Unlock()
+	return &freshTupleQueryRows{rows: rows, rowErr: rowErr, scanned: func() { c.mu.Lock(); c.scanned[phase]++; c.mu.Unlock() }}, nil
 }
 
 // These scenario rows describe ten member fields, not complete S1 wire rows.

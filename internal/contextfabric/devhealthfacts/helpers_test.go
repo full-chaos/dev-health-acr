@@ -217,6 +217,13 @@ func (s *fakeScanner) Scan(dest ...any) error {
 		case *uint64:
 			*value = row[index].(uint64)
 		case *uint8:
+			if index >= len(row) {
+				// queryTeamScopeRows scans two trailing flags after the columns every canned row holds: is_scope_row
+				// and is_org_row. A canned row without them is a key that holds only legacy rows, which answers both
+				// questions with its one row (CHAOS-8863).
+				*value = 1
+				continue
+			}
 			*value = row[index].(uint8)
 		case *time.Time:
 			*value = row[index].(time.Time)

@@ -146,3 +146,16 @@ func TestQueryVersionMovedPastTheRemovedTeamLimitation(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before the removed-team limitation (v251 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// The flow fact takes the organization and the scope views of work_item_metrics_daily, so an answer stored under
+// v254 and before holds the sum of both views once the ops writer stores them and must not be reused.
+func TestQueryVersionMovedPastTheFlowViews(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 255 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the flow views (v254 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}

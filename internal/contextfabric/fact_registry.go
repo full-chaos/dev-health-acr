@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -557,7 +558,16 @@ type FactRegistryOptions struct {
 	// request.options.Logger, the same reasoning open.go already records
 	// for falkorgraph.SlogTelemetry.
 	Logger *slog.Logger
+	// ReadFanout bounds how many provider reads of one ReadFacts call run at
+	// the same time. 0 means FactReadFanout; a larger value is clamped to
+	// FactReadFanout; 1 reads one provider at a time.
+	ReadFanout int
 }
+
+// FactReadFanout is the most provider reads one ReadFacts call runs at once.
+// Every read keeps its own statement memory cap, so a turn holds at most this
+// many caps on the server.
+const FactReadFanout = 4
 
 type registeredFactProvider struct {
 	capability FactCapability
@@ -570,6 +580,7 @@ type FactCapabilityRegistry struct {
 	now            func() time.Time
 	scopeResolver  *FactReadScopeResolver
 	logger         *slog.Logger
+	readFanout     int
 }
 
 // ValidateObservationCoverBound refuses a registry whose declared observation
@@ -629,6 +640,7 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		logger:         options.Logger,
 		providers:      make(map[FactKind]registeredFactProvider, len(providers)),
 		defaultTimeout: options.DefaultTimeout,
+		readFanout:     clampFactReadFanout(options.ReadFanout),
 		now:            options.Now,
 		// ALWAYS constructed, never left nil. A nil resolver would make
 		// "was scope resolved?" a second thing every call site has to check,
@@ -1037,8 +1049,10 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	for _, requirement := range request.Requirements {
 		requirementsByKind[requirement.Kind] = requirement
 	}
-	for _, planned := range planFactReads(newFactPlanInput(request), capabilities) {
-		requirement := requirementsByKind[planned.Kind]
+	plannedReads := planFactReads(newFactPlanInput(request), capabilities)
+	prepared := r.prepareFactReads(request, requirementsByKind, plannedReads, allowedSubjects)
+	reads := r.runFactReads(ctx, principal, prepared)
+	for readIndex, planned := range plannedReads {
 		registered, ok := r.providers[planned.Kind]
 		if !ok {
 			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured",
@@ -1102,7 +1116,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			r.recordFactRead(ctx, principal, planned.Kind, factReadPruned, SourcePruned, planned.Subjects, 0, false)
 			continue
 		}
-		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects, planned.Subjects)
+		query, err := prepared[readIndex].query, prepared[readIndex].buildErr
 		if err != nil {
 			// The BUNDLE is returned alongside the error, not a zero value
 			// (codex review finding). Scope is already resolved and carries
@@ -1115,7 +1129,10 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			r.recordFactRead(ctx, principal, planned.Kind, factReadRejected, "", planned.Subjects, 0, false)
 			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
-		result, err := r.readProvider(ctx, principal, registered, query)
+		if reads[readIndex].panicked {
+			panic(reads[readIndex].panicValue)
+		}
+		result, err := reads[readIndex].result, reads[readIndex].err
 		if err != nil {
 			if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) {
 				// Same reasoning as the parameter rejection above: the
@@ -1236,6 +1253,80 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 // the state says what the coverage entry claims, the outcome says which
 // branch of ReadFacts' plan loop minted it, so a defect is attributable to a
 // branch without re-reading source.
+func clampFactReadFanout(requested int) int {
+	if requested <= 0 || requested > FactReadFanout {
+		return FactReadFanout
+	}
+	return requested
+}
+
+type preparedFactRead struct {
+	registered registeredFactProvider
+	query      FactQuery
+	buildErr   error
+	read       bool
+}
+
+type factReadSlot struct {
+	result     FactProviderResult
+	err        error
+	panicked   bool
+	panicValue any
+}
+
+// prepareFactReads decides, in plan order and before any provider is touched,
+// which planned reads go to a provider: the ones the merge loop would reach
+// and send. It stops at the first plan entry whose query cannot be built,
+// because the merge loop returns there and later entries are never read.
+func (r *FactCapabilityRegistry) prepareFactReads(request CanonicalFactRequest, requirementsByKind map[FactKind]FactRequirement, plans []factPlanEntry, allowed map[string]SubjectRef) []preparedFactRead {
+	prepared := make([]preparedFactRead, len(plans))
+	for i, planned := range plans {
+		registered, ok := r.providers[planned.Kind]
+		if !ok || (planned.ScopeGap != nil && len(planned.Subjects) == 0) || planned.Pruned {
+			continue
+		}
+		query, err := buildFactQuery(request, requirementsByKind[planned.Kind], registered.capability, allowed, planned.Subjects)
+		prepared[i] = preparedFactRead{registered: registered, query: query, buildErr: err, read: err == nil}
+		if err != nil {
+			break
+		}
+	}
+	return prepared
+}
+
+// runFactReads sends the prepared reads, at most r.readFanout at a time, and
+// returns when every one has finished. A provider panic is held and raised in
+// the caller's goroutine at that read's place in plan order; it also cancels
+// the reads still running.
+func (r *FactCapabilityRegistry) runFactReads(ctx context.Context, principal storage.Principal, prepared []preparedFactRead) []factReadSlot {
+	slots := make([]factReadSlot, len(prepared))
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	slotsFree := make(chan struct{}, r.readFanout)
+	var running sync.WaitGroup
+	for i := range prepared {
+		if !prepared[i].read {
+			continue
+		}
+		slotsFree <- struct{}{}
+		running.Add(1)
+		go func(i int) {
+			defer running.Done()
+			defer func() { <-slotsFree }()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slots[i] = factReadSlot{panicked: true, panicValue: recovered}
+					cancel()
+				}
+			}()
+			result, err := r.readProvider(readCtx, principal, prepared[i].registered, prepared[i].query)
+			slots[i] = factReadSlot{result: result, err: err}
+		}(i)
+	}
+	running.Wait()
+	return slots
+}
+
 type factReadOutcome string
 
 const (
