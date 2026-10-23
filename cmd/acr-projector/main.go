@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
@@ -226,7 +227,7 @@ func serve(args []string) error {
 	}
 	defer shutdownExporter(exporter)
 	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
-	logger.Info("starting acr-projector", append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)...)
+	logStarting(logger, info, cfg, os.LookupEnv)
 	exporter.LogStart(ctx, logger)
 
 	metrics, err := hostedmetrics.New(exporter.Meter(), hostedmetrics.Vocabularies{})
@@ -288,4 +289,9 @@ func shutdownExporter(exporter *otelexport.Exporter) {
 	if err := exporter.Shutdown(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "acr-projector: otel export shutdown incomplete:", err)
 	}
+}
+
+func logStarting(logger *slog.Logger, info version.Info, cfg config.ProjectorConfig, lookup func(string) (string, bool)) {
+	attributes := append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)
+	logger.Info("starting acr-projector", append(attributes, embedprovider.StartupAttributes(lookup)...)...)
 }
