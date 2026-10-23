@@ -42,11 +42,32 @@ func DisplayPrefix(token string) string {
 	return token[:displayLength]
 }
 
+// tokenEncodedLen is the unpadded base64url length of tokenSecretBytes bytes.
+const tokenEncodedLen = (tokenSecretBytes*8 + 5) / 6
+
+// IsTokenShapeValid checks the exact alphabet and length of the secret before
+// decoding it: the base64 decoder skips CR and LF, so a decode alone cannot
+// refuse them.
 func IsTokenShapeValid(token string) bool {
 	if !strings.HasPrefix(token, TokenPrefix) {
 		return false
 	}
 	secret := strings.TrimPrefix(token, TokenPrefix)
-	decoded, err := base64.RawURLEncoding.DecodeString(secret)
+	if len(secret) != tokenEncodedLen || !isRawURLAlphabet(secret) {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(secret)
 	return err == nil && len(decoded) == tokenSecretBytes
+}
+
+func isRawURLAlphabet(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
