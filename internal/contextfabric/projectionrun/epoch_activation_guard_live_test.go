@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
@@ -118,6 +119,7 @@ type epochGuardHarness struct {
 
 func startEpochGuardFalkor(t *testing.T, ctx context.Context) string {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: epochGuardFalkorImage, ExposedPorts: []string{"6379/tcp"},

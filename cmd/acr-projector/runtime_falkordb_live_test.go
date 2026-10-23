@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
@@ -46,6 +47,7 @@ const falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1
 // testcontainers convention (falkordb needs no external credential, unlike
 // ADR 0007's Zep Cloud predecessor).
 func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T) {
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 
 	// --- Postgres: real checkpoints/rebuild-markers/episode store, migrated. ---

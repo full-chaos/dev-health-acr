@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/stretchr/testify/require"
@@ -79,12 +80,14 @@ func packageBudgetExceeded(elapsed, timeout time.Duration) bool {
 
 func sharedPostgresFixture(t *testing.T) *sharedPostgresServer {
 	t.Helper()
-	sharedPostgresOnce.Do(func() { sharedPostgres, sharedPostgresErr = startSharedPostgres(context.Background()) })
+	chfixture.RequireContainers(t)
+	sharedPostgresOnce.Do(func() { sharedPostgres, sharedPostgresErr = startSharedPostgres(t, context.Background()) })
 	require.NoError(t, sharedPostgresErr, "start the shared PostgreSQL container")
 	return sharedPostgres
 }
 
-func startSharedPostgres(ctx context.Context) (*sharedPostgresServer, error) {
+func startSharedPostgres(tb testing.TB, ctx context.Context) (*sharedPostgresServer, error) {
+	chfixture.RequireContainers(tb)
 	// Pinned by digest so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this
 	// to the ghcr.io mirror by digest, same as every other postgres:18-alpine
 	// pull in this module.

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
@@ -39,6 +40,7 @@ import (
 // never a reserved rig port).
 func newLaneLabeledFalkorDBAdapter(t *testing.T, ctx context.Context, tracer graphrank.ResolutionTracer) *falkorgraph.Adapter {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},

@@ -37,6 +37,7 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 // with tune applied to the production query client's Options.
 func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context, tune func(*runtimeclickhouse.Options)) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},

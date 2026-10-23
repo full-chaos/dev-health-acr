@@ -35,6 +35,7 @@ const (
 
 func startScopeClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Client, clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},

@@ -36,6 +36,7 @@ type clickHouseServer struct {
 // when that test ends.
 func startClickHouseServer(t *testing.T) *clickHouseServer {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

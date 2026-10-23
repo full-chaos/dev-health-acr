@@ -91,6 +91,7 @@ var (
 // terminates the container after the last test.
 func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	sharedDevHealthClickHouseOnce.Do(func() {
 		ctx := context.Background()
 		container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

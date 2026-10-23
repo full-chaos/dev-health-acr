@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
@@ -31,6 +32,7 @@ import (
 
 func newProjectionRunTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in

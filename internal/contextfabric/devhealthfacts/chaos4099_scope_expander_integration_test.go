@@ -55,6 +55,7 @@ const chaos4099ZeroRepositoryID = "00000000-0000-0000-0000-000000000000"
 
 func newChaos4099ScopeExpanderClient(t *testing.T, ctx context.Context) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
