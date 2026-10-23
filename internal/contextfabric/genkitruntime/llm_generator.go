@@ -128,7 +128,11 @@ func newOutputSchema(value any, closed bool) (outputSchema, error) {
 		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
 	}
 	instructions := OutputFormatInstructions(raw)
-	return outputSchema{wire: wire, strict: strictWire(wire), closed: closed, compiled: compiled, instructions: instructions}, nil
+	strict := strictWire(wire)
+	if _, interpretation := value.(interpretationOutput); interpretation {
+		strict = strictWire(requireFrameDiscriminator(wire))
+	}
+	return outputSchema{wire: wire, strict: strict, closed: closed, compiled: compiled, instructions: instructions}, nil
 }
 
 // LLMClients maps each model a runtime calls (Config.Model, and
