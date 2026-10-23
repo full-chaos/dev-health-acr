@@ -390,17 +390,75 @@ func TestByteArraysElided(t *testing.T) {
 	}
 }
 
-func TestNumericValuesKeepProtectedLookingKeys(t *testing.T) {
-	got := record(t, func(l *slog.Logger) {
-		l.Info("m", "estimated_tokens", 5, "authorization_batches", 3, "pass_pages", 2, "token_ok", true, "session_ms", time.Second, "force_slow_path", "Bearer abcdefghijklmnop1234")
-	})
-	for _, k := range []string{"estimated_tokens", "authorization_batches", "pass_pages", "token_ok", "session_ms"} {
-		if got[k] == Redacted || got[k] == nil {
-			t.Errorf("numeric %q redacted: %v", k, got[k])
+func TestNumbersAndFlagsUnderProtectedKeysAreRedacted(t *testing.T) {
+	keys := []string{"token", "access_token", "session_id", "authorization", "credential_id", "otp", "pin", "mfa_code", "passcode", "verification_code", "auth_code", "otp_code", "access_key", "authKey", "auth_key"}
+	for _, k := range keys {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, 123456, "force", "Bearer abcdefghijklmnop1234") })
+		if got[k] != Redacted {
+			t.Errorf("number under %q = %v", k, got[k])
+		}
+		mapped := raw(t, func(l *slog.Logger) { l.Info("m", "payload", map[string]any{k: 987654}) })
+		if strings.Contains(mapped, "987654") {
+			t.Errorf("number under map key %q leaked: %s", k, mapped)
 		}
 	}
-	got = record(t, func(l *slog.Logger) { l.Info("m", "password", 12345, "api_key", slog.StringValue("x")) })
-	if got["password"] != Redacted || got["api_key"] != Redacted {
-		t.Errorf("string under a protected key kept: %v", got["api_key"])
+	for _, k := range []string{"status_code", "error_code", "exit_code", "estimated_tokens", "output_tokens", "pass_pages", "spinner", "mapping"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, 7, "force", "Bearer abcdefghijklmnop1234") })
+		if got[k] != float64(7) {
+			t.Errorf("clean key %q = %v", k, got[k])
+		}
+	}
+}
+
+func TestKeyValuePairsInText(t *testing.T) {
+	for _, v := range []string{
+		"GET /x?access_token=AT123456&b=1",
+		"client_secret=CS123456 ok",
+		"dial db_password=DBPW123 host=h",
+		`{"api_key":"JSONKEY123","n":1}`,
+		"login pass=PASS123 now",
+		"cfg 'otp': '445566'",
+		"x session_id=SID123",
+		"Authorization: Bearer TOKTOKTOK1",
+	} {
+		for _, got := range []string{ScrubText(v), func() string {
+			o := record(t, func(l *slog.Logger) { l.Info("m", "note", v) })
+			s, _ := o["note"].(string)
+			return s
+		}(), func() string { o := record(t, func(l *slog.Logger) { l.Info(v) }); s, _ := o["msg"].(string); return s }()} {
+			for _, leak := range []string{"AT123456", "CS123456", "DBPW123", "JSONKEY123", "PASS123", "445566", "SID123", "TOKTOKTOK1"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("%q leaks %q: %q", v, leak, got)
+				}
+			}
+		}
+	}
+	for _, v := range []string{"status_code=200 path=/a", "time 12:30:45 ok", "error: failed", `{"n":1,"name":"x"}`} {
+		if got := ScrubText(v); got != v {
+			t.Errorf("clean text changed: %q -> %q", v, got)
+		}
+	}
+}
+
+func TestBasicAuthWithTab(t *testing.T) {
+	out := ScrubText("Authorization:\tBasic\tdXNlcjpwYXNzd29yZA==")
+	if strings.Contains(out, "dXNlcjpwYXNz") {
+		t.Errorf("tab separated basic leaked: %q", out)
+	}
+	got := record(t, func(l *slog.Logger) { l.Info("m", "note", "x Basic\tdXNlcjpwYXNzd29yZA==") })
+	if s, _ := got["note"].(string); strings.Contains(s, "dXNlcjpwYXNz") {
+		t.Errorf("attr leaked: %q", s)
+	}
+}
+
+func TestNestedMapPathsAreJoined(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) {
+		l.Info("m", "peer", map[string]any{"client": map[string]any{"ip": "203.0.113.55"}}, slog.Any("x", map[string]any{"remote": map[string]any{"addr": "198.51.100.5"}}))
+		l.Info("m", "auth", map[string]any{"deep": map[string]any{"v": "deep-secret"}})
+	})
+	for _, leak := range []string{"203.0.113.55", "198.51.100.5", "deep-secret"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leak %q in %s", leak, out)
+		}
 	}
 }

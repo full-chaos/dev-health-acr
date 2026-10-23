@@ -25,12 +25,12 @@ const (
 var protectedFragments = []string{
 	"token", "secret", "password", "passwd", "passphrase", "credential", "authorization", "bearer",
 	"cookie", "apikey", "signature", "jwt", "session", "privatekey", "signingkey", "encryptionkey",
-	"awsaccesskeyid",
+	"awsaccesskeyid", "passcode", "verificationcode", "authcode", "otpcode", "mfacode", "accesskey", "authkey",
 }
 
 // protectedSegments match only as a whole word of the key (split on separators and camel case),
 // so author and passenger stay clean.
-var protectedSegments = map[string]bool{"dsn": true, "pwd": true}
+var protectedSegments = map[string]bool{"dsn": true, "pwd": true, "otp": true, "pin": true, "mfa": true, "passcode": true}
 
 var passSuffixDenied = map[string]bool{"bypass": true, "compass": true, "overpass": true, "underpass": true, "trespass": true, "encompass": true, "surpass": true, "impass": true}
 
@@ -51,11 +51,10 @@ var valueShapes = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`),
 	regexp.MustCompile(`\b(?:sk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
-	regexp.MustCompile(`(?i)\b(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;&]+`),
 }
 
 // shapeMarkers are lowercase; a value is checked against them case-insensitively before any regex runs.
-var shapeMarkers = []string{"earer", "asic ", "eyj", "-----", "://", "sk-", "sk_", "ghp_", "gho_", "ghs_", "xox", "akia", "asia", "pass", "pwd", "secret", "token", "api"}
+var shapeMarkers = []string{"earer", "asic", "eyj", "-----", "://", "sk-", "sk_", "ghp_", "gho_", "ghs_", "xox", "akia", "asia"}
 
 // ErrorClass names an error's dynamic type; the message is never returned.
 func ErrorClass(err error) string {
@@ -141,8 +140,9 @@ const (
 func classify(key string) keyClass {
 	c := compact(key)
 	if !benignKeys[c] {
+		cf := strings.ReplaceAll(c, "tokens", "")
 		for _, f := range protectedFragments {
-			if strings.Contains(c, f) {
+			if strings.Contains(cf, f) {
 				return classProtected
 			}
 		}
@@ -256,13 +256,46 @@ func redactUserinfo(s string) string {
 	return out.String()
 }
 
+var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
+
+// kvWords: a key=value or "key":"value" pair can only name a protected key if one of these fragments appears.
+var kvWords = []string{"token", "secret", "pass", "pwd", "key", "auth", "code", "otp", "pin", "mfa", "session", "credential", "cookie", "signature", "jwt", "dsn", "bearer"}
+
+func mayContainPair(s string) bool {
+	if !strings.ContainsAny(s, "=:") {
+		return false
+	}
+	for _, w := range kvWords {
+		if containsFold(s, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactPairs(s string) string {
+	return kvPair.ReplaceAllStringFunc(s, func(m string) string {
+		sub := kvPair.FindStringSubmatch(m)
+		if classify(sub[2]) == classProtected {
+			return sub[1] + Redacted
+		}
+		return m
+	})
+}
+
 func scrubString(s string) string {
-	if !mayContainShape(s) {
+	shape, pair := mayContainShape(s), mayContainPair(s)
+	if !shape && !pair {
 		return s
 	}
-	s = redactUserinfo(s)
-	for _, re := range valueShapes {
-		s = re.ReplaceAllString(s, Redacted)
+	if shape {
+		s = redactUserinfo(s)
+		for _, re := range valueShapes {
+			s = re.ReplaceAllString(s, Redacted)
+		}
+	}
+	if pair {
+		s = redactPairs(s)
 	}
 	return s
 }
@@ -316,8 +349,8 @@ func scalarString(v reflect.Value) (string, bool) {
 	return "", false
 }
 
-func keyedValue(k string, v reflect.Value, depth int, b *budget) any {
-	switch classify(k) {
+func keyedValue(path []string, k string, v reflect.Value, depth int, b *budget) any {
+	switch classPath(path, k) {
 	case classProtected:
 		return Redacted
 	case classNetwork:
@@ -326,7 +359,7 @@ func keyedValue(k string, v reflect.Value, depth int, b *budget) any {
 		}
 		return Redacted
 	}
-	return tree(v, depth+1, b)
+	return tree(v, depth+1, b, append(append([]string{}, path...), k))
 }
 
 func fieldNames(f reflect.StructField) []string {
@@ -340,7 +373,7 @@ func fieldNames(f reflect.StructField) []string {
 }
 
 // tree converts an opaque value to a scrubbed, structured copy; no format verb is applied to caller data.
-func tree(v reflect.Value, depth int, b *budget) any {
+func tree(v reflect.Value, depth int, b *budget, path []string) any {
 	if !v.IsValid() {
 		return nil
 	}
@@ -366,7 +399,7 @@ func tree(v reflect.Value, depth int, b *budget) any {
 		if v.IsNil() {
 			return nil
 		}
-		return tree(v.Elem(), depth+1, b)
+		return tree(v.Elem(), depth+1, b, path)
 	case reflect.Bool:
 		return v.Bool()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -385,8 +418,8 @@ func tree(v reflect.Value, depth int, b *budget) any {
 				out["[truncated]"] = true
 				break
 			}
-			k := fmt.Sprint(tree(iter.Key(), depth+1, b))
-			out[k] = keyedValue(k, iter.Value(), depth, b)
+			k := fmt.Sprint(tree(iter.Key(), depth+1, b, nil))
+			out[k] = keyedValue(path, k, iter.Value(), depth, b)
 		}
 		return out
 	case reflect.Slice, reflect.Array:
@@ -399,7 +432,7 @@ func tree(v reflect.Value, depth int, b *budget) any {
 		}
 		out := make([]any, 0, n)
 		for i := 0; i < n; i++ {
-			out = append(out, tree(v.Index(i), depth+1, b))
+			out = append(out, tree(v.Index(i), depth+1, b, path))
 		}
 		return out
 	case reflect.Struct:
@@ -412,7 +445,7 @@ func tree(v reflect.Value, depth int, b *budget) any {
 			}
 			class := classClean
 			for _, name := range fieldNames(f) {
-				switch c := classify(name); {
+				switch c := classPath(path, name); {
 				case c == classProtected:
 					class = classProtected
 				case c == classNetwork && class == classClean:
@@ -429,7 +462,7 @@ func tree(v reflect.Value, depth int, b *budget) any {
 					out[f.Name] = Redacted
 				}
 			default:
-				out[f.Name] = tree(v.Field(i), depth+1, b)
+				out[f.Name] = tree(v.Field(i), depth+1, b, append(append([]string{}, path...), f.Name))
 			}
 		}
 		return out
@@ -438,34 +471,12 @@ func tree(v reflect.Value, depth int, b *budget) any {
 	}
 }
 
-var strongFragments = []string{"password", "passwd", "passphrase", "pwd", "secret", "apikey", "privatekey", "signingkey", "encryptionkey", "awsaccesskeyid"}
-
-// strongKey names a key whose value is a secret whatever its type, so a numeric value is redacted too.
-func strongKey(key string) bool {
-	c := compact(key)
-	for _, f := range strongFragments {
-		if strings.Contains(c, f) {
-			return true
-		}
-	}
-	return false
-}
-
-// numeric values (counts, durations, flags) carry no secret text, so a protected key keeps them.
-func numeric(v slog.Value) bool {
-	switch v.Kind() {
-	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
-		return true
-	}
-	return false
-}
-
 func clean(groups []string, a slog.Attr) bool {
 	switch a.Value.Kind() {
 	case slog.KindString:
-		return classPath(groups, a.Key) == classClean && !mayContainShape(a.Value.String())
+		return classPath(groups, a.Key) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
 	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
-		return classPath(groups, a.Key) != classNetwork && !strongKey(a.Key)
+		return classPath(groups, a.Key) == classClean
 	}
 	return false
 }
@@ -491,9 +502,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 	}
 	switch classPath(groups, a.Key) {
 	case classProtected:
-		if !numeric(a.Value) || strongKey(a.Key) {
-			a.Value = slog.StringValue(Redacted)
-		}
+		a.Value = slog.StringValue(Redacted)
 		return a
 	case classNetwork:
 		a.Value = slog.StringValue(networkPrefix(a.Value.String()))
@@ -503,7 +512,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 	case slog.KindString:
 		a.Value = slog.StringValue(scrubString(a.Value.String()))
 	case slog.KindAny:
-		a.Value = slog.AnyValue(tree(reflect.ValueOf(a.Value.Any()), 0, b))
+		a.Value = slog.AnyValue(tree(reflect.ValueOf(a.Value.Any()), 0, b, append(append([]string{}, groups...), a.Key)))
 	}
 	return a
 }
@@ -521,7 +530,7 @@ func (h handler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h handler) Handle(ctx context.Context, r slog.Record) error {
-	msgClean := !mayContainShape(r.Message)
+	msgClean := !mayContainShape(r.Message) && !mayContainPair(r.Message)
 	allClean := msgClean
 	if allClean {
 		r.Attrs(func(a slog.Attr) bool {

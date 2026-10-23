@@ -27,7 +27,7 @@ func TestNodeBudgetBoundsCyclicAndWideValues(t *testing.T) {
 		m[fmt.Sprintf("k%d", i)] = m
 	}
 	b := &budget{left: maxNodes}
-	out := tree(reflect.ValueOf(m), 0, b)
+	out := tree(reflect.ValueOf(m), 0, b, nil)
 	if got := countNodes(out); got > maxNodes+maxElements {
 		t.Errorf("output nodes = %d, want <= %d", got, maxNodes+maxElements)
 	}
@@ -39,7 +39,7 @@ func TestNodeBudgetBoundsCyclicAndWideValues(t *testing.T) {
 		wide[i] = map[string]any{"a": []any{1, 2, 3}}
 	}
 	b = &budget{left: maxNodes}
-	if got := countNodes(tree(reflect.ValueOf(wide), 0, b)); got > maxNodes+maxElements {
+	if got := countNodes(tree(reflect.ValueOf(wide), 0, b, nil)); got > maxNodes+maxElements {
 		t.Errorf("wide output nodes = %d", got)
 	}
 	if b.left != 0 {
