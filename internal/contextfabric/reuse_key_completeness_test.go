@@ -231,6 +231,7 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"QuestionFrame":        {reason: "per-call shadow capture of the compositional frame (receipt-only, phase 1), not a version identity -- nothing downstream reads it, so it cannot make a reused answer wrong. Its embedded Version field is a package constant (QuestionFrameVersion), and design §13.2 makes it a ReuseKey member only at promotion, when the derivation replaces the precedence table; until then there is nothing for it to fence"},
 	"FrameOutcome":         {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameFailedInvariant": {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"TermlessNamedSubject": {reason: "per-call validation-outcome echo (telemetry only), set from the same frame refusal as FrameFailedInvariant -- not a version identity"},
 	// The ordering verdict. EXCLUDED, and the reasoning has to clear a
 	// higher bar than its two siblings above, because unlike them this one
 	// DOES change what the server serves -- a refusing gate terminates the
