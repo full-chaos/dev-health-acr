@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -36,5 +37,8 @@ func TestLiveFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 	state, stateErr := container.State(context.Background())
 	if stateErr == nil {
 		t.Fatalf("a container whose readiness failed is still known to the daemon (running=%v status=%q): the start path leaked it", state.Running, state.Status)
+	}
+	if !errdefs.IsNotFound(stateErr) {
+		t.Fatalf("the container is not shown to be gone: the daemon answered %v, not a not-found; a daemon or network error is not proof of removal", stateErr)
 	}
 }
