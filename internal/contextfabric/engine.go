@@ -31,14 +31,11 @@ type EngineOptions struct {
 	// AnchorBindingCarryEnabled makes the admitted anchor binding the only
 	// source of a same-question continuation's carried anchor
 	// (anchor_binding_carry.go). Zero value = off: the confirmed-need
-	// ledger's carry runs as before. Needs the shadow binding.
+	// ledger's carry runs as before. Needs the shadow binding. With it on, a
+	// changed question under a continuation is also admitted onto a bound
+	// binding as admitted_follow_up, so a follow-up that names no subject
+	// offers the remembered one first (anchor_binding_follow_up.go).
 	AnchorBindingCarryEnabled bool
-	// AnchorBindingFollowUpEnabled admits a changed question under a
-	// continuation onto a bound binding as admitted_follow_up, so a
-	// follow-up that names no subject offers the remembered one first
-	// (anchor_binding_follow_up.go). Zero value = off. Needs
-	// AnchorBindingCarryEnabled.
-	AnchorBindingFollowUpEnabled bool
 	// AnchorBindingMaxAge is the age past which a carried anchor proof is not
 	// admitted (anchor_admission.go). Zero selects
 	// DefaultAnchorBindingMaxAge; anything else must lie in
@@ -1313,7 +1310,6 @@ type Engine struct {
 	anchorBindingMaxAgeSetting                  time.Duration
 	anchorBindingCountEnabled                   bool
 	anchorBindingCarryEnabled                   bool
-	anchorBindingFollowUpEnabled                bool
 	reuseModelIdentityResolver                  ReuseModelIdentityResolver
 	reuseProjectionVersion                      string
 	reuseModelIdentities                        []string
@@ -1375,11 +1371,6 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		// would silently either carry nothing or fall back to the ledger.
 		return nil, errors.New("context fabric anchor binding carry needs the shadow anchor binding")
 	}
-	if options.AnchorBindingFollowUpEnabled && !options.AnchorBindingCarryEnabled {
-		// The follow-up widens what the binding carry admits; alone it would
-		// admit nothing and read as if it did.
-		return nil, errors.New("context fabric anchor binding follow-up needs the anchor binding carry")
-	}
 	var recorder StoredResultAuthorizationRecorder
 	if dependencies.Telemetry != nil {
 		recorder = dependencies.Telemetry
@@ -1394,27 +1385,26 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		synthesizer: dependencies.Synthesizer, results: results, rawResults: dependencies.Results, telemetry: dependencies.Telemetry,
 		storedResultGate: gate,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
-		reuseEpochSnapshotter:        dependencies.ReuseEpochSnapshotter,
-		anchorFreshness:              dependencies.AnchorFreshness,
-		anchorBindingMaxAgeSetting:   options.AnchorBindingMaxAge,
-		anchorBindingCountEnabled:    options.AnchorBindingCountEnabled,
-		anchorBindingCarryEnabled:    options.AnchorBindingCarryEnabled,
-		anchorBindingFollowUpEnabled: options.AnchorBindingFollowUpEnabled,
-		reuseModelIdentityResolver:   dependencies.ReuseModelIdentityResolver,
-		clarificationSelectionSink:   dependencies.ClarificationSelectionSink,
-		structureSelectionSink:       dependencies.StructureSelectionSink,
-		handleVerifier:               dependencies.HandleVerifier,
-		anchorVerifier:               dependencies.AnchorVerifier,
-		anchorMembershipVerifier:     dependencies.AnchorMembershipVerifier,
-		candidateVerifier:            dependencies.CandidateVerifier,
-		workItemMembership:           dependencies.WorkItemMembership,
-		treeWorkItemMembership:       NewTreeWorkItemMembership(dependencies.TreeWorkItemGraph, dependencies.TreeWorkItemFilter, dependencies.TreeWorkItemGate),
-		priorConsultant:              dependencies.PriorConsultant,
-		priorHandleGrammarChecker:    dependencies.PriorHandleGrammarChecker,
-		offerPhraser:                 dependencies.OfferPhraser,
-		requirements:                 dependencies.Requirements,
-		observationKeys:              dependencies.ObservationKeys,
-		reuseProjectionVersion:       options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
+		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
+		anchorFreshness:            dependencies.AnchorFreshness,
+		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
+		anchorBindingCountEnabled:  options.AnchorBindingCountEnabled,
+		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
+		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
+		clarificationSelectionSink: dependencies.ClarificationSelectionSink,
+		structureSelectionSink:     dependencies.StructureSelectionSink,
+		handleVerifier:             dependencies.HandleVerifier,
+		anchorVerifier:             dependencies.AnchorVerifier,
+		anchorMembershipVerifier:   dependencies.AnchorMembershipVerifier,
+		candidateVerifier:          dependencies.CandidateVerifier,
+		workItemMembership:         dependencies.WorkItemMembership,
+		treeWorkItemMembership:     NewTreeWorkItemMembership(dependencies.TreeWorkItemGraph, dependencies.TreeWorkItemFilter, dependencies.TreeWorkItemGate),
+		priorConsultant:            dependencies.PriorConsultant,
+		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
+		offerPhraser:               dependencies.OfferPhraser,
+		requirements:               dependencies.Requirements,
+		observationKeys:            dependencies.ObservationKeys,
+		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:                      options.ReuseRetrievalIdentity,
 		reusePromptVersions:                         options.ReusePromptVersions,
 		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,

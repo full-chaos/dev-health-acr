@@ -4,13 +4,12 @@ package contextfabric
 // that proved the parent's binding, for example "and how many teams
 // contribute to it?" after an answer about one repository.
 //
-// Before this switch, admission refuses every changed question
+// Without the carry, admission refuses every changed question
 // (refused_question_changed), and a follow-up whose own text names no
 // subject ends no_match: the subject the user refers to is lost.
 //
-// With EngineOptions.AnchorBindingFollowUpEnabled on (it needs
-// AnchorBindingCarryEnabled), a changed question under a continuation is
-// admitted as admitted_follow_up when the parent binding is bound and every
+// With EngineOptions.AnchorBindingCarryEnabled on, a changed question under a
+// continuation is admitted as admitted_follow_up when the parent binding is bound and every
 // other admission check passes (policy, age, ownership, the live re-read).
 // That admission NEVER feeds the carry hint or the count kind, which read
 // admitted only: per the conservative contract (design rev 4 §3.3), the

@@ -1,14 +1,11 @@
 package contextfabric
 
 import (
-	"context"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // followUpQuestion is a natural follow-up that names no subject of its own.
@@ -43,25 +40,32 @@ func rememberedAlphaOffer(parentResultID string) SubjectCandidate {
 }
 
 // TestAFollowUpNamingNoSubjectOffersTheRememberedOneFirst: the follow-up's
-// own resolution names nothing. Switched off, the question change refuses
-// admission and the turn ends no_match. Switched on, it is admitted as a
-// follow-up and ends asking which subject was meant, the remembered alpha
-// offered first under the label the first answer served; nothing is
-// carried into resolution and nothing is served from memory.
+// own resolution names nothing. With the carry off, the question change
+// refuses admission and the turn ends no_match. With the carry on, it is
+// admitted as a follow-up and ends asking which subject was meant, the
+// remembered alpha offered first under the label the first answer served;
+// nothing is carried into resolution and nothing is served from memory.
 func TestAFollowUpNamingNoSubjectOffersTheRememberedOneFirst(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		followUpOn bool
-		admission  AnchorBindingAdmission
-		carry      BoundAnchorCarry
-		status     InvestigationStatus
-		offered    bool
+		name      string
+		carryOn   bool
+		admission AnchorBindingAdmission
+		carry     BoundAnchorCarry
+		status    InvestigationStatus
+		offered   bool
 	}{
-		{"switched off", false, AnchorBindingAdmissionRefusedQuestionChanged, BoundAnchorCarryNotAdmitted, InvestigationNoMatch, false},
-		{"switched on", true, AnchorBindingAdmissionAdmittedFollowUp, BoundAnchorCarryFollowUpOffered, InvestigationClarificationRequired, true},
+		{"carry off", false, AnchorBindingAdmissionRefusedQuestionChanged, BoundAnchorCarrySwitchOff, InvestigationNoMatch, false},
+		{"carry on", true, AnchorBindingAdmissionAdmittedFollowUp, BoundAnchorCarryFollowUpOffered, InvestigationClarificationRequired, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rig, one, two := followUpTurns(t, carryTurnOptions{followUpOn: tc.followUpOn}, emptyProbeResponse())
+			run := followUpTurns
+			if !tc.carryOn {
+				run = func(t *testing.T, o carryTurnOptions, response needTurnResponse) (*anchorProbeRig, anchorProbeTurn, anchorProbeTurn) {
+					o.mutate = askFollowUp
+					return bindingCarryTurnsWith(t, o, response)
+				}
+			}
+			rig, one, two := run(t, carryTurnOptions{}, emptyProbeResponse())
 			line := two.transitions[0]
 			if line.Admission != tc.admission || line.BoundAnchorCarry != tc.carry || two.result.Status != tc.status {
 				t.Fatalf("admission/carry/status = %s/%s/%s, want %s/%s/%s", line.Admission, line.BoundAnchorCarry, two.result.Status, tc.admission, tc.carry, tc.status)
@@ -92,11 +96,25 @@ func TestAFollowUpNamingNoSubjectOffersTheRememberedOneFirst(t *testing.T) {
 	}
 }
 
+// TestTheCarryAloneAdmitsAChangedQuestionAsAFollowUp: with the binding carry
+// on and nothing else, a changed question under a continuation is admitted as
+// a follow-up and the remembered subject is offered first.
+func TestTheCarryAloneAdmitsAChangedQuestionAsAFollowUp(t *testing.T) {
+	_, one, two := followUpTurns(t, carryTurnOptions{}, emptyProbeResponse())
+	line := two.transitions[0]
+	if line.Admission != AnchorBindingAdmissionAdmittedFollowUp || line.BoundAnchorCarry != BoundAnchorCarryFollowUpOffered || two.result.Status != InvestigationClarificationRequired {
+		t.Fatalf("admission/carry/status = %s/%s/%s, want admitted_follow_up/follow_up_offered/clarification_required", line.Admission, line.BoundAnchorCarry, two.result.Status)
+	}
+	if got := two.result.SubjectResolution.Candidates; len(got) != 1 || !reflect.DeepEqual(got[0], rememberedAlphaOffer(one.result.ResultID)) {
+		t.Fatalf("candidates = %+v, want the remembered alpha offer", got)
+	}
+}
+
 // TestAFollowUpOfferIsRedeemedOnTheNextTurn: the caller picks the remembered
 // alpha by its receipt; the next turn resolves through that receipt and
 // serves alpha.
 func TestAFollowUpOfferIsRedeemedOnTheNextTurn(t *testing.T) {
-	rig, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true}, emptyProbeResponse())
+	rig, one, two := followUpTurns(t, carryTurnOptions{}, emptyProbeResponse())
 	receipt := rememberedAlphaOffer(one.result.ResultID).ReceiptID
 	request := continuingNeedTurnAgain(needTurnRequest("request_carry_three", true), needTurnRequest("request_carry_two", true), two.result.ResultID)
 	askFollowUp(&request)
@@ -124,7 +142,7 @@ func TestAFollowUpOfferPutsTheRememberedOneBeforeTheResolversOwn(t *testing.T) {
 		{"the resolver offers only beta", offeringResponse(beta)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true}, tc.response)
+			_, one, two := followUpTurns(t, carryTurnOptions{}, tc.response)
 			served := two.result.SubjectResolution
 			if len(served.Candidates) != 2 || !reflect.DeepEqual(served.Candidates[0], func() SubjectCandidate {
 				c := rememberedAlphaOffer(one.result.ResultID)
@@ -155,7 +173,7 @@ func TestAFollowUpThatNamesItsOwnSubjectIsUnchanged(t *testing.T) {
 		{"another subject", identityProvenResponse(probeBeta), InvestigationClarificationRequired, SubjectSubstitutionClarified},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true}, tc.response)
+			_, _, two := followUpTurns(t, carryTurnOptions{}, tc.response)
 			line := two.transitions[0]
 			if two.result.Status != tc.status || line.SubstitutionGuard != tc.guard || line.BoundAnchorCarry != BoundAnchorCarryFollowUpCommitted {
 				t.Fatalf("status/guard/carry = %s/%s/%s, want %s/%s/follow_up_committed", two.result.Status, line.SubstitutionGuard, line.BoundAnchorCarry, tc.status, tc.guard)
@@ -171,7 +189,7 @@ func TestAFollowUpThatNamesItsOwnSubjectIsUnchanged(t *testing.T) {
 // not take the binding's kind as its scope anchor offers nothing.
 func TestAFollowUpOfferNeedsAFrameThatTakesTheKind(t *testing.T) {
 	unscoped := func(rig *anchorProbeRig) { rig.interpreter.outcome.Frame = nil }
-	_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: unscoped}, emptyProbeResponse())
+	_, _, two := followUpTurns(t, carryTurnOptions{before: unscoped}, emptyProbeResponse())
 	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmittedFollowUp || line.BoundAnchorCarry != BoundAnchorCarryFollowUpFrameRefused {
 		t.Fatalf("admission/carry = %s/%s, want admitted_follow_up/follow_up_frame_refused", line.Admission, line.BoundAnchorCarry)
 	}
@@ -189,7 +207,7 @@ func TestAFollowUpOfferNeedsTheParentToHaveServedTheIdentity(t *testing.T) {
 			b.Kind, b.CanonicalID, b.Witness = probeBeta.Kind, probeBeta.CanonicalID, []string{string(probeBeta.Kind) + ":" + probeBeta.CanonicalID}
 		})
 	})
-	_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, edit: holdBeta}, emptyProbeResponse())
+	_, _, two := followUpTurns(t, carryTurnOptions{edit: holdBeta}, emptyProbeResponse())
 	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmittedFollowUp || line.BoundAnchorCarry != BoundAnchorCarryFollowUpParentMismatch {
 		t.Fatalf("admission/carry = %s/%s, want admitted_follow_up/follow_up_parent_mismatch", line.Admission, line.BoundAnchorCarry)
 	}
@@ -213,7 +231,7 @@ func TestAFollowUpIsNotAdmittedFromAPendingOrExpiredBinding(t *testing.T) {
 		{"expired", expiredBinding, AnchorBindingAdmissionRefusedExpired},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, edit: tc.edit}, emptyProbeResponse())
+			_, _, two := followUpTurns(t, carryTurnOptions{edit: tc.edit}, emptyProbeResponse())
 			if line := two.transitions[0]; line.Admission != tc.want || two.result.Status != InvestigationNoMatch || len(two.result.SubjectResolution.Candidates) != 0 {
 				t.Fatalf("admission/status/candidates = %s/%s/%d, want %s/no_match/0", line.Admission, two.result.Status, len(two.result.SubjectResolution.Candidates), tc.want)
 			}
@@ -227,36 +245,13 @@ func TestAFollowUpIsNotAdmittedFromAPendingOrExpiredBinding(t *testing.T) {
 // only) and carries no hint.
 func TestAnAdmittedFollowUpNeverFeedsTheHintOrTheKind(t *testing.T) {
 	projectKind := func(rig *anchorProbeRig) { rig.interpreter.read(SubjectProject, false) }
-	rig, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, countOn: true, before: projectKind}, emptyProbeResponse())
+	rig, _, two := followUpTurns(t, carryTurnOptions{countOn: true, before: projectKind}, emptyProbeResponse())
 	line := two.transitions[0]
 	if line.Admission != AnchorBindingAdmissionAdmittedFollowUp || line.BoundAnchorKind != BoundAnchorKindNone {
 		t.Fatalf("admission/bound kind = %s/%s, want admitted_follow_up/none", line.Admission, line.BoundAnchorKind)
 	}
 	if hints := carriedHintsOf(rig); len(hints) != 0 {
 		t.Fatalf("carried hints = %+v, want none", hints)
-	}
-}
-
-// TestNewEngineRefusesTheFollowUpWithoutTheCarry: the follow-up widens what
-// the carry admits, so it alone is a configuration error.
-func TestNewEngineRefusesTheFollowUpWithoutTheCarry(t *testing.T) {
-	deps := EngineDependencies{
-		Interpreter: &anchorProbeInterpreter{},
-		Graph:       &needTurnGraph{},
-		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
-			return CanonicalFactBundle{}, nil
-		}),
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
-			return validInvestigationResult(), nil
-		}),
-	}
-	options := EngineOptions{ServiceVersion: "follow-up", NewResultID: resultIDSequence(), AnchorBindingCarryEnabled: true, AnchorBindingFollowUpEnabled: true}
-	if _, err := NewEngine(deps, options); err != nil {
-		t.Fatalf("premise: the follow-up beside the carry must construct, got %v", err)
-	}
-	options.AnchorBindingCarryEnabled = false
-	if _, err := NewEngine(deps, options); err == nil || !strings.Contains(err.Error(), "follow-up needs the anchor binding carry") {
-		t.Fatalf("NewEngine() error = %v, want the follow-up-needs-carry refusal", err)
 	}
 }
 
@@ -267,7 +262,7 @@ func TestAFollowUpThatEndsBeforeResolutionReadsNotEvaluated(t *testing.T) {
 	refuseFrame := func(rig *anchorProbeRig) {
 		rig.interpreter.outcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectTeam}
 	}
-	_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: refuseFrame}, emptyProbeResponse())
+	_, _, two := followUpTurns(t, carryTurnOptions{before: refuseFrame}, emptyProbeResponse())
 	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmittedFollowUp || line.BoundAnchorCarry != BoundAnchorCarryNotEvaluated {
 		t.Fatalf("admission/carry = %s/%s, want admitted_follow_up/not_evaluated", line.Admission, line.BoundAnchorCarry)
 	}
@@ -298,7 +293,7 @@ func TestAFollowUpOfferListsTheRememberedSubjectOnce(t *testing.T) {
 			response := emptyProbeResponse()
 			response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
 			response.material.AnchorOptions = tc.options
-			_, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true}, response)
+			_, one, two := followUpTurns(t, carryTurnOptions{}, response)
 			if line := two.transitions[0]; line.BoundAnchorCarry != BoundAnchorCarryFollowUpOfferedReconciled {
 				t.Fatalf("carry = %s, want follow_up_offered_reconciled", line.BoundAnchorCarry)
 			}
@@ -335,7 +330,7 @@ func TestAFollowUpOfferListsTheRememberedSubjectOnce(t *testing.T) {
 func TestAFollowUpNeverAppliesTheLedgerAnchor(t *testing.T) {
 	var mark int
 	before := func(rig *anchorProbeRig) { mark = len(rig.graph.calls) }
-	rig, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: before}, emptyProbeResponse())
+	rig, one, two := followUpTurns(t, carryTurnOptions{before: before}, emptyProbeResponse())
 	if got := servedLedgerAnchor(one); got.ID != probeAlpha.CanonicalID {
 		t.Fatalf("premise: turn one's ledger holds %+v, want alpha", got)
 	}
@@ -362,13 +357,14 @@ func TestAFollowUpNeverAppliesTheLedgerAnchor(t *testing.T) {
 	}
 }
 
-// TestATurnWithoutTheFollowUpOfferKeepsItsAnchorOptions: with the follow-up
-// switch off, the same turn keeps its structure anchor option for alpha.
+// TestATurnWithoutTheFollowUpOfferKeepsItsAnchorOptions: with the carry off
+// there is no follow-up offer, and the same turn keeps its structure anchor
+// option for alpha.
 func TestATurnWithoutTheFollowUpOfferKeepsItsAnchorOptions(t *testing.T) {
 	response := emptyProbeResponse()
 	response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
 	response.material.AnchorOptions = []AnchorOption{anchorOptionFor(probeAlpha), anchorOptionFor(probeBeta)}
-	_, _, two := followUpTurns(t, carryTurnOptions{}, response)
+	_, _, two := bindingCarryTurnsWith(t, carryTurnOptions{mutate: askFollowUp}, response)
 	needs := two.result.StructureNeeds
 	if needs == nil || len(needs.AnchorOptions) != 2 {
 		t.Fatalf("structure needs = %+v, want both anchor options kept", needs)
