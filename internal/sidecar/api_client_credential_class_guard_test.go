@@ -150,6 +150,10 @@ func ownClassNearMissRows() []guardRow {
 	mk := func(name, value string) guardRow {
 		return guardRow{name: "own_class_near_miss_" + name, value: value, needle: strings.TrimSpace(value)}
 	}
+	exact := func(name, value string) guardRow {
+		return guardRow{name: "own_class_near_miss_" + name, value: value, needle: value}
+	}
+	const splitAt = 20
 	return []guardRow{
 		mk("short_31_bytes", auth.TokenPrefix+secret(31)),
 		mk("long_33_bytes", auth.TokenPrefix+secret(33)),
@@ -160,6 +164,11 @@ func ownClassNearMissRows() []guardRow {
 		mk("other_prefix_same_body", "fcacx_"+body),
 		mk("double_prefix", auth.TokenPrefix+valid),
 		mk("bearer_scheme_included", "Bearer "+valid),
+		exact("trailing_lf", valid+"\n"),
+		exact("trailing_crlf", valid+"\r\n"),
+		exact("trailing_space", valid+" "),
+		mk("embedded_lf", auth.TokenPrefix+body[:splitAt]+"\n"+body[splitAt:]),
+		mk("embedded_cr", auth.TokenPrefix+body[:splitAt]+"\r"+body[splitAt:]),
 	}
 }
 
