@@ -111,6 +111,14 @@ func TestLiveRepositoryAndLinkEdgeCountsEqualTheEdgesTheProducersAssert(t *testi
 	workItem("jira:DUP-1", relParityRepoA, "epic", "")
 	workItem("jira:DUP-1", relParityRepoB, "epic", "")
 	workItem("gh:acme/alpha#16", relParityRepoA, "story", "jira:DUP-1")
+	// An empty qualified key, a qualified parent nobody holds, a child and a
+	// parent whose ids exceed the natural-key bound.
+	workItem("jira:", relParityRepoA, "epic", "")
+	workItem("gh:acme/alpha#17", relParityRepoA, "story", "jira:")
+	workItem("gh:acme/alpha#18", relParityRepoA, "story", "jira:GHOST-9")
+	workItem("child-"+long, relParityRepoA, "story", "gh:acme/alpha#10")
+	workItem("parent-"+long, relParityRepoA, "epic", "")
+	workItem("gh:acme/alpha#19", relParityRepoA, "story", "parent-"+long)
 
 	// Pull requests: one per repository, one in a repository the organization lacks.
 	for _, pr := range []struct {
@@ -181,6 +189,7 @@ func TestLiveRepositoryAndLinkEdgeCountsEqualTheEdgesTheProducersAssert(t *testi
 	link("gh:acme/alpha#23", relParityRepoB, 9, "heuristic")
 	link("gh:acme/alpha#24", relParityRepoA, 8, "native")
 	link("gh:acme/alpha#22", relParityRepoA, 999, "heuristic")
+	link(long, relParityRepoB, 9, "heuristic")
 	link("gh:ghost-issue", relParityRepoA, 8, "heuristic")
 	link("gh:acme/alpha#23", relParityRepoA, 8, "guess")
 
