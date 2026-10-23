@@ -53,7 +53,8 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 			},
 			onlyOther: []string{
 				"analytics.sankey.__typename", "analytics.sankey.coverage.__typename", "analytics.sankey.coverage.repoCoverage",
-				"analytics.sankey.coverage.teamCoverage", "analytics.sankey.edges[*].__typename", "analytics.sankey.edges[*].source",
+				"analytics.sankey.coverage.sizingCoverage", "analytics.sankey.coverage.teamCoverage",
+				"analytics.sankey.coverage.unsizedUnitCount", "analytics.sankey.edges[*].__typename", "analytics.sankey.edges[*].source",
 				"analytics.sankey.edges[*].target", "analytics.sankey.edges[*].value", "analytics.sankey.nodes[*].__typename",
 				"analytics.sankey.nodes[*].dimension", "analytics.sankey.nodes[*].id", "analytics.sankey.nodes[*].label",
 				"analytics.sankey.nodes[*].value", "analytics.sankey.unit",
