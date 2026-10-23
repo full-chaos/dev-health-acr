@@ -576,7 +576,7 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 		r.retryOrExhaust(respPath, base, req.SessionNonce, logf)
 		return
 	}
-	logf("operation=%s seq=%d elapsed=%s status=ok output_bytes=%d model=%s", req.Operation, req.Seq, elapsed, len(content), answer.Model)
+	logf("operation=%s seq=%d elapsed=%s status=ok output_bytes=%d model=%s", req.Operation, req.Seq, elapsed, len(validationContent), answer.Model)
 	r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Output: json.RawMessage(validationContent)})
 }
 

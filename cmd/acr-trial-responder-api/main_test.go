@@ -882,3 +882,39 @@ func TestAnswerOneRetriesMalformedModelJSON(t *testing.T) {
 		t.Fatal("answerOne published a response after a single malformed-JSON attempt -- must be retried, not treated as terminal, on the first miss")
 	}
 }
+
+func TestAnswerOnePublishesLargeIntegersExactlyWhileStrippingNulls(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	srv, _ := fakeChatCompletionsServer(t, `{"answer":"ok","note":null,"n":9007199254740993,"f":1.50}`)
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+	name := "000001-interpret.json"
+	req := exchangeRequest{Operation: "interpret", Seq: 1, SessionNonce: "n1", System: "s", Prompt: "p",
+		OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"},"note":{"type":"string"},"n":{"type":"integer"},"f":{"type":"number"}},"required":["answer"]}`)}
+	body, _ := json.Marshal(req)
+	if err := os.WriteFile(filepath.Join(dir, "requests", name), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	respPath := filepath.Join(dir, "responses", name)
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", name), respPath, filepath.Join(dir, "_responder_logs"))
+	raw, err := os.ReadFile(respPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != "" {
+		t.Fatalf("response = %s (%v)", raw, err)
+	}
+	if !strings.Contains(string(resp.Output), `"n":9007199254740993`) || !strings.Contains(string(resp.Output), `"f":1.50`) {
+		t.Errorf("published output %s altered a number token", resp.Output)
+	}
+	logs, _ := os.ReadFile(filepath.Join(dir, "_responder_logs", name+".log"))
+	if want := fmt.Sprintf("output_bytes=%d", len(resp.Output)); !strings.Contains(string(logs), want) {
+		t.Errorf("log %q lacks %q: output_bytes must count the published bytes", logs, want)
+	}
+}
