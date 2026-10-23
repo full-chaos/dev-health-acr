@@ -171,7 +171,7 @@ func serveTeamPullRequestQuestion(t *testing.T, ctx context.Context, members []c
 	repo := seedServedPRTeam(t, ctx, orgID)
 	query, _ := sharedClickHouseFixture(t)
 	counted := countTurnStatements(t, query)
-	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(counted), contextfabric.FactRegistryOptions{ScopeExpander: devhealthfacts.NewScopeExpander(counted)})
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(counted), contextfabric.FactRegistryOptions{ScopeExpander: recordScopeSpans(counted, devhealthfacts.NewScopeExpander(counted))})
 	if err != nil {
 		t.Fatal(err)
 	}
