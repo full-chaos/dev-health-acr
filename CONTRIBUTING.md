@@ -6,6 +6,7 @@ This is a private SVS repository. Changes should be tied to Linear issues in the
 
 - Contract-first files updated together when the API shape changes.
 - `make contract-test` and `make verify` pass.
+- `make content-check` passes: no tool-artifact paths (a Go build cache, codex scratch, root `*.log`) and no more than 100 files or 1 MiB added. A legitimate large add carries a `Content-Check: allow-large <reason>` line in a commit message. `make install-pre-push-hook` runs it before every push.
 - OpenAPI YAML is regenerated from canonical JSON with `make contract-write` when the service contract changes.
 - No credentials or private evidence in fixtures.
 - Read and write authorization paths remain separate.
