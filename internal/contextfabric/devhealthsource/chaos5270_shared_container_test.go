@@ -62,8 +62,9 @@ func TestMain(m *testing.M) {
 // on first use.
 func orgIsolationClickHouseFixture(t *testing.T) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	orgIsolationClickHouseOnce.Do(func() {
-		orgIsolationClickHouseQuery, orgIsolationClickHouseConn, orgIsolationClickHouseTerminate, orgIsolationClickHouseErr = startOrgIsolationClickHouseContainer()
+		orgIsolationClickHouseQuery, orgIsolationClickHouseConn, orgIsolationClickHouseTerminate, orgIsolationClickHouseErr = startOrgIsolationClickHouseContainer(t)
 	})
 	if orgIsolationClickHouseErr != nil {
 		t.Fatalf("start shared ClickHouse container: %v", orgIsolationClickHouseErr)
@@ -83,7 +84,8 @@ func logCleanupErr(step string, err error) {
 	}
 }
 
-func startOrgIsolationClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriver.Conn, func(), error) {
+func startOrgIsolationClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, clickhousedriver.Conn, func(), error) {
+	chfixture.RequireContainers(tb)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

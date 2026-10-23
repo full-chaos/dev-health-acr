@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
@@ -22,6 +23,7 @@ import (
 // migrated to head, scoped to one test via t.Cleanup.
 func newPriorsTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in

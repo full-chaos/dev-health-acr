@@ -150,6 +150,7 @@ func oracleUUID(label string) string {
 
 func oracleClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Client, clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
@@ -205,6 +206,7 @@ func oracleClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Cli
 
 func oracleFalkor(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: oracleFalkorImg, ExposedPorts: []string{"6379/tcp"},

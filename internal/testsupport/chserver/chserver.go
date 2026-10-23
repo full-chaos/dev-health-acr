@@ -18,6 +18,7 @@ import (
 // user "acr" once the server answers a ping.
 func StartDSN(tb testing.TB, ctx context.Context) string {
 	tb.Helper()
+	chfixture.RequireContainers(tb)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},

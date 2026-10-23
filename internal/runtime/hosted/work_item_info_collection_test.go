@@ -11,10 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
@@ -41,6 +44,7 @@ const infoRequestID = "req_57550000000000000000000000000000"
 // only model drafts and ClickHouse backend rows are controlled. No tracer or
 // telemetry override is supplied to the hosted constructor.
 func TestWorkItemHostedInfoCollection(t *testing.T) {
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44", tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())
 	if err != nil {
@@ -360,6 +364,13 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 	if scenario == "zero" || scenario == "s1" {
 		want = []string{"s1"}
 	}
+	arrival := make([]string, 0, len(client.queries))
+	for _, query := range client.queries {
+		arrival = append(arrival, query.phase)
+	}
+	if !dependentPhasesInOrder(arrival) {
+		t.Fatalf("a dependent read ran out of order: %v", arrival)
+	}
 	if !reflect.DeepEqual(client.phases, want) {
 		t.Fatalf("fresh phases=%v want=%v status=%s", client.phases, want, result.Status)
 	}
@@ -382,6 +393,7 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 }
 
 type infoTupleQueryClient struct {
+	mu          sync.Mutex
 	memberID    string
 	phases      []string
 	fail        string
@@ -414,8 +426,11 @@ func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []c
 	if configured, ok := c.rowsByPhase[phase]; ok {
 		rows = configured
 	}
+	c.mu.Lock()
 	c.phases = append(c.phases, phase)
+	sort.Strings(c.phases)
 	c.queries = append(c.queries, infoTupleQuery{phase: phase, sql: sql, bindings: append([]contextpacket.ClickHouseBinding(nil), bindings...)})
+	c.mu.Unlock()
 	if c.fail == phase {
 		return nil, errors.New("controlled content read failure")
 	}
@@ -433,10 +448,12 @@ func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []c
 	if c.fail == phase+"_partial" {
 		rowErr = errors.New("controlled failure after scanned content rows")
 	}
+	c.mu.Lock()
 	if c.scanned == nil {
 		c.scanned = map[string]int{}
 	}
-	return &infoTupleQueryRows{rows: rows, rowErr: rowErr, scanned: func() { c.scanned[phase]++ }}, nil
+	c.mu.Unlock()
+	return &infoTupleQueryRows{rows: rows, rowErr: rowErr, scanned: func() { c.mu.Lock(); c.scanned[phase]++; c.mu.Unlock() }}, nil
 }
 
 // These scenario rows describe ten member fields, not complete S1 wire rows.
@@ -640,4 +657,25 @@ func requireInfoRetryTrigger(t *testing.T, log *certify.Log, collected []byte) {
 	if triggers != 1 {
 		t.Errorf("collected retry decision has %d pre-second-synthesis measured item-overrun records; want one with measured_items >= producer member+claim charge %.0f and > max_items, plus selected identity and false attempted/fit/failed before the retry call", triggers, initialMinimum)
 	}
+}
+
+// dependentPhasesInOrder: the fact reads are independent of one another and
+// run together, so only the pairs that carry a data dependency keep an order
+// assertion: the membership read (s1) comes first, and the status_since probe
+// runs after the status read it follows.
+func dependentPhasesInOrder(arrival []string) bool {
+	status, since := -1, -1
+	for i, phase := range arrival {
+		switch phase {
+		case "s1":
+			if i != 0 {
+				return false
+			}
+		case "status":
+			status = i
+		case "status_since":
+			since = i
+		}
+	}
+	return since < 0 || (status >= 0 && status < since)
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -24,6 +25,7 @@ import (
 // order, scoped to the caller's organization, and the emitted census line
 // carries the population the engine returned.
 func TestLiveKindCensus(t *testing.T) {
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

@@ -8,6 +8,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
@@ -46,6 +47,7 @@ func (a *axisEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, 
 
 func startVectorLiveAdapter(t *testing.T, embedder contextfabric.Embedder, floor float64) *Adapter {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

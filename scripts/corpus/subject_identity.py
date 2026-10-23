@@ -32,7 +32,8 @@ import re
 from pathlib import Path
 
 from attempt_order import REPLAY_DIRNAME, order_attempts  # noqa: E402
-from validators import load_attempt, validate_attempt  # noqa: E402
+from validators import (load_attempt, result_claimed_n, result_committed,  # noqa: E402
+                        validate_attempt)
 
 REPLAY_HINT = REPLAY_DIRNAME
 
@@ -165,8 +166,7 @@ def inspect(root, corpus_id, expectation, rep=1):
     # answered, unsuccessfully. It has no subject resolution, which is not the same as an
     # unreadable artefact. (Found by the round-3 history matrix, which crashed here.)
     result = result or {}
-    sr = result.get("subject_resolution") or {}
-    committed = list(sr.get("committed") or [])
+    committed = list(result_committed(result))
     mechs, matched_terms, commit_bases = [], [], []
     seen = {(c.get("kind"), c.get("canonical_id")) for c in committed}
     # r2 #2. The r1 fix only reported `unreadable_artefact` when the TERMINAL attempt was
@@ -183,7 +183,7 @@ def inspect(root, corpus_id, expectation, rep=1):
         if not r:
             continue   # a FAILURE attempt: normal, carries no subject resolution
         s = r.get("subject_resolution") or {}
-        for c in (s.get("committed") or []):
+        for c in result_committed(r):
             k = (c.get("kind"), c.get("canonical_id"))
             if k not in seen:
                 seen.add(k)
@@ -215,7 +215,7 @@ def inspect(root, corpus_id, expectation, rep=1):
         # `or ""`: an absent field is MISSING, never an empty-string basis.
         "disclosed_refusal_basis": (result.get("completeness") or {}).get(
             "refusal_basis") or None,
-        "claimed_facts_n": len(result.get("claimed_facts") or []),
+        "claimed_facts_n": result_claimed_n(result),
         "committed": [{"kind": c.get("kind"), "canonical_id": c.get("canonical_id"),
                        "label": c.get("label")} for c in committed],
         "committed_n": len(committed),

@@ -24,6 +24,7 @@ import (
 // atomic census over the view plus work_items/repos/projects, including the
 // transition move-out rule, a denied masked row, and a future boundary.
 func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -593,6 +594,7 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 // (devhealthfacts_test) shared fixture, because reaching the unexported
 // workItemMembershipMaxRowsToRead var to lower it IS the point of this test.
 func TestWorkItemMembershipS1ReadLimitExceededIsCertifiedAgainstRealClickHouse(t *testing.T) {
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

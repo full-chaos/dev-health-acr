@@ -1313,7 +1313,15 @@ import (
 // rows are unchanged; a team pull-request read for an organization with many
 // links outside the team's owned projects, refused under v253 at the API
 // statement memory cap, is served.
-const QueryVersion = "devhealthfacts.clickhouse.v254"
+//
+// v254 -> v255: the flow fact reads work_item_metrics_daily through its row_view
+// column (ops migration 141, CHAOS-8863): the totals, the daily series, the
+// window totals and the project rollups take the organization view (each item
+// once) and the scope breakdown rows take the scope view (each item once per
+// work scope), the legacy rows counting in both. Before the ops writer stores
+// the views every row is a legacy row and every value is unchanged; an answer
+// saved under v254 would hold the sum of two views once the writer runs.
+const QueryVersion = "devhealthfacts.clickhouse.v255"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

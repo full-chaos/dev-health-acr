@@ -43,6 +43,7 @@ type clickHouseScopeRequest struct {
 
 func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	certificate := newTestCertificate(t)
 	directory := t.TempDir()
 	certPath := filepath.Join(directory, "server.crt")

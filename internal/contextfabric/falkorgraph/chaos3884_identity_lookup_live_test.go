@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -33,6 +34,7 @@ func newLiveAdapterWithIdentityUniverse(t *testing.T, ctx context.Context, ident
 // 3-arg constructor in that case).
 func newLiveAdapterWithIdentityUniverseAndTracer(t *testing.T, ctx context.Context, identityUniverse func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error), telemetry falkorgraph.GraphTelemetry, tracer graphrank.ResolutionTracer) *falkorgraph.Adapter {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},

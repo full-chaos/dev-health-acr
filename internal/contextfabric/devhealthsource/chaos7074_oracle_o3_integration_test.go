@@ -15,6 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -61,6 +62,7 @@ func chaos7074FalkorAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adap
 
 func chaos7074FalkorAdapterWith(t *testing.T, ctx context.Context, configure func(*falkorgraph.Config)) *falkorgraph.Adapter {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chaos7074FalkorImage, ExposedPorts: []string{"6379/tcp"},

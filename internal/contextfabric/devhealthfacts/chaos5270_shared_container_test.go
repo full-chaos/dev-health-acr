@@ -469,9 +469,10 @@ func TestMain(m *testing.M) {
 // same blast radius as today's one-container-per-test tests.
 func sharedClickHouseFixture(t *testing.T) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	atomic.AddInt64(&sharedClickHouseTestCount, 1)
 	sharedClickHouseOnce.Do(func() {
-		sharedClickHouseQuery, sharedClickHouseConn, sharedClickHouseAddr, sharedClickHouseTerminate, sharedClickHouseErr = startSharedClickHouseContainer()
+		sharedClickHouseQuery, sharedClickHouseConn, sharedClickHouseAddr, sharedClickHouseTerminate, sharedClickHouseErr = startSharedClickHouseContainer(t)
 	})
 	if sharedClickHouseErr != nil {
 		t.Fatalf("start shared ClickHouse container: %v", sharedClickHouseErr)
@@ -509,7 +510,8 @@ func logCleanupErr(step string, err error) {
 	}
 }
 
-func startSharedClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriver.Conn, string, func(), error) {
+func startSharedClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, clickhousedriver.Conn, string, func(), error) {
+	chfixture.RequireContainers(tb)
 	ctx := context.Background()
 	sharedClickHouseStartedAt = time.Now()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

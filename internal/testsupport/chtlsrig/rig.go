@@ -47,6 +47,7 @@ type Rig struct {
 // latency proxy of the given round-trip time in front of it.
 func Start(tb testing.TB, ctx context.Context, rtt time.Duration) *Rig {
 	tb.Helper()
+	chfixture.RequireContainers(tb)
 	ca, certPEM, keyPEM := newCertificate(tb)
 	directory := tb.TempDir()
 	write := func(name string, contents []byte) string {

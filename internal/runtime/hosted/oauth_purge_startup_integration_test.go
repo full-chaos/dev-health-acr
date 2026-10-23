@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -40,6 +41,7 @@ type oauthPurgeStartupHarness struct {
 
 func newOAuthPurgeStartupHarness(t *testing.T) oauthPurgeStartupHarness {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())

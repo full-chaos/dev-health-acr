@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/redis/go-redis/v9"
@@ -23,6 +24,7 @@ const codexRoundFalkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef
 
 func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: codexRoundFalkordbImage, ExposedPorts: []string{"6379/tcp"},

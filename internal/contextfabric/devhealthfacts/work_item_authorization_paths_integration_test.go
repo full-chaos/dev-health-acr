@@ -62,6 +62,7 @@ type authzPathsFixture struct {
 
 func newAuthzPathsFixture(t *testing.T) authzPathsFixture {
 	t.Helper()
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
