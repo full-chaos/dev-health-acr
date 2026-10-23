@@ -649,6 +649,7 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		// resolver -- it answers policy_unavailable.
 		scopeResolver: NewFactReadScopeResolverWithPolicies(options.ScopeExpander, options.ScopePolicies),
 	}
+	registry.scopeResolver.fanout = registry.readFanout
 	for _, provider := range providers {
 		if provider == nil {
 			return nil, errors.New("fact provider must not be nil")

@@ -223,11 +223,17 @@ FROM (
 GROUP BY repo_id_str, repo_slug
 ORDER BY repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
+	var unlinked int
+	var unlinkedErr error
+	waitUnlinked := contextfabric.GoScopeBounded(ctx, func() {
+		unlinked, unlinkedErr = e.teamUnlinkedIssueCount(ctx, orgID, teamIDs)
+	})
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "team_ids", Value: teamIDs},
 	})
 	if err != nil {
+		waitUnlinked()
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	closed := false
@@ -245,6 +251,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		var repoID, repoSlug, bestSource, originTeamID string
 		var originTeamIDs []string
 		if err := rows.Scan(&repoID, &repoSlug, &bestSource, &originTeamID, &originTeamIDs); err != nil {
+			waitUnlinked()
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
@@ -263,14 +270,15 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		})
 	}
 	if err := rows.Err(); err != nil {
+		waitUnlinked()
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	closed = true
 	rows.Close()
 	counts.Truncated = repositoryRows >= limitPlusOne
-	unlinked, err := e.teamUnlinkedIssueCount(ctx, orgID, teamIDs)
-	if err != nil {
-		return nil, contextfabric.FactScopeExpansionCounts{}, err
+	waitUnlinked()
+	if unlinkedErr != nil {
+		return nil, contextfabric.FactScopeExpansionCounts{}, unlinkedErr
 	}
 	counts.MissingNextHopCount += unlinked
 	// NOT trimmed to limit: the resolver's overflow-row detection needs the

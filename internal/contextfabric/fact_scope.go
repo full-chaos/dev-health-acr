@@ -52,6 +52,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -1651,6 +1652,9 @@ type FactReadScopeResolver struct {
 	// weaker test, never a broken one, whereas a nil-channel send would block
 	// forever and turn a missing constructor into a hang.
 	workItemSlots chan struct{}
+	// fanout bounds how many requirements of one Resolve expand at the same
+	// time. Below 2 (a zero-value resolver too) the walk is serial.
+	fanout int
 }
 
 // NewFactReadScopeResolver builds the resolver against the production policy
@@ -1681,6 +1685,7 @@ func NewFactReadScopeResolverWithPolicies(expander FactScopeExpander, policies m
 		// channel IS the counter -- there is no separate number that could
 		// disagree with how many are actually running.
 		workItemSlots: make(chan struct{}, maxWorkItemScopeInFlight),
+		fanout:        FactReadFanout,
 	}
 }
 
@@ -1764,6 +1769,7 @@ func (r *FactReadScopeResolver) Resolve(
 		DerivedSubjects: map[FactKind][]SubjectRef{},
 		Gaps:            map[FactKind]FactScopeGap{},
 	}
+	var jobs []scopeRequirementJob
 	for _, requirement := range input.Requirements {
 		capability, registered := capabilities[requirement.Kind]
 		if !registered {
@@ -1793,7 +1799,7 @@ func (r *FactReadScopeResolver) Resolve(
 			if len(additive) == 0 {
 				continue
 			}
-			r.resolveRequirement(ctx, principal, &scope, requirement.Kind, additive, input.TimeContext, input.PullRequestStatus)
+			jobs = append(jobs, scopeRequirementJob{kind: requirement.Kind, roots: additive})
 			continue
 		}
 		// A root of a kind the capability answers directly must never
@@ -1818,10 +1824,127 @@ func (r *FactReadScopeResolver) Resolve(
 			unsupportedRoots = append(unsupportedRoots, r.additiveRollupRoots(requirement.Kind, supported, input.PullRequestFacts)...)
 			roots = unsupportedRoots
 		}
-		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext, input.PullRequestStatus)
+		jobs = append(jobs, scopeRequirementJob{kind: requirement.Kind, roots: roots})
 	}
+	r.resolveJobs(ctx, principal, &scope, jobs, input.TimeContext, input.PullRequestStatus)
 	sortFactScopeDerivations(scope.Derivations)
 	return scope
+}
+
+// scopeRequirementJob is one requirement that still owes an expansion decision.
+type scopeRequirementJob struct {
+	kind  FactKind
+	roots []SubjectRef
+}
+
+// scopeTokensKey carries the expansion budget of one Resolve to the expander.
+type scopeTokensKey struct{}
+
+// GoScopeBounded runs fn beside the caller when the Resolve that owns ctx has
+// a free expansion slot, and inline otherwise. The returned wait always has to
+// be called before the caller returns. The budget is the resolver's fan-out,
+// shared by the requirements and by these helpers, so one turn never has more
+// than that many scope reads in flight.
+func GoScopeBounded(ctx context.Context, fn func()) (wait func()) {
+	tokens, _ := ctx.Value(scopeTokensKey{}).(chan struct{})
+	if tokens != nil {
+		select {
+		case tokens <- struct{}{}:
+			done := make(chan struct{})
+			var recovered any
+			go func() {
+				defer close(done)
+				defer func() { <-tokens }()
+				defer func() { recovered = recover() }()
+				fn()
+			}()
+			return func() {
+				<-done
+				if recovered != nil {
+					panic(recovered)
+				}
+			}
+		default:
+		}
+	}
+	fn()
+	return func() {}
+}
+
+type scopeJobSlot struct {
+	scope      FactReadScope
+	panicked   bool
+	panicValue any
+}
+
+// resolveJobs resolves the requirements, at most r.fanout at a time, and folds
+// them into scope in input order, so the result is the one the serial walk
+// builds. Requirements of one kind share state (the derived subjects and the
+// gap of that kind), so a repeated kind keeps the whole walk serial. A panic is
+// held and raised in the caller's goroutine at that requirement's place.
+func (r *FactReadScopeResolver) resolveJobs(
+	ctx context.Context,
+	principal storage.Principal,
+	scope *FactReadScope,
+	jobs []scopeRequirementJob,
+	timeContext TimeContext,
+	pullRequestStatus string,
+) {
+	parallel := r.fanout > 1 && len(jobs) > 1
+	seen := map[FactKind]struct{}{}
+	for _, job := range jobs {
+		if _, repeated := seen[job.kind]; repeated {
+			parallel = false
+		}
+		seen[job.kind] = struct{}{}
+	}
+	if !parallel {
+		for _, job := range jobs {
+			r.resolveRequirement(ctx, principal, scope, job.kind, job.roots, timeContext, pullRequestStatus)
+		}
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	tokens := make(chan struct{}, r.fanout)
+	runCtx = context.WithValue(runCtx, scopeTokensKey{}, tokens)
+	slots := make([]scopeJobSlot, len(jobs))
+	var running sync.WaitGroup
+	for i := range jobs {
+		tokens <- struct{}{}
+		running.Add(1)
+		go func(i int) {
+			defer running.Done()
+			defer func() { <-tokens }()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slots[i].panicked = true
+					slots[i].panicValue = recovered
+					cancel()
+				}
+			}()
+			slots[i].scope = FactReadScope{
+				DerivedSubjects: map[FactKind][]SubjectRef{},
+				Gaps:            map[FactKind]FactScopeGap{},
+			}
+			r.resolveRequirement(runCtx, principal, &slots[i].scope, jobs[i].kind, jobs[i].roots, timeContext, pullRequestStatus)
+		}(i)
+	}
+	running.Wait()
+	for i := range jobs {
+		if slots[i].panicked {
+			panic(slots[i].panicValue)
+		}
+		slot := &slots[i].scope
+		scope.Events = append(scope.Events, slot.Events...)
+		scope.Derivations = append(scope.Derivations, slot.Derivations...)
+		for kind, subjects := range slot.DerivedSubjects {
+			scope.DerivedSubjects[kind] = subjects
+		}
+		for kind, gap := range slot.Gaps {
+			scope.Gaps[kind] = gap
+		}
+	}
 }
 
 // additiveRollupExpansionKinds are the kinds whose provider answers a team or
