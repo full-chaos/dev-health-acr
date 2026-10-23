@@ -39,7 +39,7 @@ const (
 	BoundAnchorKindNotEvaluated BoundAnchorKindDecision = "not_evaluated"
 	// BoundAnchorKindNone: neither a redeemed anchor receipt nor an admitted
 	// carried binding names a kind (a pending binding names none while the
-	// pending carry is off).
+	// carry is off).
 	BoundAnchorKindNone BoundAnchorKindDecision = "none"
 	// BoundAnchorKindAgrees: the binding's kind is the model's.
 	BoundAnchorKindAgrees BoundAnchorKindDecision = "agrees"
@@ -64,14 +64,14 @@ func boundAnchorKindDecisions() []BoundAnchorKindDecision {
 // boundAnchorKind is the kind the binding names for this turn and whether it
 // came from a receipt: a redeemed anchor receipt first, then an admitted
 // carried binding. Empty when neither names one. A binding still pending
-// window confirmation names its kind only with the pending carry on
-// (pendingOn), the same condition under which it may carry its identity
+// window confirmation names its kind only where the carry is on
+// (carryOn), the condition under which it may carry its identity
 // (anchor_binding_carry.go).
-func (t *anchorBindingTracker) boundAnchorKind(pendingOn bool) (SubjectKind, bool) {
+func (t *anchorBindingTracker) boundAnchorKind(carryOn bool) (SubjectKind, bool) {
 	if ref := receiptAnchorRef(t.receipt); ref.Kind != "" {
 		return ref.Kind, true
 	}
-	if t.parent.Binding.State == AnchorBindingPendingWindowConfirmation && !pendingOn {
+	if t.parent.Binding.State == AnchorBindingPendingWindowConfirmation && !carryOn {
 		return "", false
 	}
 	if t.admissionOutcome() == AnchorBindingAdmissionAdmitted && t.parent.Binding.active() {
@@ -91,7 +91,7 @@ func (e *Engine) applyBoundAnchorKind(t *anchorBindingTracker, outcome QuestionF
 		t.boundKind = BoundAnchorKindSwitchOff
 		return outcome
 	}
-	kind, fromReceipt := t.boundAnchorKind(e.anchorBindingPendingCarryEnabled)
+	kind, fromReceipt := t.boundAnchorKind(e.anchorBindingCarryEnabled)
 	switch {
 	case kind == "":
 		t.boundKind = BoundAnchorKindNone

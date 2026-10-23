@@ -5942,8 +5942,8 @@ var MCPHostedContextScope = Event{
 }
 
 // GraphCountCheckFinished is the Info line for one finished graph count
-// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error), how many sources and kinds it compared, how many
-// confirmed graph_below_source gaps it found and how many count reads failed.
+// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error or one measurement it could not make), how many sources and kinds it compared, how many
+// confirmed graph_below_source gaps it found, how many edge populations it compared, how many confirmed graph_edges_below_source gaps it found, how many relation types are not measured yet, and how many count reads failed.
 // The Warn lines the check emits for a gap or a failed read stay as they are;
 // this line is what makes a check that ran and found nothing observable.
 var GraphCountCheckFinished = Event{
@@ -5966,6 +5966,15 @@ var GraphCountCheckFinished = Event{
 		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		// relations_compared is the number of edge populations (relation type
+		// and arm) whose source and graph edge counts were both read;
+		// edge_gap_count the confirmed graph_edges_below_source gaps among
+		// them; relations_deferred the distinct relation types the sources
+		// produce and do not measure yet, so a clean line says how much of the
+		// edge set it covers.
+		{Key: "relations_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edge_gap_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "relations_deferred", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "error_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "duration_ms", Type: FieldInt, Presence: PresenceRequired},
 	},

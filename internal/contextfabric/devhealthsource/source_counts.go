@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -22,6 +23,16 @@ type kindCountStatement struct {
 	sql  string
 }
 
+// pullRequestReviewCountSQL counts the distinct reviews queryPullRequestReviews
+// can project: the producer omits a review whose canonical id exceeds the
+// natural-key bound (identity.Derive), so the count keeps the rows whose id fits.
+// Each one is one entity and one BELONGS_TO_PULL_REQUEST edge, so the node count
+// and the edge count share this statement.
+var pullRequestReviewCountSQL = `SELECT uniqExact(r.repo_id, r.number, r.review_id) FROM git_pull_request_reviews AS r FINAL
+INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
+INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
+WHERE r.org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindPullRequestReview, "toString(r.repo_id)", "toString(r.number)", "r.review_id")
+
 var clickHouseKindCountStatements = []kindCountStatement{
 	{contractsv1.ContextFabricSubjectRepository, `SELECT uniqExact(id) FROM repos FINAL WHERE org_id = {org_id:String}`},
 	{contractsv1.ContextFabricSubjectWorkItem, `SELECT uniqExact(w.repo_id, w.work_item_id) FROM work_items AS w FINAL WHERE w.org_id = {org_id:String}`},
@@ -35,10 +46,7 @@ WHERE d.org_id = {org_id:String}`},
 INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 WHERE i.org_id = {org_id:String} AND i.is_deleted = 0`},
-	{contractsv1.ContextFabricSubjectPullRequestReview, `SELECT uniqExact(r.repo_id, r.number, r.review_id) FROM git_pull_request_reviews AS r FINAL
-INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
-INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
-WHERE r.org_id = {org_id:String}`},
+	{contractsv1.ContextFabricSubjectPullRequestReview, pullRequestReviewCountSQL},
 	{contractsv1.ContextFabricSubjectCIRun, `SELECT uniqExact(c.repo_id, c.run_id) FROM ci_pipeline_runs AS c FINAL
 INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
 WHERE c.org_id = {org_id:String}`},

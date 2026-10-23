@@ -71,6 +71,101 @@ type Column struct {
 // devhealthsource's freshness test, which fails when production drifts
 // from what is declared here.
 var ProductionColumns = map[string][]Column{
+	// Six tables and their ENGINE come from ops baseline/head.json through cmd/pinopsbaseline
+	// (testdata/ops_baseline_pinned_tables.sql); TestOpsBaselinePinnedTablesMatchTheDeclaration
+	// fails on any hand edit.
+	"ai_workflow_artifact_edges": {
+		{Name: "edge_id", Type: "String"},
+		{Name: "org_id", Type: "UUID"},
+		{Name: "run_id", Type: "String"},
+		{Name: "artifact_type", Type: "LowCardinality(String)"},
+		{Name: "artifact_id", Type: "String"},
+		{Name: "provider", Type: "LowCardinality(String)"},
+		{Name: "repo_id", Type: "Nullable(UUID)"},
+		{Name: "confidence", Type: "Float32"},
+		{Name: "source", Type: "LowCardinality(String)"},
+		{Name: "evidence", Type: "String"},
+		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC') DEFAULT now64()"},
+	},
+	"ai_workflow_runs": {
+		{Name: "run_id", Type: "String"},
+		{Name: "org_id", Type: "UUID"},
+		{Name: "provider", Type: "LowCardinality(String)"},
+		{Name: "run_kind", Type: "LowCardinality(String)"},
+		{Name: "status", Type: "Nullable(String)"},
+		{Name: "tool", Type: "Nullable(String)"},
+		{Name: "model", Type: "Nullable(String)"},
+		{Name: "actor", Type: "Nullable(String)"},
+		{Name: "repo_id", Type: "Nullable(UUID)"},
+		{Name: "prompts_redacted", Type: "Bool"},
+		{Name: "prompt_hash", Type: "Nullable(String)"},
+		{Name: "prompt_length", Type: "Nullable(UInt32)"},
+		{Name: "started_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
+		{Name: "completed_at", Type: "Nullable(DateTime64(3, 'UTC'))"},
+		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "metadata", Type: "String"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC') DEFAULT now64()"},
+	},
+	"git_commit_stats": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "commit_hash", Type: "String"},
+		{Name: "file_path", Type: "String"},
+		{Name: "additions", Type: "Int32"},
+		{Name: "deletions", Type: "Int32"},
+		{Name: "old_file_mode", Type: "String"},
+		{Name: "new_file_mode", Type: "String"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
+		{Name: "org_id", Type: "String DEFAULT 'default'"},
+	},
+	"git_commits": {
+		{Name: "repo_id", Type: "UUID"},
+		{Name: "hash", Type: "String"},
+		{Name: "message", Type: "Nullable(String)"},
+		{Name: "author_name", Type: "Nullable(String)"},
+		{Name: "author_email", Type: "Nullable(String)"},
+		{Name: "author_when", Type: "DateTime64(3, 'UTC')"},
+		{Name: "committer_name", Type: "Nullable(String)"},
+		{Name: "committer_email", Type: "Nullable(String)"},
+		{Name: "committer_when", Type: "DateTime64(3, 'UTC')"},
+		{Name: "parents", Type: "UInt32"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
+		{Name: "org_id", Type: "String DEFAULT 'default'"},
+		{Name: "source_id", Type: "Nullable(UUID) DEFAULT NULL"},
+	},
+	"work_graph_edges": {
+		{Name: "edge_id", Type: "String"},
+		{Name: "source_type", Type: "String"},
+		{Name: "source_id", Type: "String"},
+		{Name: "target_type", Type: "String"},
+		{Name: "target_id", Type: "String"},
+		{Name: "edge_type", Type: "String"},
+		{Name: "repo_id", Type: "Nullable(UUID)"},
+		{Name: "provider", Type: "Nullable(String)"},
+		{Name: "provenance", Type: "String"},
+		{Name: "confidence", Type: "Float32"},
+		{Name: "evidence", Type: "String"},
+		{Name: "discovered_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC')"},
+		{Name: "event_ts", Type: "DateTime64(3, 'UTC') DEFAULT now()"},
+		{Name: "day", Type: "Date DEFAULT toDate(event_ts)"},
+		{Name: "org_id", Type: "String DEFAULT 'default'"},
+		{Name: "is_deleted", Type: "UInt8 DEFAULT 0"},
+	},
+	"work_graph_pr_review_outcome_edges": {
+		{Name: "edge_id", Type: "String"},
+		{Name: "org_id", Type: "UUID"},
+		{Name: "pr_id", Type: "String"},
+		{Name: "review_outcome_id", Type: "String"},
+		{Name: "outcome", Type: "Nullable(String)"},
+		{Name: "provider", Type: "LowCardinality(String)"},
+		{Name: "repo_id", Type: "Nullable(UUID)"},
+		{Name: "confidence", Type: "Float32"},
+		{Name: "source", Type: "LowCardinality(String)"},
+		{Name: "evidence", Type: "String"},
+		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC') DEFAULT now64()"},
+	},
 	"capacity_forecasts": {
 		{Name: "forecast_id", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
@@ -708,6 +803,9 @@ var ProductionColumns = map[string][]Column{
 		{Name: "story_points_completed", Type: "Float64"},
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "org_id", Type: "String"},
+		// Ops migration 141: the view of a row (empty = legacy, org, scope), the LAST column of the sorting
+		// key. A column with no DEFAULT, because ClickHouse refuses a default in a sorting key.
+		{Name: "row_view", Type: "LowCardinality(String)"},
 	},
 	// work_item_measure_capability answers whether a provider tracks a
 	// work_item_metrics_daily measure at all (ops migration 111). The
@@ -801,6 +899,15 @@ var ProductionColumns = map[string][]Column{
 // from live. A field that cannot be authored separately cannot drift
 // separately.
 var EngineFull = map[string]string{
+	// Six tables and their ENGINE come from ops baseline/head.json through cmd/pinopsbaseline
+	// (testdata/ops_baseline_pinned_tables.sql); TestOpsBaselinePinnedTablesMatchTheDeclaration
+	// fails on any hand edit.
+	"ai_workflow_artifact_edges":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, run_id, artifact_type, artifact_id, source) SETTINGS index_granularity = 8192",
+	"ai_workflow_runs":                        "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, provider, run_id) SETTINGS index_granularity = 8192",
+	"git_commit_stats":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path) SETTINGS index_granularity = 8192",
+	"git_commits":                             "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash) SETTINGS index_granularity = 8192",
+	"work_graph_edges":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_type, source_id, edge_type, target_type, target_id) SETTINGS index_granularity = 8192",
+	"work_graph_pr_review_outcome_edges":      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, pr_id, review_outcome_id, source) SETTINGS index_granularity = 8192",
 	"capacity_forecasts":                      "ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192",
 	"ci_pipeline_runs":                        "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id) SETTINGS index_granularity = 8192",
 	"cicd_metrics_daily":                      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192",
@@ -840,7 +947,7 @@ var EngineFull = map[string]string{
 	"work_item_relations_read":             "ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192",
 	"work_item_dependency_first_seen":      "AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_measure_capability":         "ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192",
-	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
+	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
 	// CHAOS-4398: read from dev-health-clickhouse-1 on 2026-08-28.
@@ -853,52 +960,12 @@ var EngineFull = map[string]string{
 	"work_unit_issue_size":      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
 }
 
-// EngineFullAlternates returns the further engine_full strings that live may
-// report for table besides the canonical one in EngineFull (CHAOS-10668, part
-// of CHAOS-8863), for a table whose sorting key is changing in ops.
-//
-// It is a function and not a second schema map on purpose: no fixture reads
-// it. The fixture DDL is always rendered from the canonical string in
-// EngineFull (TestDeclarationExposesNoSecondSource), so no test built on the
-// fixtures exercises an alternate. Only the live comparison uses it. The
-// live-schema-parity job reads the ops default branch, so a sorting-key change
-// lands there before acr can be rolled: both strings must pass until the
-// canonical string is moved to the new one (CHAOS-10669). Each string is
-// written out verbatim, never built from another one, and only a table that
-// EngineFull declares may have one.
-//
-// work_item_metrics_daily: ops migration 141 appends row_view to the sorting
-// key with MODIFY ORDER BY, which leaves the primary key at its old prefix, so
-// live reports both PRIMARY KEY and ORDER BY (the same shape as
-// operational_incidents above).
-func EngineFullAlternates(table string) []string {
-	switch table {
-	case "work_item_metrics_daily":
-		return []string{
-			"ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192",
-		}
-	}
-	return nil
-}
-
 // EngineFullMatchesLive reports whether live, the engine_full that a server
-// reports for table, is the canonical string in EngineFull or one of the
-// strings of EngineFullAlternates. A table EngineFull does not declare never
-// matches.
+// reports for table, is exactly the string in EngineFull. A table EngineFull
+// does not declare never matches.
 func EngineFullMatchesLive(table, live string) bool {
 	canonical, ok := EngineFull[table]
-	if !ok {
-		return false
-	}
-	if live == canonical {
-		return true
-	}
-	for _, accepted := range EngineFullAlternates(table) {
-		if live == accepted {
-			return true
-		}
-	}
-	return false
+	return ok && live == canonical
 }
 
 // AcceptsColumnType reports whether typ is the canonical type of the column or

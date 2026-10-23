@@ -49,9 +49,8 @@ const (
 	// BoundAnchorCarryNotAdmitted: the parent's binding was refused at
 	// admission, or is contested; nothing is injected.
 	BoundAnchorCarryNotAdmitted BoundAnchorCarry = "not_admitted"
-	// BoundAnchorCarryPendingHeld: the parent's admitted binding is still
-	// pending window confirmation and the pending carry is off; nothing is
-	// injected.
+	// BoundAnchorCarryPendingHeld is kept in the closed vocabulary and no
+	// longer produced: a pending parent carries like a bound one.
 	BoundAnchorCarryPendingHeld BoundAnchorCarry = "pending_held"
 	// BoundAnchorCarryInjected: the admitted binding's identity reached
 	// resolution as the carried anchor.
@@ -141,9 +140,6 @@ func (e *Engine) bindingCarryHint(t *anchorBindingTracker, hints []contractsv1.C
 		return contractsv1.ContextFabricSubjectHint{}, false
 	case !held.identifies():
 		t.carry = BoundAnchorCarryNotAdmitted
-		return contractsv1.ContextFabricSubjectHint{}, false
-	case t.parent.Binding.State == AnchorBindingPendingWindowConfirmation && !e.anchorBindingPendingCarryEnabled:
-		t.carry = BoundAnchorCarryPendingHeld
 		return contractsv1.ContextFabricSubjectHint{}, false
 	case confirmedAnchorReceipt(confirmed):
 		t.carry = BoundAnchorCarryReceiptSuperseded

@@ -153,10 +153,6 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.AnchorBindingCarryEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_ANCHOR_BINDING_CARRY_ENABLED", false); err != nil {
 		return err
 	}
-	// Default OFF -- see Config.AnchorBindingPendingCarryEnabled.
-	if cfg.AnchorBindingPendingCarryEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_ANCHOR_BINDING_PENDING_CARRY_ENABLED", false); err != nil {
-		return err
-	}
 	// Default OFF -- see Config.AnchorBindingFollowUpEnabled.
 	if cfg.AnchorBindingFollowUpEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_ANCHOR_BINDING_FOLLOW_UP_ENABLED", false); err != nil {
 		return err
@@ -254,7 +250,6 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_anchor_membership_enabled", c.AnchorMembershipOffersEnabled,
 		"context_fabric_anchor_binding_count_enabled", c.AnchorBindingCountEnabled,
 		"context_fabric_anchor_binding_carry_enabled", c.AnchorBindingCarryEnabled,
-		"context_fabric_anchor_binding_pending_carry_enabled", c.AnchorBindingPendingCarryEnabled,
 		"context_fabric_anchor_binding_follow_up_enabled", c.AnchorBindingFollowUpEnabled,
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
