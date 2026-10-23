@@ -1,5 +1,5 @@
 {
- "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, lists trimmed to 3",
+ "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, numbers replaced by 0 or 1 (fact totals synthetic), lists trimmed to 3",
  "_source_sha256": "58413787663d6846",
  "structured": {
   "committed_subjects": [
@@ -10,7 +10,7 @@
    }
   ],
   "completeness": {
-   "claimed_facts_count": 6,
+   "claimed_facts_count": 8,
    "outcomes": [
     {
      "cause_observed": false,
@@ -43,7 +43,7 @@
      "stage": "synthetic"
     }
    ],
-   "rows_count": 14,
+   "rows_count": 1,
    "state": "partial",
    "status_correction": {
     "deciding_outcome": "synthetic",
@@ -193,7 +193,7 @@
      {
       "fields": {
        "compounding_risk": {
-        "number": 0.760219185739379
+        "number": 1
        },
        "computed_at": {
         "string": "synthetic"
@@ -218,7 +218,7 @@
      {
       "fields": {
        "compounding_risk": {
-        "number": 0.6964000436501913
+        "number": 1
        },
        "computed_at": {
         "string": "synthetic"
@@ -353,7 +353,7 @@
      {
       "fields": {
        "backlog_size": {
-        "integer": 56
+        "integer": 1
        },
        "day": {
         "string": "synthetic"
@@ -374,7 +374,7 @@
         "string": "synthetic"
        },
        "unestimated_count": {
-        "integer": 56
+        "integer": 1
        },
        "work_scope_id": {
         "string": "synthetic"
@@ -405,7 +405,7 @@
      {
       "fields": {
        "backlog_size": {
-        "integer": 56
+        "integer": 1
        },
        "day": {
         "string": "synthetic"
@@ -417,14 +417,14 @@
         "integer": 0
        },
        "unestimated_count": {
-        "integer": 56
+        "integer": 1
        }
       }
      },
      {
       "fields": {
        "backlog_size": {
-        "integer": 56
+        "integer": 1
        },
        "day": {
         "string": "synthetic"
@@ -436,14 +436,14 @@
         "integer": 0
        },
        "unestimated_count": {
-        "integer": 56
+        "integer": 1
        }
       }
      },
      {
       "fields": {
        "backlog_size": {
-        "integer": 56
+        "integer": 1
        },
        "day": {
         "string": "synthetic"
@@ -455,7 +455,7 @@
         "integer": 0
        },
        "unestimated_count": {
-        "integer": 56
+        "integer": 1
        }
       }
      }
@@ -505,10 +505,10 @@
         "string": "synthetic"
        },
        "throughput_mean": {
-        "number": 7.380952380952381
+        "number": 1
        },
        "throughput_stddev": {
-        "number": 6.343171735370176
+        "number": 1
        },
        "work_scope_id": {
         "string": "synthetic"
@@ -530,7 +530,7 @@
         "boolean": false
        },
        "syn:2": {
-        "integer": 2
+        "integer": 1
        },
        "team_id": {
         "string": "synthetic"
@@ -539,10 +539,10 @@
         "string": "synthetic"
        },
        "throughput_mean": {
-        "number": 2.5194805194805197
+        "number": 1
        },
        "throughput_stddev": {
-        "number": 4.984678836872378
+        "number": 1
        },
        "work_scope_id": {
         "string": "synthetic"
@@ -583,10 +583,10 @@
         "string": "synthetic"
        },
        "throughput_mean": {
-        "number": 2.5194805194805197
+        "number": 1
        },
        "throughput_stddev": {
-        "number": 4.984678836872378
+        "number": 1
        }
       }
      },
@@ -599,26 +599,26 @@
         "string": "synthetic"
        },
        "throughput_mean": {
-        "number": 7.380952380952381
+        "number": 1
        },
        "throughput_stddev": {
-        "number": 6.343171735370176
+        "number": 1
        }
       }
      },
      {
       "fields": {
        "backlog_size": {
-        "integer": 5
+        "integer": 1
        },
        "day": {
         "string": "synthetic"
        },
        "throughput_mean": {
-        "number": 9.133333333333333
+        "number": 1
        },
        "throughput_stddev": {
-        "number": 5.17515431868676
+        "number": 1
        }
       }
      }
@@ -658,7 +658,7 @@
     "claimed_fact_ids": [
      "synthetic"
     ],
-    "confidence": 0.99,
+    "confidence": 1,
     "driver_id": "synthetic",
     "evidence_ref_ids": [
      "synthetic"
@@ -679,7 +679,7 @@
     "claimed_fact_ids": [
      "synthetic"
     ],
-    "confidence": 0.98,
+    "confidence": 1,
     "driver_id": "synthetic",
     "evidence_ref_ids": [
      "synthetic",
@@ -698,7 +698,7 @@
      }
     ],
     "category": "synthetic",
-    "confidence": 0.9,
+    "confidence": 1,
     "driver_id": "synthetic",
     "evidence_ref_ids": [
      "synthetic",
@@ -746,7 +746,7 @@
          "claim_id": "synthetic",
          "field": "synthetic",
          "kind": "claimed_fact_row",
-         "row_index": 6
+         "row_index": 1
         },
         "value": 0
        },
@@ -756,7 +756,7 @@
          "claim_id": "synthetic",
          "field": "synthetic",
          "kind": "claimed_fact_row",
-         "row_index": 5
+         "row_index": 1
         },
         "value": 0
        },
@@ -766,7 +766,7 @@
          "claim_id": "synthetic",
          "field": "synthetic",
          "kind": "claimed_fact_row",
-         "row_index": 4
+         "row_index": 1
         },
         "value": 0
        }

@@ -198,20 +198,28 @@ def marked_turns(conv, absent_ids):
 
 def score_conversation(conv, recorded, absent_ids=frozenset()):
     """`recorded` = per-turn dicts `{obs, ran, redeem_unavailable}` in turn order (one
-    replicate). Returns per-turn results plus `redeemed` per clarify turn. A turn that expects
-    an id in `absent_ids` is `unscored` (why ABSENT_WHY), whether or not it ran."""
+    replicate). Returns per-turn results plus `redeemed` per clarify turn. A turn that ran and
+    expects an id in `absent_ids` is `unscored` (why ABSENT_WHY); so is a `redeem_unavailable`
+    turn that follows such a turn. A marked turn that did not run stays `not_measured`."""
     turns = conv["turns"]
     if len(recorded) != len(turns):
         raise ValueError(f"{conv['id']}: {len(recorded)} recorded turns for {len(turns)} declared")
     marked = marked_turns(conv, absent_ids) if absent_ids else set()
-    res = []
+    res, cut = [], False
     for i, (t, rec) in enumerate(zip(turns, recorded)):
-        if i in marked:
+        ran = bool(rec.get("ran"))
+        # A turn that did not run stays not_measured (a harness failure must stay visible),
+        # except the redemption chain cut off because the marked clarify turn offered nothing
+        # to redeem.
+        cascade = (not ran) and cut and rec.get("why") == "redeem_unavailable"
+        if (i in marked and ran) or cascade:
+            cut = cascade or t.get("expect") == CLARIFY
             res.append({"n": t["n"], "verdict": UNSCORED, "why": ABSENT_WHY, "redeemed": None})
-        elif not rec.get("ran"):
+        elif not ran:
             res.append({"n": t["n"], "verdict": NOT_MEASURED,
                         "why": rec.get("why") or "turn_not_run", "redeemed": None})
         else:
+            cut = False
             s = score_turn(t, rec["obs"])
             res.append({"n": t["n"], **s, "redeemed": None})
     for i, t in enumerate(turns):

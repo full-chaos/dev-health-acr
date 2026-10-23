@@ -455,6 +455,43 @@ def test_mcp_projection_no_match_commits_and_offers_nothing():
         "no_match", [], [], 0)
 
 
+def test_marked_turn_that_did_not_run_stays_not_measured():
+    rec = [{"ran": False, "why": "harness_failed"}, {"ran": True, "obs": _obs("complete", ["s:here"])}]
+    got = C.score_conversation(_conv_absent(), rec, absent_ids=frozenset({"s:gone"}))
+    assert [r["verdict"] for r in got] == ["not_measured", "agree"], got
+    import merge_conversations as M
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "rep1"
+        d.mkdir()
+        (d / "conversation-summary.json").write_text(json.dumps(
+            {"rep": 1, "planned_ids": ["ca"], "records": [{"id": "ca", "rep": 1, "turns": rec}]}))
+        out = M.merge(tmp, [_conv_absent()], 1, absent_ids=frozenset({"s:gone"}))
+    assert out["tally"]["not_measured"] == 1 and out["problems"] and out["marked_absent_turns"] == 0
+
+
+def _cut_rec(clarify_ran=True):
+    return [{"ran": True, "obs": _obs("complete", ["s:a"])},
+            {"ran": clarify_ran, "obs": _obs("clarification_required", [], ["s:a"], 0),
+             **({} if clarify_ran else {"why": "harness_failed"})},
+            {"ran": False, "why": "redeem_unavailable"}]
+
+
+def test_redeem_unavailable_after_a_marked_clarify_turn_is_marked_with_it():
+    got = C.score_conversation(_conv(), _cut_rec(), absent_ids=frozenset({"s:b"}))
+    assert [r["verdict"] for r in got] == ["agree", "unscored", "unscored"], got
+
+
+def test_redeem_unavailable_stays_not_measured_when_nothing_marked_it():
+    got = C.score_conversation(_conv(), _cut_rec(), absent_ids=frozenset({"s:other"}))
+    assert got[2]["verdict"] == "not_measured", got
+    unrun = C.score_conversation(_conv(), _cut_rec(clarify_ran=False), absent_ids=frozenset({"s:b"}))
+    assert unrun[1]["verdict"] == "not_measured" and unrun[2]["verdict"] == "not_measured", unrun
+    conv = _conv()
+    conv["turns"][0]["expected_subject"] = {"canonical_id": "s:gone"}
+    early = C.score_conversation(conv, _cut_rec(), absent_ids=frozenset({"s:gone"}))
+    assert early[0]["verdict"] == "unscored" and early[2]["verdict"] == "not_measured", early
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

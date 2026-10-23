@@ -1,5 +1,5 @@
 {
- "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, lists trimmed to 3",
+ "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, numbers replaced by 0 or 1 (fact totals synthetic), lists trimmed to 3",
  "_source_sha256": "06015ae3d3868a57",
  "structured": {
   "committed_subjects": [],

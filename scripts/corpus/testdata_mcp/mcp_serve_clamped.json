@@ -1,5 +1,5 @@
 {
- "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, lists trimmed to 3",
+ "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, numbers replaced by 0 or 1 (fact totals synthetic), lists trimmed to 3",
  "_source_sha256": "94a98135a754e31e",
  "structured": {
   "committed_subjects": [
@@ -10,7 +10,7 @@
    }
   ],
   "completeness": {
-   "claimed_facts_count": 26,
+   "claimed_facts_count": 5,
    "outcomes": [
     {
      "cause_observed": false,
@@ -44,7 +44,7 @@
      "stage": "synthetic"
     }
    ],
-   "rows_count": 26,
+   "rows_count": 1,
    "state": "partial",
    "status_correction": {
     "deciding_outcome": "synthetic",
