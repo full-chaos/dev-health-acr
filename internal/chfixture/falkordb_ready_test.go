@@ -124,6 +124,56 @@ func TestAwaitFalkorServingFailsLoudWhenTheIndexCommandNeverSucceeds(t *testing.
 	}
 }
 
+func TestAwaitFalkorServingTreatsARepeatedIndexCreateAsServing(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	var deleted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveFakeRESPIndexError(c, "-ERR Attribute 'k' is already indexed\r\n", &deleted)
+		}
+	}()
+	var pl probeLog
+	if err := awaitFalkorServing(context.Background(), ln.Addr().String(), 700*time.Millisecond, 150*time.Millisecond, 50*time.Millisecond, pl.logf); err != nil {
+		t.Fatalf("an already-indexed reply means an earlier try executed and must count as serving: %v", err)
+	}
+	if got := deleted.Load(); got != 1 {
+		t.Fatalf("the throwaway graph must be deleted once, got %d", got)
+	}
+}
+
+func serveFakeRESPIndexError(c net.Conn, indexReply string, deleted *atomic.Int32) {
+	defer func() { _ = c.Close() }()
+	buf := make([]byte, 4096)
+	for {
+		n, err := c.Read(buf)
+		if err != nil {
+			return
+		}
+		req := strings.ToUpper(string(buf[:n]))
+		switch {
+		case strings.Contains(req, "PING"):
+			_, _ = c.Write([]byte("+PONG\r\n"))
+		case strings.Contains(req, "GRAPH.LIST"):
+			_, _ = c.Write([]byte("*0\r\n"))
+		case strings.Contains(req, "GRAPH.QUERY"):
+			_, _ = c.Write([]byte(indexReply))
+		case strings.Contains(req, "GRAPH.DELETE"):
+			deleted.Add(1)
+			_, _ = c.Write([]byte("+Graph removed\r\n"))
+		case strings.Contains(req, "HELLO"), strings.Contains(req, "CLIENT"):
+			_, _ = c.Write([]byte("-ERR unknown command\r\n"))
+		}
+	}
+}
+
 func TestAwaitFalkorServingUsesAFreshGraphNameForEveryStart(t *testing.T) {
 	a, errA := probeGraphName()
 	b, errB := probeGraphName()

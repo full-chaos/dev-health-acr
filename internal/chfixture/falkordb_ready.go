@@ -99,8 +99,15 @@ func probeFalkor(ctx context.Context, client *redis.Client, graph string, tryLim
 	if err := client.Do(tryCtx, "GRAPH.LIST").Err(); err != nil {
 		return fmt.Errorf("GRAPH.LIST: %w", err)
 	}
-	if err := client.Do(tryCtx, "GRAPH.QUERY", graph, "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)").Err(); err != nil {
+	if err := client.Do(tryCtx, "GRAPH.QUERY", graph, "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)").Err(); err != nil && !alreadyIndexed(err) {
 		return fmt.Errorf("GRAPH.QUERY CREATE INDEX: %w", err)
 	}
 	return nil
+}
+
+// alreadyIndexed reports the error a repeated CREATE INDEX gets when an earlier try executed but its reply was lost;
+// the adapter's schema bootstrap treats the same error as success.
+func alreadyIndexed(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "already indexed") || strings.Contains(msg, "already exists")
 }
