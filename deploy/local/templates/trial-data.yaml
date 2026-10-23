@@ -205,6 +205,9 @@ spec:
             - name: backup-disk-config
               mountPath: /etc/clickhouse-server/config.d/backup-disk.xml
               subPath: backup-disk.xml
+            - name: backup-disk-config
+              mountPath: /etc/clickhouse-server/config.d/logs-off.xml
+              subPath: logs-off.xml
           readinessProbe:
             httpGet:
               path: /ping
@@ -266,6 +269,30 @@ data:
         <allowed_path>/backups/</allowed_path>
       </backups>
     </clickhouse>
+  logs-off.xml: |
+      <clickhouse>
+        <text_log remove="1"/>
+        <trace_log remove="1"/>
+        <processors_profile_log remove="1"/>
+        <metric_log remove="1"/>
+        <asynchronous_metric_log remove="1"/>
+        <part_log remove="1"/>
+        <query_log remove="1"/>
+        <query_thread_log remove="1"/>
+        <query_views_log remove="1"/>
+        <query_metric_log remove="1"/>
+        <error_log remove="1"/>
+        <background_schedule_pool_log remove="1"/>
+        <asynchronous_insert_log remove="1"/>
+        <backup_log remove="1"/>
+        <opentelemetry_span_log remove="1"/>
+        <crash_log remove="1"/>
+        <blob_storage_log remove="1"/>
+        <s3queue_log remove="1"/>
+        <aggregated_zookeeper_log remove="1"/>
+        <delta_lake_metadata_log remove="1"/>
+        <iceberg_metadata_log remove="1"/>
+      </clickhouse>
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
