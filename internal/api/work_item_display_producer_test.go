@@ -190,7 +190,7 @@ func displayProducerTransports(t *testing.T, f *freshTupleProducerFixture, store
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := len(f.client.phases)
+	before := len(f.client.queries)
 	syntheses := 0
 	f.model.observe = func(contextfabric.SynthesisInput) { syntheses++ }
 	called, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "investigate_question", Arguments: json.RawMessage(args)})
@@ -238,8 +238,12 @@ func displayProducerTransports(t *testing.T, f *freshTupleProducerFixture, store
 			}
 		}
 	}
-	if syntheses != 0 || !reflect.DeepEqual(f.client.phases[before:], []string{"s1"}) {
-		t.Errorf("reuse did fresh content/synthesis: phases=%v syntheses=%d", f.client.phases[before:], syntheses)
+	var reused []string
+	for _, query := range f.client.queries[before:] {
+		reused = append(reused, query.phase)
+	}
+	if syntheses != 0 || !reflect.DeepEqual(reused, []string{"s1"}) {
+		t.Errorf("reuse did fresh content/synthesis: phases=%v syntheses=%d", reused, syntheses)
 	}
 	if err = file.Sync(); err != nil {
 		t.Fatal(err)
