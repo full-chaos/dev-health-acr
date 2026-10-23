@@ -2222,14 +2222,16 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 // fast first draw does not shrink the reserve below what a slower draw costs.
 const synthesisRedrawFloor = 20 * time.Second
 
-// synthesisRedrawReserve is the slice of the request deadline a redraw needs:
-// the composition reserve plus the expected cost of one draw (twice the
-// slowest draw so far, at least synthesisRedrawFloor), doubled when a fallback
-// leg must still fit after it. It never exceeds the old gate (Config.Timeout,
+// synthesisRedrawReserve is the slice of the remaining request deadline a
+// redraw needs: the expected cost of one draw (twice the slowest draw so far,
+// at least synthesisRedrawFloor), doubled when a fallback leg must still fit
+// after it. The ctx the production caller passes already ends the composition
+// reserve before the request deadline (boundSynthesisCallContext), so that
+// slice is not added here. It never exceeds the old gate (Config.Timeout,
 // doubled with a fallback), so a redraw the old gate allowed is still allowed.
 func synthesisRedrawReserve(timeout time.Duration, hasFallback bool, slowestDraw time.Duration) time.Duration {
 	ceiling, attempt := timeout, max(synthesisRedrawFloor, 2*slowestDraw)
-	reserved := contractsv1.ContextFabricSynthesisCompositionReserveSeconds*time.Second + attempt
+	reserved := attempt
 	if hasFallback {
 		ceiling *= 2
 		reserved += attempt

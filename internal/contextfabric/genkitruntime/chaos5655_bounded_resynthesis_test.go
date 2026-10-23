@@ -444,8 +444,8 @@ func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *te
 	}
 	const (
 		attemptTimeout = 90 * time.Second
-		budget         = 40 * time.Second
-		reserved       = 45 * time.Second // composition reserve 5s + a redraw 20s + the fallback attempt 20s
+		budget         = 30 * time.Second
+		reserved       = 40 * time.Second // a redraw 20s + the fallback attempt 20s
 	)
 	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: attemptTimeout, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling, Fallback: fallback})
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
@@ -856,8 +856,8 @@ func TestBoundedResynthesisRedrawsWhenTheRemainingBudgetCoversTheDrawsOwnCost(t 
 		t.Fatalf("outcome = %q, generator.calls = %d, want success after 2 draws", receipt.Outcome, gen.calls)
 	}
 	attrs := onlyDecisionEvent(t, handler).Attrs
-	if got := attrs["resynthesis_deadline_reserved_ms"]; got != int64(49000) {
-		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 49000 (5s + 22s + 22s)", got)
+	if got := attrs["resynthesis_deadline_reserved_ms"]; got != int64(44000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 44000 (22s + 22s)", got)
 	}
 }
 
@@ -872,7 +872,7 @@ func TestBoundedResynthesisStillStopsBelowTheDrawsOwnCost(t *testing.T) {
 	defer cancel()
 
 	if _, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err == nil {
-		t.Fatal("SynthesizeAnswer() error = nil, want the fallback's error: 40s left is under the 49s a redraw plus a fallback needs")
+		t.Fatal("SynthesizeAnswer() error = nil, want the fallback's error: 40s left is under the 44s a redraw plus a fallback needs")
 	}
 	if gen.calls != 1 {
 		t.Fatalf("generator.calls = %d, want 1", gen.calls)
@@ -907,9 +907,36 @@ func TestBoundedResynthesisReserveWithoutFallbackIsOneExpectedDraw(t *testing.T)
 	defer cancel()
 
 	if _, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
-		t.Fatalf("SynthesizeAnswer() error = %v, want success on draw 2: 30s left covers 5s + one 22s draw, no fallback", err)
+		t.Fatalf("SynthesizeAnswer() error = %v, want success on draw 2: 30s left covers one 22s draw, no fallback", err)
 	}
-	if got := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_reserved_ms"]; got != int64(27000) {
-		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 27000", got)
+	if got := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_reserved_ms"]; got != int64(22000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 22000", got)
+	}
+}
+
+// The production caller passes a ctx that already ends the composition
+// reserve before the request deadline, so the gate must be satisfiable by the
+// time the REQUEST has left after one draw, with that reserve withheld: 69s
+// of request, an 11s draw, 5s withheld -> 53s left, a 44s reserve.
+func TestBoundedResynthesisRunsThroughTheProductionWrapperWithItsOwnWithheldReserve(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{invalidTitleSynthesisOutput(), claimedSynthesisOutput()}}
+	fallback := &trackedErroringFallback{err: errors.New("fallback must not be needed"), receipt: validReceipt(contextfabric.ModelOperationSynthesize)}
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	rt := mustRuntime(t, slowDrawGenerator{gen, clock, 11 * time.Second}, Config{Logger: logger, Timeout: 45 * time.Second, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: 3, Fallback: fallback})
+	rt.now = clock.read
+	ctx, cancel := context.WithTimeout(context.Background(), 69*time.Second)
+	defer cancel()
+
+	synthesizer := contextfabric.RuntimeAnswerSynthesizer{Runtime: rt}
+	if _, err := synthesizer.Synthesize(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
+		t.Fatalf("Synthesize() error = %v, want success on the second draw through the wrapper", err)
+	}
+	if gen.calls != 2 || fallback.calls != 0 {
+		t.Fatalf("generator.calls = %d fallback.calls = %d, want 2 and 0", gen.calls, fallback.calls)
+	}
+	if got := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_reserved_ms"]; got != int64(44000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 44000", got)
 	}
 }
