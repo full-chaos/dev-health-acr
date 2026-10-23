@@ -136,6 +136,11 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		SearchKind: func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
 			return a.kindScopedFulltextSearchNodes(ctx, key, principal.OrgID, term, kind, limit, temporal)
 		},
+		// CHAOS-10941: kind-scoped semantic retrieval, offer-only (see
+		// graphrank.ResolveDeps.KindScopedSemantic).
+		KindScopedSemantic: func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]graphrank.CandidateNode, bool, bool, error) {
+			return a.kindScopedSemanticSearchNodes(ctx, key, principal.OrgID, term, kind, limit, temporal)
+		},
 		// CHAOS-4348: every repository/project/team node in scope, once per
 		// resolution -- see ResolveDeps.ExactNameCandidates' own doc comment
 		// (graphrank/resolve.go) for why this is a separate, unranked

@@ -54,6 +54,12 @@ const (
 	// OfferAdmittedAboveFloor: similarity only, and the confidence exceeds
 	// OfferSimilarityFloor.
 	OfferAdmittedAboveFloor OfferAdmission = "above_floor"
+	// OfferAdmittedKindScopedSemantic (CHAOS-10941): a vector-only find of the
+	// kind-scoped semantic arm for a hinted kind. Assigned by the resolution
+	// seam, never by ClassifyOffer (so it is not in OfferAdmissions): the arm
+	// is bounded to one hinted kind's own population and the similarity
+	// floor, and its finds can only be offered, never committed.
+	OfferAdmittedKindScopedSemantic OfferAdmission = "kind_scoped_semantic"
 	// OfferRefusedVectorOnly: matched by vector proximity alone.
 	OfferRefusedVectorOnly OfferAdmission = "vector_only"
 	// OfferRefusedAtOrBelowFloor: similarity only, confidence at or below
@@ -71,7 +77,7 @@ var OfferAdmissions = []OfferAdmission{
 // Admitted reports whether the admission lets the candidate be offered.
 func (a OfferAdmission) Admitted() bool {
 	switch a {
-	case OfferAdmittedCommitted, OfferAdmittedIdentity, OfferAdmittedAboveFloor:
+	case OfferAdmittedCommitted, OfferAdmittedIdentity, OfferAdmittedAboveFloor, OfferAdmittedKindScopedSemantic:
 		return true
 	default:
 		return false

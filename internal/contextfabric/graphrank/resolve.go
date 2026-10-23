@@ -339,6 +339,16 @@ type ResolveDeps struct {
 	// count-closure mismatch, malformed row) is captured AS a returned
 	// State value instead.
 	ConfirmedKindVectorCensus func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) ConfirmedKindVectorCensusOutcome
+	// KindScopedSemantic (CHAOS-10941) is an optional kind-scoped semantic
+	// retrieval for a frame/receipt/caller-hinted repository/project/team
+	// kind: a paraphrase that shares no token with the node ("self-hosted CI
+	// executor setup repository") cannot reach it through any lexical arm,
+	// and the unscoped vector arm is crowded by high-population kinds and
+	// withheld on a historical axis. Its finds are OFFER-ONLY: they never
+	// enter candidatesBySubject, never commit, never register an identity
+	// claim (applyKindScopedSemanticOffers). nil = no-op, same convention as
+	// every optional hook here.
+	KindScopedSemantic func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
 	// VectorMarginCommitThreshold is CHAOS-3829's per-embedder-identity
 	// calibrated M (falkorgraph's retrieval_policy.go RetrievalPolicy.
 	// VectorMarginCommitThreshold): the vector-arm top-1/top-2 similarity
@@ -3921,6 +3931,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// which is exactly the artifact this rescue produces. Skipping it
 	// under offersOnly would silently withhold the low-population-kind
 	// offer from the one call whose entire purpose is building offers.
+	var kindScopedSemanticCandidates []contextfabric.SubjectCandidate
+	if confirmedKind == nil && len(resolution.Committed) == 0 {
+		if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
+			semantic, semanticDegraded, semanticErr := applyKindScopedSemanticOffers(ctx, principal, request, deps, terms, hinted, admission)
+			if semanticErr != nil {
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, semanticErr
+			}
+			kindScopedSemanticCandidates = semantic
+			resolution.RetrievalDegraded = resolution.RetrievalDegraded || semanticDegraded
+		}
+	}
 	var lowPopulationOfferCandidates []contextfabric.SubjectCandidate
 	if confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
 		offered, offerErr := applyLowPopulationKindOffers(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, effectiveSearchLimit)
@@ -4081,6 +4102,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// trace loop immediately below is the one place that DID need its own
 	// dedup guard for this (fixed there, not here).
 	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
+	coverageCandidates = append(coverageCandidates, kindScopedSemanticCandidates...)
+	kindScopedSemanticKeys := make(map[string]bool, len(kindScopedSemanticCandidates))
+	for _, candidate := range kindScopedSemanticCandidates {
+		kindScopedSemanticKeys[SubjectKey(candidate.Subject)] = true
+	}
 	// The coverage-floor and low-population finds reach the offer
 	// builders outside resolution.Candidates, so the offer floor applies to
 	// them here through the SAME classifier the resolution seam uses. The
@@ -4093,6 +4119,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	coverageAdmitted := make([]contextfabric.SubjectCandidate, 0, len(coverageCandidates))
 	for _, candidate := range coverageCandidates {
 		admission := offerAdmissionOf(candidate, offerFloorCommitted)
+		if admission == OfferRefusedVectorOnly && kindScopedSemanticKeys[SubjectKey(candidate.Subject)] {
+			admission = OfferAdmittedKindScopedSemantic
+		}
 		offerFloorRows = append(offerFloorRows, offerFloorRow(candidate, admission))
 		if admission.Admitted() {
 			coverageAdmitted = append(coverageAdmitted, candidate)
@@ -4100,6 +4129,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 	}
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
+	if len(kindScopedSemanticKeys) > 0 {
+		var leading []contextfabric.SubjectCandidate
+		for _, candidate := range coverageAdmitted {
+			if kindScopedSemanticKeys[SubjectKey(candidate.Subject)] {
+				leading = append(leading, candidate)
+			}
+		}
+		kindOfferCandidates = unionCandidatesForOffer(leading, kindOfferCandidates)
+	}
 	// offerFullPool is the untruncated merged pool the kind offers read for
 	// "which kinds does the pool hold", held to the same floor.
 	offerFullPool := make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
