@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
@@ -92,11 +93,7 @@ func serve(args []string) error {
 	}
 	defer shutdownExporter(exporter)
 	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
-	logger.Info("starting acr-api", append([]any{
-		"version", info.Version,
-		"commit", info.Commit,
-		"build_date", info.Date,
-	}, cfg.SafeAttributes()...)...)
+	logStarting(logger, info, cfg, os.LookupEnv)
 	exporter.LogStart(ctx, logger)
 
 	metrics, err := hostedmetrics.New(exporter.Meter(), hostedmetrics.Vocabularies{
@@ -143,4 +140,9 @@ func requirementOutcomeVocabulary() []string {
 		values = append(values, string(member))
 	}
 	return values
+}
+
+func logStarting(logger *slog.Logger, info version.Info, cfg config.Config, lookup func(string) (string, bool)) {
+	attributes := append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)
+	logger.Info("starting acr-api", append(attributes, embedprovider.StartupAttributes(lookup)...)...)
 }
