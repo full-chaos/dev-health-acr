@@ -767,6 +767,25 @@ qi_off_count="$(grep -cE '^\s+- ports:\s*$' <<<"$qi_off_api" || true)"
   || fail_gate "query-egress: queryInternalPort must add exactly one API egress rule (got $qi_on_count vs $qi_off_count)"
 pass "query-egress: API egress rule is gated on queryInternalPort"
 
+# clickhouseExtraPorts: one port-only rule per entry, API policy only, default none; 9000 stays.
+ch_x="$(render --set 'networkPolicy.egress.clickhouseExtraPorts={9440}')"
+ch_x_api="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$ch_x")"
+grep -Pzq 'protocol: TCP\n\s+port: 9000\n' <<<"$ch_x_api" \
+  || fail_gate "clickhouse-extra-ports: the clickhousePort 9000 rule must stay"
+grep -Pzq 'protocol: TCP\n\s+port: 9440\n' <<<"$ch_x_api" \
+  || fail_gate "clickhouse-extra-ports: clickhouseExtraPorts=[9440] must add a TCP 9440 egress rule"
+if grep -qE 'port: 9440' <<<"$default_api_np"; then
+  fail_gate "clickhouse-extra-ports: the default render must carry no 9440 egress rule"
+fi
+ch_x_count="$(grep -cE '^\s+- ports:\s*$' <<<"$ch_x_api" || true)"
+ch_d_count="$(grep -cE '^\s+- ports:\s*$' <<<"$default_api_np" || true)"
+(( ch_x_count == ch_d_count + 1 )) \
+  || fail_gate "clickhouse-extra-ports: one extra port must add exactly one API egress rule (got $ch_x_count vs $ch_d_count)"
+if render --set 'networkPolicy.egress.clickhouseExtraPorts={0}' >/dev/null 2>&1; then
+  fail_gate "clickhouse-extra-ports: port 0 must be refused by the schema"
+fi
+pass "clickhouse-extra-ports: extra ClickHouse egress ports render one rule each"
+
 # CHAOS-7075: GWC's MCP listener egress rule (graphql_query) is API-policy
 # only, default off (queryMcpPort 0), and one rule when set.
 qm_on="$(render --set networkPolicy.egress.queryMcpPort=8092)"
