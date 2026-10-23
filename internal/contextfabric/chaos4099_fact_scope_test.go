@@ -1112,16 +1112,27 @@ type recordingScopeExpander struct {
 	// the resolver's per-target root attribution (as opposed to the
 	// origins[0] fallback) without a real ClickHouse-backed expander.
 	targetRoot map[string]SubjectRef
+	// mu guards the recorded calls: the resolver may expand several
+	// requirements at once.
+	mu sync.Mutex
+	// perKind answers by requirement kind, which stays stable when the
+	// requirements of one Resolve expand side by side. perCall answers by
+	// call order and is only for turns that expand one requirement.
+	perKind map[FactKind][]SubjectRef
 }
 
 func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request FactScopeExpansionRequest) (FactScopeExpansionResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.calls++
 	e.requests = append(e.requests, request)
 	if e.err != nil {
 		return FactScopeExpansionResult{Counts: e.counts}, e.err
 	}
 	targets := e.targets
-	if len(e.perCall) > 0 {
+	if kindTargets, ok := e.perKind[request.RequirementKind]; ok {
+		targets = kindTargets
+	} else if len(e.perCall) > 0 {
 		if e.calls-1 < len(e.perCall) {
 			targets = e.perCall[e.calls-1]
 		} else {
@@ -1933,14 +1944,10 @@ func TestChaos4101_TeamSubjectAdmitsRealFactsAcrossAllThreeCapabilities(t *testi
 		stubs[kind] = stub
 		providers = append(providers, stub)
 	}
-	// perCall order MUST match caseSixtyRequirements()'s own requirement
-	// order (PullRequests, Reviews, Metrics): Resolve walks input.Requirements
-	// in that order, one ExpandFactScope call per requirement, single team
-	// origin kind.
-	expander := &recordingScopeExpander{perCall: [][]SubjectRef{
-		{prTarget},
-		{reviewTarget},
-		{repoTarget},
+	expander := &recordingScopeExpander{perKind: map[FactKind][]SubjectRef{
+		FactPullRequests: {prTarget},
+		FactReviews:      {reviewTarget},
+		FactMetrics:      {repoTarget},
 	}}
 	registry, err := NewFactCapabilityRegistry(providers, FactRegistryOptions{ScopeExpander: expander})
 	if err != nil {
