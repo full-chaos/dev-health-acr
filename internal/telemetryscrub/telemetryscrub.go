@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -140,7 +141,7 @@ const (
 func classify(key string) keyClass {
 	c := compact(key)
 	if !benignKeys[c] {
-		cf := strings.ReplaceAll(c, "tokens", "")
+		cf := strings.ReplaceAll(strings.ReplaceAll(c, "tokens", ""), "secretar", "")
 		for _, f := range protectedFragments {
 			if strings.Contains(cf, f) {
 				return classProtected
@@ -192,7 +193,10 @@ func classPath(groups []string, key string) keyClass {
 			network = true
 		}
 	}
-	if !network && classify(strings.Join(append(append([]string{}, groups...), key), ".")) == classNetwork {
+	switch classify(strings.Join(append(append([]string{}, groups...), key), ".")) {
+	case classProtected:
+		return classProtected
+	case classNetwork:
 		network = true
 	}
 	if network {
@@ -231,6 +235,24 @@ func mayContainShape(s string) bool {
 }
 
 // redactUserinfo replaces everything between "://" and the last "@" of the same whitespace-delimited token.
+// looksLikeUserinfo tells credentials from a host-and-path prefix: "host/users/" and "host:8080/users/" are paths.
+func looksLikeUserinfo(before string) bool {
+	slash := strings.Index(before, "/")
+	if slash < 0 {
+		return true
+	}
+	colon := strings.Index(before, ":")
+	if colon < 0 || colon > slash {
+		return false
+	}
+	for _, r := range before[colon+1 : slash] {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+	return false
+}
+
 func redactUserinfo(s string) string {
 	var out strings.Builder
 	for {
@@ -245,7 +267,7 @@ func redactUserinfo(s string) string {
 			end = len(rest)
 		}
 		token := rest[:end]
-		if at := strings.LastIndex(token, "@"); at >= 0 {
+		if at := strings.LastIndex(token, "@"); at >= 0 && looksLikeUserinfo(token[:at]) {
 			out.WriteString(Redacted + "@")
 			token = token[at+1:]
 		}
@@ -273,12 +295,16 @@ func mayContainPair(s string) bool {
 	return false
 }
 
-var queryPair = regexp.MustCompile(`([?&])([A-Za-z0-9_.-]+)=([^\s&#"']*)`)
+var queryPair = regexp.MustCompile(`([?&])([A-Za-z0-9_.%+-]+)=([^\s&#"']*)`)
 
 func redactQuery(s string) string {
 	return queryPair.ReplaceAllStringFunc(s, func(m string) string {
 		sub := queryPair.FindStringSubmatch(m)
-		if classify(sub[2]) == classProtected {
+		key := sub[2]
+		if decoded, err := url.QueryUnescape(key); err == nil {
+			key = decoded
+		}
+		if classify(key) == classProtected {
 			return sub[1] + sub[2] + "=" + Redacted
 		}
 		return m
@@ -315,11 +341,12 @@ func scrubString(s string) string {
 
 func networkPrefix(raw string) string {
 	raw = strings.TrimSpace(raw)
+	var addr netip.Addr
 	if p, err := netip.ParsePrefix(raw); err == nil {
-		return p.Masked().String()
-	}
-	addr, err := netip.ParseAddr(raw)
-	if err != nil {
+		addr = p.Addr()
+	} else if a, err := netip.ParseAddr(raw); err == nil {
+		addr = a
+	} else {
 		return Redacted
 	}
 	addr = addr.WithZone("").Unmap()
@@ -456,6 +483,10 @@ func tree(v reflect.Value, depth int, b *budget, path []string) any {
 			if !f.IsExported() {
 				continue
 			}
+			if b.left <= 0 {
+				out["[truncated]"] = true
+				break
+			}
 			class := classClean
 			for _, name := range fieldNames(f) {
 				switch c := classPath(path, name); {
@@ -495,6 +526,12 @@ func clean(groups []string, a slog.Attr) bool {
 }
 
 func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
+	if a.Value.Kind() == slog.KindLogValuer {
+		if err, ok := a.Value.Any().(error); ok && classPath(groups, a.Key) == classClean {
+			a.Value = slog.StringValue(ErrorClass(err))
+			return a
+		}
+	}
 	a.Value = a.Value.Resolve()
 	if a.Value.Kind() == slog.KindGroup {
 		if a.Key != "" && classify(a.Key) == classProtected {

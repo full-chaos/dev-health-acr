@@ -222,10 +222,13 @@ func TestDefaultLoggerCanBeScrubbed(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	slog.SetDefault(slog.New(Handler(slog.NewJSONHandler(&buf, nil))))
-	slog.Info("m", "token", "default-raw-secret")
-	if strings.Contains(buf.String(), "default-raw-secret") {
+	InstallDefault(&buf, slog.LevelInfo)
+	slog.Info("m", "token", "default-raw-secret", "remote_ip", "203.0.113.77")
+	if strings.Contains(buf.String(), "default-raw-secret") || strings.Contains(buf.String(), "203.0.113.77") {
 		t.Errorf("package-level call leaked: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "203.0.113.0/24") {
+		t.Errorf("default logger is not the scrubber: %s", buf.String())
 	}
 }
 
@@ -245,6 +248,11 @@ func TestCleanRecordPassesThroughUnchanged(t *testing.T) {
 	r.AddAttrs(slog.String("org_id", "o1"), slog.Int("n", 1))
 	if err := h.Handle(context.Background(), r); err != nil || got.NumAttrs() != 2 {
 		t.Fatalf("err=%v attrs=%d", err, got.NumAttrs())
+	}
+	values := map[string]string{}
+	got.Attrs(func(a slog.Attr) bool { values[a.Key] = a.Value.String(); return true })
+	if values["org_id"] != "o1" || values["n"] != "1" {
+		t.Fatalf("values changed: %v", values)
 	}
 }
 
@@ -492,5 +500,53 @@ func TestURLQueryParametersAreScrubbed(t *testing.T) {
 	}
 	if got := ScrubText("https://h/cb?x=1&y=2"); got != "https://h/cb?x=1&y=2" {
 		t.Errorf("clean url changed: %q", got)
+	}
+}
+
+type valuerErr struct{}
+
+func (valuerErr) Error() string        { return "valuer-error-secret" }
+func (valuerErr) LogValue() slog.Value { return slog.StringValue("logvaluer-error-secret") }
+
+func TestR2JoinedPathsLogValuerErrorsPrefixesAndEncodedKeys(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) {
+		l.Info("m", slog.Group("api", "key", "group-path-secret"))
+		l.Info("m", "payload", map[string]any{"api": map[string]any{"key": "map-path-secret"}})
+		l.Info("m", "custom_error", valuerErr{})
+		l.Info("m", "remote_ip", "203.0.113.77/32", "peer_ip", "x")
+		l.Info("m", "note", "https://example.test/cb?access%5Ftoken=QUERY-SECRET-1&api%5Fkey=QUERY-SECRET-2&ok=1")
+	})
+	for _, leak := range []string{"group-path-secret", "map-path-secret", "logvaluer-error-secret", "valuer-error-secret", "203.0.113.77", "QUERY-SECRET-1", "QUERY-SECRET-2"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leak %q in %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "203.0.113.0/24") || !strings.Contains(out, "telemetryscrub.valuerErr") {
+		t.Errorf("expected prefix and error class: %s", out)
+	}
+}
+
+func TestR2FalsePositivesStayClean(t *testing.T) {
+	for _, v := range []string{"https://example.org/users/@alice/profile", "https://host:8080/users/@alice", "see https://example.org/a"} {
+		if got := ScrubText(v); got != v {
+			t.Errorf("ordinary url changed: %q -> %q", v, got)
+		}
+	}
+	for _, v := range []string{"redis://:PW1@host:6379/0", "https://user:pa/ss1@h.example/x", "https://u:p@ssPW1@h.example"} {
+		if got := ScrubText(v); strings.Contains(got, "PW1") || strings.Contains(got, "pa/ss1") {
+			t.Errorf("userinfo leaked: %q -> %q", v, got)
+		}
+	}
+	for _, k := range []string{"secretary", "secretaries", "Secretary"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, "keep") })
+		if got[k] != "keep" {
+			t.Errorf("%q = %v", k, got[k])
+		}
+	}
+	for _, k := range []string{"secret", "api_secret", "clientSecret", "secrets_ref"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, "v") })
+		if got[k] != Redacted {
+			t.Errorf("%q = %v", k, got[k])
+		}
 	}
 }
