@@ -80,7 +80,13 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 
 func workGraphLabelsFor(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, grant []string) map[string]string {
 	t.Helper()
-	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet(grant, true)}
+	return workGraphLabelsForCommit(t, ctx, query, grant, "")
+}
+
+// workGraphLabelsForCommit is workGraphLabelsFor for a request that names one commit.
+func workGraphLabelsForCommit(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, grant []string, commitSHA string) map[string]string {
+	t.Helper()
+	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", CommitSHA: commitSHA, TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet(grant, true)}
 	result, err := contextpacket.ExecuteCatalog(ctx, contextpacket.NewClickHouseSourceExecutor(query), plan)
 	if err != nil {
 		t.Fatalf("catalog: %v", err)
@@ -439,5 +445,48 @@ func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *te
 		if !served {
 			t.Errorf("%s: no reference for PROJ-6 among %d", name, len(references))
 		}
+	}
+}
+
+// A request that names a commit reaches the edges of the writers' commit id
+// "<repo_id>@<sha>" on either endpoint, as well as an edge whose id is the bare
+// sha, and a commit is labelled by the first eight characters of its sha, never
+// by the repository id inside the id.
+func TestWorkGraphCommitShaFilterServesTheWriterFormEdges(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	seedWorkGraphLabelRows(t, ctx, direct)
+	const sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	const other = "f9e8d7c6e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	for _, row := range []struct{ id, srcType, source, tgtType, target, edgeType string }{
+		{"w-commit-writer", "commit", wgRepo + "@" + sha, "issue", "CHAOS-99", "implements"},
+		{"w-pr-contains-commit", "pr", wgRepo + "#pr311", "commit", wgRepo + "@" + sha, "contains"},
+		{"w-commit-other", "commit", wgRepo + "@" + other, "issue", "CHAOS-77", "implements"},
+	} {
+		if err := direct.Exec(ctx, `INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'github', 'native', 0.9, '', now64(3), now64(3), ?)`, row.id, row.srcType, row.source, row.tgtType, row.target, row.edgeType, wgRepo, wgOrg); err != nil {
+			t.Fatalf("seed %s: %v", row.id, err)
+		}
+	}
+	labels := workGraphLabelsForCommit(t, ctx, query, nil, sha)
+	want := map[string]string{
+		"e-commit-issue":       "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99 (repository-wide)",
+		"w-commit-writer":      "commit a1b2c3d4 implements CHAOS-99 (repository-wide)",
+		"w-pr-contains-commit": "acme/deploy-service#311 Rework deploy pipeline stages contains commit a1b2c3d4 (repository-wide)",
+	}
+	if len(labels) != len(want) {
+		t.Errorf("a request for commit %s serves %v, want exactly %v", sha[:8], labels, want)
+	}
+	for id, label := range want {
+		if got := labels[id]; got != label {
+			t.Errorf("edge %s label = %q, want %q", id, got, label)
+		}
+	}
+	if _, served := labels["w-commit-other"]; served {
+		t.Errorf("w-commit-other (another commit) is served for a request naming commit %s", sha[:8])
 	}
 }
