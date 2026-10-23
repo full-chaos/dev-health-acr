@@ -46,12 +46,16 @@ func TestLatencyProxyDelaysOneRoundTripAndCountsConnectionsAndHellos(t *testing.
 	const rtt = 60 * time.Millisecond
 	proxy := NewLatencyProxy(t, echoBackend(t), rtt)
 
+	// The proxy's connection delay starts at Accept, which can run before Dial
+	// returns, so the clock must start before Dial to bound the opening delay.
+	dialStarted := time.Now()
 	first, err := net.Dial("tcp", proxy.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = first.Close() }()
-	opening := roundTrip(t, first, []byte{tlsHandshakeRecord, 3, 3})
+	roundTrip(t, first, []byte{tlsHandshakeRecord, 3, 3})
+	opening := time.Since(dialStarted)
 	if opening < 2*rtt {
 		t.Fatalf("first round trip on a new connection took %s, want at least a connection round trip plus a data round trip (%s)", opening, 2*rtt)
 	}
