@@ -120,11 +120,11 @@ import (
 var a = testcontainers.GenericContainer
 func f() {
 	_, _ = testcontainers.GenericContainer(nil, testcontainers.GenericContainerRequest{})
-	_, _ = testcontainers.Run(nil, "img")
+	_, _ = testcontainers.Run(nil, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44")
 	_, _ = pg.Run(nil, "img")
 	_, _ = pg.RunContainer(nil)
 	_, _ = startterm.Generic(nil, testcontainers.GenericContainerRequest{})
-	_, _ = startterm.PostgresRun(nil, "img")
+	_, _ = startterm.PostgresRun(nil, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44")
 }
 `)
 	bad, helper, err := directStartRefs(token.NewFileSet(), "x_test.go", src)

@@ -1,4 +1,4 @@
-package startterm
+package startterm_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -43,7 +44,7 @@ func TestLiveClickHouseFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	container, err := Generic(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
@@ -58,7 +59,7 @@ func TestLivePostgresFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	pc, err := PostgresRun(ctx, livePostgresImage,
+	pc, err := startterm.PostgresRun(ctx, livePostgresImage,
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"),
 		testcontainers.WithWaitStrategy(neverReady{}),
 	)
