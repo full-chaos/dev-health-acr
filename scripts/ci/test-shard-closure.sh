@@ -277,6 +277,43 @@ done
 
 printf 'PASS: every closure control was correctly rejected\n'
 
+# A package that holds a gated container test (a containergate.Require call)
+# must be in BOTH matrices' unions: a gated test no job selects would skip
+# nowhere and run nowhere. The union == `go list ./...` proof above already
+# covers every package; this names the gated ones so dropping one from the
+# unions fails by name, and the control proves the check can reject.
+module_path="$(cd "$repo_root" && go list -m)"
+(cd "$repo_root" && git grep -l 'containergate\.Require(' -- '*.go') \
+  | grep -v '^internal/testsupport/containergate/' \
+  | xargs -n1 dirname | LC_ALL=C sort -u | sed "s|^|$module_path/|" >"$tmpdir/gated.sorted"
+gated_count="$(wc -l <"$tmpdir/gated.sorted" | tr -d ' ')"
+if [ "$gated_count" -lt 1 ]; then
+  printf '%s: no package calls containergate.Require; the gated-package check would be vacuous\n' "${0##*/}" >&2
+  exit 1
+fi
+
+check_gated_packages_covered() {
+  local job="$1" union_sorted="$2" missing
+  missing="$(LC_ALL=C comm -23 "$tmpdir/gated.sorted" "$union_sorted")"
+  if [ -n "$missing" ]; then
+    printf '%s: gated container-test packages that no %s shard runs:\n%s\n' "${0##*/}" "$job" "$missing" >&2
+    return 1
+  fi
+}
+
+for job in race unit; do
+  check_gated_packages_covered "$job" "$tmpdir/union.$job.sorted"
+  without_gated="$tmpdir/control-without-gated.$job"
+  grep -vxF "$(head -n1 "$tmpdir/gated.sorted")" "$tmpdir/union.$job.sorted" >"$without_gated"
+  if check_gated_packages_covered "$job" "$without_gated" 2>/dev/null; then
+    printf 'CONTROL FAILED: %s union without %s was accepted by the gated-package check\n' "$job" "$(head -n1 "$tmpdir/gated.sorted")" >&2
+    exit 1
+  fi
+  printf 'PASS: every one of %s gated container-test packages is in the %s union\n' "$gated_count" "$job"
+done
+printf 'CONTROL OK: dropping a gated package from a union is rejected by name\n'
+
+
 # CHAOS-7282: the unit matrix's dedicated leg(s). Each unit_dedicated package
 # (test-shard.sh --print-unit-dedicated-packages) must be emitted by EXACTLY the
 # leg(s) the workflow's matrix lists beyond the round-robin total, alone, and by

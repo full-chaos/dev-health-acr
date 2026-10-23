@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgpurge"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -49,6 +50,7 @@ type rig struct {
 }
 
 func newRig(t *testing.T) *rig {
+	containergate.Require(t)
 	ctx := context.Background()
 	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())

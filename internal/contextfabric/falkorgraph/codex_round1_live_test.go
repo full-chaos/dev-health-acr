@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -23,6 +24,7 @@ const codexRoundFalkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef
 
 func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
 	t.Helper()
+	containergate.Require(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: codexRoundFalkordbImage, ExposedPorts: []string{"6379/tcp"},

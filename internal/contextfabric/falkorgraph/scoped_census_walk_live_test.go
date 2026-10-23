@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -66,6 +67,7 @@ func scopedUUID(label string) string {
 
 func scopedClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Client, clickhousedriver.Conn) {
 	t.Helper()
+	containergate.Require(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
@@ -144,6 +146,7 @@ func (r *scopedRoundTracer) take() []graphrank.ResolutionTraceEvent {
 
 func scopedFalkor(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, tracer graphrank.ResolutionTracer) *Adapter {
 	t.Helper()
+	containergate.Require(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: codexRoundFalkordbImage, ExposedPorts: []string{"6379/tcp"},

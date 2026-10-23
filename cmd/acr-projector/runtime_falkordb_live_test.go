@@ -15,6 +15,7 @@ import (
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,7 @@ const falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1
 // testcontainers convention (falkordb needs no external credential, unlike
 // ADR 0007's Zep Cloud predecessor).
 func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T) {
+	containergate.Require(t)
 	ctx := context.Background()
 
 	// --- Postgres: real checkpoints/rebuild-markers/episode store, migrated. ---

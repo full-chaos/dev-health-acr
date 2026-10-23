@@ -39,6 +39,8 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 // requirePostgresClientTools skips when psql/pg_isready are not on PATH in
@@ -91,6 +93,7 @@ type acrDBInitHarness struct {
 // bootstrap sequence rather than a second hand-copied one.
 func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 	t.Helper()
+	containergate.Require(t)
 	requirePostgresClientTools(t)
 	ctx := context.Background()
 

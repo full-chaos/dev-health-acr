@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 func TestOpen_pingsPostgresAndAppliesBoundedPoolSettings(t *testing.T) {
@@ -91,6 +93,7 @@ func TestConfig_validateAcceptsPlaintextNetworkDSN(t *testing.T) {
 
 func newTestPostgresDSN(t *testing.T, ctx context.Context) string {
 	t.Helper()
+	containergate.Require(t)
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in

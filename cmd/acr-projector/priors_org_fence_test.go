@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ type priorsFenceRig struct {
 
 func newPriorsFenceRig(t *testing.T) *priorsFenceRig {
 	t.Helper()
+	containergate.Require(t)
 	ctx := context.Background()
 	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())

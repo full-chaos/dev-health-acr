@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 // Same pinned image as the falkorgraph live tests.
@@ -58,6 +59,7 @@ func (f *chaos7071RecordingFacts) ReadFacts(_ context.Context, _ storage.Princip
 // graph is admitted, one that is not is refused, and the admitted read lands
 // on the engine's registry with the admitted subject only.
 func TestLiveChaos7071DirectReadsComposeFromTheRealEngine(t *testing.T) {
+	containergate.Require(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

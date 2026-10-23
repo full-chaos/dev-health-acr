@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -91,6 +92,7 @@ var (
 // terminates the container after the last test.
 func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
 	t.Helper()
+	containergate.Require(t)
 	sharedDevHealthClickHouseOnce.Do(func() {
 		ctx := context.Background()
 		container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
@@ -21,6 +22,7 @@ import (
 // one test via t.Cleanup.
 func newStructureSelectionTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
+	containergate.Require(t)
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in

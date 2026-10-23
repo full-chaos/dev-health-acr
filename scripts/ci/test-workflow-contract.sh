@@ -1446,6 +1446,38 @@ check_gomod_proxy_fallback() {
   return "$status"
 }
 
+# Container-starting tests run only under ACR_CONTAINER_TESTS=1
+# (internal/testsupport/containergate), and a hosted job without it FAILS them.
+# So every job that runs go tests (directly, or through make / the shard and
+# battery scripts) must have the switch in scope as '1', set at the workflow
+# level or in that job's own env; no occurrence may carry another value.
+check_container_switch_in_scope() {
+  local file="$1" status=0 job block workflow_level=0
+  if awk '
+    /^env:/ { in_env=1; next }
+    in_env && /^[^[:space:]#]/ { in_env=0 }
+    in_env && $0 == "  ACR_CONTAINER_TESTS: '"'"'1'"'"'" { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$file"; then
+    workflow_level=1
+  fi
+  if grep -E '^ *ACR_CONTAINER_TESTS:' "$file" | grep -vqE "^ *ACR_CONTAINER_TESTS: '1'\$" ; then
+    printf '%s: ACR_CONTAINER_TESTS must only ever be set to '"'"'1'"'"'\n' "${file##*/}" >&2
+    status=1
+  fi
+  while IFS= read -r job; do
+    [ -n "$job" ] || continue
+    block="$(job_block "$file" "$job")"
+    if grep -vE '^[[:space:]]*#' <<<"$block" | grep -qE '(go test|gotestsum|make (test|hosted-integration|clients-real|fullstack|fixture-graph|o4)[a-z-]*|test-shard\.sh|run-isolated-budget\.sh|run_arm\.sh)'; then
+      if [ "$workflow_level" -ne 1 ] && ! grep -qE "^      ACR_CONTAINER_TESTS: '1'\$" <<<"$block"; then
+        printf '%s: job %s runs go tests without ACR_CONTAINER_TESTS=1 in scope (workflow or job env)\n' "${file##*/}" "$job" >&2
+        status=1
+      fi
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
 # The content sanity gate (CHAOS-4640) judges HEAD^1..HEAD of the checkout: the
 # whole PR diff on a pull_request merge ref, the squash commit on a main push.
 # That only holds with a depth-2 checkout, and the gate and its own test must
@@ -1493,6 +1525,7 @@ run_all_checks() {
   check_observed_race_dedup "$file"
   check_race_json_all_jobs "$file"
   check_gomod_proxy_fallback "$file"
+  check_container_switch_in_scope "$file"
   check_content_sanity_steps "$file"
 }
 
@@ -1503,6 +1536,10 @@ printf 'PASS: %s satisfies all workflow contract checks\n' "$workflow"
 fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
 check_gomod_proxy_fallback "$fullstack_workflow"
 printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
+for other_workflow in "$repo_root"/.github/workflows/*.yml; do
+  check_container_switch_in_scope "$other_workflow"
+done
+printf 'PASS: every workflow that runs go tests carries ACR_CONTAINER_TESTS=1\n'
 
 # ---- negative controls ---------------------------------------------------
 # Each mutation below must make its corresponding check FAIL. mktemp -d
@@ -1594,6 +1631,28 @@ fullstack_comma="$tmpdir/fullstack-comma.yml"
 sed 's/^  GOPROXY: https:\/\/proxy.golang.org|direct$/  GOPROXY: https:\/\/proxy.golang.org,direct/' "$fullstack_workflow" > "$fullstack_comma"
 cmp -s "$fullstack_workflow" "$fullstack_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: fullstack_comma did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'put the comma form back on fullstack-acceptance GOPROXY' check_gomod_proxy_fallback "$fullstack_comma"
+
+# (c3b) the container switch: dropped, set to another value, or moved to one
+# job (the other go-test jobs then run without it), in ci.yml and in the
+# other workflows that run go tests.
+switch_dropped="$tmpdir/switch-dropped.yml"
+sed '/^  ACR_CONTAINER_TESTS: /d' "$workflow" > "$switch_dropped"
+cmp -s "$workflow" "$switch_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: switch_dropped did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped ACR_CONTAINER_TESTS from the workflow env' check_container_switch_in_scope "$switch_dropped"
+switch_zero="$tmpdir/switch-zero.yml"
+sed "s/^  ACR_CONTAINER_TESTS: '1'\$/  ACR_CONTAINER_TESTS: '0'/" "$workflow" > "$switch_zero"
+cmp -s "$workflow" "$switch_zero" && { printf 'NEGATIVE CONTROL SETUP FAILED: switch_zero did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'set ACR_CONTAINER_TESTS to 0' check_container_switch_in_scope "$switch_zero"
+switch_one_job="$tmpdir/switch-one-job.yml"
+awk '/^  ACR_CONTAINER_TESTS: / { next } !done && /^    steps:$/ { print "    env:"; print "      ACR_CONTAINER_TESTS: '"'"'1'"'"'"; done=1 } { print }' "$workflow" > "$switch_one_job"
+cmp -s "$workflow" "$switch_one_job" && { printf 'NEGATIVE CONTROL SETUP FAILED: switch_one_job did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'kept ACR_CONTAINER_TESTS on one job only' check_container_switch_in_scope "$switch_one_job"
+for other_workflow in "$repo_root"/.github/workflows/mutation-battery.yml "$fullstack_workflow"; do
+  switch_other="$tmpdir/switch-other-${other_workflow##*/}"
+  sed '/^  ACR_CONTAINER_TESTS: /d' "$other_workflow" > "$switch_other"
+  cmp -s "$other_workflow" "$switch_other" && { printf 'NEGATIVE CONTROL SETUP FAILED: switch_other did not change %s\n' "${other_workflow##*/}" >&2; exit 1; }
+  assert_check_fails "dropped ACR_CONTAINER_TESTS from ${other_workflow##*/}" check_container_switch_in_scope "$switch_other"
+done
 
 # (c4) the content sanity gate loses its depth, its run step or its own test.
 cs_shallow="$tmpdir/cs-shallow.yml"

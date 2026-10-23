@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	postgresmigrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -121,6 +122,7 @@ func newPostgresFixtureWithAccess(t *testing.T, ctx context.Context, access post
 
 func newUnmigratedPostgresFixture(t *testing.T, ctx context.Context) *postgresFixture {
 	t.Helper()
+	containergate.Require(t)
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in

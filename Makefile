@@ -309,7 +309,7 @@ crosscompile:
 	GOOS=linux GOARCH=amd64 go vet ./...
 
 hosted-integration:
-	ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
+	ACR_CONTAINER_TESTS=1 ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
 
 clients-real:
 	bash scripts/clients/test-conformance.sh --clients opencode,claude-code,codex,cursor

@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -33,6 +34,7 @@ func newLiveAdapterWithIdentityUniverse(t *testing.T, ctx context.Context, ident
 // 3-arg constructor in that case).
 func newLiveAdapterWithIdentityUniverseAndTracer(t *testing.T, ctx context.Context, identityUniverse func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error), telemetry falkorgraph.GraphTelemetry, tracer graphrank.ResolutionTracer) *falkorgraph.Adapter {
 	t.Helper()
+	containergate.Require(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},

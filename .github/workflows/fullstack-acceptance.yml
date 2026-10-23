@@ -43,6 +43,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Container-starting tests run only under this switch (internal/testsupport/
+  # containergate); a job without it fails its container tests instead of
+  # skipping them. test-workflow-contract.sh pins it.
+  ACR_CONTAINER_TESTS: '1'
   GOFLAGS: -trimpath
   # The comma form of Go's default proxy list falls back to `direct` only on a
   # 404/410, so a proxy stream INTERNAL_ERROR failed jobs that had a usable

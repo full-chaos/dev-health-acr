@@ -91,6 +91,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # Container-starting tests run only under this switch (internal/testsupport/
+  # containergate); a job without it fails its container tests instead of
+  # skipping them. test-workflow-contract.sh pins it.
+  ACR_CONTAINER_TESTS: '1'
   GO_VERSION: '1.27.3'
   GOFLAGS: -trimpath
 

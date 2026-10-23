@@ -98,6 +98,8 @@ make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
+Tests that start a container (testcontainers) run only under `ACR_CONTAINER_TESTS=1`. Without it they skip, so a plain `go test` or `go test -run <regex>` starts no container; hosted CI sets it and fails a job that lacks it. `internal/testsupport/containergate` holds the switch (`containergate.Require(t)` before every container start) and its guard test names any start without it.
+
 CI and image builds use `-trimpath`. For local builds that share a Go build cache across
 checkouts, set it once per machine (a user setting, not done by any script here):
 `go env -w GOFLAGS=-trimpath`.

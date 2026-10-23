@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -27,6 +28,7 @@ import (
 // falkorgraph.Configured/falkorgraph.New path (identical to production)
 // takes over.
 func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAFalkorBackend(t *testing.T) {
+	containergate.Require(t)
 	ctx := context.Background()
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io

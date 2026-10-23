@@ -25,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -41,6 +42,7 @@ const infoRequestID = "req_57550000000000000000000000000000"
 // only model drafts and ClickHouse backend rows are controlled. No tracer or
 // telemetry override is supplied to the hosted constructor.
 func TestWorkItemHostedInfoCollection(t *testing.T) {
+	containergate.Require(t)
 	ctx := context.Background()
 	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44", tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())
 	if err != nil {

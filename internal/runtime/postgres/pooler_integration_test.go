@@ -13,6 +13,8 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 func TestOpen_rejectsActualPgBouncerTransactionAndStatementModes(t *testing.T) {
@@ -103,6 +105,7 @@ func newPgBouncerDSNs(t *testing.T, ctx context.Context, mode string) (string, s
 
 func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBouncerModes) (string, string) {
 	t.Helper()
+	containergate.Require(t)
 	dockerNetwork, err := network.New(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() { removeTestNetwork(t, dockerNetwork) })

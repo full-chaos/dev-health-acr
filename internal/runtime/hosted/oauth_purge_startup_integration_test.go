@@ -15,6 +15,7 @@ import (
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -40,6 +41,7 @@ type oauthPurgeStartupHarness struct {
 
 func newOAuthPurgeStartupHarness(t *testing.T) oauthPurgeStartupHarness {
 	t.Helper()
+	containergate.Require(t)
 	ctx := context.Background()
 	container, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())

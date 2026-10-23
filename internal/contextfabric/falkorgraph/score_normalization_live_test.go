@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -35,6 +36,7 @@ const scoreLiveTestImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f4
 // §6.2 confirms live-observed scores of 4 and 4.5 from ordinary multi-term
 // queries; repetition is this test's own lever for the same effect).
 func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
+	containergate.Require(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -178,6 +180,7 @@ func TestLiveFulltextSearchNormalizesRealRediSearchScores(t *testing.T) {
 // 1 of 4 query terms must not auto-commit (Codex P1 / AC-3778-4: a weak
 // single lexical match must not silently read as a confident answer).
 func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
+	containergate.Require(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
