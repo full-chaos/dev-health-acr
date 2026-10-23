@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,7 +47,7 @@ func TestDirectReadServesTeamBlockersThroughTheRealScopeExpander(t *testing.T) {
 	orgID := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
 	for _, statement := range devhealthschema.DDL("work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen") {
-		if err := direct.Exec(ctx, statement); err != nil {
+		if err := direct.Exec(ctx, statement); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
 	}
