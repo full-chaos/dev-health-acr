@@ -238,6 +238,10 @@ type flowScopeRow struct {
 	bugState, storyPointsState                     uint8
 }
 
+// flowLatestDayTotals is one team's items started and completed on the latest day of each of its work scopes, summed
+// over the organization view of the table: each item counted once in the team, however many work scopes hold it.
+type flowLatestDayTotals struct{ itemsStarted, itemsCompleted int64 }
+
 func (r flowScopeRow) toFactValueRow() contextfabric.FactValueRow {
 	fields := map[string]contextfabric.FactValue{
 		"provider":             contextfabric.StringFactValue(r.provider),
@@ -318,9 +322,9 @@ func (p *FlowProvider) queryTeamFlowDailySeries(ctx context.Context, orgID strin
 	` + flowMeasureAggregateSQL("", flowMeasureStoryPointsCompleted, "sumIf") + `
 FROM (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY ` + devhealthschema.WorkItemMetricsViewOrder("org") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + ` AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1
 GROUP BY team_id, day
@@ -373,7 +377,7 @@ func flowDailyTable(rows []flowDailyRow, grain contextfabric.TemporalGrain) (con
 // (query ORDER BY) scan order -- the same deterministic-ordering
 // discipline metrics.go's readProjectMetrics documents (ruling invariant
 // 8).
-func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowScopeRow, teamOrder []string, rowCount int, err error) {
+func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowScopeRow, orgTotals map[string]flowLatestDayTotals, teamOrder []string, rowCount int, err error) {
 	// The hash tiebreak's ifNull(*, -1) sentinels are unambiguous while -1
 	// sits outside each column's real domain: item counts and durations are
 	// never negative in live data, mirroring metrics.go/health.go's
@@ -388,38 +392,52 @@ func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids
 	toUInt8(isNotNull(lead_time_p50_hours)), toFloat64(ifNull(lead_time_p50_hours, 0)),
 	toUInt8(isNotNull(lead_time_p90_hours)), toFloat64(ifNull(lead_time_p90_hours, 0)),
 	toFloat64(bug_completed_ratio), toUInt8(` + flowMeasureRowStateSQL("", flowMeasureBugCompletedRatio) + `),
-	toFloat64(story_points_completed), toUInt8(` + flowMeasureRowStateSQL("", flowMeasureStoryPointsCompleted) + `)
+	toFloat64(story_points_completed), toUInt8(` + flowMeasureRowStateSQL("", flowMeasureStoryPointsCompleted) + `),
+	toUInt8(rn_scope = 1 AND ` + devhealthschema.WorkItemMetricsViewPredicate("scope") + `), toUInt8(rn_org = 1 AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + `)
 FROM (
-	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
+	SELECT team_id, provider, work_scope_id, day, row_view, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
+		row_number() OVER (PARTITION BY team_id, provider, (` + devhealthschema.WorkItemMetricsViewPredicate("scope") + `), work_scope_id ORDER BY day DESC, ` + devhealthschema.WorkItemMetricsViewOrder("scope") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn_scope,
+		row_number() OVER (PARTITION BY team_id, provider, (` + devhealthschema.WorkItemMetricsViewPredicate("org") + `), work_scope_id ORDER BY day DESC, ` + devhealthschema.WorkItemMetricsViewOrder("org") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn_org
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND row_view IN ('', 'org', 'scope') AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
-WHERE rn = 1
+WHERE (rn_scope = 1 AND ` + devhealthschema.WorkItemMetricsViewPredicate("scope") + `) OR (rn_org = 1 AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + `)
 ORDER BY team_id, work_scope_id, provider`)
 	byTeam = make(map[string][]flowScopeRow)
+	orgTotals = make(map[string]flowLatestDayTotals)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var teamID string
 		var r flowScopeRow
+		var isScopeRow, isOrgRow uint8
 		var hasWipP50, hasWipP90, hasCycleP50, hasCycleP90, hasLeadP50, hasLeadP90 uint8
 		if scanErr := row.Scan(&teamID, &r.provider, &r.workScopeID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay,
 			&hasWipP50, &r.wipAgeP50Hours, &hasWipP90, &r.wipAgeP90Hours,
 			&hasCycleP50, &r.cycleP50Hours, &hasCycleP90, &r.cycleP90Hours,
 			&hasLeadP50, &r.leadP50Hours, &hasLeadP90, &r.leadP90Hours,
-			&r.bugCompletedRatio, &r.bugState, &r.storyPointsCompleted, &r.storyPointsState); scanErr != nil {
+			&r.bugCompletedRatio, &r.bugState, &r.storyPointsCompleted, &r.storyPointsState, &isScopeRow, &isOrgRow); scanErr != nil {
 			return scanErr
 		}
 		r.hasWipAgeP50, r.hasWipAgeP90 = hasWipP50 != 0, hasWipP90 != 0
 		r.hasCycleP50, r.hasCycleP90 = hasCycleP50 != 0, hasCycleP90 != 0
 		r.hasLeadP50, r.hasLeadP90 = hasLeadP50 != 0, hasLeadP90 != 0
-		if _, seen := byTeam[teamID]; !seen {
-			teamOrder = append(teamOrder, teamID)
+		// One row can be both: a key that holds only legacy rows (every key before the ops writer stores the views)
+		// answers both questions with the same row.
+		if isOrgRow != 0 {
+			totals := orgTotals[teamID]
+			totals.itemsStarted += r.itemsStarted
+			totals.itemsCompleted += r.itemsCompleted
+			orgTotals[teamID] = totals
 		}
-		byTeam[teamID] = append(byTeam[teamID], r)
+		if isScopeRow != 0 {
+			if _, seen := byTeam[teamID]; !seen {
+				teamOrder = append(teamOrder, teamID)
+			}
+			byTeam[teamID] = append(byTeam[teamID], r)
+		}
 		return nil
 	}, timeBound.bindings()...)
-	return byTeam, teamOrder, rowCount, scanErr
+	return byTeam, orgTotals, teamOrder, rowCount, scanErr
 }
 
 func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
@@ -427,7 +445,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 	if len(ids) == 0 {
 		return 0, 0, rejected, nil
 	}
-	byTeam, teamOrder, rowCount, err := p.queryTeamScopeRows(ctx, orgID, ids, timeBound)
+	byTeam, orgTotals, teamOrder, rowCount, err := p.queryTeamScopeRows(ctx, orgID, ids, timeBound)
 	if err != nil {
 		return rowCount, 0, rejected, err
 	}
@@ -467,11 +485,11 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			continue
 		}
 		rows := byTeam[teamID]
-		var totalStarted, totalCompleted int64
+		// The latest-day totals are the ORG view (each item once in the team); the breakdown rows below are the
+		// SCOPE view (one row per work scope). queryTeamScopeRows reads both in one statement.
+		totalStarted, totalCompleted := orgTotals[teamID].itemsStarted, orgTotals[teamID].itemsCompleted
 		valueRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		for _, r := range rows {
-			totalStarted += r.itemsStarted
-			totalCompleted += r.itemsCompleted
 			valueRows = append(valueRows, r.toFactValueRow())
 		}
 		valueRows, omitted := capFactValueRows(valueRows)
@@ -626,9 +644,9 @@ func flowProjectLatestScopeSQL(timeBound factTimeBound) string {
 	-- rows belong to the answer depends on the project each is matched
 	-- against -- a fact this subquery cannot see.
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, ` + devhealthschema.WorkItemMetricsViewOrder("org") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + ` AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 `
 }
 
@@ -883,9 +901,9 @@ func (p *FlowProvider) queryProjectFlowDailySeries(ctx context.Context, orgID st
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY ` + devhealthschema.WorkItemMetricsViewOrder("org") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + ` AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id, wm.day
 ORDER BY p.id, wm.day DESC`)
@@ -975,8 +993,8 @@ type flowWindowTotals struct {
 	present                                    bool
 }
 
-const flowWindowTotalsDedupe = `SELECT team_id, provider, work_scope_id, day, items_started, items_completed,
-		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn`
+var flowWindowTotalsDedupe = `SELECT team_id, provider, work_scope_id, day, items_started, items_completed,
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY ` + devhealthschema.WorkItemMetricsViewOrder("org") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn`
 
 // addFlowWindowFields names the window every headline value covers. A range
 // request gets window totals; a point-in-time or current request has no window,
@@ -1012,7 +1030,7 @@ func (p *FlowProvider) queryTeamFlowWindowTotals(ctx context.Context, orgID stri
 FROM (
 	` + flowWindowTotalsDedupe + `
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + ` AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1
 GROUP BY team_id
@@ -1040,7 +1058,7 @@ FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	` + flowWindowTotalsDedupe + `
 	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
+	WHERE org_id = {org_id:String} AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + ` AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id
 ORDER BY p.id -- window totals`)
