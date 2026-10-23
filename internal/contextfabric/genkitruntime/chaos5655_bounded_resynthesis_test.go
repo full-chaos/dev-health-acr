@@ -895,3 +895,21 @@ func TestSynthesisRedrawReserveNeverExceedsTheOldGate(t *testing.T) {
 		}
 	}
 }
+
+func TestBoundedResynthesisReserveWithoutFallbackIsOneExpectedDraw(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{invalidTitleSynthesisOutput(), claimedSynthesisOutput()}}
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	runtime := mustRuntime(t, slowDrawGenerator{gen, clock, 11 * time.Second}, Config{Logger: logger, Timeout: 45 * time.Second, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: 3})
+	runtime.now = clock.read
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success on draw 2: 30s left covers 5s + one 22s draw, no fallback", err)
+	}
+	if got := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_reserved_ms"]; got != int64(27000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 27000", got)
+	}
+}
