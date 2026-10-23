@@ -213,7 +213,7 @@ func TestAFollowUpIsNotAdmittedFromAPendingOrExpiredBinding(t *testing.T) {
 		{"expired", expiredBinding, AnchorBindingAdmissionRefusedExpired},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, pendingOn: true, edit: tc.edit}, emptyProbeResponse())
+			_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, edit: tc.edit}, emptyProbeResponse())
 			if line := two.transitions[0]; line.Admission != tc.want || two.result.Status != InvestigationNoMatch || len(two.result.SubjectResolution.Candidates) != 0 {
 				t.Fatalf("admission/status/candidates = %s/%s/%d, want %s/no_match/0", line.Admission, two.result.Status, len(two.result.SubjectResolution.Candidates), tc.want)
 			}

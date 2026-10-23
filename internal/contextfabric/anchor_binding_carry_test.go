@@ -41,7 +41,7 @@ func bindingCarryTurns(t *testing.T, carryOn bool, edit func(*staticResultStore)
 // a store edit, a request mutation, and a rig hook run just before the
 // follow-up.
 type carryTurnOptions struct {
-	carryOn, pendingOn  bool
+	carryOn             bool
 	followUpOn, countOn bool
 	// unwindowed asks both turns without a window, so no window is carried
 	// into the follow-up.
@@ -60,7 +60,7 @@ func bindingCarryTurnsWith(t *testing.T, o carryTurnOptions, followUpResponse ne
 		t.Fatalf("premise: turn one's ledger holds %+v; it must capture alpha", got)
 	}
 	rig.verify()
-	rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = o.carryOn, o.pendingOn
+	rig.engine.anchorBindingCarryEnabled = o.carryOn
 	rig.engine.anchorBindingFollowUpEnabled, rig.engine.anchorBindingCountEnabled = o.followUpOn, o.countOn
 	if o.edit != nil {
 		o.edit(rig.store)
@@ -505,19 +505,16 @@ func TestACarryAtTheHintCapIsRecordedAsCapFull(t *testing.T) {
 
 // TestAContestedOrPendingBindingCarry: a contested binding carries nothing;
 // a binding pending window confirmation is admitted and carries its held
-// identity only with the pending carry on, and reads pending_held without
-// it. Whatever carries nothing withholds the ledger's alpha too.
+// identity. Whatever carries nothing withholds the ledger's alpha too.
 func TestAContestedOrPendingBindingCarry(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		state     AnchorBindingState
-		pendingOn bool
 		carry     BoundAnchorCarry
 		wantHints int
 	}{
-		{"contested", AnchorBindingContested, true, BoundAnchorCarryNotAdmitted, 0},
-		{"pending, pending carry off", AnchorBindingPendingWindowConfirmation, false, BoundAnchorCarryPendingHeld, 0},
-		{"pending, pending carry on", AnchorBindingPendingWindowConfirmation, true, BoundAnchorCarryInjected, 1},
+		{"contested", AnchorBindingContested, BoundAnchorCarryNotAdmitted, 0},
+		{"pending", AnchorBindingPendingWindowConfirmation, BoundAnchorCarryInjected, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			set := mutateStoredBindings(func(s *PersistedSemanticState) {
@@ -528,7 +525,7 @@ func TestAContestedOrPendingBindingCarry(t *testing.T) {
 					}
 				})
 			})
-			rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: true, pendingOn: tc.pendingOn, edit: set}, emptyProbeResponse())
+			rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: true, edit: set}, emptyProbeResponse())
 			if line := two.transitions[0]; line.BoundAnchorCarry != tc.carry {
 				t.Fatalf("line carry = %s, want %s", line.BoundAnchorCarry, tc.carry)
 			}
@@ -553,7 +550,7 @@ func TestAContestedOrPendingBindingCarry(t *testing.T) {
 
 // TestNewEngineRefusesTheCarryWithoutTheShadow: the carry is owned by the
 // shadow binding, so the switch with the shadow off is a configuration
-// error; the pending carry widens the carry, so it alone is one too.
+// error.
 func TestNewEngineRefusesTheCarryWithoutTheShadow(t *testing.T) {
 	deps := EngineDependencies{
 		Interpreter: &anchorProbeInterpreter{},
@@ -569,15 +566,6 @@ func TestNewEngineRefusesTheCarryWithoutTheShadow(t *testing.T) {
 	if _, err := NewEngine(deps, options); err != nil {
 		t.Fatalf("premise: the carry with the shadow on must construct, got %v", err)
 	}
-	options.AnchorBindingPendingCarryEnabled = true
-	if _, err := NewEngine(deps, options); err != nil {
-		t.Fatalf("premise: the pending carry beside the carry must construct, got %v", err)
-	}
-	options.AnchorBindingCarryEnabled = false
-	if _, err := NewEngine(deps, options); err == nil || !strings.Contains(err.Error(), "pending carry needs the anchor binding carry") {
-		t.Fatalf("NewEngine() error = %v, want the pending-needs-carry refusal", err)
-	}
-	options.AnchorBindingCarryEnabled, options.AnchorBindingPendingCarryEnabled = true, false
 	options.DisableAnchorBindingShadow = true
 	_, err := NewEngine(deps, options)
 	if err == nil || !strings.Contains(err.Error(), "needs the shadow anchor binding") {

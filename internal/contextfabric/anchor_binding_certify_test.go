@@ -8,6 +8,7 @@ package contextfabric_test
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 
@@ -104,12 +105,32 @@ func TestTheAnchorBindingTransitionLineCertifiesAgainstItsSpecification(t *testi
 	}
 }
 
+// retiredAnchorBindingTokens are members of a closed vocabulary that stay on
+// the wire declaration and that no production driver may emit.
+var retiredAnchorBindingTokens = map[string]map[string]string{
+	"bound_anchor_carry": {"pending_held": "retired by the 9318 switch removal; removal tracked in the Linear follow-up"},
+}
+
 // TestEveryClosedAnchorBindingTokenIsEmittedByTheRealProducer drives every
 // transition-line driver through the production slog sink, certifies every
 // line it wrote against the declaration, and requires every member of every
 // closed vocabulary the declaration names -- except the fail-closed
-// undeclared token -- to have been emitted at least once.
+// undeclared token and the retired tokens, which no driver may emit -- to
+// have been emitted at least once.
 func TestEveryClosedAnchorBindingTokenIsEmittedByTheRealProducer(t *testing.T) {
+	for key, tokens := range retiredAnchorBindingTokens {
+		var declared []string
+		for _, field := range eventspec.AnchorBindingTransition.Fields {
+			if field.Key == key {
+				declared = field.ClosedVocabulary
+			}
+		}
+		for token := range tokens {
+			if !slices.Contains(declared, token) {
+				t.Errorf("%s: retired token %s is not in the closed vocabulary", key, token)
+			}
+		}
+	}
 	seen := map[string]map[string]bool{}
 	lines := 0
 	for _, driver := range contextfabric.RunAnchorBindingVocabularyForTest(t) {
@@ -148,6 +169,12 @@ func TestEveryClosedAnchorBindingTokenIsEmittedByTheRealProducer(t *testing.T) {
 			if member == contextfabric.AnchorBindingUndeclaredToken {
 				if seen[field.Key][member] {
 					t.Errorf("%s: a production driver emitted the fail-closed token", field.Key)
+				}
+				continue
+			}
+			if reason, ok := retiredAnchorBindingTokens[field.Key][member]; ok {
+				if seen[field.Key][member] {
+					t.Errorf("%s: a production driver emitted the retired token %s (%s)", field.Key, member, reason)
 				}
 				continue
 			}
