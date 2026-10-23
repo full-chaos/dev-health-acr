@@ -14,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"math/big"
 	"net"
 	"net/url"
@@ -72,7 +73,7 @@ func Start(tb testing.TB, ctx context.Context, rtt time.Duration) *Rig {
   </openSSL>
 </clickhouse>`))
 	password := randomHex(tb)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{secureNative},
 			Env: map[string]string{"CLICKHOUSE_USER": "default", "CLICKHOUSE_PASSWORD": password},

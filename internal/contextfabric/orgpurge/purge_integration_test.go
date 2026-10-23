@@ -3,6 +3,7 @@ package orgpurge_test
 import (
 	"context"
 	"database/sql"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"os"
 	"sort"
 	"strings"
@@ -51,7 +52,7 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
+	pg, err := startterm.PostgresRun(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Terminate(ctx)) })
