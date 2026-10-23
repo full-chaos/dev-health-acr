@@ -50,7 +50,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	// API token shape. This is what actually stops a Dev Health license
 	// key or any other non-ACR credential from ever reaching the wire,
 	// independent of how it was loaded.
-	if strings.HasPrefix(credential.Token, "dhlic_") {
+	if !auth.IsTokenShapeValid(credential.Token) {
 		return 0, ErrCredentialShapeInvalid
 	}
 	requestURL, err := c.buildURL(subPath)
