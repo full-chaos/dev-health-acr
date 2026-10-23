@@ -503,6 +503,7 @@
             "dns": { "type": "boolean" },
             "postgresPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "clickhousePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "clickhouseExtraPorts": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
             "entitlementPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "queryInternalPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
             "queryMcpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
