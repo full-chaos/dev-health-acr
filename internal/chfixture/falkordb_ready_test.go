@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,25 +72,120 @@ func TestAwaitFalkorServingAcceptsAServerThatAnswersAfterADelay(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	start := time.Now()
+	var deleted atomic.Int32
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go serveFakeRESP(c, start.Add(400*time.Millisecond))
+			go serveFakeRESP(c, start.Add(400*time.Millisecond), start.Add(700*time.Millisecond), &deleted)
 		}
 	}()
 	var pl probeLog
 	if err := awaitFalkorServing(context.Background(), ln.Addr().String(), 5*time.Second, 150*time.Millisecond, 50*time.Millisecond, pl.logf); err != nil {
 		t.Fatalf("a server that answers must be accepted: %v\n%s", err, strings.Join(pl.lines, "\n"))
 	}
-	if time.Since(start) < 400*time.Millisecond {
-		t.Fatal("returned before the server answered")
+	if time.Since(start) < 700*time.Millisecond {
+		t.Fatal("returned before the index command was served")
+	}
+	if got := deleted.Load(); got != 1 {
+		t.Fatalf("the throwaway graph must be deleted once on success, got %d", got)
 	}
 }
 
-func serveFakeRESP(c net.Conn, answerFrom time.Time) {
+func TestAwaitFalkorServingFailsLoudWhenTheIndexCommandNeverSucceeds(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	var deleted atomic.Int32
+	far := time.Now().Add(time.Hour)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveFakeRESP(c, time.Time{}, far, &deleted)
+		}
+	}()
+	var pl probeLog
+	err = awaitFalkorServing(context.Background(), ln.Addr().String(), 700*time.Millisecond, 150*time.Millisecond, 50*time.Millisecond, pl.logf)
+	if err == nil {
+		t.Fatal("a server that answers PING and GRAPH.LIST but cannot create an index was reported as serving")
+	}
+	if !strings.Contains(err.Error(), "CREATE INDEX") {
+		t.Fatalf("error does not name the index step: %v", err)
+	}
+	if got := deleted.Load(); got != 1 {
+		t.Fatalf("the throwaway graph must be deleted once on the timeout path, got %d", got)
+	}
+}
+
+func TestAwaitFalkorServingTreatsARepeatedIndexCreateAsServing(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	var deleted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveFakeRESPIndexError(c, "-ERR Attribute 'k' is already indexed\r\n", &deleted)
+		}
+	}()
+	var pl probeLog
+	if err := awaitFalkorServing(context.Background(), ln.Addr().String(), 700*time.Millisecond, 150*time.Millisecond, 50*time.Millisecond, pl.logf); err != nil {
+		t.Fatalf("an already-indexed reply means an earlier try executed and must count as serving: %v", err)
+	}
+	if got := deleted.Load(); got != 1 {
+		t.Fatalf("the throwaway graph must be deleted once, got %d", got)
+	}
+}
+
+func serveFakeRESPIndexError(c net.Conn, indexReply string, deleted *atomic.Int32) {
+	defer func() { _ = c.Close() }()
+	buf := make([]byte, 4096)
+	for {
+		n, err := c.Read(buf)
+		if err != nil {
+			return
+		}
+		req := strings.ToUpper(string(buf[:n]))
+		switch {
+		case strings.Contains(req, "PING"):
+			_, _ = c.Write([]byte("+PONG\r\n"))
+		case strings.Contains(req, "GRAPH.LIST"):
+			_, _ = c.Write([]byte("*0\r\n"))
+		case strings.Contains(req, "GRAPH.QUERY"):
+			_, _ = c.Write([]byte(indexReply))
+		case strings.Contains(req, "GRAPH.DELETE"):
+			deleted.Add(1)
+			_, _ = c.Write([]byte("+Graph removed\r\n"))
+		case strings.Contains(req, "HELLO"), strings.Contains(req, "CLIENT"):
+			_, _ = c.Write([]byte("-ERR unknown command\r\n"))
+		}
+	}
+}
+
+func TestAwaitFalkorServingUsesAFreshGraphNameForEveryStart(t *testing.T) {
+	a, errA := probeGraphName()
+	b, errB := probeGraphName()
+	if errA != nil || errB != nil {
+		t.Fatalf("names: %v %v", errA, errB)
+	}
+	if a == b || !strings.HasPrefix(a, "acr_ready_probe_") {
+		t.Fatalf("probe graph names must be unique per start: %q %q", a, b)
+	}
+}
+
+func serveFakeRESP(c net.Conn, answerFrom, indexFrom time.Time, deleted *atomic.Int32) {
 	defer func() { _ = c.Close() }()
 	buf := make([]byte, 4096)
 	for {
@@ -104,10 +200,17 @@ func serveFakeRESP(c net.Conn, answerFrom time.Time) {
 		switch {
 		case strings.Contains(req, "PING"):
 			_, _ = c.Write([]byte("+PONG\r\n"))
-		case strings.Contains(req, "GRAPH.QUERY"):
-			_, _ = c.Write([]byte("*0\r\n"))
 		case strings.Contains(req, "GRAPH.LIST"):
 			_, _ = c.Write([]byte("*0\r\n"))
+		case strings.Contains(req, "GRAPH.QUERY"):
+			if time.Now().Before(indexFrom) {
+				_, _ = c.Write([]byte("-ERR Index not ready\r\n"))
+			} else {
+				_, _ = c.Write([]byte("*1\r\n$18\r\nIndices created: 1\r\n"))
+			}
+		case strings.Contains(req, "GRAPH.DELETE"):
+			deleted.Add(1)
+			_, _ = c.Write([]byte("+Graph removed\r\n"))
 		case strings.Contains(req, "HELLO"), strings.Contains(req, "CLIENT"):
 			_, _ = c.Write([]byte("-ERR unknown command\r\n"))
 		}

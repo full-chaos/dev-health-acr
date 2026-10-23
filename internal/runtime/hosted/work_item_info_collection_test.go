@@ -31,7 +31,6 @@ import (
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const infoRepository = "example-org/widget-service"
@@ -71,7 +70,7 @@ func TestWorkItemHostedInfoCollection(t *testing.T) {
 	if _, err = runner.Apply(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	graph, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3", ExposedPorts: []string{"6379/tcp"}, WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute)}, Started: true})
+	graph, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3", ExposedPorts: []string{"6379/tcp"}, WaitingFor: chfixture.FalkorReady()}, Started: true})
 	if err != nil {
 		t.Fatal(err)
 	}
