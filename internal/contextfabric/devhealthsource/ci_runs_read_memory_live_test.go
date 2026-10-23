@@ -11,6 +11,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -47,14 +48,16 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 		t.Fatalf("open native ClickHouse connection: %v", err)
 	}
 	t.Cleanup(func() { _ = direct.Close() })
+	var unlimitedRows uint
+	var unlimitedBytes uint64
 	inner, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second,
+		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second, MaxResultRows: &unlimitedRows, MaxBytesToRead: &unlimitedBytes,
 	})
 	if err != nil {
 		t.Fatalf("open the query client: %v", err)
 	}
 	t.Cleanup(func() { _ = inner.Close() })
-	reader := contextpacket.NewMemoryCappedQueryClient(inner, 1<<30, contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))
+	reader := statementthreads.Unbounded(inner)
 	for _, statement := range productionSchemaDDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("apply rendered schema statement: %v\n%s", err, statement)
@@ -110,6 +113,11 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 	if err := admin.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("flush the query log: %v", err)
 	}
+	var unbound uint64
+	if err := admin.QueryRow(ctx, "SELECT "+statementthreads.UnboundThreadsCount+" FROM system.query_log WHERE current_database = ? AND type = 'QueryFinish' AND log_comment LIKE 'ci-%'", database).Scan(&unbound); err != nil {
+		t.Fatalf("read the statement threads from the query log: %v", err)
+	}
+	statementthreads.RequireThreadBound(t, ctx, admin, "CI run statements", unbound)
 	rows, err := admin.Query(ctx, `SELECT log_comment, max(memory_usage), max(read_rows), max(read_bytes), count()
 FROM system.query_log WHERE current_database = ? AND type = 'QueryFinish' AND log_comment LIKE 'ci-%' GROUP BY log_comment ORDER BY log_comment`, database)
 	if err != nil {
