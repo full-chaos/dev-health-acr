@@ -13,14 +13,19 @@ set -euo pipefail
 # tip, so the range is the whole PR diff against base; on a main push HEAD is
 # the squash commit and the range is exactly what that merge landed.
 #
-# Fails (exit 1) when an ADDED path (or a rename target):
+# Fails (exit 1) when an ADDED path (or a rename or copy target):
 #   - matches a tool-artifact name rule (artifact_reason below), or
-#   - is ignored by .gitignore (a force-added file), or
+#   - is ignored by .gitignore (a force-added file),
 # and, unless the override marker is present, when the range adds more than
-# CONTENT_MAX_FILES files or CONTENT_MAX_BYTES bytes (defaults 100 / 1 MiB;
-# the last 200 acr PRs added at most 28 files and 196 KB).
-# Modified or deleted paths never trip it, so files tracked before a rule
-# existed are not a problem. Pure renames add nothing.
+# CONTENT_MAX_FILES files (added or copied paths) or CONTENT_MAX_BYTES bytes.
+# Bytes are the new size of every added or copied file plus the GROWTH of every
+# modified, retyped, or renamed-and-changed file (new size minus old size when
+# positive), so a rename or an append cannot carry a big blob past the limit.
+# Defaults 100 / 1 MiB: over the last 400 acr PRs the most files added was 28
+# and the most bytes (added plus growth) 703 KB.
+# Name rules and the ignore rule look only at added, renamed and copied paths:
+# a file modified in place or deleted never trips them, so files tracked before
+# a rule existed are not a problem. A pure rename adds nothing.
 #
 # Override marker, a line in a commit message of the range or in the PR body:
 #   Content-Check: allow-large <reason>
@@ -78,26 +83,35 @@ artifact_reason() {
 }
 
 added_paths=()
-added_shas=()
 target_paths=()
+new_shas=()
+old_shas=()
 while IFS= read -r -d '' meta; do
   status="${meta##* }"
-  IFS=' ' read -r _ mode_new _ sha_new _ <<<"${meta#:}"
+  IFS=' ' read -r _ mode_new sha_old sha_new _ <<<"${meta#:}"
+  is_sub=0
+  if [ "$mode_new" = "160000" ]; then is_sub=1; fi
   case "$status" in
     R* | C*)
       IFS= read -r -d '' _src
       IFS= read -r -d '' dst
       target_paths+=("$dst")
+      if [ "${status:0:1}" = "C" ]; then
+        added_paths+=("$dst")
+        if [ "$is_sub" -eq 0 ]; then new_shas+=("$sha_new"); old_shas+=(""); fi
+      elif [ "$is_sub" -eq 0 ]; then
+        new_shas+=("$sha_new"); old_shas+=("$sha_old")
+      fi
       ;;
     A)
       IFS= read -r -d '' dst
       target_paths+=("$dst")
       added_paths+=("$dst")
-      if [ "$mode_new" = "160000" ]; then
-        added_shas+=("")
-      else
-        added_shas+=("$sha_new")
-      fi
+      if [ "$is_sub" -eq 0 ]; then new_shas+=("$sha_new"); old_shas+=(""); fi
+      ;;
+    M | T)
+      IFS= read -r -d '' _skip
+      if [ "$is_sub" -eq 0 ]; then new_shas+=("$sha_new"); old_shas+=("$sha_old"); fi
       ;;
     *)
       IFS= read -r -d '' _skip
@@ -107,14 +121,25 @@ done < <(git -c diff.renameLimit=5000 diff -z --raw -M --no-abbrev "$base" "$hea
 
 n_files="${#added_paths[@]}"
 total_bytes=0
-if [ "$n_files" -gt 0 ]; then
-  while IFS= read -r size; do
-    total_bytes=$((total_bytes + size))
+declare -A blob_size=()
+if [ "${#new_shas[@]}" -gt 0 ]; then
+  while read -r sha size; do
+    blob_size["$sha"]="$size"
   done < <(
-    for s in "${added_shas[@]}"; do
-      if [ -n "$s" ]; then printf '%s\n' "$s"; fi
-    done | git cat-file --batch-check='%(objectsize)'
+    {
+      printf '%s\n' "${new_shas[@]}"
+      for s in "${old_shas[@]}"; do
+        if [ -n "$s" ]; then printf '%s\n' "$s"; fi
+      done
+    } | sort -u | git cat-file --batch-check='%(objectname) %(objectsize)'
   )
+  for i in "${!new_shas[@]}"; do
+    grown="${blob_size[${new_shas[$i]}]:-0}"
+    if [ -n "${old_shas[$i]}" ]; then
+      grown=$((grown - ${blob_size[${old_shas[$i]}]:-0}))
+    fi
+    if [ "$grown" -gt 0 ]; then total_bytes=$((total_bytes + grown)); fi
+  done
 fi
 
 problems=()

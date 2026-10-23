@@ -209,6 +209,80 @@ run_cases() {
   many_files "$r/data" 150 && git -C "$r" add -A && git -C "$r" commit -q -m "drop" -m "see Content-Check: allow-large because"
   expect marker-must-start-a-line 1 'over the limit' "$r"
 
+
+  # ---- size growth through rename and modify ----
+  scenario rename-and-grow
+  seq 1 250000 >"$r/old.txt" && git -C "$r" add -A && git -C "$r" commit -q -m "old"
+  git -C "$r" branch -f base-with-old2
+  git -C "$r" mv old.txt new.txt && seq 250001 400000 >>"$r/new.txt" && git -C "$r" add -A && git -C "$r" commit -q -m "rename and grow"
+  out_rc=0
+  out="$(cd "$r" && "$script" base-with-old2 HEAD 2>&1)" || out_rc=$?
+  if [ "$out_rc" -ne 1 ] || ! grep -q 'over the limit of 1048576' <<<"$out"; then
+    fails=$((fails + 1)); if [ "$quiet" -eq 0 ]; then echo "FAIL rename-then-grow-past-1-MiB: rc=$out_rc"; printf '    %s\n' "$out"; fi
+  elif [ "$quiet" -eq 0 ]; then echo "ok   rename-then-grow-past-1-MiB"; fi
+
+  scenario modify-and-grow
+  printf 'seed\n' >"$r/log.txt" && git -C "$r" add -A && git -C "$r" commit -q -m "seed"
+  git -C "$r" branch -f base-with-seed
+  head -c 1048577 /dev/zero | tr '\0' 'a' >>"$r/log.txt" && git -C "$r" commit -q -a -m "append 1 MiB + 1"
+  out_rc=0
+  out="$(cd "$r" && "$script" base-with-seed HEAD 2>&1)" || out_rc=$?
+  if [ "$out_rc" -ne 1 ] || ! grep -q 'over the limit of 1048576' <<<"$out"; then
+    fails=$((fails + 1)); if [ "$quiet" -eq 0 ]; then echo "FAIL append-to-a-tracked-file-past-1-MiB: rc=$out_rc"; printf '    %s\n' "$out"; fi
+  elif [ "$quiet" -eq 0 ]; then echo "ok   append-to-a-tracked-file-past-1-MiB"; fi
+
+  scenario regenerate-same-size
+  head -c 900000 /dev/zero | tr '\0' 'a' >"$r/golden.json" && git -C "$r" add -A && git -C "$r" commit -q -m "golden"
+  git -C "$r" branch -f base-with-golden
+  head -c 900000 /dev/zero | tr '\0' 'b' >"$r/golden.json" && git -C "$r" commit -q -a -m "regenerate"
+  out_rc=0
+  out="$(cd "$r" && "$script" base-with-golden HEAD 2>&1)" || out_rc=$?
+  if [ "$out_rc" -ne 0 ]; then
+    fails=$((fails + 1)); if [ "$quiet" -eq 0 ]; then echo "FAIL regenerating-a-golden-of-the-same-size: rc=$out_rc"; printf '    %s\n' "$out"; fi
+  elif [ "$quiet" -eq 0 ]; then echo "ok   regenerating-a-golden-of-the-same-size"; fi
+
+  scenario rename-small-edit
+  many_files "$r/old" 150 && git -C "$r" add -A && git -C "$r" commit -q -m "old"
+  git -C "$r" branch -f base-with-old3
+  git -C "$r" mv old new && printf 'edit\n' >>"$r/new/f1.txt" && git -C "$r" add -A && git -C "$r" commit -q -m "move and edit one"
+  out_rc=0
+  out="$(cd "$r" && "$script" base-with-old3 HEAD 2>&1)" || out_rc=$?
+  if [ "$out_rc" -ne 0 ]; then
+    fails=$((fails + 1)); if [ "$quiet" -eq 0 ]; then echo "FAIL move-of-150-files-with-one-small-edit: rc=$out_rc"; printf '    %s\n' "$out"; fi
+  elif [ "$quiet" -eq 0 ]; then echo "ok   move-of-150-files-with-one-small-edit"; fi
+
+  # ---- every name rule has its own fixture ----
+  while IFS= read -r artifact; do
+    scenario "rule-$(printf '%s' "$artifact" | tr -c 'A-Za-z0-9\n' '_')"
+    mkdir -p "$r/$(dirname "$artifact")" && printf 'x\n' >"$r/$artifact" && commit_all "$r" "artifact"
+    expect "name-rule: $artifact" 1 'tool artifact:' "$r"
+  done <<'RULES'
+.gocache/x
+.gomodcache/x
+sub/.gomodcache/x
+go-build/x
+.cache/x
+sub/.cache/x
+node_modules/x
+__pycache__/x
+sub/__pycache__/x
+mod.pyc
+.DS_Store
+sub/.DS_Store
+.tmp/x
+sub/.tmp/x
+.probe-tmp/x
+.trial-exchange-20260816T125957Z/req
+sub/.trial-exchange/req
+prompt.md
+.codex-review-context.md
+sub/.codex-review.patch
+LEDGER.md
+sub/LEDGER.md
+codex-gate.log
+sub/codex-gate-r2.md
+x.log
+RULES
   scenario bad-ref
   out_rc=0
   out="$(cd "$r" && "$script" no-such-ref HEAD 2>&1)" || out_rc=$?
@@ -261,5 +335,12 @@ if [ -z "${SCRIPT:-}" ]; then
   mutate marker-anywhere "s/grep -qE '\\^Content-Check: allow-large/grep -qE 'Content-Check: allow-large/"
   mutate no-rename-detection 's/ -M --no-abbrev/ --no-renames --no-abbrev/'
   mutate renames-skip-name-rules 's/^      target_paths\+=\("\$dst"\)$/      :/'
+  # one mutant per name rule: dropping any single rule must fail a fixture
+  rule_lines="$(awk '/^artifact_reason\(\) \{/ {on=1} on && /\) echo / {print NR} /^}/ {on=0}' "$real")"
+  for n in $rule_lines; do
+    mutate "drop-rule-at-line-$n" "${n}d"
+  done
+  mutate growth-of-modified-ignored 's/^      if \[ "\$is_sub" -eq 0 \]; then new_shas\+=\("\$sha_new"\); old_shas\+=\("\$sha_old"\); fi$/      if [ "$is_sub" -eq 0 ]; then new_shas+=(""); old_shas+=(""); fi/'
+  mutate growth-of-rename-ignored 's/^        new_shas\+=\("\$sha_new"\); old_shas\+=\("\$sha_old"\)$/        :/'
 fi
 echo "content-sanity test: ok"
