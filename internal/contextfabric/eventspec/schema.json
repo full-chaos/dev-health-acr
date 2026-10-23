@@ -435,7 +435,6 @@
           "not_evaluated",
           "none",
           "not_admitted",
-          "pending_held",
           "injected",
           "caller_superseded",
           "receipt_superseded",

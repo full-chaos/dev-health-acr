@@ -49,9 +49,6 @@ const (
 	// BoundAnchorCarryNotAdmitted: the parent's binding was refused at
 	// admission, or is contested; nothing is injected.
 	BoundAnchorCarryNotAdmitted BoundAnchorCarry = "not_admitted"
-	// BoundAnchorCarryPendingHeld is kept in the closed vocabulary and no
-	// longer produced: a pending parent carries like a bound one.
-	BoundAnchorCarryPendingHeld BoundAnchorCarry = "pending_held"
 	// BoundAnchorCarryInjected: the admitted binding's identity reached
 	// resolution as the carried anchor.
 	BoundAnchorCarryInjected BoundAnchorCarry = "injected"
@@ -90,7 +87,7 @@ const (
 
 func boundAnchorCarries() []BoundAnchorCarry {
 	return []BoundAnchorCarry{
-		BoundAnchorCarrySwitchOff, BoundAnchorCarryNotEvaluated, BoundAnchorCarryNone, BoundAnchorCarryNotAdmitted, BoundAnchorCarryPendingHeld,
+		BoundAnchorCarrySwitchOff, BoundAnchorCarryNotEvaluated, BoundAnchorCarryNone, BoundAnchorCarryNotAdmitted,
 		BoundAnchorCarryInjected, BoundAnchorCarryCallerSuperseded, BoundAnchorCarryReceiptSuperseded,
 		BoundAnchorCarryCapFull, BoundAnchorCarryRememberedOffered, BoundAnchorCarryFollowUpOffered, BoundAnchorCarryFollowUpOfferedReconciled,
 		BoundAnchorCarryFollowUpCommitted, BoundAnchorCarryFollowUpFrameRefused, BoundAnchorCarryFollowUpParentMismatch,
