@@ -383,3 +383,6 @@ func KeyClass(key string) (protected, network bool) {
 	}
 	return false, false
 }
+
+// ScrubText applies the value-shape redaction Handler uses to a string.
+func ScrubText(s string) string { return scrubString(s) }

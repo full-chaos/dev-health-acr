@@ -282,3 +282,15 @@ func TestKeyClass(t *testing.T) {
 		}
 	}
 }
+
+func TestScrubText(t *testing.T) {
+	if got := ScrubText("a Bearer abcdefghijklmnop1234 b"); strings.Contains(got, "abcdefghijklmnop") || !strings.Contains(got, Redacted) {
+		t.Errorf("got %q", got)
+	}
+	if got := ScrubText("plain text"); got != "plain text" {
+		t.Errorf("got %q", got)
+	}
+	if got := ScrubText("-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----"); strings.Contains(got, "MIIE") {
+		t.Errorf("got %q", got)
+	}
+}
