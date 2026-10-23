@@ -708,6 +708,9 @@ var ProductionColumns = map[string][]Column{
 		{Name: "story_points_completed", Type: "Float64"},
 		{Name: "computed_at", Type: "DateTime('UTC')"},
 		{Name: "org_id", Type: "String"},
+		// Ops migration 141: the view of a row (empty = legacy, org, scope), the LAST column of the sorting
+		// key. A column with no DEFAULT, because ClickHouse refuses a default in a sorting key.
+		{Name: "row_view", Type: "LowCardinality(String)"},
 	},
 	// work_item_measure_capability answers whether a provider tracks a
 	// work_item_metrics_daily measure at all (ops migration 111). The
@@ -840,7 +843,7 @@ var EngineFull = map[string]string{
 	"work_item_relations_read":             "ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192",
 	"work_item_dependency_first_seen":      "AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_measure_capability":         "ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192",
-	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192",
+	"work_item_metrics_daily":              "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192",
 	"work_item_team_attributions":          "ReplacingMergeTree(computed_at) ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source) SETTINGS index_granularity = 8192",
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
 	// CHAOS-4398: read from dev-health-clickhouse-1 on 2026-08-28.
@@ -853,52 +856,12 @@ var EngineFull = map[string]string{
 	"work_unit_issue_size":      "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
 }
 
-// EngineFullAlternates returns the further engine_full strings that live may
-// report for table besides the canonical one in EngineFull (CHAOS-10668, part
-// of CHAOS-8863), for a table whose sorting key is changing in ops.
-//
-// It is a function and not a second schema map on purpose: no fixture reads
-// it. The fixture DDL is always rendered from the canonical string in
-// EngineFull (TestDeclarationExposesNoSecondSource), so no test built on the
-// fixtures exercises an alternate. Only the live comparison uses it. The
-// live-schema-parity job reads the ops default branch, so a sorting-key change
-// lands there before acr can be rolled: both strings must pass until the
-// canonical string is moved to the new one (CHAOS-10669). Each string is
-// written out verbatim, never built from another one, and only a table that
-// EngineFull declares may have one.
-//
-// work_item_metrics_daily: ops migration 141 appends row_view to the sorting
-// key with MODIFY ORDER BY, which leaves the primary key at its old prefix, so
-// live reports both PRIMARY KEY and ORDER BY (the same shape as
-// operational_incidents above).
-func EngineFullAlternates(table string) []string {
-	switch table {
-	case "work_item_metrics_daily":
-		return []string{
-			"ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192",
-		}
-	}
-	return nil
-}
-
 // EngineFullMatchesLive reports whether live, the engine_full that a server
-// reports for table, is the canonical string in EngineFull or one of the
-// strings of EngineFullAlternates. A table EngineFull does not declare never
-// matches.
+// reports for table, is exactly the string in EngineFull. A table EngineFull
+// does not declare never matches.
 func EngineFullMatchesLive(table, live string) bool {
 	canonical, ok := EngineFull[table]
-	if !ok {
-		return false
-	}
-	if live == canonical {
-		return true
-	}
-	for _, accepted := range EngineFullAlternates(table) {
-		if live == accepted {
-			return true
-		}
-	}
-	return false
+	return ok && live == canonical
 }
 
 // AcceptsColumnType reports whether typ is the canonical type of the column or

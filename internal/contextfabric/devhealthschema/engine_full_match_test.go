@@ -12,33 +12,30 @@ const (
 	workItemMetricsDailyNew = "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192"
 )
 
-// CHAOS-10668: the live-schema-parity job reads ops main, which gains row_view
-// at the end of the work_item_metrics_daily sorting key. The old and the new
-// string must both pass and nothing else may: a set that accepts anything is
-// not a guard.
-func TestEngineFullMatchesLiveAcceptsExactlyTheOldAndTheNewWorkItemMetricsDailyString(t *testing.T) {
+// Ops migration 141 appended row_view to the sorting key of work_item_metrics_daily and it is on prod. The live
+// string is the new one; the old one and any other key are refused.
+func TestEngineFullMatchesLiveAcceptsOnlyTheNewWorkItemMetricsDailyString(t *testing.T) {
 	const table = "work_item_metrics_daily"
-	if devhealthschema.EngineFull[table] != workItemMetricsDailyOld {
-		t.Fatalf("the canonical string moved: %q", devhealthschema.EngineFull[table])
+	if devhealthschema.EngineFull[table] != workItemMetricsDailyNew {
+		t.Fatalf("the canonical string is not the new one: %q", devhealthschema.EngineFull[table])
 	}
-	for name, live := range map[string]string{"old": workItemMetricsDailyOld, "new": workItemMetricsDailyNew} {
-		if !devhealthschema.EngineFullMatchesLive(table, live) {
-			t.Errorf("the %s string is refused: %q", name, live)
-		}
+	if !devhealthschema.EngineFullMatchesLive(table, workItemMetricsDailyNew) {
+		t.Errorf("the new string is refused")
 	}
 	refused := map[string]string{
+		"the old string":           workItemMetricsDailyOld,
 		"columns swapped":          strings.Replace(workItemMetricsDailyNew, "work_scope_id, team_id, row_view", "team_id, work_scope_id, row_view", 1),
 		"view column first":        strings.Replace(workItemMetricsDailyNew, "ORDER BY (org_id,", "ORDER BY (row_view, org_id,", 1),
 		"another extra column":     strings.Replace(workItemMetricsDailyNew, "team_id, row_view)", "team_id, row_view, status)", 1),
 		"new key without primary":  strings.Replace(workItemMetricsDailyNew, "PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ", "", 1),
 		"new key, other primary":   strings.Replace(workItemMetricsDailyNew, "PRIMARY KEY (org_id, provider, day, work_scope_id, team_id)", "PRIMARY KEY (org_id, provider, day)", 1),
-		"old key, other settings":  strings.Replace(workItemMetricsDailyOld, "index_granularity = 8192", "index_granularity = 4096", 1),
+		"new key, other settings":  strings.Replace(workItemMetricsDailyNew, "index_granularity = 8192", "index_granularity = 4096", 1),
 		"new key, other engine":    strings.Replace(workItemMetricsDailyNew, "ReplacingMergeTree(computed_at)", "ReplacingMergeTree", 1),
 		"new key, other partition": strings.Replace(workItemMetricsDailyNew, "toYYYYMM(day)", "toYear(day)", 1),
 		"empty":                    "",
 	}
 	for name, live := range refused {
-		if live == workItemMetricsDailyNew || live == workItemMetricsDailyOld {
+		if name != "the old string" && live == workItemMetricsDailyNew {
 			t.Fatalf("case %q did not change the string: the case proves nothing", name)
 		}
 		if devhealthschema.EngineFullMatchesLive(table, live) {
@@ -47,11 +44,8 @@ func TestEngineFullMatchesLiveAcceptsExactlyTheOldAndTheNewWorkItemMetricsDailyS
 	}
 }
 
-func TestEngineFullMatchesLiveOfATableWithNoAlternateIsExact(t *testing.T) {
+func TestEngineFullMatchesLiveOfAnotherTableIsExact(t *testing.T) {
 	const table = "work_items"
-	if len(devhealthschema.EngineFullAlternates(table)) != 0 {
-		t.Fatalf("the test table has alternates now: pick another")
-	}
 	canonical := devhealthschema.EngineFull[table]
 	if !devhealthschema.EngineFullMatchesLive(table, canonical) {
 		t.Errorf("the canonical string of %s is refused", table)
@@ -59,30 +53,21 @@ func TestEngineFullMatchesLiveOfATableWithNoAlternateIsExact(t *testing.T) {
 	if devhealthschema.EngineFullMatchesLive(table, canonical+" ") {
 		t.Errorf("a changed string of %s is accepted", table)
 	}
-	if devhealthschema.EngineFullMatchesLive("no_such_table", workItemMetricsDailyOld) {
+	if devhealthschema.EngineFullMatchesLive("no_such_table", workItemMetricsDailyNew) {
 		t.Error("a table that EngineFull does not declare matched")
 	}
 }
 
-func TestEngineFullAlternatesExistOnlyForDeclaredTablesAndDifferFromTheCanonicalString(t *testing.T) {
-	for table := range devhealthschema.ProductionColumns {
-		canonical, declared := devhealthschema.EngineFull[table]
-		alternates := devhealthschema.EngineFullAlternates(table)
-		if !declared && len(alternates) > 0 {
-			t.Errorf("%s has alternates and no canonical string", table)
-		}
-		seen := map[string]bool{canonical: true}
-		for _, alternate := range alternates {
-			if seen[alternate] {
-				t.Errorf("%s: an alternate equals the canonical string or another alternate: %q", table, alternate)
-			}
-			seen[alternate] = true
-		}
+// The declared columns hold row_view as the last column and the fixture DDL carries it in the sorting key.
+func TestWorkItemMetricsDailyDeclaresRowViewAsTheLastSortingKeyColumn(t *testing.T) {
+	const table = "work_item_metrics_daily"
+	columns := devhealthschema.ProductionColumns[table]
+	last := columns[len(columns)-1]
+	if last.Name != "row_view" || last.Type != "LowCardinality(String)" {
+		t.Fatalf("last declared column is %+v, want row_view LowCardinality(String)", last)
 	}
-	if len(devhealthschema.EngineFullAlternates("work_item_metrics_daily")) != 1 {
-		t.Error("work_item_metrics_daily must have exactly the one new-key alternate")
-	}
-	if devhealthschema.EngineFullAlternates("no_such_table") != nil {
-		t.Error("an unknown table has alternates")
+	ddl := devhealthschema.DDL(table)[0]
+	if !strings.Contains(ddl, "row_view LowCardinality(String)") || !strings.Contains(ddl, "team_id, row_view)") {
+		t.Errorf("the fixture DDL does not carry row_view as a column and as the last key column: %s", ddl)
 	}
 }
