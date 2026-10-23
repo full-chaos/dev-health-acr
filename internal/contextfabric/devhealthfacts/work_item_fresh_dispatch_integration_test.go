@@ -142,7 +142,7 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 			expected = expected[:retain]
 			client := &freshLiveQuery{inner: query, failure: tc.failure, t: t}
 			if tc.move {
-				client.beforeStatus = func() {
+				client.beforeContentRead = func() {
 					seed(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repo, org, "acme/other", tc.provider, at.Add(time.Minute))
 				}
 			}
@@ -426,7 +426,7 @@ type freshLiveQuery struct {
 	arrival            []string
 	failure            string
 	injected           bool
-	beforeStatus       func()
+	beforeContentRead  func()
 }
 
 func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
@@ -445,9 +445,9 @@ func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []conte
 	c.arrival = append(c.arrival, phase)
 	sort.Strings(c.phases)
 	c.statements = append(c.statements, sql)
-	if phase == "status" && c.beforeStatus != nil {
-		c.beforeStatus()
-		c.beforeStatus = nil
+	if phase != "s1" && c.beforeContentRead != nil {
+		c.beforeContentRead()
+		c.beforeContentRead = nil
 	}
 	c.mu.Unlock()
 	// Fail through the real server/client, without modifying the shared DDL.
