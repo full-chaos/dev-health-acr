@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,6 +80,7 @@ func runPeriodShapeTurnWith(t *testing.T, path interpreterPath, question string,
 		options.request(&request)
 	}
 	var events []string
+	var factTimesMu sync.Mutex
 	engine := mustReuseTestEngine(t, EngineDependencies{
 		Graph: graphReaderStub{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}}},
@@ -87,7 +90,14 @@ func runPeriodShapeTurnWith(t *testing.T, path interpreterPath, question string,
 			},
 		},
 		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, factRequest CanonicalFactRequest) (CanonicalFactBundle, error) {
+			factTimesMu.Lock()
 			run.factTimes = append(run.factTimes, factRequest.Question.TimeContext)
+			// The prior-point read runs beside the current one, so its place in
+			// the log is not fixed; keep the current read first.
+			sort.SliceStable(run.factTimes, func(i, j int) bool {
+				return !isPriorPointRead(run.factTimes[i]) && isPriorPointRead(run.factTimes[j])
+			})
+			factTimesMu.Unlock()
 			return CanonicalFactBundle{
 				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
@@ -115,6 +125,10 @@ func runPeriodShapeTurnWith(t *testing.T, path interpreterPath, question string,
 	}
 	run.result = result
 	return run
+}
+
+func isPriorPointRead(tc TimeContext) bool {
+	return tc.Axis == TemporalValidTime && tc.AsOf != nil
 }
 
 // primaryFactTime is the time context of the turn's first canonical fact read.

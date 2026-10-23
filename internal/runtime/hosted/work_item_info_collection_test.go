@@ -11,7 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -382,6 +384,7 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 }
 
 type infoTupleQueryClient struct {
+	mu          sync.Mutex
 	memberID    string
 	phases      []string
 	fail        string
@@ -414,8 +417,11 @@ func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []c
 	if configured, ok := c.rowsByPhase[phase]; ok {
 		rows = configured
 	}
+	c.mu.Lock()
 	c.phases = append(c.phases, phase)
+	sort.Strings(c.phases)
 	c.queries = append(c.queries, infoTupleQuery{phase: phase, sql: sql, bindings: append([]contextpacket.ClickHouseBinding(nil), bindings...)})
+	c.mu.Unlock()
 	if c.fail == phase {
 		return nil, errors.New("controlled content read failure")
 	}
@@ -433,10 +439,12 @@ func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []c
 	if c.fail == phase+"_partial" {
 		rowErr = errors.New("controlled failure after scanned content rows")
 	}
+	c.mu.Lock()
 	if c.scanned == nil {
 		c.scanned = map[string]int{}
 	}
-	return &infoTupleQueryRows{rows: rows, rowErr: rowErr, scanned: func() { c.scanned[phase]++ }}, nil
+	c.mu.Unlock()
+	return &infoTupleQueryRows{rows: rows, rowErr: rowErr, scanned: func() { c.mu.Lock(); c.scanned[phase]++; c.mu.Unlock() }}, nil
 }
 
 // These scenario rows describe ten member fields, not complete S1 wire rows.

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -415,6 +416,7 @@ func containsFreshLive(values []string, want string) bool {
 }
 
 type freshLiveQuery struct {
+	mu                 sync.Mutex
 	t                  *testing.T
 	inner              contextpacket.ClickHouseQueryClient
 	phases, statements []string
@@ -434,12 +436,15 @@ func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []conte
 	if strings.Contains(sql, "work_item_transitions") {
 		phase = "status_since"
 	}
+	c.mu.Lock()
 	c.phases = append(c.phases, phase)
+	sort.Strings(c.phases)
 	c.statements = append(c.statements, sql)
 	if phase == "status" && c.beforeStatus != nil {
 		c.beforeStatus()
 		c.beforeStatus = nil
 	}
+	c.mu.Unlock()
 	// Fail through the real server/client, without modifying the shared DDL.
 	if phase == c.failure {
 		return c.inner.Query(ctx, "SELECT fresh_dispatch_missing_column FROM system.one", nil)
