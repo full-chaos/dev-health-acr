@@ -210,7 +210,7 @@ func oracleFalkor(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: oracleFalkorImg, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: chfixture.FalkorReady(),
 		},
 		Started: true,
 	})

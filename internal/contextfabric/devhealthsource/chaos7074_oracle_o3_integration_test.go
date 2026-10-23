@@ -13,7 +13,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -66,7 +65,7 @@ func chaos7074FalkorAdapterWith(t *testing.T, ctx context.Context, configure fun
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chaos7074FalkorImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: wait.ForListeningPort("6379/tcp").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: chfixture.FalkorReady(),
 		},
 		Started: true,
 	})

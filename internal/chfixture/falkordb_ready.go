@@ -2,9 +2,12 @@ package chfixture
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -19,8 +22,9 @@ const (
 
 // FalkorReady is the wait strategy for a FalkorDB container. A host-mapped port is open as soon as the container
 // network is up, before the server answers, so a bare listening-port wait reports ready while the first command
-// still hangs. This strategy returns only after the server answers PING, GRAPH.LIST and a GRAPH.QUERY on the mapped port, logs
-// every failed try, and fails with the last error when the budget ends.
+// still hangs. This strategy returns only after the server answers PING and GRAPH.LIST on the mapped port, logs
+// every failed try, and fails with the last error when the budget ends. It also creates an index on a throwaway
+// graph, the command the adapter's schema bootstrap issues first, and deletes that graph on every path.
 func FalkorReady() wait.Strategy {
 	return falkorServing{}
 }
@@ -42,11 +46,16 @@ func (falkorServing) WaitUntilReady(ctx context.Context, target wait.StrategyTar
 func awaitFalkorServing(ctx context.Context, addr string, budget, tryLimit, poll time.Duration, logf func(string, ...any)) error {
 	began := time.Now()
 	deadline := began.Add(budget)
+	graph, err := probeGraphName()
+	if err != nil {
+		return err
+	}
 	client := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1, Protocol: 2, DisableIdentity: true, DialTimeout: tryLimit, ReadTimeout: tryLimit, WriteTimeout: tryLimit})
 	defer func() { _ = client.Close() }()
+	defer deleteProbeGraph(client, graph, tryLimit, logf)
 	var last error
 	for try := 1; ; try++ {
-		last = probeFalkor(ctx, client, tryLimit)
+		last = probeFalkor(ctx, client, graph, tryLimit)
 		if last == nil {
 			logf("falkordb serving on %s after %dms, %d tries", addr, time.Since(began).Milliseconds(), try)
 			return nil
@@ -65,7 +74,23 @@ func awaitFalkorServing(ctx context.Context, addr string, budget, tryLimit, poll
 	}
 }
 
-func probeFalkor(ctx context.Context, client *redis.Client, tryLimit time.Duration) error {
+func probeGraphName() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("falkordb ready: probe graph name: %w", err)
+	}
+	return "acr_ready_probe_" + hex.EncodeToString(b[:]), nil
+}
+
+func deleteProbeGraph(client *redis.Client, graph string, tryLimit time.Duration, logf func(string, ...any)) {
+	ctx, cancel := context.WithTimeout(context.Background(), tryLimit)
+	defer cancel()
+	if err := client.Do(ctx, "GRAPH.DELETE", graph).Err(); err != nil && !strings.Contains(err.Error(), "empty key") {
+		logf("falkordb probe graph %s not deleted: %v", graph, err)
+	}
+}
+
+func probeFalkor(ctx context.Context, client *redis.Client, graph string, tryLimit time.Duration) error {
 	tryCtx, cancel := context.WithTimeout(ctx, tryLimit)
 	defer cancel()
 	if err := client.Ping(tryCtx).Err(); err != nil {
@@ -74,8 +99,8 @@ func probeFalkor(ctx context.Context, client *redis.Client, tryLimit time.Durati
 	if err := client.Do(tryCtx, "GRAPH.LIST").Err(); err != nil {
 		return fmt.Errorf("GRAPH.LIST: %w", err)
 	}
-	if err := client.Do(tryCtx, "GRAPH.QUERY", "acr-fixture-ready", "RETURN 1").Err(); err != nil {
-		return fmt.Errorf("GRAPH.QUERY: %w", err)
+	if err := client.Do(tryCtx, "GRAPH.QUERY", graph, "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)").Err(); err != nil {
+		return fmt.Errorf("GRAPH.QUERY CREATE INDEX: %w", err)
 	}
 	return nil
 }
