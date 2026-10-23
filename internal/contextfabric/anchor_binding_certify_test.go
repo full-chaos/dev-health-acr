@@ -107,9 +107,7 @@ func TestTheAnchorBindingTransitionLineCertifiesAgainstItsSpecification(t *testi
 
 // retiredAnchorBindingTokens are members of a closed vocabulary that stay on
 // the wire declaration and that no production driver may emit.
-var retiredAnchorBindingTokens = map[string]map[string]string{
-	"bound_anchor_carry": {"pending_held": "retired by the 9318 switch removal; removal tracked in the Linear follow-up"},
-}
+var retiredAnchorBindingTokens = map[string]map[string]string{}
 
 // TestEveryClosedAnchorBindingTokenIsEmittedByTheRealProducer drives every
 // transition-line driver through the production slog sink, certifies every
