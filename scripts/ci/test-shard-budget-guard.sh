@@ -116,6 +116,29 @@ if command -v jq >/dev/null; then
   ptexpect local-constant-proof-caught-by-duration 1 'TestSomeLocalConstantProof'
   slow TestViaUntaggedHelperProof 900
   ptexpect untagged-helper-proof-caught-by-duration 1 'TestViaUntaggedHelperProof'
+  # r1 findings: a slow SKIPPED test counts; an unreadable duration record fails closed; the allowlist needs its header
+  : >"$tmp/pt.json"
+  printf '%s\n' "$hdr" '{"Action":"pass","Package":"example/a","Test":"TestFast","Elapsed":1}' \
+    '{"Action":"skip","Package":"example/a","Test":"TestSlowSkip","Elapsed":900}' >"$tmp/pt.json"
+  ptexpect slow-skipped-test-fails 1 'example/a TestSlowSkip ran 900s under -race'
+  printf '%s\n' "$hdr" '{"Action":"pass","Package":"example/a","Test":"TestFast","Elapsed":1}' \
+    '{"Action":"pass","Package":"example/a","Test":"TestSlow","Elapsed":900' >"$tmp/pt.json"
+  ptexpect truncated-record-fails-closed 1 'unreadable record'
+  printf '%s\n' "$hdr" '{"Action":"pass","Package":"example/a","Test":"TestFast","Elapsed":1}' \
+    '{"Action":"pass","Package":"example/a","Test":"TestSlow","Elapsed":"not-a-number"}' >"$tmp/pt.json"
+  ptexpect non-numeric-elapsed-fails-closed 1 'unreadable record'
+  printf '%s\n' "$hdr" '{"Action":"pass","Package":"example/a","Test":"TestFast","Elapsed":1}' \
+    '{"Action":"fail","Package":"example/a","Test":"TestSlow"}' >"$tmp/pt.json"
+  ptexpect missing-elapsed-fails-closed 1 'unreadable record'
+  printf '%s\n' 'go test -race -json example/a' "$hdr" '{"Action":"pass","Package":"example/a","Test":"TestFast","Elapsed":1}' >"$tmp/pt.json"
+  ptexpect leading-non-json-line-is-allowed 0 'slowest top-level tests'
+  slow TestA 450
+  printf 'example/a\tTestA\t500\tmissing header\n' >"$allow.nohdr"
+  rc=0; RACE_SLOW_TESTS="$allow.nohdr" "$guard" --json 6000 "$tmp/pt.json" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then echo "ok   headerless-allowlist-rc2"; else echo "FAIL headerless-allowlist-rc2 rc=$rc"; fails=$((fails + 1)); fi
+  : >"$allow.empty"
+  rc=0; RACE_SLOW_TESTS="$allow.empty" "$guard" --json 6000 "$tmp/pt.json" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then echo "ok   empty-allowlist-rc2"; else echo "FAIL empty-allowlist-rc2 rc=$rc"; fails=$((fails + 1)); fi
 fi
 
 [ "$fails" -eq 0 ]

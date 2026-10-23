@@ -90,9 +90,12 @@ if [ "$json" -eq 1 ]; then
   allow="${RACE_SLOW_TESTS:-$(cd "$(dirname "$0")" && pwd)/race-slow-tests.tsv}"
   case "$limit$band$max_bytes" in *[!0-9]*) echo "shard-budget-guard: RACE_TEST_LIMIT_SECONDS, RACE_TEST_BAND_SECONDS and RACE_JSON_MAX_BYTES must be whole numbers" >&2; exit 2 ;; esac
   [ -r "$allow" ] || { echo "shard-budget-guard: allowlist $allow is not readable" >&2; exit 2; }
-  # a row is package<TAB>test<TAB>limit_seconds<TAB>reason; the first line is the header
-  if ! awk -F'\t' 'NR == 1 { next } NF != 4 || $1 == "" || $2 == "" || $3 !~ /^[0-9]+$/ || $4 == "" { bad = 1 } END { exit bad }' "$allow"; then
-    echo "shard-budget-guard: $allow has a row that is not package<TAB>test<TAB>limit_seconds<TAB>reason" >&2
+  # the first line must be exactly the header; every other row is package<TAB>test<TAB>limit_seconds<TAB>reason
+  if ! awk -F'\t' -v hdr="package	test	limit_seconds	reason" '
+    NR == 1 { if ($0 != hdr) bad = 1; next }
+    NF != 4 || $1 == "" || $2 == "" || $3 !~ /^[0-9]+$/ || $4 == "" { bad = 1 }
+    END { if (NR == 0) bad = 1; exit bad }' "$allow"; then
+    echo "shard-budget-guard: $allow must start with the header package<TAB>test<TAB>limit_seconds<TAB>reason and hold only rows of that shape" >&2
     exit 2
   fi
   size="$(wc -c <"$file")"
@@ -102,8 +105,23 @@ if [ "$json" -eq 1 ]; then
   fi
   tests="$(mktemp)"
   trap 'rm -f "$lines" "$tests"' EXIT
-  jq -Rr 'fromjson? | select((.Action == "pass" or .Action == "fail") and (.Test != null) and ((.Test | contains("/")) | not) and (.Package != null))
-    | "\(.Package)\t\(.Test)\t\(.Elapsed // 0)"' "$file" >"$tests"
+  # A line that starts with "{" is a test2json record and must parse; a top-level test record that ended (pass, fail or skip)
+  # must carry a package and a numeric Elapsed. Anything else fails closed. A line that does not start with "{" is
+  # the wrapper's own echo (make's recipe line) and is ignored.
+  jq -Rr 'if startswith("{") then
+      ((try fromjson catch null) as $e
+       | if ($e | type) != "object" then "BAD\t\(input_line_number)\tnot a JSON object"
+         elif ($e.Test != null) and ($e.Action == "pass" or $e.Action == "fail" or $e.Action == "skip") and (($e.Test | tostring | contains("/")) | not) then
+           (if ($e.Package | type) != "string" then "BAD\t\(input_line_number)\tno package"
+            elif ($e.Elapsed | type) != "number" or $e.Elapsed < 0 then "BAD\t\(input_line_number)\tElapsed is not a non-negative number"
+            else "T\t\($e.Package)\t\($e.Test)\t\($e.Elapsed)" end)
+         else empty end)
+    else empty end' "$file" >"$tests" || { echo "::error::shard-budget-guard: jq could not read $file; the per-test limit was not measured"; exit 1; }
+  if grep -q '^BAD' "$tests"; then
+    printf '::error::shard-budget-guard: unreadable record in %s (line %s: %s); the per-test limit was not measured\n' "$file" "$(grep -m1 '^BAD' "$tests" | cut -f2)" "$(grep -m1 '^BAD' "$tests" | cut -f3)"
+    exit 1
+  fi
+  sed -i 's/^T\t//' "$tests"
   if [ ! -s "$tests" ]; then
     echo "::error::shard-budget-guard: no test-level events in $file; the per-test limit was not measured"
     exit 1
@@ -113,7 +131,7 @@ if [ "$json" -eq 1 ]; then
     BEGIN {
       while ((getline row < allowfile) > 0) {
         n = split(row, f, "\t")
-        if (n == 4 && f[3] ~ /^[0-9]+$/) lift[f[1] "\t" f[2]] = f[3] + 0
+        if (++line > 1 && n == 4 && f[3] ~ /^[0-9]+$/) lift[f[1] "\t" f[2]] = f[3] + 0
       }
     }
     { pkg[NR] = $1; name[NR] = $2; secs[NR] = $3 + 0 }
