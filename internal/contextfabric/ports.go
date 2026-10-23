@@ -1455,12 +1455,14 @@ const (
 // implements to report, per measured edge population, how many DISTINCT edges
 // (relationship identities, never scanned rows) its producers currently assert
 // for an organization, counted over the producers' own row shape. Every
-// measured key is present in the map, zero included. DeferredEdgeRelations
-// names the relation types the source produces but does not measure, so a
-// reader can tell "not measured by design" from "measured and clean".
-// Read-only; never advances a cursor.
+// measured key is present in the map, zero included. EdgeCountKeys names every
+// key the source measures: a key it names that the map lacks is a measurement
+// that did not happen. DeferredEdgeRelations names the relation types the
+// source produces but does not measure, so a reader can tell "not measured by
+// design" from "measured and clean". Read-only; never advances a cursor.
 type ProjectionSourceEdgeCounts interface {
 	ProjectionSourceEdgeCounts(ctx context.Context, orgID string) (map[EdgeCountKey]int64, error)
+	EdgeCountKeys() []EdgeCountKey
 	DeferredEdgeRelations() []RelationshipType
 }
 

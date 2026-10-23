@@ -24,6 +24,7 @@ type countingSource struct {
 	onCount  func()
 
 	edges       map[contextfabric.EdgeCountKey]int64
+	declared    []contextfabric.EdgeCountKey
 	edgeErr     error
 	deferred    []contextfabric.RelationshipType
 	edgeCalls   atomic.Int64
@@ -36,6 +37,18 @@ func (s *countingSource) ProjectionSourceEdgeCounts(context.Context, string) (ma
 		s.onEdgeCount()
 	}
 	return s.edges, s.edgeErr
+}
+
+// EdgeCountKeys is the declared set when a test sets one, else the keys of edges.
+func (s *countingSource) EdgeCountKeys() []contextfabric.EdgeCountKey {
+	if s.declared != nil {
+		return s.declared
+	}
+	keys := make([]contextfabric.EdgeCountKey, 0, len(s.edges))
+	for key := range s.edges {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func (s *countingSource) DeferredEdgeRelations() []contextfabric.RelationshipType {

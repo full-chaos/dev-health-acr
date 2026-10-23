@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -17,16 +18,40 @@ var membershipEdgeKeys = []contextfabric.EdgeCountKey{
 	{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmWorkItemColumn},
 }
 
+// encodeSegmentSQL is identity.EncodeSegment over a SQL expression.
+func encodeSegmentSQL(expr string) string {
+	return strings.Replace(identity.SQLSegmentEncodeFragment, "col", expr, 1)
+}
+
+// derivedIDFitsSQL is the SQL form of identity.Derive's length guard: true when
+// the canonical id of kind built from the segment expressions is within
+// identity.MaxNaturalKeyBytes. A producer omits a row whose id is longer (it
+// returns a progress candidate and no entity or edge), so a count of what the
+// producer projects keeps only the rows for which this holds.
+func derivedIDFitsSQL(kind string, segments ...string) string {
+	parts := []string{"'" + kind + ".v2:'"}
+	for i, segment := range segments {
+		if i > 0 {
+			parts = append(parts, "':'")
+		}
+		parts = append(parts, encodeSegmentSQL(segment))
+	}
+	return fmt.Sprintf("length(concat(%s)) <= %d", strings.Join(parts, ", "), identity.MaxNaturalKeyBytes)
+}
+
 // membershipEdgeCountSQL counts the BELONGS_TO_PROJECT edges the producer
 // asserts, per arm: one per distinct relationship identity (subject, resolved
 // project, and for a transition interval its event). It reads the producer's own
 // row source (membershipRows) and keeps the rows querySubjectProjectMemberships
 // turns into an edge: not malformed, not a duplicate add, a project that
-// resolves to exactly one row, and not a column-superseded retraction.
+// resolves to exactly one row, not a column-superseded retraction, and canonical
+// ids (work item, project) the producer does not omit for their length.
 func membershipEdgeCountSQL(ingest bool) string {
 	return `SELECT source, uniqExact(subject_kind, repo_id_str, subject_id, provider, resolved_project_id, event_id) AS edge_count
 FROM (` + membershipRows(cursorState{}, ingest, false) + `)
 WHERE is_malformed = 0 AND is_duplicate_add = 0 AND key_resolution_count = 1 AND source != '` + columnSupersededSource + `'
+  AND (subject_kind != 'work_item' OR ` + derivedIDFitsSQL(identity.KindWorkItem, "repo_id_str", "subject_id") + `)
+  AND ` + derivedIDFitsSQL(identity.KindProject, "provider", "resolved_project_id") + `
 GROUP BY source`
 }
 
@@ -67,6 +92,14 @@ func (s *TeamsProjectsSource) ProjectionSourceEdgeCounts(ctx context.Context, or
 	return counts, nil
 }
 
+// EdgeCountKeys implements contextfabric.ProjectionSourceEdgeCounts.
+func (s *TeamsProjectsSource) EdgeCountKeys() []contextfabric.EdgeCountKey {
+	if !s.enabled {
+		return nil
+	}
+	return append([]contextfabric.EdgeCountKey(nil), membershipEdgeKeys...)
+}
+
 // DeferredEdgeRelations implements contextfabric.ProjectionSourceEdgeCounts:
 // the relation types this source produces and does not measure yet.
 func (s *TeamsProjectsSource) DeferredEdgeRelations() []contextfabric.RelationshipType {
@@ -87,6 +120,11 @@ func (s *ClickHouseProjectionSource) ProjectionSourceEdgeCounts(ctx context.Cont
 	return map[contextfabric.EdgeCountKey]int64{
 		{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}: counts[contractsv1.ContextFabricSubjectPullRequestReview],
 	}, nil
+}
+
+// EdgeCountKeys implements contextfabric.ProjectionSourceEdgeCounts.
+func (s *ClickHouseProjectionSource) EdgeCountKeys() []contextfabric.EdgeCountKey {
+	return []contextfabric.EdgeCountKey{{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}}
 }
 
 // DeferredEdgeRelations implements contextfabric.ProjectionSourceEdgeCounts.

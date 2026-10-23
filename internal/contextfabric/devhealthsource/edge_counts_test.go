@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -92,6 +93,72 @@ func TestMembershipEdgeCountSQLReadsTheProducersOwnRowSource(t *testing.T) {
 				t.Fatalf("ingest=%v: a count has no page or cursor (%q):\n%s", ingest, banned, statement)
 			}
 		}
+	}
+}
+
+// The producer omits a row whose canonical id is over the natural-key bound
+// (identity.Derive); the count must keep exactly the rows Derive keeps.
+func TestDerivedIDFitsSQLMirrorsIdentityDerive(t *testing.T) {
+	t.Parallel()
+	sql := derivedIDFitsSQL(identity.KindWorkItem, "repo_id_str", "subject_id")
+	for _, want := range []string{"length(concat('work_item.v2:', replaceAll(replaceAll(repo_id_str, '%', '%25'), ':', '%3A'), ':', replaceAll(replaceAll(subject_id, '%', '%25'), ':', '%3A'))) <= 256"} {
+		if sql != want {
+			t.Fatalf("derivedIDFitsSQL = %s\nwant %s", sql, want)
+		}
+	}
+	if strings.Count(identity.SQLSegmentEncodeFragment, "col") != 1 || !strings.HasPrefix(identity.SQLSegmentEncodeFragment, "replaceAll(replaceAll(col,") {
+		t.Fatalf("encodeSegmentSQL assumes the fragment names its column once, first: %s", identity.SQLSegmentEncodeFragment)
+	}
+	if identity.MaxNaturalKeyBytes != 256 {
+		t.Fatalf("the SQL bound is rendered from identity.MaxNaturalKeyBytes, now %d", identity.MaxNaturalKeyBytes)
+	}
+	for _, statement := range []string{membershipEdgeCountSQL(false), membershipEdgeCountSQL(true)} {
+		for _, want := range []string{
+			"(subject_kind != 'work_item' OR " + sql + ")",
+			derivedIDFitsSQL(identity.KindProject, "provider", "resolved_project_id"),
+		} {
+			if !strings.Contains(statement, want) {
+				t.Fatalf("membership edge count lacks the omission predicate %q", want)
+			}
+		}
+	}
+	review := derivedIDFitsSQL(identity.KindPullRequestReview, "toString(r.repo_id)", "toString(r.number)", "r.review_id")
+	if !strings.Contains(pullRequestReviewCountSQL, review) {
+		t.Fatalf("the review count must keep only reviews the producer does not omit for id length")
+	}
+}
+
+func TestEdgeCountKeysAreTheKeysTheSourceReturns(t *testing.T) {
+	t.Parallel()
+	teamsClient := &edgeCountClient{rows: map[string][][]any{"uniqExact(subject_kind": {{"transition", uint64(1)}}}}
+	teams, err := NewTeamsProjectsSource(teamsClient, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts, err := teams.ProjectionSourceEdgeCounts(context.Background(), "org-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := teams.EdgeCountKeys()
+	if len(declared) != len(counts) {
+		t.Fatalf("declared %v, returned %v", declared, counts)
+	}
+	for _, key := range declared {
+		if _, ok := counts[key]; !ok {
+			t.Fatalf("declared key %+v is not in the returned map", key)
+		}
+	}
+	disabled, _ := NewTeamsProjectsSource(&edgeCountClient{}, false)
+	if len(disabled.EdgeCountKeys()) != 0 {
+		t.Fatalf("a disabled source declares nothing")
+	}
+	review, _ := NewClickHouseProjectionSource(&edgeCountClient{rows: map[string][][]any{"git_pull_request_reviews": {{uint64(1)}}}})
+	got, err := review.ProjectionSourceEdgeCounts(context.Background(), "org-a")
+	if err != nil || len(review.EdgeCountKeys()) != 1 || len(got) != 1 {
+		t.Fatalf("%v %v %v", review.EdgeCountKeys(), got, err)
+	}
+	if _, ok := got[review.EdgeCountKeys()[0]]; !ok {
+		t.Fatalf("the declared review key must be the returned one")
 	}
 }
 

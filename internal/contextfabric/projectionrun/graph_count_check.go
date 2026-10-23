@@ -128,6 +128,11 @@ type graphCountState struct {
 	// sees it again: rows landing in the source between a drain and the count
 	// read close on their own by the next tick, a skipped row does not.
 	suspects map[string]bool
+	// seen holds the gaps the running check measured: a suspect a check did not
+	// measure again (a failed read, an unmeasured source, a cancelled check) is
+	// dropped at the end of it, so a gap confirms only across two checks that both
+	// measured it.
+	seen     map[string]bool
 	passes   map[string]int
 	instance string
 }
@@ -180,6 +185,10 @@ func (g *graphCountState) resetOrg(orgID string, sources []string) {
 func (g *graphCountState) confirmGap(key string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.seen == nil {
+		g.seen = map[string]bool{}
+	}
+	g.seen[key] = true
 	if g.suspects[key] {
 		return true
 	}
@@ -188,6 +197,30 @@ func (g *graphCountState) confirmGap(key string) bool {
 	}
 	g.suspects[key] = true
 	return false
+}
+
+// beginPass starts a check of the organization: no gap is measured yet.
+func (g *graphCountState) beginPass(orgID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for key := range g.seen {
+		if strings.HasPrefix(key, orgID+"\x00") {
+			delete(g.seen, key)
+		}
+	}
+}
+
+// endPass drops every suspect of the organization that the check did not
+// measure: a gap seen before a check that could not measure it is not a gap seen
+// at two checks in a row.
+func (g *graphCountState) endPass(orgID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for key := range g.suspects {
+		if strings.HasPrefix(key, orgID+"\x00") && !g.seen[key] {
+			delete(g.suspects, key)
+		}
+	}
 }
 
 func (g *graphCountState) clearGap(key string) {
@@ -236,13 +269,14 @@ func (g *graphCountState) due(orgID string, sources []string, now time.Time, int
 // count against the graph's edge count. It warns `graph_below_source` and
 // `graph_edges_below_source` when the graph trails the source beyond the
 // tolerance. It never fails or blocks the tick: a count error is its own Warn
-// class, and a measurement the check could not make is `graph_edge_count_unmeasured`.
+// class, and a measurement the check could not make is `graph_count_unmeasured`.
 func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	if c.graphCountInterval <= 0 || ctx.Err() != nil {
 		return
 	}
-	graph, ok := c.backend.(contextfabric.ProjectionGraphCounts)
-	if !ok {
+	nodeGraph, hasNodeCounts := c.backend.(contextfabric.ProjectionGraphCounts)
+	_, hasEdgeCounts := c.backend.(contextfabric.ProjectionGraphEdgeCounts)
+	if !hasNodeCounts && !hasEdgeCounts {
 		return
 	}
 	if !c.graphCounts.due(orgID, c.sourceNames, c.now(), c.graphCountInterval) {
@@ -251,8 +285,10 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	hash := orgIDHash(orgID)
 	started := c.now()
 	result := GraphCountCheck{OrgID: orgID, Instance: c.graphCounts.instanceID(), Pass: c.graphCounts.nextPass(orgID), At: started}
+	c.graphCounts.beginPass(orgID)
 	cancelled := false
 	defer func() {
+		c.graphCounts.endPass(orgID)
 		result.Duration = c.now().Sub(started)
 		switch {
 		case cancelled || ctx.Err() != nil:
@@ -269,7 +305,13 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	// Each phase has its own timeout: the edge read walks a full history and
 	// must not starve the node read, nor the other way round.
 	nodeCtx, cancelNodes := context.WithTimeout(ctx, graphCountCheckTimeout)
-	c.checkNodeCounts(nodeCtx, orgID, hash, graph, &result)
+	if hasNodeCounts {
+		c.checkNodeCounts(nodeCtx, orgID, hash, nodeGraph, &result)
+	} else if c.anySourceReadsNodeCounts() {
+		result.Errors++
+		c.logger.WarnContext(nodeCtx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "node", "reason", "backend_no_node_counts",
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash))
+	}
 	cancelled = nodeCtx.Err() != nil
 	cancelNodes()
 	if ctx.Err() != nil {
@@ -279,6 +321,15 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	defer cancelEdges()
 	c.checkEdgeCounts(edgeCtx, orgID, hash, &result)
 	cancelled = cancelled || edgeCtx.Err() != nil
+}
+
+func (c *Coordinator) anySourceReadsNodeCounts() bool {
+	for _, source := range c.sourceNames {
+		if _, ok := c.sources[source].(contextfabric.ProjectionSourceCounts); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, graph contextfabric.ProjectionGraphCounts, result *GraphCountCheck) {
@@ -333,26 +384,27 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 
 // checkEdgeCounts is the edge phase of the check. Every source the node phase
 // measured must also be measurable here: a source or backend that reads node
-// counts and no edge counts is reported (graph_edge_count_unmeasured) and fails
+// counts and no edge counts is reported (graph_count_unmeasured) and fails
 // the check, never skipped.
 func (c *Coordinator) checkEdgeCounts(ctx context.Context, orgID, hash string, result *GraphCountCheck) {
 	graph, ok := c.backend.(contextfabric.ProjectionGraphEdgeCounts)
 	if !ok {
 		result.Errors++
-		c.logger.WarnContext(ctx, "context_fabric: graph_edge_count_unmeasured", "check", "graph_edge_count", "reason", "backend_no_edge_counts",
+		c.logger.WarnContext(ctx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "edge", "reason", "backend_no_edge_counts",
 			"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 		return
 	}
 	deferred := map[contextfabric.RelationshipType]bool{}
 	defer func() { result.RelationsDeferred = len(deferred) }()
 	for _, source := range c.sourceNames {
-		if _, measured := c.sources[source].(contextfabric.ProjectionSourceCounts); !measured {
-			continue
-		}
-		counter, ok := c.sources[source].(contextfabric.ProjectionSourceEdgeCounts)
-		if !ok {
+		_, hasNodeCounts := c.sources[source].(contextfabric.ProjectionSourceCounts)
+		counter, hasEdgeCounts := c.sources[source].(contextfabric.ProjectionSourceEdgeCounts)
+		if !hasEdgeCounts {
+			if !hasNodeCounts {
+				continue
+			}
 			result.Errors++
-			c.logger.WarnContext(ctx, "context_fabric: graph_edge_count_unmeasured", "check", "graph_edge_count", "reason", "source_no_edge_counts",
+			c.logger.WarnContext(ctx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "edge", "reason", "source_no_edge_counts",
 				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash))
 			continue
 		}
@@ -365,6 +417,15 @@ func (c *Coordinator) checkEdgeCounts(ctx context.Context, orgID, hash string, r
 			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "edge_source_count",
 				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 			continue
+		}
+		for _, key := range counter.EdgeCountKeys() {
+			if _, present := sourceCounts[key]; present {
+				continue
+			}
+			result.Errors++
+			c.logger.WarnContext(ctx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "edge", "reason", "source_missing_edge_count",
+				"source", contextfabric.SanitizeLogAttr(source), "relation_type", contextfabric.SanitizeLogAttr(string(key.Relation)), "arm", contextfabric.SanitizeLogAttr(key.Arm),
+				"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 		}
 		keys := make([]contextfabric.EdgeCountKey, 0, len(sourceCounts))
 		for key := range sourceCounts {

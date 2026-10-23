@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -23,12 +24,14 @@ type kindCountStatement struct {
 }
 
 // pullRequestReviewCountSQL counts the distinct reviews queryPullRequestReviews
-// can project. Each one is one entity and one BELONGS_TO_PULL_REQUEST edge, so
-// the node count and the edge count share this statement.
-const pullRequestReviewCountSQL = `SELECT uniqExact(r.repo_id, r.number, r.review_id) FROM git_pull_request_reviews AS r FINAL
+// can project: the producer omits a review whose canonical id exceeds the
+// natural-key bound (identity.Derive), so the count keeps the rows whose id fits.
+// Each one is one entity and one BELONGS_TO_PULL_REQUEST edge, so the node count
+// and the edge count share this statement.
+var pullRequestReviewCountSQL = `SELECT uniqExact(r.repo_id, r.number, r.review_id) FROM git_pull_request_reviews AS r FINAL
 INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
 INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
-WHERE r.org_id = {org_id:String}`
+WHERE r.org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindPullRequestReview, "toString(r.repo_id)", "toString(r.number)", "r.review_id")
 
 var clickHouseKindCountStatements = []kindCountStatement{
 	{contractsv1.ContextFabricSubjectRepository, `SELECT uniqExact(id) FROM repos FINAL WHERE org_id = {org_id:String}`},
