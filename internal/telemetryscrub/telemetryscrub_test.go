@@ -294,3 +294,113 @@ func TestScrubText(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestNetworkGroupNamesTaintChildren(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) {
+		l.Info("m", slog.Group("client_ip", "v4", "203.0.113.77"))
+		l.WithGroup("remote_ip").Info("v", "addr", "198.51.100.9")
+		l.With(slog.Group("remote_ip", slog.Group("inner", "x", "192.0.2.55"))).Info("m")
+	})
+	for _, leak := range []string{"203.0.113.77", "198.51.100.9", "192.0.2.55"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leak %q in %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "203.0.113.0/24") {
+		t.Errorf("prefix missing: %s", out)
+	}
+}
+
+type dbConn struct {
+	DBPass   string `json:"password"`
+	Alias    string `json:"api_key"`
+	PeerAddr string `json:"remote_ip"`
+	Host     string
+}
+
+func TestOpaqueWalkAppliesNetworkAndTagRules(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) {
+		l.Info("m",
+			"conn", dbConn{DBPass: "tag-pw", Alias: "tag-key", PeerAddr: "203.0.113.99", Host: "h1"},
+			"peers", map[string]any{"remote_ip": "198.51.100.77", "n": 1},
+		)
+	})
+	for _, leak := range []string{"tag-pw", "tag-key", "203.0.113.99", "198.51.100.77"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leak %q in %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, `"Host":"h1"`) || !strings.Contains(out, "203.0.113.0/24") {
+		t.Errorf("ordinary field lost or prefix missing: %s", out)
+	}
+}
+
+func TestExtraFragmentsAndFalsePositives(t *testing.T) {
+	for _, key := range []string{"pwd", "db_pwd", "pass", "DBPass", "dbpass", "passphrase", "signing_key", "signingKey", "encryption_key", "aws_access_key_id", "auth", "basic_auth", "proxy.auth"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", key, "frag-secret") })
+		if got[key] != Redacted {
+			t.Errorf("key %q = %v", key, got[key])
+		}
+	}
+	for _, key := range []string{"author", "passenger", "bypass", "compass", "auth_outcome", "authority", "pass_outcome"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", key, "keep") })
+		if got[key] != "keep" {
+			t.Errorf("key %q = %v, want kept", key, got[key])
+		}
+	}
+}
+
+func TestValueShapesCaseAndUserinfo(t *testing.T) {
+	for _, v := range []string{
+		"x beaRer abcdefghijklmnop1234",
+		"redis://:PW1@host:6379/0",
+		"https://user:pa/ss1@h.example/x",
+		"https://u:p@ssPW1@h.example",
+		"Authorization: Basic dXNlcjpwYXNzd29yZA==",
+		"key AKIAABCDEFGHIJKLMNOP end",
+		"key ASIAABCDEFGHIJKLMNOP end",
+		"dial failed password=hunter2 host=x",
+		"cfg SECRET=s3cr3t;",
+		"Token: abc123xyz",
+	} {
+		for _, got := range []string{ScrubText(v), func() string {
+			o := record(t, func(l *slog.Logger) { l.Info("m", "note", v) })
+			s, _ := o["note"].(string)
+			return s
+		}()} {
+			for _, leak := range []string{"PW1", "dXNlcjpwYXNz", "AKIAABCDEFGHIJKLMNOP", "ASIAABCDEFGHIJKLMNOP", "hunter2", "s3cr3t", "abc123xyz", "abcdefghijklmnop", "pa/ss1"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("value %q leaks %q: %q", v, leak, got)
+				}
+			}
+			if !strings.Contains(got, Redacted) {
+				t.Errorf("value %q not redacted: %q", v, got)
+			}
+		}
+	}
+	if got := ScrubText("see https://example.org/a/b now"); got != "see https://example.org/a/b now" {
+		t.Errorf("plain url changed: %q", got)
+	}
+}
+
+func TestByteArraysElided(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) { l.Info("m", "key", [4]byte{1, 2, 3, 4}, "id", [16]byte{9}) })
+	if strings.Contains(out, "[1,2,3,4]") || strings.Count(out, "[bytes]") != 2 {
+		t.Errorf("byte arrays not elided: %s", out)
+	}
+}
+
+func TestNumericValuesKeepProtectedLookingKeys(t *testing.T) {
+	got := record(t, func(l *slog.Logger) {
+		l.Info("m", "estimated_tokens", 5, "authorization_batches", 3, "pass_pages", 2, "token_ok", true, "session_ms", time.Second, "force_slow_path", "Bearer abcdefghijklmnop1234")
+	})
+	for _, k := range []string{"estimated_tokens", "authorization_batches", "pass_pages", "token_ok", "session_ms"} {
+		if got[k] == Redacted || got[k] == nil {
+			t.Errorf("numeric %q redacted: %v", k, got[k])
+		}
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", "password", 12345, "api_key", slog.StringValue("x")) })
+	if got["password"] != Redacted || got["api_key"] != Redacted {
+		t.Errorf("string under a protected key kept: %v", got["api_key"])
+	}
+}

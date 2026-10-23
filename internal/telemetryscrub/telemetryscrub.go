@@ -23,9 +23,16 @@ const (
 
 // Fragments are compared after lowercasing and removing every non-alphanumeric rune.
 var protectedFragments = []string{
-	"token", "secret", "password", "passwd", "credential", "authorization", "bearer",
-	"cookie", "apikey", "signature", "jwt", "session", "privatekey",
+	"token", "secret", "password", "passwd", "passphrase", "credential", "authorization", "bearer",
+	"cookie", "apikey", "signature", "jwt", "session", "privatekey", "signingkey", "encryptionkey",
+	"awsaccesskeyid",
 }
+
+// protectedSegments match only as a whole word of the key (split on separators and camel case),
+// so author and passenger stay clean.
+var protectedSegments = map[string]bool{"dsn": true, "pwd": true}
+
+var passSuffixDenied = map[string]bool{"bypass": true, "compass": true, "overpass": true, "underpass": true, "trespass": true, "encompass": true, "surpass": true, "impass": true}
 
 var benignKeys = map[string]bool{
 	"maxoutputtokens":                    true,
@@ -39,14 +46,16 @@ var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remotea
 
 var valueShapes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
+	regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/=]{8,}`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`),
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`),
-	regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@`),
 	regexp.MustCompile(`\b(?:sk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{16,}`),
+	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+	regexp.MustCompile(`(?i)\b(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;&]+`),
 }
 
-// shapeMarkers gate the regexes: a value without any marker cannot match a shape.
-var shapeMarkers = []string{"earer", "EARER", "eyJ", "-----", "://", "sk-", "sk_", "ghp_", "gho_", "ghs_", "xox"}
+// shapeMarkers are lowercase; a value is checked against them case-insensitively before any regex runs.
+var shapeMarkers = []string{"earer", "asic ", "eyj", "-----", "://", "sk-", "sk_", "ghp_", "gho_", "ghs_", "xox", "akia", "asia", "pass", "pwd", "secret", "token", "api"}
 
 // ErrorClass names an error's dynamic type; the message is never returned.
 func ErrorClass(err error) string {
@@ -69,15 +78,56 @@ func compact(key string) string {
 	return b.String()
 }
 
-func hasDSNSegment(key string) bool {
-	for _, seg := range strings.FieldsFunc(strings.ToLower(key), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
-	}) {
-		if seg == "dsn" {
+func segments(key string) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	rs := []rune(key)
+	for i, r := range rs {
+		alnum := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !alnum {
+			flush()
+			continue
+		}
+		upper := r >= 'A' && r <= 'Z'
+		if upper && len(cur) > 0 {
+			prev := rs[i-1]
+			prevLower := prev >= 'a' && prev <= 'z' || prev >= '0' && prev <= '9'
+			nextLower := i+1 < len(rs) && rs[i+1] >= 'a' && rs[i+1] <= 'z'
+			if prevLower || (prev >= 'A' && prev <= 'Z' && nextLower) {
+				flush()
+			}
+		}
+		cur = append(cur, r)
+	}
+	flush()
+	return out
+}
+
+func protectedBySegment(key, c string) bool {
+	segs := segments(key)
+	for _, seg := range segs {
+		if protectedSegments[seg] {
 			return true
 		}
 	}
-	return strings.HasSuffix(strings.ToLower(key), "dsn")
+	if len(segs) > 0 {
+		if last := segs[len(segs)-1]; last == "auth" || last == "pass" {
+			return true
+		}
+	}
+	if strings.HasSuffix(c, "dsn") || strings.HasSuffix(c, "pwd") {
+		return true
+	}
+	if strings.HasSuffix(c, "pass") && !passSuffixDenied[c] {
+		return true
+	}
+	return false
 }
 
 type keyClass uint8
@@ -96,7 +146,7 @@ func classify(key string) keyClass {
 				return classProtected
 			}
 		}
-		if hasDSNSegment(key) {
+		if protectedBySegment(key, c) {
 			return classProtected
 		}
 	}
@@ -126,38 +176,91 @@ func classifyCached(key string) keyClass {
 	return c
 }
 
-// classPath applies the key rules to a leaf key and to every group-qualified prefix.
+// classPath applies the key rules to a leaf key and to every enclosing group: a protected
+// or network ancestor taints every child.
 func classPath(groups []string, key string) keyClass {
 	out := classifyCached(key)
 	if out == classProtected || len(groups) == 0 {
 		return out
 	}
+	network := out == classNetwork
 	for i := range groups {
-		if classify(groups[i]) == classProtected {
+		switch classify(groups[i]) {
+		case classProtected:
 			return classProtected
+		case classNetwork:
+			network = true
 		}
 	}
-	if out == classClean {
-		if classify(strings.Join(append(append([]string{}, groups...), key), ".")) == classNetwork {
-			return classNetwork
-		}
+	if !network && classify(strings.Join(append(append([]string{}, groups...), key), ".")) == classNetwork {
+		network = true
 	}
-	return out
+	if network {
+		return classNetwork
+	}
+	return classClean
 }
 
-func mayContainShape(s string) bool {
-	for _, m := range shapeMarkers {
-		if strings.Contains(s, m) {
+func containsFold(s, lowerSub string) bool {
+	n := len(lowerSub)
+	for i := 0; i+n <= len(s); i++ {
+		j := 0
+		for ; j < n; j++ {
+			c := s[i+j]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != lowerSub[j] {
+				break
+			}
+		}
+		if j == n {
 			return true
 		}
 	}
 	return false
 }
 
+func mayContainShape(s string) bool {
+	for _, m := range shapeMarkers {
+		if containsFold(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactUserinfo replaces everything between "://" and the last "@" of the same whitespace-delimited token.
+func redactUserinfo(s string) string {
+	var out strings.Builder
+	for {
+		i := strings.Index(s, "://")
+		if i < 0 {
+			break
+		}
+		out.WriteString(s[:i+3])
+		rest := s[i+3:]
+		end := strings.IndexAny(rest, " \t\r\n")
+		if end < 0 {
+			end = len(rest)
+		}
+		token := rest[:end]
+		if at := strings.LastIndex(token, "@"); at >= 0 {
+			out.WriteString(Redacted + "@")
+			token = token[at+1:]
+		}
+		out.WriteString(token)
+		s = rest[end:]
+	}
+	out.WriteString(s)
+	return out.String()
+}
+
 func scrubString(s string) string {
 	if !mayContainShape(s) {
 		return s
 	}
+	s = redactUserinfo(s)
 	for _, re := range valueShapes {
 		s = re.ReplaceAllString(s, Redacted)
 	}
@@ -187,12 +290,61 @@ func networkPrefix(raw string) string {
 
 var timeType = reflect.TypeOf(time.Time{})
 
+// maxNodes bounds the work spent on the opaque values of one record.
+const maxNodes = 512
+
+type budget struct{ left int }
+
+func (b *budget) take() bool {
+	if b.left <= 0 {
+		return false
+	}
+	b.left--
+	return true
+}
+
+func scalarString(v reflect.Value) (string, bool) {
+	for v.IsValid() && (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) {
+		if v.IsNil() {
+			return "", false
+		}
+		v = v.Elem()
+	}
+	if v.IsValid() && v.Kind() == reflect.String {
+		return v.String(), true
+	}
+	return "", false
+}
+
+func keyedValue(k string, v reflect.Value, depth int, b *budget) any {
+	switch classify(k) {
+	case classProtected:
+		return Redacted
+	case classNetwork:
+		if str, ok := scalarString(v); ok {
+			return networkPrefix(str)
+		}
+		return Redacted
+	}
+	return tree(v, depth+1, b)
+}
+
+func fieldNames(f reflect.StructField) []string {
+	names := []string{f.Name}
+	for _, tag := range []string{"json", "yaml", "mapstructure", "db"} {
+		if name, _, _ := strings.Cut(f.Tag.Get(tag), ","); name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // tree converts an opaque value to a scrubbed, structured copy; no format verb is applied to caller data.
-func tree(v reflect.Value, depth int) any {
+func tree(v reflect.Value, depth int, b *budget) any {
 	if !v.IsValid() {
 		return nil
 	}
-	if depth > maxDepth {
+	if depth > maxDepth || !b.take() {
 		return "[truncated]"
 	}
 	if v.CanInterface() {
@@ -214,7 +366,7 @@ func tree(v reflect.Value, depth int) any {
 		if v.IsNil() {
 			return nil
 		}
-		return tree(v.Elem(), depth+1)
+		return tree(v.Elem(), depth+1, b)
 	case reflect.Bool:
 		return v.Bool()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -228,22 +380,17 @@ func tree(v reflect.Value, depth int) any {
 	case reflect.Map:
 		out := map[string]any{}
 		iter := v.MapRange()
-		n := 0
 		for iter.Next() {
-			if n++; n > maxElements {
+			if b.left <= 0 {
 				out["[truncated]"] = true
 				break
 			}
-			k := fmt.Sprint(tree(iter.Key(), depth+1))
-			if classify(k) == classProtected {
-				out[k] = Redacted
-				continue
-			}
-			out[k] = tree(iter.Value(), depth+1)
+			k := fmt.Sprint(tree(iter.Key(), depth+1, b))
+			out[k] = keyedValue(k, iter.Value(), depth, b)
 		}
 		return out
 	case reflect.Slice, reflect.Array:
-		if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
+		if v.Type().Elem().Kind() == reflect.Uint8 {
 			return "[bytes]"
 		}
 		n := v.Len()
@@ -252,13 +399,10 @@ func tree(v reflect.Value, depth int) any {
 		}
 		out := make([]any, 0, n)
 		for i := 0; i < n; i++ {
-			out = append(out, tree(v.Index(i), depth+1))
+			out = append(out, tree(v.Index(i), depth+1, b))
 		}
 		return out
 	case reflect.Struct:
-		if v.Type() == timeType {
-			return v.Interface()
-		}
 		out := map[string]any{}
 		t := v.Type()
 		for i := 0; i < t.NumField(); i++ {
@@ -266,11 +410,27 @@ func tree(v reflect.Value, depth int) any {
 			if !f.IsExported() {
 				continue
 			}
-			if classify(f.Name) == classProtected {
-				out[f.Name] = Redacted
-				continue
+			class := classClean
+			for _, name := range fieldNames(f) {
+				switch c := classify(name); {
+				case c == classProtected:
+					class = classProtected
+				case c == classNetwork && class == classClean:
+					class = classNetwork
+				}
 			}
-			out[f.Name] = tree(v.Field(i), depth+1)
+			switch class {
+			case classProtected:
+				out[f.Name] = Redacted
+			case classNetwork:
+				if str, ok := scalarString(v.Field(i)); ok {
+					out[f.Name] = networkPrefix(str)
+				} else {
+					out[f.Name] = Redacted
+				}
+			default:
+				out[f.Name] = tree(v.Field(i), depth+1, b)
+			}
 		}
 		return out
 	default:
@@ -278,17 +438,39 @@ func tree(v reflect.Value, depth int) any {
 	}
 }
 
+var strongFragments = []string{"password", "passwd", "passphrase", "pwd", "secret", "apikey", "privatekey", "signingkey", "encryptionkey", "awsaccesskeyid"}
+
+// strongKey names a key whose value is a secret whatever its type, so a numeric value is redacted too.
+func strongKey(key string) bool {
+	c := compact(key)
+	for _, f := range strongFragments {
+		if strings.Contains(c, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// numeric values (counts, durations, flags) carry no secret text, so a protected key keeps them.
+func numeric(v slog.Value) bool {
+	switch v.Kind() {
+	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
+		return true
+	}
+	return false
+}
+
 func clean(groups []string, a slog.Attr) bool {
 	switch a.Value.Kind() {
 	case slog.KindString:
 		return classPath(groups, a.Key) == classClean && !mayContainShape(a.Value.String())
 	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
-		return classPath(groups, a.Key) == classClean
+		return classPath(groups, a.Key) != classNetwork && !strongKey(a.Key)
 	}
 	return false
 }
 
-func scrubAttr(groups []string, a slog.Attr) slog.Attr {
+func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 	a.Value = a.Value.Resolve()
 	if a.Value.Kind() == slog.KindGroup {
 		if a.Key != "" && classify(a.Key) == classProtected {
@@ -302,14 +484,16 @@ func scrubAttr(groups []string, a slog.Attr) slog.Attr {
 		group := a.Value.Group()
 		out := make([]slog.Attr, 0, len(group))
 		for _, g := range group {
-			out = append(out, scrubAttr(inner, g))
+			out = append(out, scrubAttr(inner, g, b))
 		}
 		a.Value = slog.GroupValue(out...)
 		return a
 	}
 	switch classPath(groups, a.Key) {
 	case classProtected:
-		a.Value = slog.StringValue(Redacted)
+		if !numeric(a.Value) || strongKey(a.Key) {
+			a.Value = slog.StringValue(Redacted)
+		}
 		return a
 	case classNetwork:
 		a.Value = slog.StringValue(networkPrefix(a.Value.String()))
@@ -319,7 +503,7 @@ func scrubAttr(groups []string, a slog.Attr) slog.Attr {
 	case slog.KindString:
 		a.Value = slog.StringValue(scrubString(a.Value.String()))
 	case slog.KindAny:
-		a.Value = slog.AnyValue(tree(reflect.ValueOf(a.Value.Any()), 0))
+		a.Value = slog.AnyValue(tree(reflect.ValueOf(a.Value.Any()), 0, b))
 	}
 	return a
 }
@@ -350,18 +534,20 @@ func (h handler) Handle(ctx context.Context, r slog.Record) error {
 	if allClean {
 		return h.next.Handle(ctx, r)
 	}
+	b := &budget{left: maxNodes}
 	out := slog.NewRecord(r.Time, r.Level, scrubString(r.Message), r.PC)
 	r.Attrs(func(a slog.Attr) bool {
-		out.AddAttrs(scrubAttr(h.groups, a))
+		out.AddAttrs(scrubAttr(h.groups, a, b))
 		return true
 	})
 	return h.next.Handle(ctx, out)
 }
 
 func (h handler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	b := &budget{left: maxNodes}
 	out := make([]slog.Attr, 0, len(attrs))
 	for _, a := range attrs {
-		out = append(out, scrubAttr(h.groups, a))
+		out = append(out, scrubAttr(h.groups, a, b))
 	}
 	return handler{next: h.next.WithAttrs(out), groups: h.groups}
 }
