@@ -3412,6 +3412,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(resolution.InactiveHints) > 0 && len(resolution.Committed) == 0 {
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		}
+		// The follow-up offer is a clarification whatever kind the model declared as
+		// the scope anchor: the guards below read the declared kind, which is empty
+		// on a live follow-up, and would let discovery serve an org-wide answer. The
+		// receipt dispositions are already on resolution (composed above).
+		if anchorShadow.followUpOfferEndsTurn(resolution) {
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+		}
 		if uncommittedTeamAnchorNamed(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution) {
 			resolution.ClarificationPrompt = uncommittedTeamAnchorPrompt(resolution)
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))

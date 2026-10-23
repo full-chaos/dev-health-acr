@@ -84,6 +84,15 @@ func (t *anchorBindingTracker) offerFollowUpAnchor(resolution SubjectResolution,
 	return out
 }
 
+// followUpOfferEndsTurn is true when the turn offered the remembered identity
+// and committed nothing: the offer is then the whole answer, a clarification.
+func (t *anchorBindingTracker) followUpOfferEndsTurn(resolution SubjectResolution) bool {
+	if t == nil || len(resolution.Committed) != 0 {
+		return false
+	}
+	return t.carry == BoundAnchorCarryFollowUpOffered || t.carry == BoundAnchorCarryFollowUpOfferedReconciled
+}
+
 // reconcileFollowUpStructure removes, after a follow-up offer, any anchor
 // option the turn's structure offer holds for the offered identity, so the
 // caller sees the remembered subject once, through one redemption path. The
