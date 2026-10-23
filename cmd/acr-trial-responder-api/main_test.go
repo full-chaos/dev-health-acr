@@ -88,13 +88,12 @@ func newTestResponder(t *testing.T, dir, baseURL string) *responder {
 	}
 	t.Cleanup(func() { _ = provider.Close() })
 	return &responder{
-		provider:                  provider,
-		model:                     "gpt-5.6-luna",
-		exchangeDir:               dir,
-		poll:                      20 * time.Millisecond,
-		requestTimeout:            5 * time.Second,
-		attempts:                  map[string]int{},
-		loggedStrictNormalization: map[string]bool{},
+		provider:       provider,
+		model:          "gpt-5.6-luna",
+		exchangeDir:    dir,
+		poll:           20 * time.Millisecond,
+		requestTimeout: 5 * time.Second,
+		attempts:       map[string]int{},
 	}
 }
 
@@ -916,6 +915,9 @@ func TestAnswerOnePublishesLargeIntegersExactlyWhileStrippingNulls(t *testing.T)
 	logs, _ := os.ReadFile(filepath.Join(dir, "_responder_logs", name+".log"))
 	if want := fmt.Sprintf("output_bytes=%d", len(resp.Output)); !strings.Contains(string(logs), want) {
 		t.Errorf("log %q lacks %q: output_bytes must count the published bytes", logs, want)
+	}
+}
+
 func TestProviderRejectionReasonIsReportedWithoutRequestContent(t *testing.T) {
 	const secretPrompt = "PROMPT-CONTENT-MUST-NOT-APPEAR"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

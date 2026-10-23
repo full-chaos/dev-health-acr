@@ -9,9 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 )
 
 func exchangeDirForTest(t *testing.T) string {
@@ -62,7 +63,7 @@ func answerOnceAgainst(t *testing.T, message map[string]any, effort string) (map
 	return captured, resp, string(logs)
 }
 
-func TestAnswerOneSendsOneSystemMessageStrictSchemaAndNoSamplingFields(t *testing.T) {
+func TestAnswerOneSendsOneSystemMessageAndNoSamplingFields(t *testing.T) {
 	body, resp, logs := answerOnceAgainst(t, map[string]any{"role": "assistant", "content": `{"answer":"ok"}`}, "xhigh")
 	if resp.Error != "" {
 		t.Fatalf("response error = %q", resp.Error)
@@ -72,11 +73,11 @@ func TestAnswerOneSendsOneSystemMessageStrictSchemaAndNoSamplingFields(t *testin
 	}
 	messages, _ := body["messages"].([]any)
 	if len(messages) != 2 {
-		t.Fatalf("messages = %v, want one system message (System, blank line, Instructions) and one user message", messages)
+		t.Fatalf("messages = %v, want one system message and one user message", messages)
 	}
 	system, _ := messages[0].(map[string]any)
 	user, _ := messages[1].(map[string]any)
-	wantSystem := "system prompt\n\nproduce JSON matching output_schema; echo session_nonce"
+	wantSystem := "system prompt\n\nproduce JSON matching output_schema; echo session_nonce" + genkitruntime.OutputFormatInstructions([]byte(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`))
 	if system["role"] != "system" || system["content"] != wantSystem || user["role"] != "user" || user["content"] != "user prompt" {
 		t.Errorf("messages = %v, want system %q then user", messages, wantSystem)
 	}
@@ -88,29 +89,82 @@ func TestAnswerOneSendsOneSystemMessageStrictSchemaAndNoSamplingFields(t *testin
 	if body["reasoning_effort"] != "xhigh" || body["model"] != "gpt-5.6-luna" {
 		t.Errorf("reasoning_effort = %v model = %v", body["reasoning_effort"], body["model"])
 	}
-	format, _ := body["response_format"].(map[string]any)
-	schema, _ := format["json_schema"].(map[string]any)
-	if format["type"] != "json_schema" || schema["strict"] != true || schema["name"] != "interpret" {
-		t.Errorf("response_format = %v, want strict json_schema named after the operation", format)
+}
+
+// The responder must put on the wire what production puts on it for a Chat
+// Completions model (genkitruntime llm_generator.go complete): a JSON object
+// answer and the schema as text, for every operation. Built from the real
+// production schemas so a change on either side fails here.
+func TestAnswerOneSendsTheProductionChatCompletionsWireForEveryOperation(t *testing.T) {
+	schemas := map[string]func() ([]byte, error){
+		"interpret":  genkitruntime.InterpretationOutputSchema,
+		"synthesize": genkitruntime.SynthesisOutputSchema,
 	}
-	var original any
-	if err := json.Unmarshal([]byte(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`), &original); err != nil {
-		t.Fatal(err)
+	for operation, build := range schemas {
+		t.Run(operation, func(t *testing.T) {
+			schema, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := exchangeDirForTest(t)
+			var captured map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&captured)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":0,"model":"gpt-5.6-luna","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}]}`))
+			}))
+			defer srv.Close()
+			r := newTestResponder(t, dir, srv.URL)
+			req := exchangeRequest{Operation: operation, Seq: 1, SessionNonce: "n1", System: "S", Prompt: "P", OutputSchema: schema}
+			body, _ := json.Marshal(req)
+			name := "000001-" + operation + ".json"
+			if err := os.WriteFile(filepath.Join(dir, "requests", name), body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r.answerOne(t.Context(), filepath.Join(dir, "requests", name), filepath.Join(dir, "responses", name), filepath.Join(dir, "_responder_logs"))
+
+			format, _ := captured["response_format"].(map[string]any)
+			if format["type"] != "json_object" || format["json_schema"] != nil {
+				t.Fatalf("response_format = %v, want json_object with no schema (production's Chat Completions wire)", format)
+			}
+			messages, _ := captured["messages"].([]any)
+			system, _ := messages[0].(map[string]any)
+			content, _ := system["content"].(string)
+			if !strings.HasSuffix(content, genkitruntime.OutputFormatInstructions(schema)) {
+				t.Errorf("system message does not end with production's schema instructions text")
+			}
+		})
 	}
-	normalized, _ := normalizeForStrictSchema(original)
-	normalizedJSON, err := json.Marshal(normalized)
+}
+
+// Replays the live failure: a provider that refuses any json_schema request
+// (HTTP 400 on the synthesize schema) answers a json_object request. The
+// responder must publish a validated answer, not a terminal invalid_request.
+func TestAnswerOneDoesNotSendASchemaOnTheWireSoAProviderThatRefusesOneStillAnswers(t *testing.T) {
+	dir := exchangeDirForTest(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		if format, _ := body["response_format"].(map[string]any); format["type"] == "json_schema" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema for response_format: schema must have a 'type' key.","type":"invalid_request_error","param":"response_format","code":null}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","created":0,"model":"gpt-5.6-luna","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{\"answer\":\"ok\"}"}}]}`))
+	}))
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+	writeExchangeRequest(t, dir, 1, "n1")
+	name := "000001-interpret.json"
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", name), filepath.Join(dir, "responses", name), filepath.Join(dir, "_responder_logs"))
+	raw, err := os.ReadFile(filepath.Join(dir, "responses", name))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("no response: %v", err)
 	}
-	var wantSchema map[string]any
-	if err := json.Unmarshal(normalizedJSON, &wantSchema); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(schema["schema"], wantSchema) {
-		t.Errorf("sent schema = %v, want the normalized strict schema %v", schema["schema"], wantSchema)
-	}
-	if wantSchema["additionalProperties"] != false {
-		t.Errorf("normalized schema must close additionalProperties, got %v", wantSchema["additionalProperties"])
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != "" || len(resp.Output) == 0 {
+		t.Fatalf("response = %s (%v), want a published output", raw, err)
 	}
 }
 
@@ -150,7 +204,7 @@ func TestResponderDoesNotImportOpenAIGo(t *testing.T) {
 		}
 	}
 	if checked < 2 {
-		t.Fatalf("checked %d non-test files, want main.go and strictschema.go at least", checked)
+		t.Fatalf("checked %d non-test files, want main.go and errorreason.go at least", checked)
 	}
 }
 

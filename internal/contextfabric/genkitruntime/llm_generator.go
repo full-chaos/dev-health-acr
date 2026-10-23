@@ -1,6 +1,7 @@
 package genkitruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -104,6 +105,18 @@ func (s outputSchema) anthropicWire() map[string]any {
 	return s.wire
 }
 
+// OutputFormatInstructions is the text a Chat Completions call appends to the
+// system message in place of a schema on the wire; schemaJSON is compact or
+// indented JSON of the same schema map, and the text is identical for both.
+func OutputFormatInstructions(schemaJSON []byte) string {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, schemaJSON); err != nil {
+		compact.Reset()
+		compact.Write(schemaJSON)
+	}
+	return fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", compact.String())
+}
+
 func newOutputSchema(value any, closed bool) (outputSchema, error) {
 	wire := inferSchemaMap(value)
 	raw, err := json.Marshal(wire)
@@ -114,7 +127,7 @@ func newOutputSchema(value any, closed bool) (outputSchema, error) {
 	if err != nil {
 		return outputSchema{}, fmt.Errorf("compile output schema: %w", err)
 	}
-	instructions := fmt.Sprintf("Output should be in JSON format and conform to the following schema:\n\n```%s```", string(raw))
+	instructions := OutputFormatInstructions(raw)
 	return outputSchema{wire: wire, strict: strictWire(wire), closed: closed, compiled: compiled, instructions: instructions}, nil
 }
 

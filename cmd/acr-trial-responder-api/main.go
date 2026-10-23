@@ -60,6 +60,7 @@ import (
 	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/xeipuuv/gojsonschema"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
@@ -190,7 +191,7 @@ func main() {
 	}
 	defer func() { _ = provider.Close() }()
 
-	r := &responder{provider: provider, model: model, effort: effort, exchangeDir: exdir, poll: poll, requestTimeout: defaultRequestTimeout, attempts: map[string]int{}, loggedStrictNormalization: map[string]bool{}}
+	r := &responder{provider: provider, model: model, effort: effort, exchangeDir: exdir, poll: poll, requestTimeout: defaultRequestTimeout, attempts: map[string]int{}}
 	if err := r.run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
 		os.Exit(1)
@@ -272,15 +273,6 @@ type responder struct {
 	// sequential for loop -- answerOne is always called synchronously,
 	// never from a goroutine, so a plain map needs no locking.
 	attempts map[string]int
-	// loggedStrictNormalization tracks which req.Operation values have
-	// already had their strict-schema rewrite notes logged (see
-	// logStrictNormalizationOnce) -- every call for a given operation
-	// normalizes the SAME schema to the SAME result, so logging the notes
-	// on every single call would just repeat the same lines for the
-	// life of the process; once per operation is enough to audit what
-	// strict mode cost. Same single-threaded-loop reasoning as attempts
-	// above -- no locking needed.
-	loggedStrictNormalization map[string]bool
 }
 
 // run is the watch loop: identical shape to run-responder-codex.sh's own
@@ -443,16 +435,6 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	// comment), so this stays the single authority for "is the answer
 	// actually right."
 	schemaLoader := gojsonschema.NewGoLoader(schemaAny)
-	// strictSchema (team-lead ruling, 2026-08-26, following the case-57
-	// kiac acceptance run): non-strict mode measured only 3/13 first-try
-	// conformance on this operation's schema, with 2/13 exhausting every
-	// retry outright -- "non-strict is unfit," ruled fix is to make
-	// OpenAI's OWN grammar-constrained strict mode accept this schema.
-	// See strictschema.go's own header for the full transform and why the
-	// original schema (above) remains the post-response authority.
-	strictSchema, strictNotes := normalizeForStrictSchema(schemaAny)
-	r.logStrictNormalizationOnce(req.Operation, strictNotes, logf)
-
 	// req.Instructions carries real behavioral guidance beyond formatting
 	// ("base your answer ONLY on system and prompt -- do not invent facts
 	// not present in them") -- codex xhigh review round 1 (High, confirmed):
@@ -470,25 +452,19 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	if req.Instructions != "" {
 		system += "\n\n" + req.Instructions
 	}
+	// The wire production sends a Chat Completions model (genkitruntime
+	// llm_generator.go complete): a JSON object answer and the schema as text
+	// at the end of the system message, never a schema on the wire. The text
+	// comes from the one accessor production uses.
+	system += genkitruntime.OutputFormatInstructions(req.OutputSchema)
 
 	callCtx, cancel := context.WithTimeout(ctx, r.requestTimeout)
 	defer cancel()
 	started := time.Now()
-	// The strict schema is sent with strict:true (team-lead ruling,
-	// 2026-08-26): llm's Chat Completions client always sends a schema
-	// Format as strict json_schema. strictSchema is
-	// normalizeForStrictSchema's own OpenAI-strict-mode-compatible rewrite of
-	// the original schema; the raw schema got an immediate 400 live.
-	strictMap, ok := strictSchema.(map[string]any)
-	if !ok {
-		logf("operation=%s seq=%d class=%s: output_schema is not a JSON object schema", req.Operation, req.Seq, classInvalidRequest)
-		r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Error: classInvalidRequest})
-		return
-	}
 	answer, callErr := r.provider.Complete(callCtx, llm.Request{
 		System:          system,
 		Prompt:          req.Prompt,
-		Format:          &llm.JSONFormat{Name: req.Operation, Schema: strictMap},
+		Format:          &llm.JSONFormat{Type: llm.FormatTypeJSONObject},
 		ReasoningEffort: r.effort,
 	})
 	elapsed := time.Since(started)
@@ -541,21 +517,11 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	// terminal; a schema VIOLATION in the model's own content goes through
 	// retryOrExhaust like the malformed-JSON case immediately above, same
 	// reasoning.
-	// strictSchema (its own comment above) forces every property present
-	// in every response, with an explicit JSON null standing in for "the
-	// ORIGINAL schema treats this as absent" (an originally-optional
-	// property, or one a compiled anyOf variant structurally excludes).
-	// The ORIGINAL schema was never written expecting that: a property's
-	// own value-schema (e.g. time_context.as_of's bare {"type":"string"})
-	// accepts a MISSING key just fine but does NOT accept an explicit
-	// null in its place -- validating the model's raw content as-is
-	// against the original schema would therefore reject the EXACT
-	// correct answer for every branch that omits a field, on every single
-	// call. Stripping null-valued keys before validation restores the
-	// equivalence: "explicitly null" (strict mode's only way to say
-	// "omitted") is treated as "actually omitted" (what the original
-	// schema was written against), the same convention
-	// compileConditionalToAnyOf's own null-forcing relies on.
+	// A model may write an explicit null where the original schema treats a
+	// property as absent (its value schema, e.g. a bare string, rejects null
+	// in place). Null-valued keys are stripped before validation and the
+	// stripped bytes are what is published, so "explicitly null" and
+	// "omitted" mean the same thing to the schema and to the engine decoder.
 	validationContent, stripErr := stripNullFieldsJSON([]byte(content))
 	if stripErr != nil {
 		// Content already passed json.Valid above, so this should be
@@ -596,23 +562,6 @@ func (r *responder) retryOrExhaust(respPath, requestBase, sessionNonce string, l
 	}
 	logf("giving up after %d attempts: class=%s", r.attempts[requestBase], classRetriesExhausted)
 	r.writeResponse(respPath, exchangeResponse{SessionNonce: sessionNonce, Error: classRetriesExhausted})
-}
-
-// logStrictNormalizationOnce logs notes's rewrite list the FIRST time this
-// process normalizes operation's schema, and is a no-op on every later call
-// for the same operation (see loggedStrictNormalization's own field
-// comment). notes describes SCHEMA STRUCTURE only (property names/
-// keywords from Go type reflection) -- never request/response content --
-// so logging it is exempt from this file's own corpus-privacy discipline.
-func (r *responder) logStrictNormalizationOnce(operation string, notes []string, logf func(string, ...any)) {
-	if r.loggedStrictNormalization[operation] {
-		return
-	}
-	r.loggedStrictNormalization[operation] = true
-	logf("operation=%s strict-schema normalization (%d rewrite(s)):", operation, len(notes))
-	for _, note := range notes {
-		logf("  %s", note)
-	}
 }
 
 // requestLogger returns a logf closure that appends timestamped lines to
