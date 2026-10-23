@@ -8160,7 +8160,6 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 			trace.reset()
 		}
 		setupReq := twoTurnRequest(index, tc, requestIDSuffix)
-		setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(windowBand)}
 		setupCtx, setupCancel := context.WithTimeout(ctx, timeout)
 		setupResult, setupErr := investigator.Investigate(setupCtx, principal, setupReq)
 		setupCancel()
@@ -8953,7 +8952,8 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 				Kind: contractsv1.ContextFabricSubjectKind(entry.NegativeKind), PatternID: entry.NegativeHandlePatternID, Value: entry.NegativeHandleValue,
 			}}
 		case string(contractsv1.ContextFabricStructureNeedWindow):
-			setupReq.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowID(entry.NegativeWindowBand)}
+			// No explicit window: a caller-supplied window is committed and
+			// never gated, so only an unstated-window turn offers the bands.
 		}
 		// CHAOS-4103: reset immediately before this call, the SAME
 		// discipline every other observed call in this file uses, so the
