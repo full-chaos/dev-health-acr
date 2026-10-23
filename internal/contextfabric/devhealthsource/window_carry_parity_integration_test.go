@@ -49,7 +49,7 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 			project = projects[rng.Intn(len(projects))]
 		}
 		f.workItem(item, project, stamp(), stamp())
-		f.attribution(item, teams[rng.Intn(len(teams))], []string{"native_team", "manual"}[rng.Intn(2)], uint8(rng.Intn(2)), stamp())
+		f.attribution(item, teams[rng.Intn(len(teams))], []string{"native_team", "manual_fallback"}[rng.Intn(2)], uint8(rng.Intn(2)), stamp())
 		if rng.Intn(2) == 0 {
 			f.transition(item, projects[rng.Intn(len(projects))], "K1", fmt.Sprintf("linear:ev-%d-a", i), stamp(), stamp())
 		}
