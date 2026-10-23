@@ -92,10 +92,12 @@ func workGraphEndpointLabelSQL(id, kind, pr string) string {
 // The table key is (org_id, source_type, source_id, ...) with no repo_id, so
 // a bare repo_id equality prunes nothing. Every writer of a pull-request-sourced
 // edge sets repo_id to the repository in the source id's "<repo_id>#pr" prefix,
-// and issue-sourced edges carry no repo_id; the other source types are small
-// families read whole. qualifier is "" or an alias with a trailing dot.
+// every writer of a commit-sourced edge gives it the id "<repo_id>@<sha>" and
+// that repo_id, and issue-sourced edges carry no repo_id; the other source
+// types are small families read whole. qualifier is "" or an alias with a
+// trailing dot.
 func WorkGraphEdgeScopeSQL(qualifier string) string {
-	return qualifier + "repo_id = {repo_id:UUID} AND ((" + qualifier + "source_type = 'pr' AND startsWith(" + qualifier + "source_id, concat(toString({repo_id:UUID}), '#pr'))) OR " + qualifier + "source_type NOT IN ('pr', 'issue'))"
+	return qualifier + "repo_id = {repo_id:UUID} AND ((" + qualifier + "source_type = 'pr' AND startsWith(" + qualifier + "source_id, concat(toString({repo_id:UUID}), '#pr'))) OR (" + qualifier + "source_type = 'commit' AND startsWith(" + qualifier + "source_id, concat(toString({repo_id:UUID}), '@'))) OR " + qualifier + "source_type NOT IN ('pr', 'issue', 'commit'))"
 }
 
 const workGraphPullRequestsSQL = `SELECT concat(toString(p.repo_id), '#pr', toString(p.number)) ref, p.number number, ifNull(p.title, '') title, r.repo slug FROM git_pull_requests AS p FINAL INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id WHERE p.org_id = {org_id:String} AND p.repo_id = {repo_id:UUID}`

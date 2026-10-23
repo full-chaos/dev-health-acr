@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,11 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	// repository in its source id (ops issuepredges.go:116-147, prcommit/fastpath.go:49-61),
 	// so this edge is outside the contract and the key-prefix scope does not read it.
 	edge("e-foreign-pr", "pr", wgOther+"#pr5", "pr", wgRepo+"#pr311", "relates_to", "")
+	// Not served: a commit-sourced edge carries the id "<repo_id>@<sha>" in every writer
+	// (ops issuecommitedges.go:249-270, ids.go GenerateCommitID), so a bare-sha source id is
+	// outside the contract and the key-prefix scope does not read it.
 	edge("e-commit-issue", "commit", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "issue", "CHAOS-99", "implements", "")
+	edge("e-commit-issue-writer", "commit", wgRepo+"@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "issue", "CHAOS-99", "implements", "")
 	edge("e-deploy", "pr", wgRepo+"#pr311", "deployment", wgDeployID, "deployed_as", "")
 }
 
@@ -120,28 +125,31 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 		want  map[string]string
 	}{
 		"organization-wide caller": {nil, map[string]string{
-			"e-pr-issue":           pr + "implements CHAOS-77 Gate deploy stages on smoke tests",
-			"e-pr-issue-unique":    pr + "implements CHAOS-78 Gate deploy stages on smoke tests",
-			"e-collide":            pr + "implements CHAOS-81",
-			"e-collide-long":       pr + "implements CHAOS-82",
-			"e-pr-jira-issue":      pr + "implements PROJ-5 Jira issue without a repository",
-			"e-pr-linked-jira":     pr + "implements PROJ-6 Jira issue linked by a native pull request",
-			"e-owned-project-jira": pr + "implements PROJ-7 Jira issue in an owned project",
-			"e-commit-issue":       "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
-			"e-deploy":             pr + "deployed as deployment 40000000",
+			"e-pr-issue":            pr + "implements CHAOS-77 Gate deploy stages on smoke tests",
+			"e-pr-issue-unique":     pr + "implements CHAOS-78 Gate deploy stages on smoke tests",
+			"e-collide":             pr + "implements CHAOS-81",
+			"e-collide-long":        pr + "implements CHAOS-82",
+			"e-pr-jira-issue":       pr + "implements PROJ-5 Jira issue without a repository",
+			"e-pr-linked-jira":      pr + "implements PROJ-6 Jira issue linked by a native pull request",
+			"e-owned-project-jira":  pr + "implements PROJ-7 Jira issue in an owned project",
+			"e-commit-issue-writer": wgRepo + "@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
+			"e-deploy":              pr + "deployed as deployment 40000000",
 		}},
 		"caller granted the scoped repository only": {[]string{"acme/deploy-service"}, map[string]string{
-			"e-pr-issue":           pr + "implements CHAOS-77 Gate deploy stages on smoke tests",
-			"e-pr-issue-unique":    pr + "implements CHAOS-78 Gate deploy stages on smoke tests",
-			"e-collide":            pr + "implements CHAOS-81 Title in the scoped repository",
-			"e-collide-long":       pr + "implements CHAOS-82 Short title in the scoped repository",
-			"e-pr-jira-issue":      pr + "implements PROJ-5",
-			"e-pr-linked-jira":     pr + "implements PROJ-6 Jira issue linked by a native pull request",
-			"e-owned-project-jira": pr + "implements PROJ-7 Jira issue in an owned project",
-			"e-commit-issue":       "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
+			"e-pr-issue":            pr + "implements CHAOS-77 Gate deploy stages on smoke tests",
+			"e-pr-issue-unique":     pr + "implements CHAOS-78 Gate deploy stages on smoke tests",
+			"e-collide":             pr + "implements CHAOS-81 Title in the scoped repository",
+			"e-collide-long":        pr + "implements CHAOS-82 Short title in the scoped repository",
+			"e-pr-jira-issue":       pr + "implements PROJ-5",
+			"e-pr-linked-jira":      pr + "implements PROJ-6 Jira issue linked by a native pull request",
+			"e-owned-project-jira":  pr + "implements PROJ-7 Jira issue in an owned project",
+			"e-commit-issue-writer": wgRepo + "@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
 		}},
 	} {
 		labels := workGraphLabelsFor(t, ctx, query, tc.grant)
+		if _, served := labels["e-commit-issue"]; served {
+			t.Errorf("%s: e-commit-issue is served; a commit-sourced edge whose source id lacks the repository prefix is not in the writers' contract", name)
+		}
 		if _, served := labels["e-foreign-pr"]; served {
 			t.Errorf("%s: e-foreign-pr is served; a pull-request-sourced edge outside its source repository's prefix is not in the writers' contract", name)
 		}
@@ -165,10 +173,17 @@ type workGraphCost struct {
 	gateMemory, gateMemoryHigh, gateReadBytes                uint64
 }
 
+// workGraphCommitNoiseSQL seeds rows commit-sourced edges of another
+// repository of the organization, with the writers' source id
+// "<repo_id>@<sha>" (ops issuecommitedges.go, ids.go GenerateCommitID).
+func workGraphCommitNoiseSQL(rows int) string {
+	return fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('cnoise-', toString(number)), 'commit', concat('%s@', lower(hex(SHA1(toString(number))))), 'issue', concat('CNOISE-', toString(number)), 'implements', toUUID('%s'), 'github', 'explicit_text', 0.9, 'Fixes #1', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOther, wgOrg, rows)
+}
+
 // workGraphStatementCost seeds one isolated database with the label rows plus
 // the requested extra rows, runs work_graph.v1 for a restricted caller (the
 // widest authorization relation) and returns the statement's peak cost.
-func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGraphCost {
+func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseRows int) workGraphCost {
 	t.Helper()
 	ctx := context.Background()
 	rawQuery, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
@@ -192,6 +207,11 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 		}
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise pull requests: %v", err)
+		}
+	}
+	if commitNoiseRows > 0 {
+		if err := direct.Exec(ctx, workGraphCommitNoiseSQL(commitNoiseRows)); err != nil {
+			t.Fatalf("seed commit noise edges: %v", err)
 		}
 	}
 	// Background merges would otherwise change the part layout, and with it the
@@ -274,21 +294,23 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	return c
 }
 
-// Three stages, each in its own database: the base, the base plus 150k other
-// work items only, and the base plus 20k other edges and 20k other pull
-// requests only. Neither addition may move the statement's read volume or
+// Four stages, each in its own database: the base, the base plus 150k other
+// work items only, the base plus 20k other edges and 20k other pull
+// requests only, and the base plus 60k commit-sourced edges of another
+// repository only. No addition may move the statement's read volume or
 // memory past the 1.15x slope.
 func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testing.T) {
 	const ceiling = uint64(56 << 20)
 	const statementCeiling = uint64(12 << 20)
-	base := workGraphStatementCost(t, 50000, 20000)
-	filler := workGraphStatementCost(t, 125000, 20000)
-	noise := workGraphStatementCost(t, 50000, 60000)
-	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +40k edges and pull requests %+v", base, filler, noise)
+	base := workGraphStatementCost(t, 50000, 20000, 0)
+	filler := workGraphStatementCost(t, 125000, 20000, 0)
+	noise := workGraphStatementCost(t, 50000, 60000, 0)
+	commits := workGraphStatementCost(t, 50000, 20000, 60000)
+	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +40k edges and pull requests %+v, +60k commit edges %+v", base, filler, noise, commits)
 	// Ceilings are absolute bounds, so each asserts the largest of the measured
 	// warm peaks: a cap is hit by the worst run. Warm, the statement peaks near
 	// 7 MB, its freshness read near 4 to 6 MB and the issue gate near 8 MB.
-	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise} {
+	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise, "+commit edges": commits} {
 		for _, c := range []struct {
 			what         string
 			lowest, peak uint64
@@ -312,7 +334,7 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 	// three warm runs, so a regression that grows the cost lifts all three.
 	const memoryFloor = float64(2 << 20)
 	const readSlack = float64(8192)
-	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise} {
+	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise, "+commit edges": commits} {
 		for what, pair := range map[string][4]uint64{
 			"work_graph.v1 memory":  {stage.memory, stage.memoryHigh, base.memory, base.memoryHigh},
 			"freshness read memory": {stage.freshnessMemory, stage.freshnessMemoryHigh, base.freshnessMemory, base.freshnessMemoryHigh},
@@ -353,6 +375,9 @@ func TestWorkGraphEdgeScopePrunesThePrimaryKey(t *testing.T) {
 	seedWorkGraphLabelRows(t, ctx, direct)
 	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(200000)`, wgOther, wgOrg)); err != nil {
 		t.Fatalf("seed noise edges: %v", err)
+	}
+	if err := direct.Exec(ctx, workGraphCommitNoiseSQL(200000)); err != nil {
+		t.Fatalf("seed commit noise edges: %v", err)
 	}
 	if err := direct.Exec(ctx, "OPTIMIZE TABLE work_graph_edges FINAL"); err != nil {
 		t.Fatalf("optimize: %v", err)
@@ -397,6 +422,15 @@ func TestWorkGraphEdgeScopePrunesThePrimaryKey(t *testing.T) {
 	if bare != bareTotal {
 		t.Errorf("control: a bare repo_id equality selects %d of %d granules, want all (the control no longer shows the defect)", bare, bareTotal)
 	}
+	// The commit arm alone: with 200k commit edges of another repository, the
+	// prefix read selects a sliver of the commit granules, where the whole
+	// source_type read (the arm before the prefix) selects all of them.
+	commitArm, commitTotal := granules("e.repo_id = toUUID('" + wgRepo + "') AND e.source_type = 'commit' AND startsWith(e.source_id, concat(toString(toUUID('" + wgRepo + "')), '@'))")
+	commitWhole, _ := granules("e.repo_id = toUUID('" + wgRepo + "') AND e.source_type = 'commit'")
+	t.Logf("commit arm selects %d of %d granules; the whole source_type='commit' read selects %d", commitArm, commitTotal, commitWhole)
+	if commitWhole < 8 || commitArm*4 > commitWhole {
+		t.Errorf("the commit arm selects %d granules against %d for the whole commit source type: the key prefix does not prune it", commitArm, commitWhole)
+	}
 }
 
 // An evidence-reference or source-row re-resolution names a repository-less
@@ -440,4 +474,81 @@ func TestWorkGraphReresolutionServesTheSameRepositorylessTitlesAsThePacket(t *te
 			t.Errorf("%s: no reference for PROJ-6 among %d", name, len(references))
 		}
 	}
+}
+
+// The commit arm's prefix prune serves the same edges as the arm it replaced
+// for every writer-conforming edge. The old scope read every commit-sourced
+// edge of the organization and filtered repo_id after the read; the new one
+// reads the "<repo_id>@" prefix only. On a seed that mixes both writers'
+// edges, other repositories' edges and two edges no writer produces, the new
+// scope is the old scope minus exactly those two edges.
+func TestWorkGraphCommitArmPrefixServesTheSameWriterEdgesAsTheWholeCommitRead(t *testing.T) {
+	ctx := context.Background()
+	_, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	seedWorkGraphLabelRows(t, ctx, direct)
+	const sha = "b1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	for _, row := range []struct{ id, source, repo string }{
+		{"w-commit-a", wgRepo + "@" + sha, wgRepo},
+		{"w-commit-b", wgRepo + "@c1c2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", wgRepo},
+		{"o-commit-a", wgOther + "@" + sha, wgOther},
+		{"x-commit-foreign", wgOther + "@" + sha, wgRepo},
+	} {
+		if err := direct.Exec(ctx, `INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) VALUES (?, 'commit', ?, 'issue', 'CHAOS-77', 'implements', ?, 'github', 'explicit_text', 0.9, '', now64(3), now64(3), ?)`, row.id, row.source, row.repo, wgOrg); err != nil {
+			t.Fatalf("seed %s: %v", row.id, err)
+		}
+	}
+	if err := direct.Exec(ctx, workGraphCommitNoiseSQL(50)); err != nil {
+		t.Fatalf("seed commit noise: %v", err)
+	}
+	edgeIDs := func(scope string) map[string]bool {
+		t.Helper()
+		scope = strings.ReplaceAll(scope, "{repo_id:UUID}", "toUUID('"+wgRepo+"')")
+		rows, err := direct.Query(ctx, "SELECT e.edge_id FROM work_graph_edges AS e FINAL WHERE e.org_id = '"+wgOrg+"' AND "+scope)
+		if err != nil {
+			t.Fatalf("read edges: %v", err)
+		}
+		defer rows.Close()
+		ids := map[string]bool{}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			ids[id] = true
+		}
+		return ids
+	}
+	const before = "e.repo_id = {repo_id:UUID} AND ((e.source_type = 'pr' AND startsWith(e.source_id, concat(toString({repo_id:UUID}), '#pr'))) OR e.source_type NOT IN ('pr', 'issue'))"
+	old, now := edgeIDs(before), edgeIDs(contextpacket.WorkGraphEdgeScopeSQL("e."))
+	for _, id := range []string{"w-commit-a", "w-commit-b", "e-commit-issue-writer", "e-pr-issue", "e-deploy"} {
+		if !old[id] || !now[id] {
+			t.Errorf("writer-conforming edge %s: served before %v, after %v, want both", id, old[id], now[id])
+		}
+	}
+	for _, id := range []string{"o-commit-a", "x-commit-foreign", "e-foreign-pr"} {
+		if now[id] {
+			t.Errorf("edge %s of another repository is served after the change", id)
+		}
+	}
+	for id := range now {
+		if !old[id] {
+			t.Errorf("edge %s is served after the change and was not before: the new scope may only narrow", id)
+		}
+	}
+	dropped := []string{}
+	for id := range old {
+		if !now[id] {
+			dropped = append(dropped, id)
+		}
+	}
+	sort.Strings(dropped)
+	if len(dropped) != 2 || dropped[0] != "e-commit-issue" || dropped[1] != "x-commit-foreign" {
+		t.Errorf("the change drops %v, want exactly [e-commit-issue x-commit-foreign] (the two seed edges no writer produces: a bare-sha source id and a source id of another repository)", dropped)
+	}
+	t.Logf("served before %d edges, after %d; dropped %v", len(old), len(now), dropped)
 }
