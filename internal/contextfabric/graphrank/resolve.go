@@ -4130,13 +4130,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
 	if len(kindScopedSemanticKeys) > 0 {
-		var leading []contextfabric.SubjectCandidate
-		for _, candidate := range coverageAdmitted {
-			if kindScopedSemanticKeys[SubjectKey(candidate.Subject)] {
-				leading = append(leading, candidate)
+		// Never outrank a non-vector candidate: order is non-vector candidates,
+		// then this arm's finds, then any other vector-only candidate. The
+		// finds lead only when nothing else is offerable.
+		var semantic, nonVector, vectorOnly []contextfabric.SubjectCandidate
+		for _, candidate := range kindOfferCandidates {
+			switch {
+			case kindScopedSemanticKeys[SubjectKey(candidate.Subject)]:
+				semantic = append(semantic, candidate)
+			case isVectorOnlyCandidate(candidate.MatchMechanisms):
+				vectorOnly = append(vectorOnly, candidate)
+			default:
+				nonVector = append(nonVector, candidate)
 			}
 		}
-		kindOfferCandidates = unionCandidatesForOffer(leading, kindOfferCandidates)
+		kindOfferCandidates = unionCandidatesForOffer(unionCandidatesForOffer(nonVector, semantic), vectorOnly)
 	}
 	// offerFullPool is the untruncated merged pool the kind offers read for
 	// "which kinds does the pool hold", held to the same floor.

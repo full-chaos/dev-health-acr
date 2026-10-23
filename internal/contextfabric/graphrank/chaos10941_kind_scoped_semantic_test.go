@@ -68,7 +68,7 @@ func chaos10941Semantic(subject contextfabric.SubjectRef) CandidateNode {
 	return n
 }
 
-func TestChaos10941_KindScopedSemanticFindIsOfferedLeadingNeverCommitted(t *testing.T) {
+func TestChaos10941_KindScopedSemanticFindIsOfferedNeverCommitted(t *testing.T) {
 	t.Parallel()
 	resolution, offers := chaos10941Resolve(t, chaos10941Backend(true, chaos10941Semantic(chaos10941Repo)), chaos10941Request())
 	if len(resolution.Committed) != 0 {
@@ -142,5 +142,32 @@ func TestChaos10941_KindScopedSemanticDegradedFoldsIntoResolution(t *testing.T) 
 	resolution, _ := chaos10941Resolve(t, b, chaos10941Request())
 	if !resolution.RetrievalDegraded {
 		t.Fatal("degraded semantic arm did not mark the resolution degraded")
+	}
+}
+
+func TestChaos10941_KindScopedSemanticFindNeverOutranksANonVectorCandidate(t *testing.T) {
+	t.Parallel()
+	lexical := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_lexical", Label: "Executor Setup Project"}
+	b := chaos10941Backend(true, chaos10941Semantic(chaos10941Repo))
+	b.searchResults = map[string][]CandidateNode{chaos10941Term: {
+		candidateNode(lexical.Kind, lexical.CanonicalID, lexical.Label, 0.7, "*"),
+		candidateNode(contextfabric.SubjectTeam, "team_other", "Other Team", 0.68, "*"),
+	}}
+	resolution, offers := chaos10941Resolve(t, b, chaos10941Request())
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("committed: %#v", resolution.Committed)
+	}
+	offered := chaos10941Offered(offers)
+	repoAt, lexicalAt := -1, -1
+	for i, id := range offered {
+		switch id {
+		case chaos10941Repo.CanonicalID:
+			repoAt = i
+		case lexical.CanonicalID:
+			lexicalAt = i
+		}
+	}
+	if lexicalAt < 0 || repoAt < 0 || repoAt < lexicalAt {
+		t.Fatalf("offer order = %v: the semantic find must come after the lexical candidate", offered)
 	}
 }

@@ -381,8 +381,10 @@ mechanism is configured. `KindScopedSemantic` embeds the term once and
 scores the hinted kind's own stored embeddings (identity-fenced, bounded by
 the exact-name census cap, over-cap = degraded and nothing returned) with the
 exact temporal predicate in the read, so it is correct on a historical axis.
-Its finds are offered (leading the candidate offer, `ClassifyOffer`'s
-vector-only refusal is overridden only for this arm) and never committed.
+Its finds are offered after any non-vector candidate (they lead only when
+they are the only candidates; `ClassifyOffer`'s vector-only refusal, a
+CHAOS-6047 lane-level choice, is overridden only for this arm) and never
+committed.
 **Team-lead R4 ruling: this rescue NEVER commits.** It reuses
 `buildConfirmedKindScopedSnapshot` PRE-confirmation, for the fixed,
 small, identity-census-enumerable kind set (`isAliasLookupScopedKind`)
