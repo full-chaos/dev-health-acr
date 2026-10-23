@@ -82,7 +82,7 @@ func writeExchangeRequest(t *testing.T, dir string, seq int, nonce string) {
 
 func newTestResponder(t *testing.T, dir, baseURL string) *responder {
 	t.Helper()
-	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna", func(string) {})
+	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna", false, func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,11 +923,11 @@ func TestProviderRejectionReasonIsReportedWithoutRequestContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema for response_format 'synthesize':\n too many objects","type":"invalid_request_error","param":"response_format","code":"invalid_json_schema"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema. echo: PROMPT-CONTENT-MUST-NOT-APPEAR","type":"invalid_request_error","param":"response_format","code":"invalid_json_schema"}}`))
 	}))
 	defer srv.Close()
 	var reported []string
-	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", func(reason string) { reported = append(reported, reason) })
+	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", false, func(reason string) { reported = append(reported, reason) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,7 +940,7 @@ func TestProviderRejectionReasonIsReportedWithoutRequestContent(t *testing.T) {
 	if len(reported) != 1 {
 		t.Fatalf("reported %d reasons, want 1: %v", len(reported), reported)
 	}
-	for _, want := range []string{"http=400", "type=invalid_request_error", "code=invalid_json_schema", "param=response_format", "too many objects"} {
+	for _, want := range []string{"http=400", "type=invalid_request_error", "code=invalid_json_schema", "param=response_format", "message_bytes="} {
 		if !strings.Contains(reported[0], want) {
 			t.Errorf("reason %q lacks %q", reported[0], want)
 		}
@@ -958,5 +958,15 @@ func TestStripNullFieldsJSONRefusesTrailingData(t *testing.T) {
 	}
 	if out, err := stripNullFieldsJSON([]byte(" {\"a\":null,\"b\":1}\n")); err != nil || string(out) != `{"b":1}` {
 		t.Errorf("surrounding whitespace: out=%s err=%v, want {\"b\":1}", out, err)
+	}
+}
+
+func TestProviderRejectionMessageIsReportedOnlyOnExplicitOptIn(t *testing.T) {
+	body := []byte(`{"error":{"message":"Invalid schema:\n at anyOf 0","type":"invalid_request_error","param":"response_format","code":null}}`)
+	if got := providerErrorReason(400, body, false); strings.Contains(got, "anyOf") {
+		t.Errorf("default report %q carries the provider message", got)
+	}
+	if got := providerErrorReason(400, body, true); !strings.Contains(got, "message=Invalid schema: at anyOf 0") {
+		t.Errorf("opt-in report %q lacks the flattened message", got)
 	}
 }

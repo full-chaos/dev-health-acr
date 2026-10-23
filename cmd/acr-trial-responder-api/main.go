@@ -184,7 +184,8 @@ func main() {
 		// No production launcher sets this.
 		baseURL = base
 	}
-	provider, err := newProvider(apiKey, baseURL, model, func(reason string) { fmt.Fprintf(os.Stderr, "responder: provider rejected a request: %s\n", reason) })
+	includeMessage := os.Getenv("ACR_TEST_TRIAL_RESPONDER_LOG_PROVIDER_MESSAGE") == "1"
+	provider, err := newProvider(apiKey, baseURL, model, includeMessage, func(reason string) { fmt.Fprintf(os.Stderr, "responder: provider rejected a request: %s\n", reason) })
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acr-trial-responder-api: %v\n", err)
 		os.Exit(1)
@@ -245,13 +246,13 @@ func resolveResponderEffort(raw string) (string, error) {
 // sent no temperature and no output cap; both stay unset here. The HTTP
 // client has no overall timeout: every call is bounded by the request
 // context (requestTimeout), which is longer than the llm default.
-func newProvider(apiKey, baseURL, model string, reportProviderError func(string)) (llm.Provider, error) {
+func newProvider(apiKey, baseURL, model string, includeProviderMessage bool, reportProviderError func(string)) (llm.Provider, error) {
 	return llm.NewCompatible(llm.Config{
 		Kind:        llm.KindLocal,
 		APIKey:      llm.NewSecret(apiKey),
 		BaseURL:     baseURL,
 		Model:       model,
-		HTTPClient:  &http.Client{Transport: reasonLogTransport{next: outboundhttp.SharedTransport(), report: reportProviderError}},
+		HTTPClient:  &http.Client{Transport: reasonLogTransport{next: outboundhttp.SharedTransport(), report: reportProviderError, includeMessage: includeProviderMessage}},
 		Temperature: llm.TemperatureOmit,
 		OutputCap:   llm.OutputCapOmit,
 	})
@@ -429,11 +430,10 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 		r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Error: classInvalidRequest})
 		return
 	}
-	// Post-response validation (below, after the API call) uses THIS
-	// ORIGINAL schema, never the strict-normalized one -- normalization is
-	// allowed to WEAKEN semantic constraints (strictSchema's own doc
-	// comment), so this stays the single authority for "is the answer
-	// actually right."
+	// Post-response validation (below, after the API call) uses this
+	// original schema: it is the single authority for "is the answer
+	// actually right". The request carries the schema as text only (the
+	// production Chat Completions wire), so nothing upstream enforces it.
 	schemaLoader := gojsonschema.NewGoLoader(schemaAny)
 	// req.Instructions carries real behavioral guidance beyond formatting
 	// ("base your answer ONLY on system and prompt -- do not invent facts
