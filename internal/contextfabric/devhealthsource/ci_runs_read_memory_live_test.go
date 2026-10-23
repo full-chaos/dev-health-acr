@@ -81,7 +81,7 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 		{name: "steady", since: base.Add(time.Duration(ciRunsRows-100) * time.Second)},
 		{name: "future", since: base.Add(60 * 24 * time.Hour)},
 	}
-	variants := []string{"legacy", "current", "joinpruned", "prewhere", "joinpruned+prewhere", "threads1", "threads2", "block8192", "threads1+block8192", "narrowproxy"}
+	variants := []string{"legacy", "current", "joinpruned", "prewhere", "joinpruned+prewhere", "threads1", "threads2", "block8192", "threads1+block8192", "narrowproxy", "keysfirst"}
 	for _, cursor := range cursors {
 		var want []string
 		for _, variant := range variants {

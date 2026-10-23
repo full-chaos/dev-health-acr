@@ -653,6 +653,9 @@ func ciRunsVariantStatement(variant string, cursor cursorState) (string, error) 
 // and returns every selected column of every row, formatted, in order.
 func ReadCIRunsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, variant, orgID string, since time.Time, after string, limit int) ([]string, error) {
 	cursor := cursorState{Since: since, After: after, Space: cursorSpaceIngest}
+	if variant == "keysfirst" {
+		return readCIRunsKeysFirst(ctx, client, orgID, cursor, limit)
+	}
 	statement, err := ciRunsVariantStatement(variant, cursor)
 	if err != nil {
 		return nil, err
@@ -718,4 +721,83 @@ func ReadCIRunCountForTest(ctx context.Context, client contextpacket.ClickHouseQ
 		}
 	}
 	return total, rows.Err()
+}
+
+func formatCIRunRow(runID, repoID, branch, status, repoSlug string, observedAt, startedAt time.Time, hasFinished uint8, finishedAt time.Time, pipelineName string, lastSynced time.Time) string {
+	return fmt.Sprint(runID, "|", repoID, "|", branch, "|", status, "|", repoSlug, "|", observedAt.UTC().Format(time.RFC3339Nano), "|", startedAt.UTC().Format(time.RFC3339Nano), "|", hasFinished, "|", finishedAt.UTC().Format(time.RFC3339Nano), "|", pipelineName, "|", lastSynced.UTC().Format(time.RFC3339Nano))
+}
+
+// readCIRunsKeysFirst is the candidate two-step read: the page is chosen on
+// the narrow columns, then the wide columns are read for its keys alone.
+func readCIRunsKeysFirst(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]string, error) {
+	legacy := legacyCIRunsStatement(cursor)
+	narrow := "SELECT c.run_id, toString(c.repo_id), repo.repo, c.last_synced\n" + legacy[strings.Index(legacy, "FROM ci_pipeline_runs"):]
+	rows, err := client.Query(ctx, narrow, rowLimitBindings(orgID, cursor, limit))
+	if err != nil {
+		return nil, err
+	}
+	type pageKey struct{ runID, repoID, slug string }
+	var keys []pageKey
+	for rows.Next() {
+		var key pageKey
+		var version time.Time
+		if err := rows.Scan(&key.runID, &key.repoID, &key.slug, &version); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	name, _ := contextpacket.StatementReaderFromContext(ctx)
+	wideCtx := contextpacket.WithStatementReader(ctx, name+"-wide")
+	read := map[string]func(slug string) string{}
+	const perStatement = 100
+	for start := 0; start < len(keys); start += perStatement {
+		chunk := keys[start:min(start+perStatement, len(keys))]
+		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
+		terms := make([]string, len(chunk))
+		for i, key := range chunk {
+			terms[i] = fmt.Sprintf("(c.repo_id = toUUID({r%[1]d:String}) AND c.run_id = {k%[1]d:String})", i)
+			bindings = append(bindings, contextpacket.ClickHouseBinding{Name: fmt.Sprintf("r%d", i), Value: key.repoID}, contextpacket.ClickHouseBinding{Name: fmt.Sprintf("k%d", i), Value: key.runID})
+		}
+		statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), coalesce(c.finished_at, c.started_at),
+       c.started_at, ` + nullableTimestamp("c.finished_at") + `,
+       ifNull(c.pipeline_name, ''), c.last_synced
+FROM ci_pipeline_runs AS c FINAL
+WHERE c.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)`
+		wide, err := client.Query(wideCtx, statement, bindings)
+		if err != nil {
+			return nil, err
+		}
+		for wide.Next() {
+			var runID, repoID, branch, status, pipelineName string
+			var observedAt, startedAt, finishedAt, lastSynced time.Time
+			var hasFinished uint8
+			if err := wide.Scan(&runID, &repoID, &branch, &status, &observedAt, &startedAt, &hasFinished, &finishedAt, &pipelineName, &lastSynced); err != nil {
+				wide.Close()
+				return nil, err
+			}
+			read[repoID+":"+runID] = func(slug string) string {
+				return formatCIRunRow(runID, repoID, branch, status, slug, observedAt, startedAt, hasFinished, finishedAt, pipelineName, lastSynced)
+			}
+		}
+		err = wide.Err()
+		wide.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		row, ok := read[key.repoID+":"+key.runID]
+		if !ok {
+			return nil, fmt.Errorf("keys-first read lost %s:%s", key.repoID, key.runID)
+		}
+		out = append(out, row(key.slug))
+	}
+	return out, nil
 }
