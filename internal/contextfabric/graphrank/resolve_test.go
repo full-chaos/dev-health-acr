@@ -72,10 +72,11 @@ type fakeGraphBackend struct {
 	aliasLookupCalls     [][]string
 
 	// CHAOS-10941 KindScopedSemantic fixture; nil hook by default.
-	enableKindScopedSemantic  bool
-	kindScopedSemanticResults map[string]map[contextfabric.SubjectKind][]CandidateNode
-	kindScopedSemanticDegrade bool
-	kindScopedSemanticCalls   []searchKindCall
+	enableKindScopedSemantic    bool
+	kindScopedSemanticResults   map[string]map[contextfabric.SubjectKind][]CandidateNode
+	kindScopedSemanticDegrade   bool
+	kindScopedSemanticTruncated bool
+	kindScopedSemanticCalls     []searchKindCall
 
 	// CHAOS-4038 SearchKind fixture. enableSearchKind defaults to false, so
 	// every pre-existing test in this file -- which never sets it -- gets
@@ -212,7 +213,7 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 	if f.enableKindScopedSemantic {
 		deps.KindScopedSemantic = func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) ([]CandidateNode, bool, bool, error) {
 			f.kindScopedSemanticCalls = append(f.kindScopedSemanticCalls, searchKindCall{term: term, kind: kind})
-			return f.kindScopedSemanticResults[term][kind], false, f.kindScopedSemanticDegrade, nil
+			return f.kindScopedSemanticResults[term][kind], f.kindScopedSemanticTruncated, f.kindScopedSemanticDegrade, nil
 		}
 	}
 	if f.enableConfirmedKindVectorCensus {

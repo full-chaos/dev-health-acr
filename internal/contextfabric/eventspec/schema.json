@@ -16658,6 +16658,46 @@
     ]
   },
   {
+    "id": "graphrank.kind_scoped_semantic",
+    "msg": "context fabric resolution trace: kind scoped semantic",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on a confirmed-kind-free, uncommitted resolution with a hinted repository/project/team kind and a non-nil KindScopedSemantic hook; CertifyAbsent asserts the case where the arm never ran.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_scoped_semantic"
+        ]
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "authz_dropped",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.low_population_kind_scope",
     "msg": "context fabric resolution trace: low population kind scope",
     "level": "debug",

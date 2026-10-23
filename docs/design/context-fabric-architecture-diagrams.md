@@ -307,7 +307,7 @@ flowchart TD
 
   GATE -->|"nothing committed AND<br/>confirmedKind == nil AND<br/>a hinted repository/project/team kind<br/>(CHAOS-10941)"| KSEM["applyKindScopedSemanticOffers<br/>chaos10941_kind_scoped_semantic.go<br/>deps.KindScopedSemantic: ONE embed of the term,<br/>cosine over that kind's stored embeddings,<br/>exact temporal predicate in the read"]
   KSEM -.->|"NEVER commits, never enters 'pool',<br/>no identity claim; admitted to the offer<br/>as OfferAdmittedKindScopedSemantic"| COMMITTABLE
-  KSEM --> UNION
+  KSEM -->|"candidate offer ONLY (never the kind,<br/>handle or boundary inputs)"| OFFERS
   OOP --> UNION["unionCandidatesForOffer"]
   POOL -.-> UNION
   LOWOFFER --> UNION
@@ -381,10 +381,12 @@ mechanism is configured. `KindScopedSemantic` embeds the term once and
 scores the hinted kind's own stored embeddings (identity-fenced, bounded by
 the exact-name census cap, over-cap = degraded and nothing returned) with the
 exact temporal predicate in the read, so it is correct on a historical axis.
-Its finds are offered after any non-vector candidate (they lead only when
-they are the only candidates; `ClassifyOffer`'s vector-only refusal, a
+Its finds are offered, strongest similarity first, in the candidate offer only
+(never the expected_kind or handle offers), after any non-vector candidate
+(they lead only when they are the only candidates; `ClassifyOffer`'s vector-only refusal, a
 CHAOS-6047 lane-level choice, is overridden only for this arm) and never
-committed.
+committed. One `kind_scoped_semantic` Info line per run of the arm carries
+result_count (0 = measured miss), truncated and authz_dropped.
 **Team-lead R4 ruling: this rescue NEVER commits.** It reuses
 `buildConfirmedKindScopedSnapshot` PRE-confirmation, for the fixed,
 small, identity-census-enumerable kind set (`isAliasLookupScopedKind`)

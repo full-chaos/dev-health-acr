@@ -171,3 +171,121 @@ func TestChaos10941_KindScopedSemanticFindNeverOutranksANonVectorCandidate(t *te
 		t.Fatalf("offer order = %v: the semantic find must come after the lexical candidate", offered)
 	}
 }
+
+func chaos10941SemanticAt(subject contextfabric.SubjectRef, relevance float64) CandidateNode {
+	n := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, relevance, "*")
+	similarity := relevance
+	n.VectorSimilarity = &similarity
+	return n
+}
+
+func TestChaos10941_KindScopedSemanticNeverWidensTheKindOffer(t *testing.T) {
+	t.Parallel()
+	pool := map[string][]CandidateNode{chaos10941Term: {
+		candidateNode(contextfabric.SubjectPullRequest, "pull_request:r:1", "PR one", 0.7, "*"),
+	}}
+	boundary := func(withHook bool) ([]string, contextfabric.StructureOfferMaterial) {
+		b := chaos10941Backend(withHook, chaos10941Semantic(chaos10941Repo))
+		b.searchResults = pool
+		deps := b.deps()
+		tracer := &captureResolutionTracer{}
+		deps.ResolutionTracer = tracer
+		_, offers, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, chaos10941Request(), testInterpreted(chaos10941Term), deps, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range tracer.snapshot() {
+			if event.Stage == "kind_offer" {
+				return event.KindOfferBoundaryKinds, offers
+			}
+		}
+		t.Fatal("no kind_offer event")
+		return nil, offers
+	}
+	without, withoutOffers := boundary(false)
+	with, withOffers := boundary(true)
+	if !reflect.DeepEqual(without, with) {
+		t.Fatalf("the semantic arm widened the kind offer's input kinds: without=%v with=%v", without, with)
+	}
+	if !reflect.DeepEqual(withoutOffers.KindOptions, withOffers.KindOptions) || !reflect.DeepEqual(withoutOffers.HandleOptions, withOffers.HandleOptions) {
+		t.Fatalf("the semantic arm widened the kind or handle offer")
+	}
+}
+
+func TestChaos10941_KindScopedSemanticBestSimilaritySurvivesTheOfferCap(t *testing.T) {
+	t.Parallel()
+	var hits []CandidateNode
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		hits = append(hits, chaos10941SemanticAt(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + id, Label: id}, 0.6))
+	}
+	best := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:z", Label: "z"}
+	hits = append(hits, chaos10941SemanticAt(best, 0.9))
+	_, offers := chaos10941Resolve(t, chaos10941Backend(true, hits...), chaos10941Request())
+	offered := chaos10941Offered(offers)
+	if len(offered) == 0 || offered[0] != best.CanonicalID {
+		t.Fatalf("candidate offer = %v, want the strongest semantic find (repository:z) first", offered)
+	}
+}
+
+func chaos10941SemanticEvents(tracer *captureResolutionTracer) []ResolutionTraceEvent {
+	var out []ResolutionTraceEvent
+	for _, event := range tracer.snapshot() {
+		if event.Stage == "kind_scoped_semantic" {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func TestChaos10941_KindScopedSemanticReportsTruncationAndAuthzDrops(t *testing.T) {
+	t.Parallel()
+	scope := []string{"full-chaos/dev-health-acr"}
+	allowed := candidateNode(chaos10941Repo.Kind, chaos10941Repo.CanonicalID, chaos10941Repo.Label, 0.7, scope)
+	foreign := candidateNode(chaos10941Repo.Kind, "repository:foreign", "other/private", 0.8, []string{"other/private"})
+	b := chaos10941Backend(true, allowed, foreign)
+	b.kindScopedSemanticTruncated = true
+	deps := b.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: scope}
+	_, offers, err := ResolveSubjects(context.Background(), principal, chaos10941Request(), testInterpreted(chaos10941Term), deps, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offered := chaos10941Offered(offers)
+	if len(offered) != 1 || offered[0] != chaos10941Repo.CanonicalID {
+		t.Fatalf("offer = %v, want only the authorized semantic find", offered)
+	}
+	events := chaos10941SemanticEvents(tracer)
+	if len(events) != 1 || !events[0].KindScopedSemanticTruncated || events[0].KindScopedSemanticAuthzDropped != 1 || events[0].KindScopedSemanticResultCount != 1 {
+		t.Fatalf("kind_scoped_semantic events = %+v, want one with result_count=1 truncated=true authz_dropped=1", events)
+	}
+	if len(b.subjectCandidatesAuthzDropped) == 0 {
+		t.Fatalf("authz drops from the semantic arm never reached SubjectCandidatesAuthzDropped telemetry: %v", b.subjectCandidatesAuthzDropped)
+	}
+}
+
+func TestChaos10941_KindScopedSemanticMissStillEmitsItsEvent(t *testing.T) {
+	t.Parallel()
+	b := chaos10941Backend(true)
+	deps := b.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, chaos10941Request(), testInterpreted(chaos10941Term), deps, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	events := chaos10941SemanticEvents(tracer)
+	if len(events) != 1 || events[0].KindScopedSemanticResultCount != 0 {
+		t.Fatalf("kind_scoped_semantic events = %#v, want one with result_count=0", events)
+	}
+	none := chaos10941Backend(false)
+	noneTracer := &captureResolutionTracer{}
+	noneDeps := none.deps()
+	noneDeps.ResolutionTracer = noneTracer
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, chaos10941Request(), testInterpreted(chaos10941Term), noneDeps, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(chaos10941SemanticEvents(noneTracer)) != 0 {
+		t.Fatal("event emitted although the arm never ran")
+	}
+}
