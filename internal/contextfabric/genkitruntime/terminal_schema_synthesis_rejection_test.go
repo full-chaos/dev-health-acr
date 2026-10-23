@@ -12,14 +12,14 @@ import (
 // When every draw is refused by the output-schema check alone, the call ends
 // in a typed synthesis rejection whose reason names that check, on the error
 // and on the decision line, the same word the last draw carries in
-// draw_rejected_reasons. A draft that parses (an unknown property) and a draft
+// draw_rejected_reasons. A draft that parses (a null array) and a draft
 // that never decodes (malformed JSON) are both the schema check's.
 func TestTerminalSchemaRefusedSynthesisRejectionNamesTheSchemaCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		kind invalidSynthesisDrawKind
 	}{
-		{"unknown_property_on_a_parsed_draft", drawSynthesisUnknownProperty},
+		{"null_array_on_a_parsed_draft", drawSynthesisNullArray},
 		{"malformed_json", drawSynthesisMalformedJSON},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,8 +53,8 @@ func TestTerminalSchemaRefusedSynthesisRejectionNamesTheSchemaCheck(t *testing.T
 // after schema-only draws: the schema word never replaces a more specific one.
 func TestTerminalSynthesisRejectionKeepsAValidatorRuleOverTheSchemaWord(t *testing.T) {
 	rt, handler, _ := scriptedSynthesisGenkitRuntime(t, []string{
-		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
-		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
+		invalidSynthesisDrawText(t, drawSynthesisNullArray),
+		invalidSynthesisDrawText(t, drawSynthesisNullArray),
 		invalidSynthesisDrawText(t, drawSynthesisOutOfEnumStatus),
 	})
 	_, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())

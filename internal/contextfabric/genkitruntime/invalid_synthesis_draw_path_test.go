@@ -22,13 +22,13 @@ type invalidSynthesisDrawKind int
 
 const (
 	drawSynthesisOutOfEnumStatus invalidSynthesisDrawKind = iota
-	drawSynthesisUnknownProperty
+	drawSynthesisNullArray
 	drawSynthesisMalformedJSON
 )
 
 // invalidSynthesisDrawText is the raw model text for one kind of invalid
 // synthesis draw. The out-of-enum status is refused by Genkit's local schema
-// check, as is the unknown property (a well-formed, otherwise-valid draft
+// check, as is a null array (a well-formed, otherwise-valid draft
 // this package's own validator would accept); the malformed text never
 // decodes at all.
 func invalidSynthesisDrawText(t *testing.T, kind invalidSynthesisDrawKind) string {
@@ -46,14 +46,25 @@ func invalidSynthesisDrawText(t *testing.T, kind invalidSynthesisDrawKind) strin
 		out.Status = "not_a_status"
 	case drawSynthesisMalformedJSON:
 		return `{"status": "complete", `
-	case drawSynthesisUnknownProperty:
-		// A well-formed, valid synthesis draft plus a property the schema
-		// forbids: only Genkit's local check can refuse it.
+	case drawSynthesisNullArray:
+		// A well-formed, otherwise valid draft whose declared array is null:
+		// this package's own validator accepts it (an absent list), only the
+		// schema check refuses it. An undeclared property is NOT such a draw
+		// any more: it is dropped before the check.
 		valid, err := json.Marshal(out)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return strings.TrimSuffix(string(valid), "}") + `,"unexpected_field":1}`
+		var fields map[string]any
+		if err := json.Unmarshal(valid, &fields); err != nil {
+			t.Fatal(err)
+		}
+		fields["warnings"] = nil
+		mutated, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(mutated)
 	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
@@ -97,7 +108,7 @@ func TestInvalidSynthesisDrawTakesOneRejectionPath(t *testing.T) {
 	}{
 		{"out_of_enum_status", drawSynthesisOutOfEnumStatus},
 		{"malformed_json", drawSynthesisMalformedJSON},
-		{"schema_only_violation", drawSynthesisUnknownProperty},
+		{"schema_only_violation", drawSynthesisNullArray},
 	}
 	for _, tc := range kinds {
 		t.Run(tc.name+"/redraw_below_ceiling", func(t *testing.T) {
@@ -151,8 +162,8 @@ func TestSynthesisSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection(t *
 		t.Fatal(err)
 	}
 	rt, _, calls := scriptedSynthesisGenkitRuntime(t, []string{
-		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
-		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
+		invalidSynthesisDrawText(t, drawSynthesisNullArray),
+		invalidSynthesisDrawText(t, drawSynthesisNullArray),
 		string(encoded),
 	})
 	_, _, gotErr := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
@@ -255,7 +266,7 @@ func synthesisDecisionAttr(t *testing.T, logger *captureLogger, key string) stri
 // schema-forbidden property has its own digest, and a draw that never decoded
 // reports an unknown claim count instead of zero.
 func TestRejectedSynthesisDrawsKeepTheirOwnDigestAndUnknownClaims(t *testing.T) {
-	extra := invalidSynthesisDrawText(t, drawSynthesisUnknownProperty)
+	extra := invalidSynthesisDrawText(t, drawSynthesisNullArray)
 	valid := validSynthesisDrawText(t)
 	rt, logger, _ := scriptedSynthesisGenkitRuntime(t, []string{extra, valid})
 	if _, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
@@ -293,11 +304,9 @@ func TestRejectedSynthesisDrawErrorDoesNotQuoteTheModelOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extra := strings.TrimSuffix(validSynthesisDrawText(t), "}") + `,"marker_status_from_the_model":1}`
 	for name, text := range map[string]string{
-		"out_of_enum":    string(encoded),
-		"malformed":      `{"status": "marker_status_from_the_model", `,
-		"extra_property": extra,
+		"out_of_enum": string(encoded),
+		"malformed":   `{"status": "marker_status_from_the_model", `,
 	} {
 		t.Run(name, func(t *testing.T) {
 			rt, logger, _ := scriptedSynthesisGenkitRuntime(t, []string{text})
