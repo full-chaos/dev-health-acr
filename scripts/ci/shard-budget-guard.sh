@@ -151,7 +151,7 @@ if [ "$json" -eq 1 ]; then
         key = pkg[i] "\t" name[i]
         if (key in lift) max = lift[key]
         if (secs[i] > max) {
-          printf "::error::%s %s ran %ss under -race, over the %ss per-test limit; tag it sizeproof (plain unit run only) or add a reviewed row to scripts/ci/race-slow-tests.tsv\n", pkg[i], name[i], secs[i], max
+          printf "::error::%s %s ran %ss under -race, over the %ss per-test limit; mark it with the production-size build tag (plain unit run only) or add a reviewed row to scripts/ci/race-slow-tests.tsv\n", pkg[i], name[i], secs[i], max
           rc = 1
         }
       }
