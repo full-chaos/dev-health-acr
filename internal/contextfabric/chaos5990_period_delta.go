@@ -458,6 +458,7 @@ func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Princip
 // can run beside the current read: it needs the frame, the subjects and the
 // as-of instant, never the current facts.
 type periodDeltaPrior struct {
+	asOf   time.Time
 	done   chan struct{}
 	cancel context.CancelFunc
 	bundle CanonicalFactBundle
@@ -494,7 +495,7 @@ func (e *Engine) startPeriodDeltaPriorRead(ctx context.Context, principal storag
 	touchedKinds := periodDeltaTouchedSubjectKinds(eligible)
 	priorAsOf := currentAsOf.Add(-PeriodDeltaWindowDays * 24 * time.Hour)
 	readCtx, cancel := context.WithCancel(ctx)
-	prior := &periodDeltaPrior{done: make(chan struct{}), cancel: cancel}
+	prior := &periodDeltaPrior{asOf: currentAsOf, done: make(chan struct{}), cancel: cancel}
 	go func() {
 		defer close(prior.done)
 		defer func() {
@@ -516,9 +517,18 @@ func (e *Engine) startPeriodDeltaPriorRead(ctx context.Context, principal storag
 // applyPeriodDeltaWithPrior is applyPeriodDelta with the prior read already
 // started (prior, from startPeriodDeltaPriorRead); nil starts it here.
 func (e *Engine) applyPeriodDeltaWithPrior(ctx context.Context, principal storage.Principal, frame QuestionFrame, subjects []SubjectRef, currentFacts []CanonicalFact, currentAsOf time.Time, anchored bool, prior *periodDeltaPrior) []CanonicalFact {
-	defer prior.stop()
+	defer func() { prior.stop() }()
 	if !frame.HasObligation(ObligationPeriodDelta) {
 		return currentFacts
+	}
+	// The serial path took the as-of instant after the current read. A prior
+	// read started before it is kept only while both instants fall on the same
+	// UTC day; across midnight it is dropped and read again at the later
+	// instant, so a turn that straddles midnight serves what the serial path
+	// served.
+	if prior != nil && !sameUTCDay(prior.asOf, currentAsOf) {
+		prior.stop()
+		prior = nil
 	}
 	eligible := periodDeltaEligibleSubjects(subjects)
 	if len(eligible) == 0 {
@@ -536,7 +546,6 @@ func (e *Engine) applyPeriodDeltaWithPrior(ctx context.Context, principal storag
 		// CURRENT point's own as-of instant.
 		if prior == nil {
 			prior = e.startPeriodDeltaPriorRead(ctx, principal, frame, subjects, currentAsOf, anchored)
-			defer prior.stop()
 		}
 		priorBundle, err := prior.wait()
 		switch {
@@ -674,4 +683,10 @@ func periodDeltaPriorBranchFailure(branch string) PeriodDeltaFailureReason {
 	default:
 		return PeriodDeltaFailureReadFailed
 	}
+}
+
+func sameUTCDay(a, b time.Time) bool {
+	ay, am, ad := a.UTC().Date()
+	by, bm, bd := b.UTC().Date()
+	return ay == by && am == bm && ad == bd
 }

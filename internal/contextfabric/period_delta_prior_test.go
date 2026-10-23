@@ -16,14 +16,17 @@ type prefetchFactReader struct {
 	mu      sync.Mutex
 	calls   int
 	seen    context.Context
+	once    sync.Once
+	asOfs   []time.Time
 }
 
-func (r *prefetchFactReader) ReadFacts(ctx context.Context, _ storage.Principal, _ CanonicalFactRequest) (CanonicalFactBundle, error) {
+func (r *prefetchFactReader) ReadFacts(ctx context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
 	r.mu.Lock()
 	r.calls++
 	r.seen = ctx
+	r.asOfs = append(r.asOfs, *request.Question.TimeContext.AsOf)
 	r.mu.Unlock()
-	close(r.started)
+	r.once.Do(func() { close(r.started) })
 	select {
 	case <-r.release:
 		return r.bundle, nil
@@ -102,5 +105,24 @@ func TestPeriodDeltaPriorReadIsNotStartedWithoutTheObligationOrAnAnchor(t *testi
 	}
 	if engine.startPeriodDeltaPriorRead(context.Background(), periodDeltaTestPrincipal(), frame, []SubjectRef{team}, asOf, false) != nil {
 		t.Fatal("started a prior read without an anchored instant")
+	}
+}
+
+func TestPeriodDeltaPriorReadStartedBeforeMidnightIsReadAgainAfterIt(t *testing.T) {
+	t.Parallel()
+	before := time.Date(2026, 9, 18, 23, 59, 59, 0, time.UTC)
+	after := before.Add(2 * time.Second)
+
+	engine, reader, team, current, frame := newPrefetchFixture()
+	close(reader.release)
+	prior := engine.startPeriodDeltaPriorRead(context.Background(), periodDeltaTestPrincipal(), frame, []SubjectRef{team}, before, true)
+	<-reader.started
+	if _, err := prior.wait(); err != nil {
+		t.Fatal(err)
+	}
+	engine.applyPeriodDeltaWithPrior(context.Background(), periodDeltaTestPrincipal(), frame, []SubjectRef{team}, current, after, true, prior)
+	window := PeriodDeltaWindowDays * 24 * time.Hour
+	if len(reader.asOfs) != 2 || !reader.asOfs[0].Equal(before.Add(-window)) || !reader.asOfs[1].Equal(after.Add(-window)) {
+		t.Fatalf("prior reads asked for %v, want the pre-midnight read then a re-read at %v", reader.asOfs, after.Add(-window))
 	}
 }
