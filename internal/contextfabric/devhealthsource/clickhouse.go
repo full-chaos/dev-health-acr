@@ -240,6 +240,8 @@ type ClickHouseProjectionSource struct {
 	windowPages int
 	// windowInterval is the pause between window passes (WithWindowPassInterval).
 	windowInterval time.Duration
+	// windowCarry serves complete tables' next window pages from memory within one call (WithWindowCarry).
+	windowCarry bool
 
 	// readByteLimit is the client's max_bytes_to_read
 	// (ACR_CLICKHOUSE_MAX_BYTES_TO_READ); a read that names rows by key sizes
@@ -324,7 +326,7 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, window: newWindowMemo()}, nil
+	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, windowCarry: true, window: newWindowMemo()}, nil
 }
 
 // WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
@@ -348,12 +350,22 @@ func (s *ClickHouseProjectionSource) WithWindowPassInterval(d time.Duration) (*C
 	return s, nil
 }
 
+// WithWindowCarry turns on (the default) or off serving a complete table's
+// next window page from memory within one call.
+func (s *ClickHouseProjectionSource) WithWindowCarry(on bool) *ClickHouseProjectionSource {
+	s.windowCarry = on
+	return s
+}
+
 // ReadByteLimit is the client max_bytes_to_read this source sizes its
 // key-named reads from; zero means the client default.
 func (s *ClickHouseProjectionSource) ReadByteLimit() uint64 { return s.readByteLimit }
 
 // Overlap is the trailing re-read window this source walks once caught up.
 func (s *ClickHouseProjectionSource) Overlap() time.Duration { return s.overlap }
+
+// WindowCarry reports whether complete tables are served from memory within one window call.
+func (s *ClickHouseProjectionSource) WindowCarry() bool { return s.windowCarry }
 
 // WindowPassInterval is the pause between trailing-window passes.
 func (s *ClickHouseProjectionSource) WindowPassInterval() time.Duration { return s.windowInterval }
@@ -514,6 +526,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		},
 		overlap:              s.overlapDuration(),
 		windowInterval:       s.windowInterval,
+		windowCarry:          s.windowCarry,
 		window:               s.windowMemo(),
 		windowPagesPerCall:   s.windowPages,
 		observe:              s.logOrphanedWorkItems,

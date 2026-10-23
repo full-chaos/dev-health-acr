@@ -28,6 +28,7 @@ const (
 	envContextFabricOrgActivity   = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW"
 	envContextFabricOverlap       = "ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP"
 	envContextFabricWindowPass    = "ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL"
+	envContextFabricWindowCarry   = "ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_CARRY"
 	// defaultProjectorWindowPassInterval mirrors
 	// devhealthsource.DefaultWindowPassInterval; a test pins the two equal.
 	defaultProjectorWindowPassInterval = 5 * time.Minute
@@ -126,6 +127,13 @@ type ProjectorConfig struct {
 	// next. A late or re-stamped row is projected up to this much later; the
 	// lateness the window absorbs (Overlap) is unchanged.
 	WindowPassInterval time.Duration
+	// WindowCarry (ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_CARRY, default true)
+	// lets one window-pass call serve the next page of a table whose read was
+	// complete from memory, and re-query only truncated tables. A row of such a
+	// table that lands ahead of the walk during the call waits for the next
+	// pass. false reads every table on every page, as before; with
+	// WINDOW_PASS_INTERVAL=0 that is the previous behaviour.
+	WindowCarry bool
 	// OrgDiscoveryDenyIDs (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS)
 	// names organizations discovery must never admit. It filters the
 	// DISCOVERED set only: OrgIDs is an always-include allowlist, so an
@@ -272,6 +280,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	if cfg.WindowPassInterval, err = durationValue(lookup, envContextFabricWindowPass, defaultProjectorWindowPassInterval); err != nil {
 		return ProjectorConfig{}, err
 	}
+	if cfg.WindowCarry, err = boolValue(lookup, envContextFabricWindowCarry, true); err != nil {
+		return ProjectorConfig{}, err
+	}
 	if cfg.OrgActivityWindow, err = durationValue(lookup, envContextFabricOrgActivity, defaultProjectorOrgActivityWindow); err != nil {
 		return ProjectorConfig{}, err
 	}
@@ -403,7 +414,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 		"projection_enabled", c.ProjectionEnabled,
 		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
 		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
-		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(), "window_pass_interval", c.WindowPassInterval.String(),
+		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(), "window_pass_interval", c.WindowPassInterval.String(), "window_carry", c.WindowCarry,
 		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "episode_writeback_enabled", c.EpisodeWriteback,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}

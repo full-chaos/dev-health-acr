@@ -719,6 +719,14 @@ pause a late or re-stamped row is projected up to that interval later, and the
 lateness the window absorbs (`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`) is
 unchanged. Rows beyond the cursor are read by the ordinary paged read on every
 tick and are not delayed.
+Within one call the walk reads a table's next page from memory when the read
+that preceded it returned every row the table had past the walk, and runs a
+statement only for a table that still had rows past its limit
+(`ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_CARRY`, default `true`, teams and
+projects source only). A table row that lands ahead of the walk during a call
+waits for the next pass. Nothing is kept between calls. `false` reads every
+table on every page, as before; with `WINDOW_PASS_INTERVAL=0` that is the
+previous behavior and the rollback.
 Every pass ends: its upper edge is the cursor position (the frontier) at the
 moment the pass started. Rows after that edge belong to the ordinary paged
 read, so a writer that lands rows faster than the walk reads them cannot keep

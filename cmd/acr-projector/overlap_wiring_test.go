@@ -75,3 +75,23 @@ func TestWindowPassIntervalReachesBothClickHouseBackedSources(t *testing.T) {
 		t.Error("a negative interval built the sources; want an error")
 	}
 }
+
+// TestWindowCarryReachesBothClickHouseBackedSources pins the composition root's
+// half of ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_CARRY: false is the rollback and
+// must reach the sources as false, true as true.
+func TestWindowCarryReachesBothClickHouseBackedSources(t *testing.T) {
+	t.Parallel()
+	for _, carry := range []bool{false, true} {
+		cfg := config.ProjectorConfig{Overlap: time.Minute, WindowCarry: carry, TeamsProjectsEnabled: true}
+		clickhouse, teamsProjects, err := clickhouseBackedSources(unreachableClient{t: t}, cfg, discardLogger())
+		if err != nil {
+			t.Fatalf("carry %v: %v", carry, err)
+		}
+		if got := clickhouse.WindowCarry(); got != carry {
+			t.Errorf("the ClickHouse source carries window pages = %v, want the configured %v", got, carry)
+		}
+		if got := teamsProjects.WindowCarry(); got != carry {
+			t.Errorf("the teams/projects source carries window pages = %v, want the configured %v", got, carry)
+		}
+	}
+}
