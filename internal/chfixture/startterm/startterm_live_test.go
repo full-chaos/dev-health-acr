@@ -19,7 +19,7 @@ const livePostgresImage = "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c
 
 type neverReady struct{}
 
-func (neverReady) WaitUntilReady(context.Context, wait.StrategyTarget) error {
+func (*neverReady) WaitUntilReady(context.Context, wait.StrategyTarget) error {
 	return errors.New("readiness probe failed on purpose")
 }
 
@@ -48,7 +48,7 @@ func TestLiveClickHouseFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
-			WaitingFor: neverReady{},
+			WaitingFor: &neverReady{},
 		},
 		Started: true,
 	})
@@ -61,7 +61,7 @@ func TestLivePostgresFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 	defer cancel()
 	pc, err := startterm.PostgresRun(ctx, livePostgresImage,
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"),
-		testcontainers.WithWaitStrategy(neverReady{}),
+		testcontainers.WithWaitStrategy(&neverReady{}),
 	)
 	var container testcontainers.Container
 	if pc != nil {
