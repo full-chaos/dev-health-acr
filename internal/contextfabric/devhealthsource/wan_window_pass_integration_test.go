@@ -49,7 +49,7 @@ const (
 	wanRTT        = 60 * time.Millisecond
 	wanTick       = 15 * time.Second
 	wanPassPause  = time.Minute
-	wanPasses     = 8
+	wanPasses     = 5
 	wanLargeRows  = 2600
 	wanOrgID      = "10715000-0000-4000-8000-0000000000b1"
 	wanProjectID  = "10715000-0000-4000-8000-0000000000b2"

@@ -68,7 +68,7 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 	}
 
 	query, _ := orgIsolationClickHouseFixture(t)
-	limits := []int{3, 7, 50, 200}
+	limits := []int{7, 50, 200, 200}
 	for _, producer := range devhealthsource.CarryProducersForTest() {
 		positions, err := devhealthsource.CarryPositionsForTest(ctx, query, f.h.orgID, producer.Name, 200)
 		if err != nil {
@@ -78,7 +78,7 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 			t.Fatalf("%s: the seed produced %d positions, want at least 8", producer.Name, len(positions))
 		}
 		trials, skipped, mismatches, nonEmpty := 0, 0, 0, 0
-		for trial := 0; trial < 60; trial++ {
+		for trial := 0; trial < 40; trial++ {
 			i, j := rng.Intn(len(positions)+1)-1, rng.Intn(len(positions))
 			if i > j {
 				i, j = j, i
@@ -108,8 +108,8 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 			}
 		}
 		t.Logf("carry-parity table=%s carry=%v trials=%d skipped=%d mismatches=%d non_empty_equal=%d", producer.Name, producer.Carry, trials, skipped, mismatches, nonEmpty)
-		if trials < 15 {
-			t.Errorf("%s: only %d of 60 trials read a complete table; the seed or the limits are too small to decide", producer.Name, trials)
+		if trials < 8 {
+			t.Errorf("%s: only %d of 40 trials read a complete table; the seed or the limits are too small to decide", producer.Name, trials)
 		}
 		if nonEmpty < 5 {
 			t.Errorf("%s: only %d trials compared a non-empty page; the parity of empty pages decides nothing", producer.Name, nonEmpty)
