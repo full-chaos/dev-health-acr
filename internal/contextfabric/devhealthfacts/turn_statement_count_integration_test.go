@@ -207,14 +207,21 @@ func TestTurnStatementsOfAPeriodComparisonTurn(t *testing.T) {
 // measurement of zero expansions says nothing about the scope phase.
 func scopeTurnLine(t *testing.T, run projectCohortRun) {
 	t.Helper()
-	counted, ok := run.counted.(turnCountingClient)
+	scopeLineOf(t, run.counted, 1)
+}
+
+// scopeLineOf logs the scope phase of the turn counted by client and fails
+// unless it ran at least minExpansions expander calls.
+func scopeLineOf(t *testing.T, client contextpacket.ClickHouseQueryClient, minExpansions int) {
+	t.Helper()
+	counted, ok := client.(turnCountingClient)
 	if !ok {
 		t.Fatal("measurement did not happen: the turn's client is not a counting client")
 	}
 	expansions, statements, chain := counted.rec.scopeMetrics()
 	t.Logf("scope_phase test=%s expansions=%d statements=%d serial_chain=%d", t.Name(), expansions, statements, chain)
-	if expansions < 1 {
-		t.Fatal("measurement did not happen: the turn ran no scope expansion")
+	if expansions < minExpansions {
+		t.Fatalf("measurement did not happen: the turn ran %d scope expansion(s), want at least %d", expansions, minExpansions)
 	}
 }
 
