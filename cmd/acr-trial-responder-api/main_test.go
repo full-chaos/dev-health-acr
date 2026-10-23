@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,19 +83,18 @@ func writeExchangeRequest(t *testing.T, dir string, seq int, nonce string) {
 
 func newTestResponder(t *testing.T, dir, baseURL string) *responder {
 	t.Helper()
-	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna")
+	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna", func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = provider.Close() })
 	return &responder{
-		provider:                  provider,
-		model:                     "gpt-5.6-luna",
-		exchangeDir:               dir,
-		poll:                      20 * time.Millisecond,
-		requestTimeout:            5 * time.Second,
-		attempts:                  map[string]int{},
-		loggedStrictNormalization: map[string]bool{},
+		provider:       provider,
+		model:          "gpt-5.6-luna",
+		exchangeDir:    dir,
+		poll:           20 * time.Millisecond,
+		requestTimeout: 5 * time.Second,
+		attempts:       map[string]int{},
 	}
 }
 
@@ -329,14 +329,11 @@ func TestAnswerOneFailsFastOnAuthError(t *testing.T) {
 	}
 }
 
-// TestAnswerOneSendsInstructionsToModel is the codex xhigh review round 1
-// (High, confirmed) red-first proof: an earlier draft decoded
-// exchangeRequest.Instructions but never included it in the request sent
-// to OpenAI, silently dropping the envelope's own grounding guidance
-// ("base your answer ONLY on system and prompt"). Captures the ACTUAL
-// request body the fake server receives and asserts the instructions text
-// appears in it as a distinct message.
-func TestAnswerOneSendsInstructionsToModel(t *testing.T) {
+// TestAnswerOneDoesNotSendFileExchangeInstructionsToModel pins the production
+// wire: the envelope's instructions text (written for a file-writing
+// responder) is not sent to a Chat Completions model, which production
+// never sends it.
+func TestAnswerOneDoesNotSendFileExchangeInstructionsToModel(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
@@ -368,9 +365,9 @@ func TestAnswerOneSendsInstructionsToModel(t *testing.T) {
 	if capturedBody == nil {
 		t.Fatal("fake server never received a request -- answerOne did not call the API at all")
 	}
-	const wantInstructions = "produce JSON matching output_schema; echo session_nonce"
-	if !strings.Contains(string(capturedBody), wantInstructions) {
-		t.Fatalf("request body does not contain the request's own instructions text %q -- instructions were decoded but never sent to the model.\nbody: %s", wantInstructions, capturedBody)
+	const envelopeInstructions = "produce JSON matching output_schema; echo session_nonce"
+	if strings.Contains(string(capturedBody), envelopeInstructions) {
+		t.Fatalf("request body carries the file-exchange instructions text %q; production sends a Chat Completions model no such text.\nbody: %s", envelopeInstructions, capturedBody)
 	}
 }
 
@@ -515,8 +512,8 @@ func TestAnswerOneOmitsReasoningEffortWhenUnset(t *testing.T) {
 // a false success. A live acceptance run (CHAOS-4313 case 57, kiac)
 // later found this needs to be RETRYABLE, not immediately terminal --
 // schema-non-conformant content is the model's own sampled output (this
-// schema is not strict-mode-compatible, see response_format's own comment
-// in answerOne, so nothing grammar-constrains the model), and a fresh
+// schema is sent as text only, see answerOne, so nothing grammar-constrains
+// the model), and a fresh
 // sampling attempt against the SAME request can plausibly produce
 // compliant output where the first attempt did not. So: one attempt must
 // NOT publish the mismatched output as (or alongside) a success, and must
@@ -747,19 +744,10 @@ func TestResponseAnswersRequestStillRejectsExhaustedWithMismatchedNonce(t *testi
 // TestAnswerOneRejectsOutputNotMatchingSchema's own doc comment): a fresh
 // sampling attempt can plausibly produce well-formed JSON where the first
 // did not, since nothing grammar-constrains the model here.
-// TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields is the
-// team-lead-directed lossless-strict-mode fix's own red-first proof:
-// strict mode's compiled schema can only express "this optional field is
-// absent" as an explicit JSON null (every property must be present under
-// strict mode) -- but the ORIGINAL schema this test's request carries
-// declares "note" as a bare {"type":"string"} (not required, and NOT
-// nullable in its own right), the shape genkitruntime's real schemas use
-// for every optional field. Without stripping null-valued keys before
-// post-response validation, a model response that correctly omits an
-// optional field the ONLY way strict mode allows (explicit null) would be
-// rejected as violating the original schema's own type constraint --
-// exactly the failure mode a live case-57 kiac run measured (0/1
-// exchanges succeeding under strict mode before this fix).
+// TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields: an explicit JSON
+// null on a property the ORIGINAL schema declares as a bare optional
+// {"type":"string"} must be treated as omitted, or the response would be
+// rejected for violating the schema's own type constraint.
 func TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
@@ -919,6 +907,38 @@ func TestAnswerOnePublishesLargeIntegersExactlyWhileStrippingNulls(t *testing.T)
 	}
 }
 
+func TestProviderRejectionReasonIsReportedWithoutRequestContent(t *testing.T) {
+	const secretPrompt = "PROMPT-CONTENT-MUST-NOT-APPEAR"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema. echo: PROMPT-CONTENT-MUST-NOT-APPEAR","type":"invalid_request_error","param":"response_format","code":"invalid_json_schema"}}`))
+	}))
+	defer srv.Close()
+	var reported []string
+	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", func(reason string) { reported = append(reported, reason) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.Close() }()
+
+	_, callErr := provider.Complete(t.Context(), llm.Request{Prompt: secretPrompt, Format: &llm.JSONFormat{Name: "x", Schema: map[string]any{"type": "object"}}})
+	if class, _ := llm.ClassOf(callErr); class != llm.ClassInvalidRequest {
+		t.Fatalf("call error class = %q (%v), want invalid_request: the report must not change how the client classifies the response", class, callErr)
+	}
+	if len(reported) != 1 {
+		t.Fatalf("reported %d reasons, want 1: %v", len(reported), reported)
+	}
+	for _, want := range []string{"http=400", "type=invalid_request_error", "code=invalid_json_schema", "param=response_format", "message_bytes="} {
+		if !strings.Contains(reported[0], want) {
+			t.Errorf("reason %q lacks %q", reported[0], want)
+		}
+	}
+	if strings.Contains(reported[0], secretPrompt) || strings.Contains(reported[0], "\n") {
+		t.Errorf("reason %q carries request content or a raw newline", reported[0])
+	}
+}
+
 func TestStripNullFieldsJSONRefusesTrailingData(t *testing.T) {
 	for _, raw := range []string{`{"a":1} {"b":2}`, `{"a":1}x`, `{"a":1}]`} {
 		if out, err := stripNullFieldsJSON([]byte(raw)); err == nil {
@@ -927,5 +947,48 @@ func TestStripNullFieldsJSONRefusesTrailingData(t *testing.T) {
 	}
 	if out, err := stripNullFieldsJSON([]byte(" {\"a\":null,\"b\":1}\n")); err != nil || string(out) != `{"b":1}` {
 		t.Errorf("surrounding whitespace: out=%s err=%v, want {\"b\":1}", out, err)
+	}
+}
+
+func TestProviderMessageTextNeverReachesStderrEvenWithAnOptInVariableSet(t *testing.T) {
+	const canary = "CANARY-PROVIDER-MESSAGE-TEXT"
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_LOG_PROVIDER_MESSAGE", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"` + canary + `","type":"invalid_request_error","param":"response_format","code":"invalid_json_schema"}}`))
+	}))
+	defer srv.Close()
+	var stderr bytes.Buffer
+	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", providerRejectionReporter(&stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.Close() }()
+
+	_, callErr := provider.Complete(t.Context(), llm.Request{Prompt: "p", Format: &llm.JSONFormat{Type: llm.FormatTypeJSONObject}})
+	if callErr == nil {
+		t.Fatal("expected the provider's 400 to fail the call")
+	}
+	if strings.Contains(stderr.String(), canary) || strings.Contains(callErr.Error(), canary) {
+		t.Errorf("provider message text reached a sink: stderr=%q err=%q", stderr.String(), callErr.Error())
+	}
+	if !strings.Contains(stderr.String(), "code=invalid_json_schema") || !strings.Contains(stderr.String(), "message_bytes=") {
+		t.Errorf("stderr %q lacks the closed-set report", stderr.String())
+	}
+}
+
+func TestProviderRejectionReportsOnlyKnownTypeCodeAndParamValues(t *testing.T) {
+	body := []byte(`{"error":{"message":"m","type":"REQUEST-MARKER-IN-TYPE","code":"REQUEST-MARKER-IN-CODE","param":"REQUEST-MARKER-IN-PARAM"}}`)
+	got := providerErrorReason(400, body)
+	if strings.Contains(got, "REQUEST-MARKER") {
+		t.Errorf("report %q echoes a provider-controlled value outside the closed sets", got)
+	}
+	if want := "type=other code=other param=other"; !strings.Contains(got, want) {
+		t.Errorf("report %q lacks %q", got, want)
+	}
+	known := []byte(`{"error":{"message":"m","type":"invalid_request_error","code":"invalid_json_schema","param":"response_format"}}`)
+	if got := providerErrorReason(400, known); !strings.Contains(got, "type=invalid_request_error code=invalid_json_schema param=response_format") {
+		t.Errorf("report %q dropped known values", got)
 	}
 }
