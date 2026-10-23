@@ -8833,6 +8833,7 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 			}},
 		},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	if verr := result.Validate(); verr != nil {
 		return "", fmt.Errorf("seeded anchor-negative result failed Validate: %w", verr)
 	}

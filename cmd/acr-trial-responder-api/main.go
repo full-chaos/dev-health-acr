@@ -577,7 +577,7 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 		return
 	}
 	logf("operation=%s seq=%d elapsed=%s status=ok output_bytes=%d model=%s", req.Operation, req.Seq, elapsed, len(content), answer.Model)
-	r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Output: json.RawMessage(content)})
+	r.writeResponse(respPath, exchangeResponse{SessionNonce: req.SessionNonce, Output: json.RawMessage(validationContent)})
 }
 
 // retryOrExhaust records one more non-terminal attempt at requestBase and,

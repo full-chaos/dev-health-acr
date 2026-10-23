@@ -809,6 +809,59 @@ func TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields(t *testing.T) {
 	}
 }
 
+func TestAnswerOnePublishesOutputWithExplicitNullFieldsStripped(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	srv, _ := fakeChatCompletionsServer(t, `{"answer":"ok","note":null,"nested":{"keep":"x","drop":null}}`)
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+
+	name := "000001-interpret.json"
+	req := exchangeRequest{
+		Operation:    "interpret",
+		Seq:          1,
+		SessionNonce: "n1",
+		System:       "system prompt",
+		Prompt:       "user prompt",
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"answer":{"type":"string"},"note":{"type":"string"},"nested":{"type":"object","additionalProperties":false,"properties":{"keep":{"type":"string"},"drop":{"type":"string"}}}},"required":["answer"]}`),
+		Instructions: "produce JSON matching output_schema",
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requests", name), body, 0o644); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	respPath := filepath.Join(dir, "responses", name)
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", name), respPath, filepath.Join(dir, "_responder_logs"))
+
+	raw, err := os.ReadFile(respPath)
+	if err != nil {
+		t.Fatalf("no response published: %v", err)
+	}
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != "" {
+		t.Fatalf("response = %s (%v), want a successful output", raw, err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(resp.Output, &out); err != nil {
+		t.Fatalf("output not JSON: %v", err)
+	}
+	if _, present := out["note"]; present {
+		t.Errorf("published output %s still carries the null-valued optional key note: the engine decoders treat a present null as a value (member_qualifier is rejected), so a validated-as-omitted field must be published omitted", resp.Output)
+	}
+	nested, _ := out["nested"].(map[string]any)
+	if _, present := nested["drop"]; present || nested["keep"] != "x" {
+		t.Errorf("published nested = %v, want only keep=x", nested)
+	}
+}
+
 func TestAnswerOneRetriesMalformedModelJSON(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"requests", "responses", "_responder_logs"} {

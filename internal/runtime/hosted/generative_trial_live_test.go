@@ -690,6 +690,7 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set(falkorgraph.EnvCommitTopFloor, os.Getenv("ACR_TEST_TRIAL_COMMIT_TOP_FLOOR"))
 	set(falkorgraph.EnvCommitTopGap, os.Getenv("ACR_TEST_TRIAL_COMMIT_TOP_GAP"))
 	set(falkorgraph.EnvVectorMarginCommitThreshold, os.Getenv("ACR_TEST_TRIAL_VECTOR_MARGIN_COMMIT_THRESHOLD"))
+	set(falkorgraph.EnvGraphPrefix, os.Getenv("ACR_TEST_TRIAL_FALKOR_GRAPH_PREFIX"))
 
 	// CHAOS-4155 Phase 2 harness enablement: the SAME OPTIONAL-passthrough
 	// convention as the four CommitGatePolicy knobs directly above, for
@@ -741,6 +742,11 @@ func wireProductionEnv(t *testing.T, modelOverridden bool) {
 	set("ACR_EVIDENCE_ID_KEYS", "trial="+base64.StdEncoding.EncodeToString(key))
 	set("ACR_DEVICE_VERIFICATION_URL", "http://127.0.0.1/unused-trial-device-endpoint")
 
+	prefixLine, prefixErr := trialGraphPrefixLine(os.Getenv("ACR_TEST_TRIAL_FALKOR_GRAPH_PREFIX"), os.Getenv(falkorgraph.EnvGraphPrefix))
+	if prefixErr != nil {
+		t.Fatalf("%v", prefixErr)
+	}
+	t.Log(prefixLine)
 }
 
 // contextFabricRejectionClass mirrors internal/api/context_fabric_routes.go's
@@ -1912,4 +1918,14 @@ func earlyAbortSignature(firstTen []caseOutcome) (class string, count int, corre
 		}
 	}
 	return class, count, correct
+}
+
+func trialGraphPrefixLine(requested, resolved string) (string, error) {
+	if requested != "" && resolved != requested {
+		return "", fmt.Errorf("ACR_TEST_TRIAL_FALKOR_GRAPH_PREFIX=%q was requested but the graph prefix key resolves to %q -- the run would read a different graph than the data plane it names", requested, resolved)
+	}
+	if resolved == "" {
+		return "TRIAL GRAPH PREFIX read: acr-cf (default)", nil
+	}
+	return "TRIAL GRAPH PREFIX read: " + resolved, nil
 }
