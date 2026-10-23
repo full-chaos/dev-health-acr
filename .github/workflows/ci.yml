@@ -173,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
+        with: {persist-credentials: false, fetch-depth: 2}
       - name: Check release setup script modes
         run: |
           test -x scripts/release/setup-cosign-key.sh
@@ -215,6 +215,15 @@ jobs:
         run: |
           find scripts/ci -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck -x
+      - name: Test the content sanity gate
+        run: scripts/ci/test-content-sanity.sh
+      # HEAD^1..HEAD is what lands. On a pull_request run the checkout is the
+      # merge ref, so HEAD^1 is the base tip and the range is the whole PR diff;
+      # on a main push HEAD is the squash commit and the range is that merge.
+      # The override marker is read from the commit messages and the event
+      # payload's PR body (the payload is fixed when the run starts).
+      - name: Content sanity (what this change adds)
+        run: scripts/ci/content-sanity.sh HEAD^1 HEAD
       - name: Test release asset assembly
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest

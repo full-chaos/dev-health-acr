@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
+.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -140,6 +140,14 @@ E2E_PROJECT ?= acr-fs-$(shell date -u +%Y%m%d)-$(shell echo $$$$)
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
+
+content-check:
+	scripts/ci/content-sanity.sh
+
+install-pre-push-hook:
+	hook="$$(git rev-parse --git-path hooks)/pre-push"; \
+	if [ -e "$$hook" ]; then echo "$$hook already exists; not overwriting it"; exit 1; fi; \
+	mkdir -p "$$(dirname "$$hook")" && cp scripts/ci/pre-push-content-sanity.sh "$$hook" && chmod +x "$$hook" && echo "installed $$hook"
 
 fmt-check:
 	@files="$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*'))"; \
