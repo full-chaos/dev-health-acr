@@ -71,6 +71,7 @@ if [ -z "${PRUNE_SCRIPT:-}" ]; then
   }
   mut ignore-fail 's/all\(\.\[\]; \.Action != "fail"\)/all(.[]; true)/'
   mut empty-json-ok 's/length > 0 and //'
+  # shellcheck disable=SC2016
   mut no-junit-ok 's/if \[ -s "\$d\/junit.xml" \] \\/if true \\/'
   mut no-log 's/printf .::notice::pruned/printf ":: pruned/; s/(printf .::notice::pruned go-unit-shard-%s)/\1/'
 fi
