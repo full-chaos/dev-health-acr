@@ -230,7 +230,12 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	if err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
-	defer rows.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			rows.Close()
+		}
+	}()
 
 	originsByID := teamOriginsByRawID(origins)
 	var candidates []repositoryCandidate
@@ -260,6 +265,8 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 	if err := rows.Err(); err != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
+	closed = true
+	rows.Close()
 	counts.Truncated = repositoryRows >= limitPlusOne
 	unlinked, err := e.teamUnlinkedIssueCount(ctx, orgID, teamIDs)
 	if err != nil {
