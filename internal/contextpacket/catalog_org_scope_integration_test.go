@@ -101,11 +101,6 @@ func seedTwoOrganizations(t *testing.T, ctx context.Context, direct clickhousedr
 	for _, statement := range devhealthschema.DDL() {
 		scopeExec(t, ctx, direct, statement)
 	}
-	// devhealthschema does not declare the commit tables: the ops
-	// definitions (migrations/clickhouse/000_raw_tables.sql) with the
-	// org_id column and sorting key of ops migration 027.
-	scopeExec(t, ctx, direct, `CREATE TABLE git_commits (org_id String, repo_id UUID, hash String, message Nullable(String), author_name Nullable(String), author_email Nullable(String), author_when DateTime64(3, 'UTC'), committer_name Nullable(String), committer_email Nullable(String), committer_when DateTime64(3, 'UTC'), parents UInt32, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`)
-	scopeExec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
 	now := "'2026-09-01 12:00:00.000'"
 	for _, org := range []struct{ id, marker string }{{scopeOrgA, "own"}, {scopeOrgB, scopeForeign}} {
 		m := org.marker

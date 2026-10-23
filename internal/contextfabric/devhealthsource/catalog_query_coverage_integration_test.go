@@ -49,13 +49,7 @@ func TestCatalogQueriesExecutableAgainstDeclaredSchema(t *testing.T) {
 	// its entries here breaks the build -- the list cannot silently rot
 	// into hiding queries that now work.
 	undeclaredTableQueries := map[string]string{
-		"git_commits.v1":           "git_commits",
-		"git_commit_files.v1":      "git_commits, git_commit_stats",
-		"work_graph.v1":            "work_graph_edges",
-		"ai_workflow_runs.v1":      "ai_workflow_runs",
-		"ai_workflow_artifacts.v1": "ai_workflow_artifact_edges",
-		"ai_review_outcomes.v1":    "work_graph_pr_review_outcome_edges",
-		"file_complexity.v1":       "file_complexity_snapshots",
+		"file_complexity.v1": "file_complexity_snapshots",
 	}
 
 	for _, source := range contextpacket.SourceQueryCatalogV1 {

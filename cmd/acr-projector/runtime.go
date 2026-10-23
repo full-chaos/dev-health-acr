@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -403,9 +404,7 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, me
 	// ClickHouseMaxBytesToRead == 0, so this is always an explicit
 	// positive ceiling; taking its address preserves that meaning exactly.
 	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
-	clickhouseClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
-	})
+	clickhouseClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(projectorClickHouseOptions(cfg, tlsConfig, &maxBytesToRead))
 	if err != nil {
 		return projectorClickHouseClient{}, fmt.Errorf("open clickhouse: %w", err)
 	}
@@ -413,6 +412,10 @@ func openProjectorClickHouse(cfg config.ProjectorConfig, logger *slog.Logger, me
 		query: contextpacket.NewMemoryCappedQueryClient(clickhouseClient, projectorStatementMaxMemoryUsage, append(projectorCapOptions(logger, metrics), contextpacket.WithMaxThreads(contextpacket.StatementMaxThreads))...),
 		ping:  clickhouseClient.Ping, close: clickhouseClient.Close,
 	}, nil
+}
+
+func projectorClickHouseOptions(cfg config.ProjectorConfig, tlsConfig *tls.Config, maxBytesToRead *uint64) runtimeclickhouse.Options {
+	return hosted.ClickHousePoolOptions(runtimeclickhouse.Options{DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: maxBytesToRead})
 }
 
 func projectorCapOptions(logger *slog.Logger, metrics *hostedmetrics.Instruments) []contextpacket.MemoryCapOption {
@@ -432,12 +435,18 @@ func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg con
 	if _, err := clickhouseSource.WithOverlap(cfg.Overlap); err != nil {
 		return nil, nil, err
 	}
+	if _, err := clickhouseSource.WithWindowPassInterval(cfg.WindowPassInterval); err != nil {
+		return nil, nil, err
+	}
 	teamsProjectsSource, err := devhealthsource.NewTeamsProjectsSource(client, cfg.TeamsProjectsEnabled)
 	if err != nil {
 		return nil, nil, err
 	}
 	teamsProjectsSource.WithLogger(logger)
 	if _, err := teamsProjectsSource.WithOverlap(cfg.Overlap); err != nil {
+		return nil, nil, err
+	}
+	if _, err := teamsProjectsSource.WithWindowPassInterval(cfg.WindowPassInterval); err != nil {
 		return nil, nil, err
 	}
 	return clickhouseSource, teamsProjectsSource, nil

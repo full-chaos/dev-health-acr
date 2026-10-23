@@ -88,7 +88,7 @@ func TestTickSummaryIsNotOKWhileTheWindowPassIsOverdue(t *testing.T) {
 		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
 		rows = append(rows, []any{id, "acme/repo-" + id[24:], "github", at, at, ""})
 	}
-	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: []fakeTable{{match: "FROM repos", rows: rows, cursorOf: repoCursorOf}}})
+	source, err := newUnpacedClickHouseSource(&fakeClient{tables: []fakeTable{{match: "FROM repos", rows: rows, cursorOf: repoCursorOf}}})
 	if err != nil {
 		t.Fatal(err)
 	}

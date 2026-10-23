@@ -92,9 +92,8 @@ func TestQueryVersionMovedPastTheBindingCarry(t *testing.T) {
 	}
 }
 
-// With the anchor binding pending carry switch on, a pending binding carries
-// its anchor into the confirming turn, so an answer stored before it (v179
-// and before) must not be reused.
+// A pending binding carries its anchor into the confirming turn, so an
+// answer stored before it (v179 and before) must not be reused.
 func TestQueryVersionMovedPastThePendingCarry(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
 	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)

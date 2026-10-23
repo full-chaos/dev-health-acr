@@ -261,12 +261,12 @@ func RunCaptureSkipReasonRealProducerScenarioForTest(t *testing.T, scenario stri
 		return buf.Bytes(), orgID
 
 	case CaptureSkipReasonWindowConfirmationGatedPending:
-		// The window gate with the pending carry on: the anchor binding
+		// The window gate: the anchor binding
 		// holds the offers-only pass's identity proof as pending.
 		rig := newAnchorProbeRig(t, false)
 		var buf bytes.Buffer
 		rig.engine.telemetry = NewSlogEngineTelemetry(jsonSlogLoggerForTest(&buf))
-		rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = true, true
+		rig.engine.anchorBindingCarryEnabled = true
 		rig.interpreter.read(SubjectRepository, true)
 		rig.turn(t, needTurnRequest("request_capture_gated_pending", false), identityProvenResponse(probeAlpha))
 		return buf.Bytes(), orgID

@@ -67,6 +67,10 @@ One real asymmetry, not a defect: `POST /api/v1/agent-context/episodes` sets
 issues a `credential:issue`-shaped assertion for those permissions, so this
 is confirmed-consistent with web's actual call sites, not a gap.
 
+## Which classes a row lists, and its selector
+
+A row's `accepted_credential_classes` lists the classes the route validates **at the head**. On the bearer routes that is `acr_client_credential`, plus `acr_web_assertion` where the route accepts the web assertion header; the five routes with both name the selector `class_disambiguator: dedicated_header / X-ACR-Web-Assertion` (the header acr's dispatch reads first). `acr_workload_identity_exchange` is not a presented class there: a credential it issues is an ordinary `fcacr_` credential and is presented as `acr_client_credential`. `internal_svc_acr_token` (`svc_acr_`) is a credential acr presents to ops, which acr never validates, so no acr row lists it. `POST /api/v1/oauth/token` is the one route that accepts the exchange class: its two grants carry their credential in the body and `handleDeviceToken` picks the handler by the request Content-Type, so its row names `class_disambiguator: content_type / application/x-www-form-urlencoded` (the marker of the token exchange): a form-encoded request is the RFC 8693 token exchange; any other Content-Type, or none, is the device-code grant. Rule and vocabulary are ops-owned (CHAOS-10561).
+
 ## `authverify` anchor — the `acr_workload_identity_exchange` subject-token validator
 
 L0's `credential-classes.json` left this class with a stated gap: *"The

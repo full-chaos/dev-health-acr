@@ -51,3 +51,27 @@ func TestReadByteLimitReachesTheClickHouseSource(t *testing.T) {
 		t.Fatalf("the ClickHouse source sizes its reads from %d bytes, want the configured %d", got, limit)
 	}
 }
+
+// TestWindowPassIntervalReachesBothClickHouseBackedSources pins the composition
+// root's half of ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL. Zero is a
+// valid setting (the rollback: the next pass starts at once), so it must reach
+// the sources as zero and not fall back to their default.
+func TestWindowPassIntervalReachesBothClickHouseBackedSources(t *testing.T) {
+	t.Parallel()
+	for _, interval := range []time.Duration{0, 90 * time.Second} {
+		cfg := config.ProjectorConfig{Overlap: time.Minute, WindowPassInterval: interval, TeamsProjectsEnabled: true}
+		clickhouse, teamsProjects, err := clickhouseBackedSources(unreachableClient{t: t}, cfg, discardLogger())
+		if err != nil {
+			t.Fatalf("interval %s: %v", interval, err)
+		}
+		if got := clickhouse.WindowPassInterval(); got != interval {
+			t.Errorf("the ClickHouse source pauses %s between window passes, want the configured %s", got, interval)
+		}
+		if got := teamsProjects.WindowPassInterval(); got != interval {
+			t.Errorf("the teams/projects source pauses %s between window passes, want the configured %s", got, interval)
+		}
+	}
+	if _, _, err := clickhouseBackedSources(unreachableClient{t: t}, config.ProjectorConfig{Overlap: time.Minute, WindowPassInterval: -time.Second}, discardLogger()); err == nil {
+		t.Error("a negative interval built the sources; want an error")
+	}
+}

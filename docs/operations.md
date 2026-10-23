@@ -710,6 +710,15 @@ in passes of ordinary 200-row pages (the ClickHouse client's `max_result_rows`
 is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
 pass that does not reach the window's end stops at the last fully read row and
 resumes there on the next tick, so depth never drops a row, it only delays it.
+When a pass ends, the next one starts no earlier than
+`ACR_CONTEXT_FABRIC_PROJECTOR_WINDOW_PASS_INTERVAL` later (default `5m`; `0`
+starts the next pass at once, the previous behavior and the rollback). A pass
+reads every table once per page, so passes that follow each other at once keep
+the window read rate at its maximum for as long as rows keep landing; with the
+pause a late or re-stamped row is projected up to that interval later, and the
+lateness the window absorbs (`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`) is
+unchanged. Rows beyond the cursor are read by the ordinary paged read on every
+tick and are not delayed.
 Every pass ends: its upper edge is the cursor position (the frontier) at the
 moment the pass started. Rows after that edge belong to the ordinary paged
 read, so a writer that lands rows faster than the walk reads them cannot keep
@@ -1187,7 +1196,9 @@ durations only — never text, vectors, model output, or provider response bodie
 | `context_fabric: projection batch cleared stale vectors` | WARN | A projection batch cleared vectors it had invalidated (`embedded`, `cleared` counts) | **This is the mass-clear signal.** A sustained nonzero `cleared` count means a growing fraction of the corpus is vectorless. |
 | `context_fabric: projection batch embedded nodes` | DEBUG | Every healthy batch (`embedded`, `cleared` counts) | Steady-state progress; raise to DEBUG to measure re-embedding throughput. |
 | `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled. Carries a bounded `failure_class`, never the underlying error text — see below. |
-| `context_fabric: projection graph count check finished` | INFO | One graph-vs-source count check of one organization ran (default every 10 minutes per organization) | Carries `org_id_hash`, `instance` (random per projector process; replicas count independently) and `pass` (the organization's check sequence within that instance), `outcome` (`completed`, `cancelled` by timeout or shutdown, or `failed` when a count read failed), `sources_checked`, `kinds_compared`, `gap_count` (confirmed `graph_below_source` gaps), `error_count` (failed count reads) and `duration_ms`. No line for an interval period means the check did not run. |
+| `context_fabric: projection graph count check finished` | INFO | One graph-vs-source count check of one organization ran (default every 10 minutes per organization) | Carries `org_id_hash`, `instance` (random per projector process; replicas count independently) and `pass` (the organization's check sequence within that instance), `outcome` (`completed`, `cancelled` by timeout or shutdown, or `failed` when a count read failed or a measurement could not be made), `sources_checked`, `kinds_compared`, `gap_count` (confirmed `graph_below_source` gaps), `relations_compared` (edge populations whose source and graph edge counts were both read), `edge_gap_count` (confirmed `graph_edges_below_source` gaps), `relations_deferred` (relation types the sources produce and do not measure yet), `error_count` (failed count reads and unmeasured sources or backends) and `duration_ms`. No line for an interval period means the check did not run. |
+| `context_fabric: graph_edges_below_source` | WARN | The graph holds fewer edges of one relation type (and arm) than its source asserts, beyond the tolerance (the larger of 3 and 2% of the source), at two checks in a row | Carries `source`, `relation_type`, `arm` (`transition` or `work_item_column` for `BELONGS_TO_PROJECT`, empty otherwise), `org_id_hash`, `source_count` (distinct edges the producer asserts), `graph_count` and `tolerance`. A graph with none of a relation the source holds is a gap with tolerance 0. A gap confirms only across two checks in a row that both measured it. |
+| `context_fabric: graph_count_unmeasured` | WARN | A count the check owes was not made: the backend reads no edge counts (`scope=edge`, `reason=backend_no_edge_counts`) or no node counts while a source reads them (`scope=node`, `reason=backend_no_node_counts`), a source with node counts reads no edge counts (`reason=source_no_edge_counts`), or a source did not return an edge count it declares (`reason=source_missing_edge_count`, with `relation_type` and `arm`) | Carries `scope`, `reason`, `org_id_hash` and, for a source, `source`. The check outcome is `failed`. A failed edge read is the existing `projection count check failed` line with `stage` `edge_source_count` or `edge_graph_count`. |
 | `context_fabric: observation traversal degraded` | WARN | Observation-to-entity traversal failed for some candidates | Unrelated to vectors; listed because it shares the sink. |
 
 **No log line in this subsystem carries an error's own text.** The bounded
