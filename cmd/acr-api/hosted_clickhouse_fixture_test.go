@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"net"
 	"net/url"
@@ -72,7 +73,7 @@ func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture 
 	}
 	adminPassword := randomFixtureSecret(t)
 	readPassword := randomFixtureSecret(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9440/tcp"},
 			Env: map[string]string{"CLICKHOUSE_USER": "default", "CLICKHOUSE_PASSWORD": adminPassword, "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1"},

@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"net"
 	"strings"
 	"sync"
@@ -94,7 +95,7 @@ func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
 	chfixture.RequireContainers(t)
 	sharedDevHealthClickHouseOnce.Do(func() {
 		ctx := context.Background()
-		container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
 				Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 				Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},

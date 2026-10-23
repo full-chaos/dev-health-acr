@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"net"
 	"strconv"
 	"strings"
@@ -38,7 +39,7 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context, tune func(*runtimeclickhouse.Options)) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},

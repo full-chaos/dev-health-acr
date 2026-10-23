@@ -27,7 +27,8 @@ set -euo pipefail
 #
 # Three reference shapes are enumerated, matching every shape found in this
 # module today:
-#   (a) (tcpostgres|testcontainers).Run(<any-expr>, "<image>"|<identifier>, ...)
+#   (a) (tcpostgres.Run|testcontainers.Run|startterm.PostgresRun)(<any-expr>, "<image>"|<identifier>, ...)
+#       (startterm.PostgresRun is the module's Run that terminates a failed start, CHAOS-10937)
 #   (b) Image: "<image>"                                  -- direct literal
 #   (c) Image: <identifier>                               -- resolved via a
 #       `const/var <identifier> = "<image>"` declaration, or a bare
@@ -199,12 +200,12 @@ check_literal() {
 # gate stayed green before this fix. Fixed by matching either function name.
 while IFS=: read -r file line rest; do
   [ -n "$file" ] || continue
-  image="$(printf '%s' "$rest" | sed -E 's/.*(tcpostgres|testcontainers)\.Run\([^,]+,[[:space:]]*"([^"]+)".*/\2/')"
+  image="$(printf '%s' "$rest" | sed -E 's/.*(tcpostgres\.Run|testcontainers\.Run|startterm\.PostgresRun)\([^,]+,[[:space:]]*"([^"]+)".*/\2/')"
   if [ -n "$image" ] && [ "$image" != "$rest" ]; then
     check_literal "$file" "$line" "$image"
     continue
   fi
-  ident="$(printf '%s' "$rest" | sed -E 's/.*(tcpostgres|testcontainers)\.Run\([^,]+,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*)[,)].*/\2/')"
+  ident="$(printf '%s' "$rest" | sed -E 's/.*(tcpostgres\.Run|testcontainers\.Run|startterm\.PostgresRun)\([^,]+,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*)[,)].*/\2/')"
   if [ -n "$ident" ] && [ "$ident" != "$rest" ]; then
     dir="$(dirname "$file")"
     value="$(resolve_identifier "$dir" "$ident" "$file" "$line")"
@@ -216,7 +217,7 @@ while IFS=: read -r file line rest; do
     continue
   fi
   offenders+=("${file}:${line}: could not extract the image argument from a (tcpostgres|testcontainers).Run(...) call -- investigate manually (a new call shape this gate does not recognise is exactly what it exists to catch)")
-done < <(git grep -nE '(tcpostgres|testcontainers)\.Run\(' -- '*.go')
+done < <(git grep -nE '(tcpostgres\.Run|testcontainers\.Run|startterm\.PostgresRun)\(' -- '*.go')
 
 # (b) Image: "<image>" -- direct string literal
 while IFS=: read -r file line rest; do

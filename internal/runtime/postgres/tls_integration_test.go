@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"math/big"
 	"net"
 	"net/url"
@@ -93,7 +94,7 @@ func newTLSPostgresFixture(t *testing.T, ctx context.Context) tlsPostgresFixture
 		"chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key && " +
 		"chmod 600 /var/lib/postgresql/server.key /var/lib/postgresql/server.crt && " +
 		"exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key"
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			// CHAOS-4855: pinned by digest like every other testcontainers
 			// postgres:18-alpine pull in this module (cli_test.go,

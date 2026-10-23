@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,7 +115,7 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in
 	// this module.
-	postgres, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
+	postgres, err := startterm.PostgresRun(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"),
 		tcpostgres.WithUsername("acr"),
 		tcpostgres.WithPassword("acr"),
@@ -125,7 +126,7 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 	t.Cleanup(func() { terminateTestContainer(t, postgres) })
 
 	configPath, userListPath := writePgBouncerConfig(t, modes)
-	pooler, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	pooler, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			// CHAOS-4855: pinned by digest (was the floating "latest" tag)
 			// so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the
