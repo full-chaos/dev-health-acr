@@ -597,80 +597,27 @@ func keysForTest(rows []candidate) []string {
 	return out
 }
 
-// legacyCIRunsStatement is queryCIRuns' statement as it stood on main
-// (884a1010), kept so a live test can read the same page through it and
-// through the current statement.
-func legacyCIRunsStatement(cursor cursorState) string {
-	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
-	const rowKey = "concat(toString(c.repo_id), ':', c.run_id)"
-	return `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
-       c.started_at, ` + nullableTimestamp("c.finished_at") + `,
-       ifNull(c.pipeline_name, ''), c.last_synced
-FROM ci_pipeline_runs AS c FINAL
-INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+// MainCIRunsStatementForTest is queryCIRuns' statement as main had it, with
+// no SETTINGS clause: the control a memory budget must be red on.
+func MainCIRunsStatementForTest(since time.Time, after string) string {
+	return strings.TrimSuffix(ciRunsStatement(cursorState{Since: since, After: after, Space: cursorSpaceIngest}), ciRunsSettings)
 }
 
-// ciRunsVariantStatement returns the statement a live test reads a CI run page
-// through: legacy, current, or a candidate shape under measurement.
-func ciRunsVariantStatement(variant string, cursor cursorState) (string, error) {
-	legacy := legacyCIRunsStatement(cursor)
-	const join = "INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id\n"
-	const prunedJoin = "INNER JOIN (SELECT id, org_id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS repo ON repo.id = c.repo_id AND repo.org_id = c.org_id\n"
-	switch variant {
-	case "legacy":
-		return legacy, nil
-	case "current":
-		return ciRunsStatement(cursor), nil
-	case "joinpruned":
-		return strings.Replace(legacy, join, prunedJoin, 1), nil
-	case "joinpruned+prewhere":
-		pruned := strings.Replace(legacy, join, prunedJoin, 1)
-		if cursor.Since.IsZero() && cursor.After == "" {
-			return pruned, nil
-		}
-		return strings.Replace(pruned, "WHERE c.org_id", "PREWHERE c.last_synced >= "+sinceBoundSQL+"\nWHERE c.org_id", 1), nil
-	case "threads1":
-		return legacy + " SETTINGS max_threads = 1", nil
-	case "threads2":
-		return legacy + " SETTINGS max_threads = 2", nil
-	case "block8192":
-		return legacy + " SETTINGS max_block_size = 8192", nil
-	case "threads1+block8192":
-		return legacy + " SETTINGS max_threads = 1, max_block_size = 8192", nil
-	case "narrowproxy":
-		return "SELECT c.run_id, toString(c.repo_id), repo.repo, c.last_synced\n" + legacy[strings.Index(legacy, "FROM ci_pipeline_runs"):], nil
-	case "prewhere":
-		if cursor.Since.IsZero() && cursor.After == "" {
-			return legacy, nil
-		}
-		return strings.Replace(legacy, "WHERE c.org_id", "PREWHERE c.last_synced >= "+sinceBoundSQL+"\nWHERE c.org_id", 1), nil
-	}
-	return "", fmt.Errorf("unknown CI run statement variant %q", variant)
+// CIRunsStatementForTest is the statement queryCIRuns sends for one page.
+func CIRunsStatementForTest(since time.Time, after string) string {
+	return ciRunsStatement(cursorState{Since: since, After: after, Space: cursorSpaceIngest})
 }
 
-// ReadCIRunsForTest reads one CI run page through the named statement variant
-// and returns every selected column of every row, formatted, in order.
-func ReadCIRunsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, variant, orgID string, since time.Time, after string, limit int) ([]string, error) {
+// ReadCIRunsStatementForTest runs statement as one CI run page and returns
+// every selected column of every row, formatted, in order.
+func ReadCIRunsStatementForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement, orgID string, since time.Time, after string, limit int) ([]string, error) {
 	cursor := cursorState{Since: since, After: after, Space: cursorSpaceIngest}
-	if variant == "keysfirst" {
-		return readCIRunsKeysFirst(ctx, client, orgID, cursor, limit)
-	}
-	statement, err := ciRunsVariantStatement(variant, cursor)
-	if err != nil {
-		return nil, err
-	}
 	rows, err := client.Query(ctx, statement, rowLimitBindings(orgID, cursor, limit))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []string
-	if variant == "narrowproxy" {
-		for rows.Next() {
-		}
-		return nil, rows.Err()
-	}
 	for rows.Next() {
 		var runID, repoID, branch, status, repoSlug, pipelineName string
 		var observedAt, startedAt, finishedAt, lastSynced time.Time
@@ -681,123 +628,4 @@ func ReadCIRunsForTest(ctx context.Context, client contextpacket.ClickHouseQuery
 		out = append(out, fmt.Sprint(runID, "|", repoID, "|", branch, "|", status, "|", repoSlug, "|", observedAt.UTC().Format(time.RFC3339Nano), "|", startedAt.UTC().Format(time.RFC3339Nano), "|", hasFinished, "|", finishedAt.UTC().Format(time.RFC3339Nano), "|", pipelineName, "|", lastSynced.UTC().Format(time.RFC3339Nano)))
 	}
 	return out, rows.Err()
-}
-
-const legacyCIRunCountStatement = `SELECT uniqExact(c.repo_id, c.run_id) FROM ci_pipeline_runs AS c FINAL
-INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
-WHERE c.org_id = {org_id:String}`
-
-// ReadCIRunCountForTest runs the CI run count statement: main's ("legacy"),
-// the current one ("current"), or main's with the repos join pruned to the
-// organization ("joinpruned"), and returns the count.
-func ReadCIRunCountForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, variant, orgID string) (uint64, error) {
-	var statement string
-	switch variant {
-	case "legacy":
-		statement = legacyCIRunCountStatement
-	case "current":
-		for _, st := range clickHouseKindCountStatements {
-			if st.kind == contractsv1.ContextFabricSubjectCIRun {
-				statement = st.sql
-			}
-		}
-	case "threads1":
-		statement = legacyCIRunCountStatement + " SETTINGS max_threads = 1"
-	case "joinpruned":
-		statement = strings.Replace(legacyCIRunCountStatement, "INNER JOIN repos AS repo FINAL ON", "INNER JOIN (SELECT id, org_id FROM repos FINAL WHERE org_id = {org_id:String}) AS repo ON", 1)
-	}
-	if statement == "" {
-		return 0, fmt.Errorf("unknown CI run count variant %q", variant)
-	}
-	rows, err := client.Query(ctx, statement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	var total uint64
-	for rows.Next() {
-		if err := rows.Scan(&total); err != nil {
-			return 0, err
-		}
-	}
-	return total, rows.Err()
-}
-
-func formatCIRunRow(runID, repoID, branch, status, repoSlug string, observedAt, startedAt time.Time, hasFinished uint8, finishedAt time.Time, pipelineName string, lastSynced time.Time) string {
-	return fmt.Sprint(runID, "|", repoID, "|", branch, "|", status, "|", repoSlug, "|", observedAt.UTC().Format(time.RFC3339Nano), "|", startedAt.UTC().Format(time.RFC3339Nano), "|", hasFinished, "|", finishedAt.UTC().Format(time.RFC3339Nano), "|", pipelineName, "|", lastSynced.UTC().Format(time.RFC3339Nano))
-}
-
-// readCIRunsKeysFirst is the candidate two-step read: the page is chosen on
-// the narrow columns, then the wide columns are read for its keys alone.
-func readCIRunsKeysFirst(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]string, error) {
-	legacy := legacyCIRunsStatement(cursor)
-	narrow := "SELECT c.run_id, toString(c.repo_id), repo.repo, c.last_synced\n" + legacy[strings.Index(legacy, "FROM ci_pipeline_runs"):]
-	rows, err := client.Query(ctx, narrow, rowLimitBindings(orgID, cursor, limit))
-	if err != nil {
-		return nil, err
-	}
-	type pageKey struct{ runID, repoID, slug string }
-	var keys []pageKey
-	for rows.Next() {
-		var key pageKey
-		var version time.Time
-		if err := rows.Scan(&key.runID, &key.repoID, &key.slug, &version); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		keys = append(keys, key)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	name, _ := contextpacket.StatementReaderFromContext(ctx)
-	wideCtx := contextpacket.WithStatementReader(ctx, name+"-wide")
-	read := map[string]func(slug string) string{}
-	const perStatement = 100
-	for start := 0; start < len(keys); start += perStatement {
-		chunk := keys[start:min(start+perStatement, len(keys))]
-		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
-		terms := make([]string, len(chunk))
-		for i, key := range chunk {
-			terms[i] = fmt.Sprintf("(c.repo_id = toUUID({r%[1]d:String}) AND c.run_id = {k%[1]d:String})", i)
-			bindings = append(bindings, contextpacket.ClickHouseBinding{Name: fmt.Sprintf("r%d", i), Value: key.repoID}, contextpacket.ClickHouseBinding{Name: fmt.Sprintf("k%d", i), Value: key.runID})
-		}
-		statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), coalesce(c.finished_at, c.started_at),
-       c.started_at, ` + nullableTimestamp("c.finished_at") + `,
-       ifNull(c.pipeline_name, ''), c.last_synced
-FROM ci_pipeline_runs AS c FINAL
-WHERE c.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)`
-		wide, err := client.Query(wideCtx, statement, bindings)
-		if err != nil {
-			return nil, err
-		}
-		for wide.Next() {
-			var runID, repoID, branch, status, pipelineName string
-			var observedAt, startedAt, finishedAt, lastSynced time.Time
-			var hasFinished uint8
-			if err := wide.Scan(&runID, &repoID, &branch, &status, &observedAt, &startedAt, &hasFinished, &finishedAt, &pipelineName, &lastSynced); err != nil {
-				wide.Close()
-				return nil, err
-			}
-			read[repoID+":"+runID] = func(slug string) string {
-				return formatCIRunRow(runID, repoID, branch, status, slug, observedAt, startedAt, hasFinished, finishedAt, pipelineName, lastSynced)
-			}
-		}
-		err = wide.Err()
-		wide.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		row, ok := read[key.repoID+":"+key.runID]
-		if !ok {
-			return nil, fmt.Errorf("keys-first read lost %s:%s", key.repoID, key.runID)
-		}
-		out = append(out, row(key.slug))
-	}
-	return out, nil
 }

@@ -23,14 +23,16 @@ const (
 	ciRunsForeignRepos  = 1500
 	ciRunsPageLimit     = 500
 	ciRunsWholeReadRows = 200000
+	ciRunsWarmReads     = 3
+	ciRunsMemoryBudget  = 40 << 20
 )
 
 // TestLiveCIRunsPageReadMemory reads CI run pages through main's statement and
 // through the current one on a store shaped like prod's: one organization with
 // many runs in several unmerged versions, beside other organizations holding
-// many more repositories. Every statement variant must return the same rows as
-// main's for every cursor, and the current statement must peak well below
-// main's, as the server's own query log measures it.
+// many more repositories. The current statement must return main's rows for
+// every cursor and stay under a memory budget that main's statement exceeds,
+// as the server's own query log measures it.
 //
 // Needs Docker (ClickHouse container). Written to be run by CI.
 func TestLiveCIRunsPageReadMemory(t *testing.T) {
@@ -81,52 +83,42 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 		{name: "steady", since: base.Add(time.Duration(ciRunsRows-100) * time.Second)},
 		{name: "future", since: base.Add(60 * 24 * time.Hour)},
 	}
-	variants := []string{"legacy", "current", "joinpruned", "prewhere", "joinpruned+prewhere", "threads1", "threads2", "block8192", "threads1+block8192", "narrowproxy", "keysfirst"}
+	statements := []struct {
+		name string
+		text func(since time.Time, after string) string
+	}{
+		{"main", devhealthsource.MainCIRunsStatementForTest},
+		{"fix", devhealthsource.CIRunsStatementForTest},
+	}
 	for _, cursor := range cursors {
 		var want []string
-		for _, variant := range variants {
-			name := fmt.Sprintf("ci-%s-%s", cursor.name, variant)
-			got, err := devhealthsource.ReadCIRunsForTest(contextpacket.WithStatementReader(ctx, name), reader, variant, ciRunsOrganization, cursor.since, cursor.after, ciRunsWholeReadRows)
-			if err != nil {
-				t.Errorf("%s: %v", name, err)
-				continue
+		for _, statement := range statements {
+			text := statement.text(cursor.since, cursor.after)
+			name := fmt.Sprintf("ci-%s-%s", cursor.name, statement.name)
+			var got []string
+			for read := 0; read < ciRunsWarmReads; read++ {
+				var err error
+				got, err = devhealthsource.ReadCIRunsStatementForTest(contextpacket.WithStatementReader(ctx, name), reader, text, ciRunsOrganization, cursor.since, cursor.after, ciRunsWholeReadRows)
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
 			}
-			if variant == "legacy" {
+			if statement.name == "main" {
 				want = got
 				if cursor.name != "future" && len(want) == 0 {
 					t.Fatalf("%s: main's statement returned no row: the seed does not exercise the read", name)
 				}
 				continue
 			}
-			if variant == "narrowproxy" {
-				continue
-			}
 			if !slices.Equal(got, want) {
 				t.Errorf("%s: %d rows differ from main's %d rows", name, len(got), len(want))
 			}
-			page, err := devhealthsource.ReadCIRunsForTest(ctx, reader, variant, ciRunsOrganization, cursor.since, cursor.after, ciRunsPageLimit)
+			page, err := devhealthsource.ReadCIRunsStatementForTest(ctx, reader, text, ciRunsOrganization, cursor.since, cursor.after, ciRunsPageLimit)
 			if err != nil {
 				t.Errorf("%s page: %v", name, err)
 			} else if len(page) > ciRunsPageLimit+1 || !slices.Equal(page, want[:min(len(want), len(page))]) {
 				t.Errorf("%s page: not a prefix of main's rows", name)
 			}
-		}
-	}
-
-	var wantCount uint64
-	for _, variant := range []string{"legacy", "current", "joinpruned", "threads1"} {
-		got, err := devhealthsource.ReadCIRunCountForTest(contextpacket.WithStatementReader(ctx, "ci-count-"+variant), reader, variant, ciRunsOrganization)
-		if err != nil {
-			t.Errorf("count %s: %v", variant, err)
-			continue
-		}
-		if variant == "legacy" {
-			wantCount = got
-			if got == 0 {
-				t.Fatal("main's count statement returned 0: the seed does not exercise it")
-			}
-		} else if got != wantCount {
-			t.Errorf("count %s = %d, main's = %d", variant, got, wantCount)
 		}
 	}
 
@@ -138,36 +130,41 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 		t.Fatalf("read the statement threads from the query log: %v", err)
 	}
 	statementthreads.RequireThreadBound(t, ctx, admin, "CI run statements", unbound)
-	rows, err := admin.Query(ctx, `SELECT log_comment, max(memory_usage), max(read_rows), max(read_bytes), count()
+	rows, err := admin.Query(ctx, `SELECT log_comment, min(memory_usage), max(memory_usage), max(read_rows), max(read_bytes), max(query_duration_ms), count()
 FROM system.query_log WHERE current_database = ? AND type = 'QueryFinish' AND log_comment LIKE 'ci-%' GROUP BY log_comment ORDER BY log_comment`, database)
 	if err != nil {
 		t.Fatalf("read the query log: %v", err)
 	}
 	defer rows.Close()
 	var table strings.Builder
-	fmt.Fprintf(&table, "%-34s %14s %12s %14s %6s\n", "statement", "memory_usage", "read_rows", "read_bytes", "runs")
-	measured := map[string]uint64{}
+	fmt.Fprintf(&table, "%-18s %12s %12s %10s %12s %8s %6s\n", "statement", "memory_min", "memory_max", "read_rows", "read_bytes", "ms_max", "reads")
+	lowest, highest := map[string]uint64{}, map[string]uint64{}
 	for rows.Next() {
 		var comment string
-		var memory, readRows, readBytes, runs uint64
-		if err := rows.Scan(&comment, &memory, &readRows, &readBytes, &runs); err != nil {
+		var memoryMin, memoryMax, readRows, readBytes, duration, reads uint64
+		if err := rows.Scan(&comment, &memoryMin, &memoryMax, &readRows, &readBytes, &duration, &reads); err != nil {
 			t.Fatalf("scan the query log: %v", err)
 		}
-		measured[comment] = memory
-		fmt.Fprintf(&table, "%-34s %14d %12d %14d %6d\n", comment, memory, readRows, readBytes, runs)
+		if reads != ciRunsWarmReads {
+			t.Errorf("%s: %d reads in the query log, want %d: the measure did not happen as planned", comment, reads, ciRunsWarmReads)
+		}
+		lowest[comment], highest[comment] = memoryMin, memoryMax
+		fmt.Fprintf(&table, "%-18s %12d %12d %10d %12d %8d %6d\n", comment, memoryMin, memoryMax, readRows, readBytes, duration, reads)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read the query log: %v", err)
 	}
-	t.Log("\n" + table.String())
-	if len(measured) == 0 {
-		t.Fatal("the query log holds no CI run statement: the measure did not happen")
-	}
+	t.Logf("budget %d bytes\n%s", ciRunsMemoryBudget, table.String())
 	for _, cursor := range cursors {
-		legacy, current := measured["ci-"+cursor.name+"-legacy"], measured["ci-"+cursor.name+"-current"]
-		if legacy == 0 || current == 0 {
-			t.Errorf("%s: no memory value for main's statement (%d) or the current one (%d)", cursor.name, legacy, current)
+		fix, ok := highest["ci-"+cursor.name+"-fix"]
+		if !ok || fix == 0 {
+			t.Errorf("%s: no memory value for the current statement: the measure did not happen", cursor.name)
+		} else if fix > ciRunsMemoryBudget {
+			t.Errorf("%s: the current statement peaked at %d bytes, over the budget %d", cursor.name, fix, ciRunsMemoryBudget)
 		}
+	}
+	if control := lowest["ci-catch-up-main"]; control <= ciRunsMemoryBudget {
+		t.Errorf("catch-up: main's statement peaked at %d bytes at its lowest read, not over the budget %d: the budget does not tell the two statements apart", control, ciRunsMemoryBudget)
 	}
 }
 

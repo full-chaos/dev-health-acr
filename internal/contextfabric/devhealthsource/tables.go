@@ -1648,6 +1648,11 @@ func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient
 	})
 }
 
+// ciRunsSettings bounds the page read's memory: measured on a store shaped like
+// prod's, the join and FINAL buffers follow the thread count and block size,
+// not the rows the page returns (63 MB to 29 MB at the catch-up cursor).
+const ciRunsSettings = "\nSETTINGS max_threads = 1, max_block_size = 8192"
+
 // ciRunsStatement is queryCIRuns' statement for one page at cursor.
 func ciRunsStatement(cursor cursorState) string {
 	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
@@ -1657,7 +1662,7 @@ func ciRunsStatement(cursor cursorState) string {
        ifNull(c.pipeline_name, ''), c.last_synced
 FROM ci_pipeline_runs AS c FINAL
 INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey) + ciRunsSettings
 }
 
 // dependencyCursorExpr is queryWorkItemDependencies' keyset position: the
