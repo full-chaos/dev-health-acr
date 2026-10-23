@@ -220,7 +220,7 @@ INSERT INTO work_graph_edges
     (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id,
      provider, provenance, confidence, evidence, discovered_at, last_synced, org_id)
 VALUES
-    ('edge-checkout-commit-ci-001', 'commit', 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+    ('edge-checkout-commit-ci-001', 'commit', '00000000-3065-4000-8000-000000000001@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
      'ci_run', 'checkout-e2e-run-4821', 'touches', '00000000-3065-4000-8000-000000000001',
      'synthetic', 'native', 0.9, 'commit triggered the checkout-e2e pipeline run',
      '2026-01-13 18:42:00.000', '2026-01-14 12:00:00.000', '__ORG_ID__');
