@@ -44,6 +44,11 @@ concurrency:
 
 env:
   GOFLAGS: -trimpath
+  # The comma form of Go's default proxy list falls back to `direct` only on a
+  # 404/410, so a proxy stream INTERNAL_ERROR failed jobs that had a usable
+  # origin. The pipe falls back on any error; GOSUMDB is unchanged, so modules
+  # fetched directly are still hash-verified. test-workflow-contract.sh pins it.
+  GOPROXY: https://proxy.golang.org|direct
   OPENCODE_PINNED_VERSION: 1.18.4
   # The acceptance client loads this provider package at runtime. It is
   # pre-warmed into the npm cache so the graded run itself never depends on a

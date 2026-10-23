@@ -1421,6 +1421,31 @@ check_race_json_all_jobs() {
   return "$status"
 }
 
+# Go's default GOPROXY is "https://proxy.golang.org,direct". The comma falls
+# back to `direct` only on a 404/410, so a proxy "stream error: INTERNAL_ERROR"
+# fails the job with no fallback (acr lint and unit jobs, 2026-10-19/20). The
+# pipe form falls back on any error; GOSUMDB stays default, so modules fetched
+# directly are still hash-verified. The workflow-level env reaches every job,
+# and no job or step may override it with another value.
+check_gomod_proxy_fallback() {
+  local file="$1" want status=0
+  want='  GOPROXY: https://proxy.golang.org|direct'
+  if ! awk -v want="$want" '
+    /^env:/ { in_env=1; next }
+    in_env && /^[^[:space:]#]/ { in_env=0 }
+    in_env && $0 == want { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$file"; then
+    printf '%s: workflow-level env lacks "%s" (the comma form never falls back on a stream error)\n' "${file##*/}" "${want#  }" >&2
+    status=1
+  fi
+  if [ "$(grep -cE '^ *GOPROXY:' "$file" || true)" -ne 1 ]; then
+    printf '%s: GOPROXY must be set exactly once, at the workflow level\n' "${file##*/}" >&2
+    status=1
+  fi
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -1451,12 +1476,16 @@ run_all_checks() {
   check_reach_gating "$file"
   check_observed_race_dedup "$file"
   check_race_json_all_jobs "$file"
+  check_gomod_proxy_fallback "$file"
 }
 
 # ---- positive run -------------------------------------------------------
 
 run_all_checks "$workflow"
 printf 'PASS: %s satisfies all workflow contract checks\n' "$workflow"
+fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
+check_gomod_proxy_fallback "$fullstack_workflow"
+printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
 
 # ---- negative controls ---------------------------------------------------
 # Each mutation below must make its corresponding check FAIL. mktemp -d
@@ -1528,6 +1557,26 @@ awk '!done && /^    runs-on: ubuntu-latest$/ { sub(/runs-on: ubuntu-latest/, "ru
   "$workflow" > "$pool_job_returns"
 assert_check_fails 'pointed a job back at the removed ARC pool' \
   check_go_cache "$pool_job_returns"
+
+# (c3) the Go module proxy fallback. Each mutation puts back a shape that
+# fails on a proxy stream error: the comma form, no GOPROXY at all, a job-level
+# override, and the same for the second workflow that downloads modules.
+proxy_comma="$tmpdir/proxy-comma.yml"
+sed 's/^  GOPROXY: https:\/\/proxy.golang.org|direct$/  GOPROXY: https:\/\/proxy.golang.org,direct/' "$workflow" > "$proxy_comma"
+cmp -s "$workflow" "$proxy_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: proxy_comma did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put the comma form back on the workflow GOPROXY' check_gomod_proxy_fallback "$proxy_comma"
+proxy_dropped="$tmpdir/proxy-dropped.yml"
+sed '/^  GOPROXY: /d' "$workflow" > "$proxy_dropped"
+cmp -s "$workflow" "$proxy_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: proxy_dropped did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped GOPROXY from the workflow env' check_gomod_proxy_fallback "$proxy_dropped"
+proxy_job_override="$tmpdir/proxy-job-override.yml"
+awk '!done && /^    steps:$/ { print "    env:"; print "      GOPROXY: https://proxy.golang.org,direct"; done=1 } { print }' "$workflow" > "$proxy_job_override"
+cmp -s "$workflow" "$proxy_job_override" && { printf 'NEGATIVE CONTROL SETUP FAILED: proxy_job_override did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'overrode GOPROXY with the comma form in one job' check_gomod_proxy_fallback "$proxy_job_override"
+fullstack_comma="$tmpdir/fullstack-comma.yml"
+sed 's/^  GOPROXY: https:\/\/proxy.golang.org|direct$/  GOPROXY: https:\/\/proxy.golang.org,direct/' "$fullstack_workflow" > "$fullstack_comma"
+cmp -s "$fullstack_workflow" "$fullstack_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: fullstack_comma did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put the comma form back on fullstack-acceptance GOPROXY' check_gomod_proxy_fallback "$fullstack_comma"
 
 # (c3) testcontainers jobs: reaper back on, session id dropped, reap step
 # gated off or moved before the tests.

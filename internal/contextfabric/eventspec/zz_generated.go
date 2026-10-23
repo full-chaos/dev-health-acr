@@ -12396,15 +12396,18 @@ func (f OTelExportFields) SlogArgs() []any {
 // GraphCountCheckFinishedFields is projectionrun.graph_count_check_finished's generated typed construction interface
 // (CHAOS-5516): one Go field per Field GraphCountCheckFinished.Fields declares in spec.go.
 type GraphCountCheckFinishedFields struct {
-	OrgIDHash      string
-	Instance       string
-	Pass           int
-	Outcome        string
-	SourcesChecked int
-	KindsCompared  int
-	GapCount       int
-	ErrorCount     int
-	DurationMs     int
+	OrgIDHash         string
+	Instance          string
+	Pass              int
+	Outcome           string
+	SourcesChecked    int
+	KindsCompared     int
+	GapCount          int
+	RelationsCompared int
+	EdgeGapCount      int
+	RelationsDeferred int
+	ErrorCount        int
+	DurationMs        int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every GraphCountCheckFinishedFields uniformly, set ONLY by NewGraphCountCheckFinishedFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -12418,18 +12421,21 @@ type GraphCountCheckFinishedFields struct {
 
 // NewGraphCountCheckFinishedFields is the generated constructor for GraphCountCheckFinishedFields -- every
 // field GraphCountCheckFinished.Fields declares is a required parameter.
-func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
+func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
 	return GraphCountCheckFinishedFields{
-		OrgIDHash:      orgIDHash,
-		Instance:       instance,
-		Pass:           pass,
-		Outcome:        outcome,
-		SourcesChecked: sourcesChecked,
-		KindsCompared:  kindsCompared,
-		GapCount:       gapCount,
-		ErrorCount:     errorCount,
-		DurationMs:     durationMs,
-		constructed:    true,
+		OrgIDHash:         orgIDHash,
+		Instance:          instance,
+		Pass:              pass,
+		Outcome:           outcome,
+		SourcesChecked:    sourcesChecked,
+		KindsCompared:     kindsCompared,
+		GapCount:          gapCount,
+		RelationsCompared: relationsCompared,
+		EdgeGapCount:      edgeGapCount,
+		RelationsDeferred: relationsDeferred,
+		ErrorCount:        errorCount,
+		DurationMs:        durationMs,
+		constructed:       true,
 	}
 }
 
@@ -12453,6 +12459,9 @@ func (f GraphCountCheckFinishedFields) SlogArgs() []any {
 		"sources_checked", f.SourcesChecked,
 		"kinds_compared", f.KindsCompared,
 		"gap_count", f.GapCount,
+		"relations_compared", f.RelationsCompared,
+		"edge_gap_count", f.EdgeGapCount,
+		"relations_deferred", f.RelationsDeferred,
 		"error_count", f.ErrorCount,
 		"duration_ms", f.DurationMs,
 	}
