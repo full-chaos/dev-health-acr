@@ -12,7 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -56,7 +55,7 @@ const chaos4099ZeroRepositoryID = "00000000-0000-0000-0000-000000000000"
 
 func newChaos4099ScopeExpanderClient(t *testing.T, ctx context.Context) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},

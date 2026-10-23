@@ -13,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -36,7 +35,7 @@ const (
 
 func startScopeClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Client, clickhousedriver.Conn) {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},

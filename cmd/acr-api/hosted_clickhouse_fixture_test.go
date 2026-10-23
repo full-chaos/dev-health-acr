@@ -7,7 +7,6 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"net"
 	"net/url"
 	"os"
@@ -44,7 +43,7 @@ type clickHouseScopeRequest struct {
 
 func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	certificate := newTestCertificate(t)
 	directory := t.TempDir()
 	certPath := filepath.Join(directory, "server.crt")

@@ -15,13 +15,13 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 // Oracle O3 (CHAOS-7036 design J.4; CHAOS-7074).
@@ -62,7 +62,7 @@ func chaos7074FalkorAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adap
 
 func chaos7074FalkorAdapterWith(t *testing.T, ctx context.Context, configure func(*falkorgraph.Config)) *falkorgraph.Adapter {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chaos7074FalkorImage, ExposedPorts: []string{"6379/tcp"},

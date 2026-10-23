@@ -277,18 +277,18 @@ done
 
 printf 'PASS: every closure control was correctly rejected\n'
 
-# A package that holds a gated container test (a containergate.Require call)
+# A package that holds a gated container test (a chfixture.RequireContainers call)
 # must be in BOTH matrices' unions: a gated test no job selects would skip
 # nowhere and run nowhere. The union == `go list ./...` proof above already
 # covers every package; this names the gated ones so dropping one from the
 # unions fails by name, and the control proves the check can reject.
 module_path="$(cd "$repo_root" && go list -m)"
-(cd "$repo_root" && git grep -l 'containergate\.Require(' -- '*.go') \
-  | grep -v '^internal/testsupport/containergate/' \
+(cd "$repo_root" && git grep -l 'chfixture\.RequireContainers(' -- '*.go') \
+  | grep -v '^internal/chfixture/' \
   | xargs -n1 dirname | LC_ALL=C sort -u | sed "s|^|$module_path/|" >"$tmpdir/gated.sorted"
 gated_count="$(wc -l <"$tmpdir/gated.sorted" | tr -d ' ')"
 if [ "$gated_count" -lt 1 ]; then
-  printf '%s: no package calls containergate.Require; the gated-package check would be vacuous\n' "${0##*/}" >&2
+  printf '%s: no package calls chfixture.RequireContainers; the gated-package check would be vacuous\n' "${0##*/}" >&2
   exit 1
 fi
 

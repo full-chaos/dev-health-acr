@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 )
 
 func newTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	// CHAOS-4855: pinned by digest (was a bare tag) so
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in

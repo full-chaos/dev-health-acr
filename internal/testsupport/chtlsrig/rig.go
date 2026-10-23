@@ -24,7 +24,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -48,7 +47,7 @@ type Rig struct {
 // latency proxy of the given round-trip time in front of it.
 func Start(tb testing.TB, ctx context.Context, rtt time.Duration) *Rig {
 	tb.Helper()
-	containergate.Require(tb)
+	chfixture.RequireContainers(tb)
 	ca, certPEM, keyPEM := newCertificate(tb)
 	directory := tb.TempDir()
 	write := func(name string, contents []byte) string {

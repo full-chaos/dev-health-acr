@@ -20,10 +20,10 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 // The cost of the read_relationships edge page on a hub: two teams, each
@@ -49,7 +49,7 @@ type edgePageCostVenue struct {
 
 func edgePageCostStart(t *testing.T, ctx context.Context) *edgePageCostVenue {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: codexRoundFalkordbImage, ExposedPorts: []string{"6379/tcp"},

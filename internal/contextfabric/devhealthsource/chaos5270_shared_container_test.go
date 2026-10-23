@@ -29,7 +29,6 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -63,7 +62,7 @@ func TestMain(m *testing.M) {
 // on first use.
 func orgIsolationClickHouseFixture(t *testing.T) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	orgIsolationClickHouseOnce.Do(func() {
 		orgIsolationClickHouseQuery, orgIsolationClickHouseConn, orgIsolationClickHouseTerminate, orgIsolationClickHouseErr = startOrgIsolationClickHouseContainer(t)
 	})
@@ -86,7 +85,7 @@ func logCleanupErr(step string, err error) {
 }
 
 func startOrgIsolationClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, clickhousedriver.Conn, func(), error) {
-	containergate.Require(tb)
+	chfixture.RequireContainers(tb)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

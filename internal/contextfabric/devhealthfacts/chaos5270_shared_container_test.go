@@ -38,7 +38,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
@@ -470,7 +469,7 @@ func TestMain(m *testing.M) {
 // same blast radius as today's one-container-per-test tests.
 func sharedClickHouseFixture(t *testing.T) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	atomic.AddInt64(&sharedClickHouseTestCount, 1)
 	sharedClickHouseOnce.Do(func() {
 		sharedClickHouseQuery, sharedClickHouseConn, sharedClickHouseAddr, sharedClickHouseTerminate, sharedClickHouseErr = startSharedClickHouseContainer(t)
@@ -512,7 +511,7 @@ func logCleanupErr(step string, err error) {
 }
 
 func startSharedClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, clickhousedriver.Conn, string, func(), error) {
-	containergate.Require(tb)
+	chfixture.RequireContainers(tb)
 	ctx := context.Background()
 	sharedClickHouseStartedAt = time.Now()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

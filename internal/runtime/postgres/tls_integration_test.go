@@ -20,7 +20,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 )
 
 // TestOpen_acceptsRealPostgreSQLOverVerifiedTLS proves that Open succeeds
@@ -80,7 +80,7 @@ func (f tlsPostgresFixture) dsn(t *testing.T, caPath string) string {
 
 func newTLSPostgresFixture(t *testing.T, ctx context.Context) tlsPostgresFixture {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	certificate := newSelfSignedCertificate(t)
 	directory := t.TempDir()
 	certPath := filepath.Join(directory, "server.crt")

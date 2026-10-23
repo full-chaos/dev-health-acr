@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -18,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -321,7 +321,7 @@ func (m *freshPGReuseMembership) BeginWorkItemMembership(ctx context.Context, p 
 
 func freshPGReuseDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44", tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies())
 	if err != nil {

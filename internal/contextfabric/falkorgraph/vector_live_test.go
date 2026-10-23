@@ -8,9 +8,9 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 )
 
 const vectorLiveTestImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
@@ -47,7 +47,7 @@ func (a *axisEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, 
 
 func startVectorLiveAdapter(t *testing.T, embedder contextfabric.Embedder, floor float64) *Adapter {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

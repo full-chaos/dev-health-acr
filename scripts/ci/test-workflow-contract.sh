@@ -1447,7 +1447,7 @@ check_gomod_proxy_fallback() {
 }
 
 # Container-starting tests run only under ACR_CONTAINER_TESTS=1
-# (internal/testsupport/containergate), and a hosted job without it FAILS them.
+# (internal/chfixture RequireContainers), and a hosted job without it FAILS them.
 # So every job that runs go tests (directly, or through make / the shard and
 # battery scripts) must have the switch in scope as '1', set at the workflow
 # level or in that job's own env; no occurrence may carry another value.

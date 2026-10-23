@@ -20,7 +20,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -37,7 +36,7 @@ type clickHouseServer struct {
 // when that test ends.
 func startClickHouseServer(t *testing.T) *clickHouseServer {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

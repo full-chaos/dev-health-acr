@@ -1,4 +1,4 @@
-package containergate
+package chfixture
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	gatePath       = "github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
+	gatePath       = "github.com/full-chaos/dev-health-acr/internal/chfixture"
 	tcRoot         = "github.com/testcontainers/testcontainers-go"
 	tcModulePrefix = tcRoot + "/modules/"
 	tcNetwork      = tcRoot + "/network"
@@ -32,6 +33,10 @@ var rootStartNames = map[string]bool{
 	"GenericContainer": true, "Run": true, "NewDockerProvider": true,
 	"NewDockerClientWithOpts": true, "NewDockerClient": true,
 }
+
+var dockerStartVerbs = map[string]bool{"run": true, "create": true, "compose": true}
+
+var shellDockerStart = regexp.MustCompile(`\b(docker|podman|nerdctl)(-compose)?\s+(run|create|compose|start)\b|\bdocker-compose\b`)
 
 var dockerBinaries = map[string]bool{"docker": true, "podman": true, "nerdctl": true, "docker-compose": true}
 
@@ -97,7 +102,7 @@ func checkSource(fset *token.FileSet, filename string, src []byte) ([]violation,
 			return false
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		return ok && sel.Sel.Name == "Require" && pathOf(sel.X) == gatePath
+		return ok && sel.Sel.Name == "RequireContainers" && pathOf(sel.X) == gatePath
 	}
 	strLit := func(e ast.Expr) (string, bool) {
 		lit, ok := e.(*ast.BasicLit)
@@ -136,8 +141,21 @@ func checkSource(fset *token.FileSet, filename string, src []byte) ([]violation,
 		if len(args) == 0 {
 			return "", false
 		}
+		for _, arg := range args {
+			if lit, ok := strLit(arg); ok && shellDockerStart.MatchString(lit) {
+				return "exec shell string " + strconv.Quote(lit), true
+			}
+		}
 		bin, ok := strLit(args[0])
-		if !ok || !dockerBinaries[bin] {
+		if !ok {
+			for _, arg := range args[1:] {
+				if verb, lit := strLit(arg); lit && dockerStartVerbs[verb] {
+					return "exec <non-literal binary> " + verb, true
+				}
+			}
+			return "", false
+		}
+		if !dockerBinaries[strings.TrimSuffix(filepath.Base(strings.ReplaceAll(bin, "\\", "/")), ".exe")] {
 			return "", false
 		}
 		for _, arg := range args[1:] {
@@ -182,7 +200,7 @@ func checkSource(fset *token.FileSet, filename string, src []byte) ([]violation,
 				}
 				refs++
 				if requireIdx < 0 || requireIdx >= j {
-					out = append(out, violation{"G1", at(n), what + " in " + fd.Name.Name + " has no top-level containergate.Require before it"})
+					out = append(out, violation{"G1", at(n), what + " in " + fd.Name.Name + " has no top-level chfixture.RequireContainers before it"})
 				}
 				return true
 			})
@@ -235,7 +253,7 @@ func checkSource(fset *token.FileSet, filename string, src []byte) ([]violation,
 							return true
 						}
 						if id, ok := inner.Fun.(*ast.Ident); ok && gatedStarters[id.Name] {
-							out = append(out, violation{"G3", at(n), ".Do in " + fd.Name.Name + " runs gated " + id.Name + " without a top-level containergate.Require before the .Do"})
+							out = append(out, violation{"G3", at(n), ".Do in " + fd.Name.Name + " runs gated " + id.Name + " without a top-level chfixture.RequireContainers before the .Do"})
 						}
 						return true
 					})
@@ -316,13 +334,13 @@ func TestEveryContainerStartInTheModuleIsBehindRequire(t *testing.T) {
 const gatedOK = `package p
 import (
 	"testing"
-	"github.com/full-chaos/dev-health-acr/internal/testsupport/containergate"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 func start(t *testing.T) {
 	t.Helper()
-	containergate.Require(t)
+	chfixture.RequireContainers(t)
 	_, _ = testcontainers.GenericContainer(nil, testcontainers.GenericContainerRequest{})
 	_, _ = tcpostgres.Run(nil, "img")
 }
@@ -333,20 +351,25 @@ func TestGuardRulesFireOnSyntheticSources(t *testing.T) {
 		name, rule, src string
 	}{
 		{"gated source is clean", "", gatedOK},
-		{"the startScopeClickHouse shape without Require", "G1", strings.Replace(gatedOK, "\tcontainergate.Require(t)\n", "", 1)},
-		{"Require after the start", "G1", strings.Replace(strings.Replace(gatedOK, "\tcontainergate.Require(t)\n", "", 1), "\t_, _ = tcpostgres.Run(nil, \"img\")\n", "\t_, _ = tcpostgres.Run(nil, \"img\")\n\tcontainergate.Require(t)\n", 1)},
-		{"Require inside an if", "G1", strings.Replace(gatedOK, "\tcontainergate.Require(t)\n", "\tif t != nil {\n\t\tcontainergate.Require(t)\n\t}\n", 1)},
-		{"start taken as a value", "G1", strings.Replace(gatedOK, "\tcontainergate.Require(t)\n", "\tf := testcontainers.GenericContainer\n\t_ = f\n\tcontainergate.Require(t)\n", 1)},
+		{"the startScopeClickHouse shape without Require", "G1", strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "", 1)},
+		{"Require after the start", "G1", strings.Replace(strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "", 1), "\t_, _ = tcpostgres.Run(nil, \"img\")\n", "\t_, _ = tcpostgres.Run(nil, \"img\")\n\tchfixture.RequireContainers(t)\n", 1)},
+		{"Require inside an if", "G1", strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "\tif t != nil {\n\t\tchfixture.RequireContainers(t)\n\t}\n", 1)},
+		{"start taken as a value", "G1", strings.Replace(gatedOK, "\tchfixture.RequireContainers(t)\n", "\tf := testcontainers.GenericContainer\n\t_ = f\n\tchfixture.RequireContainers(t)\n", 1)},
 		{"aliased module import", "G1", "package p\nimport pg \"github.com/testcontainers/testcontainers-go/modules/postgres\"\nfunc s() { _, _ = pg.Run(nil, \"img\") }\n"},
 		{"network start", "G1", "package p\nimport \"github.com/testcontainers/testcontainers-go/network\"\nfunc s() { _, _ = network.New(nil) }\n"},
 		{"package var initialiser", "G2", "package p\nimport \"github.com/testcontainers/testcontainers-go\"\nvar x = testcontainers.GenericContainer\n"},
-		{"Once accessor with Require first is clean", "", gatedOK + "func accessor(t *testing.T, o interface{ Do(func()) }) {\n\tcontainergate.Require(t)\n\to.Do(func() { start(t) })\n}\n"},
+		{"Once accessor with Require first is clean", "", gatedOK + "func accessor(t *testing.T, o interface{ Do(func()) }) {\n\tchfixture.RequireContainers(t)\n\to.Do(func() { start(t) })\n}\n"},
 		{"Once accessor without Require", "G3", gatedOK + "func accessor(t *testing.T, o interface{ Do(func()) }) {\n\to.Do(func() { start(t) })\n}\n"},
 		{"unknown testcontainers module", "G4", "package p\nimport _ \"github.com/testcontainers/testcontainers-go/modules/compose\"\n"},
 		{"dot import", "G4", "package p\nimport . \"github.com/testcontainers/testcontainers-go\"\n"},
 		{"docker run", "G1", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"docker\", \"run\", \"img\") }\n"},
 		{"docker compose via CommandContext", "G1", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.CommandContext(nil, \"docker\", \"compose\", \"up\") }\n"},
 		{"docker with a non-literal verb", "G1", "package p\nimport \"os/exec\"\nfunc s(v string) { _ = exec.Command(\"docker\", v) }\n"},
+		{"absolute path docker run", "G1", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"/usr/bin/docker\", \"run\", \"postgres:18-alpine\") }\n"},
+		{"windows docker.exe run", "G1", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"C:\\\\bin\\\\docker.exe\", \"run\", \"img\") }\n"},
+		{"sh -c docker run", "G1", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"sh\", \"-c\", \"docker run -d img\") }\n"},
+		{"non-literal binary with a run verb", "G1", "package p\nimport \"os/exec\"\nfunc s(bin string) { _ = exec.Command(bin, \"run\", \"img\") }\n"},
+		{"absolute path docker stats starts nothing", "", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"/usr/bin/docker\", \"stats\", \"x\") }\n"},
 		{"docker stats starts nothing", "", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"docker\", \"stats\", \"x\") }\n"},
 		{"docker exec starts nothing", "", "package p\nimport \"os/exec\"\nfunc s() { _ = exec.Command(\"docker\", \"exec\", \"-i\", \"x\") }\n"},
 	}
