@@ -31,8 +31,9 @@ func TestModelSourceOverItsWholeInputDomain(t *testing.T) {
 			}
 		})
 	}
-	if got := ContextFabricModelSources(); len(got) != 2 {
-		t.Fatalf("the closed vocabulary moved without this domain moving with it: %v", got)
+	got := ContextFabricModelSources()
+	if len(got) != 2 || string(got[0]) != "organization" || string(got[1]) != "platform" {
+		t.Fatalf("the wire vocabulary moved without this domain moving with it: %v", got)
 	}
 }
 
