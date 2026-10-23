@@ -3,10 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 )
 
 const providerErrorBodyLimit = 16 << 10
@@ -14,16 +14,12 @@ const providerErrorBodyLimit = 16 << 10
 // reasonLogTransport reports the reason a provider gave for a non-2xx
 // response. The shared llm client keeps the provider body out of its errors,
 // so the transport is the one place the reason is readable. Only the
-// provider's error type, code and param are reported, each flattened to one
-// bounded line, plus the message only on explicit opt-in; the request, the schema and
+// provider's error type, code and param are reported, each from a closed set,
+// plus the message length; the message text is never reported, by any path; the request, the schema and
 // the rest of the body are never read into the report.
 type reasonLogTransport struct {
 	next   http.RoundTripper
 	report func(reason string)
-	// includeMessage is an explicit operator opt-in: the free-text message is
-	// provider-controlled and a gateway may echo request content into it, so
-	// it is off by default and only its length is reported.
-	includeMessage bool
 }
 
 func (t reasonLogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -38,12 +34,12 @@ func (t reasonLogTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		io.Closer
 	}{io.MultiReader(bytes.NewReader(raw), rest), rest}
 	if readErr == nil {
-		t.report(providerErrorReason(resp.StatusCode, raw, t.includeMessage))
+		t.report(providerErrorReason(resp.StatusCode, raw))
 	}
 	return resp, nil
 }
 
-func providerErrorReason(status int, body []byte, includeMessage bool) string {
+func providerErrorReason(status int, body []byte) string {
 	var envelope struct {
 		Error struct {
 			Type    any    `json:"type"`
@@ -63,22 +59,11 @@ func providerErrorReason(status int, body []byte, includeMessage bool) string {
 		return "http=" + strconv.Itoa(status) + " body_not_json"
 	}
 	e := envelope.Error
-	return "http=" + strconv.Itoa(status) + " type=" + field(e.Type, knownProviderErrorTypes) + " code=" + field(e.Code, knownProviderErrorCodes) + " param=" + field(e.Param, knownProviderErrorParams) + messagePart(e.Message, includeMessage)
+	return "http=" + strconv.Itoa(status) + " type=" + field(e.Type, knownProviderErrorTypes) + " code=" + field(e.Code, knownProviderErrorCodes) + " param=" + field(e.Param, knownProviderErrorParams) + " message_bytes=" + strconv.Itoa(len(e.Message))
 }
 
-func messagePart(message string, include bool) string {
-	if !include {
-		return " message_bytes=" + strconv.Itoa(len(message))
-	}
-	return " message=" + oneLine(message, 400)
-}
-
-func oneLine(s string, limit int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > limit {
-		s = s[:limit] + "..."
-	}
-	return s
+func providerRejectionReporter(w io.Writer) func(string) {
+	return func(reason string) { fmt.Fprintf(w, "responder: provider rejected a request: %s\n", reason) }
 }
 
 // type, code and param are provider-controlled strings, so only members of

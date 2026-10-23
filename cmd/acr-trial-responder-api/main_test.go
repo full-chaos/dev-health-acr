@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,7 +83,7 @@ func writeExchangeRequest(t *testing.T, dir string, seq int, nonce string) {
 
 func newTestResponder(t *testing.T, dir, baseURL string) *responder {
 	t.Helper()
-	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna", false, func(string) {})
+	provider, err := newProvider("test-key-not-a-real-secret", baseURL, "gpt-5.6-luna", func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -915,7 +916,7 @@ func TestProviderRejectionReasonIsReportedWithoutRequestContent(t *testing.T) {
 	}))
 	defer srv.Close()
 	var reported []string
-	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", false, func(reason string) { reported = append(reported, reason) })
+	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", func(reason string) { reported = append(reported, reason) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,19 +950,37 @@ func TestStripNullFieldsJSONRefusesTrailingData(t *testing.T) {
 	}
 }
 
-func TestProviderRejectionMessageIsReportedOnlyOnExplicitOptIn(t *testing.T) {
-	body := []byte(`{"error":{"message":"Invalid schema:\n at anyOf 0","type":"invalid_request_error","param":"response_format","code":null}}`)
-	if got := providerErrorReason(400, body, false); strings.Contains(got, "anyOf") {
-		t.Errorf("default report %q carries the provider message", got)
+func TestProviderMessageTextNeverReachesStderrEvenWithAnOptInVariableSet(t *testing.T) {
+	const canary = "CANARY-PROVIDER-MESSAGE-TEXT"
+	t.Setenv("ACR_TEST_TRIAL_RESPONDER_LOG_PROVIDER_MESSAGE", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"` + canary + `","type":"invalid_request_error","param":"response_format","code":"invalid_json_schema"}}`))
+	}))
+	defer srv.Close()
+	var stderr bytes.Buffer
+	provider, err := newProvider("test-key-not-a-real-secret", srv.URL, "gpt-5.6-luna", providerRejectionReporter(&stderr))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := providerErrorReason(400, body, true); !strings.Contains(got, "message=Invalid schema: at anyOf 0") {
-		t.Errorf("opt-in report %q lacks the flattened message", got)
+	defer func() { _ = provider.Close() }()
+
+	_, callErr := provider.Complete(t.Context(), llm.Request{Prompt: "p", Format: &llm.JSONFormat{Type: llm.FormatTypeJSONObject}})
+	if callErr == nil {
+		t.Fatal("expected the provider's 400 to fail the call")
+	}
+	if strings.Contains(stderr.String(), canary) || strings.Contains(callErr.Error(), canary) {
+		t.Errorf("provider message text reached a sink: stderr=%q err=%q", stderr.String(), callErr.Error())
+	}
+	if !strings.Contains(stderr.String(), "code=invalid_json_schema") || !strings.Contains(stderr.String(), "message_bytes=") {
+		t.Errorf("stderr %q lacks the closed-set report", stderr.String())
 	}
 }
 
 func TestProviderRejectionReportsOnlyKnownTypeCodeAndParamValues(t *testing.T) {
 	body := []byte(`{"error":{"message":"m","type":"REQUEST-MARKER-IN-TYPE","code":"REQUEST-MARKER-IN-CODE","param":"REQUEST-MARKER-IN-PARAM"}}`)
-	got := providerErrorReason(400, body, false)
+	got := providerErrorReason(400, body)
 	if strings.Contains(got, "REQUEST-MARKER") {
 		t.Errorf("report %q echoes a provider-controlled value outside the closed sets", got)
 	}
@@ -969,7 +988,7 @@ func TestProviderRejectionReportsOnlyKnownTypeCodeAndParamValues(t *testing.T) {
 		t.Errorf("report %q lacks %q", got, want)
 	}
 	known := []byte(`{"error":{"message":"m","type":"invalid_request_error","code":"invalid_json_schema","param":"response_format"}}`)
-	if got := providerErrorReason(400, known, false); !strings.Contains(got, "type=invalid_request_error code=invalid_json_schema param=response_format") {
+	if got := providerErrorReason(400, known); !strings.Contains(got, "type=invalid_request_error code=invalid_json_schema param=response_format") {
 		t.Errorf("report %q dropped known values", got)
 	}
 }
