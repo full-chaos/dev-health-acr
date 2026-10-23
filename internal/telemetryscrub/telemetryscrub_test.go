@@ -537,7 +537,7 @@ func TestR2FalsePositivesStayClean(t *testing.T) {
 			t.Errorf("userinfo leaked: %q -> %q", v, got)
 		}
 	}
-	for _, k := range []string{"secretary", "secretaries", "Secretary"} {
+	for _, k := range []string{"secretary", "secretaries", "Secretary", "SECRETARIES"} {
 		got := record(t, func(l *slog.Logger) { l.Info("m", k, "keep") })
 		if got[k] != "keep" {
 			t.Errorf("%q = %v", k, got[k])
@@ -547,6 +547,21 @@ func TestR2FalsePositivesStayClean(t *testing.T) {
 		got := record(t, func(l *slog.Logger) { l.Info("m", k, "v") })
 		if got[k] != Redacted {
 			t.Errorf("%q = %v", k, got[k])
+		}
+	}
+}
+
+func TestR2ExactBenignKeysOnly(t *testing.T) {
+	for _, k := range []string{"secret_args", "secretArray", "secret_arn", "secretary_token", "refresh_tokens", "auth_tokens", "api_tokens", "access_tokens", "session_tokens", "tokens_secret"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, "leaky-value") })
+		if got[k] != Redacted {
+			t.Errorf("%q = %v, want redacted", k, got[k])
+		}
+	}
+	for _, k := range []string{"estimated_tokens", "output_tokens", "input_tokens", "total_tokens", "prompt_tokens", "completion_tokens", "cached_input_tokens", "reasoning_output_tokens", "max_tokens", "total_estimated_tokens", "secretary", "secretaries"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, 42) })
+		if got[k] != float64(42) {
+			t.Errorf("%q = %v, want kept", k, got[k])
 		}
 	}
 }

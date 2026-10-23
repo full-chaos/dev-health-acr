@@ -35,12 +35,33 @@ var protectedSegments = map[string]bool{"dsn": true, "pwd": true, "otp": true, "
 
 var passSuffixDenied = map[string]bool{"bypass": true, "compass": true, "overpass": true, "underpass": true, "trespass": true, "encompass": true, "surpass": true, "impass": true}
 
+// benignKeys are exact keys (compared after compact()) that look protected and are not: token counts and the word secretary.
 var benignKeys = map[string]bool{
 	"maxoutputtokens":                    true,
 	"outputtokens":                       true,
 	"inputtokens":                        true,
 	"packettokens":                       true,
 	"devhealthfactsblockerauthorization": true,
+	"avginputtokens":                     true,
+	"avgoutputtokens":                    true,
+	"avgtotaltokens":                     true,
+	"cachecreationinputtokens":           true,
+	"cachedinputtokens":                  true,
+	"cachewriteinputtokens":              true,
+	"completiontokens":                   true,
+	"estimatedcontexttokens":             true,
+	"estimatedtokens":                    true,
+	"esttokens":                          true,
+	"hostedestimatedtokens":              true,
+	"localestimatedtokens":               true,
+	"maxcompletiontokens":                true,
+	"maxtokens":                          true,
+	"prompttokens":                       true,
+	"reasoningoutputtokens":              true,
+	"totalestimatedtokens":               true,
+	"totaltokens":                        true,
+	"secretary":                          true,
+	"secretaries":                        true,
 }
 
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
@@ -141,7 +162,7 @@ const (
 func classify(key string) keyClass {
 	c := compact(key)
 	if !benignKeys[c] {
-		cf := strings.ReplaceAll(strings.ReplaceAll(c, "tokens", ""), "secretar", "")
+		cf := c
 		for _, f := range protectedFragments {
 			if strings.Contains(cf, f) {
 				return classProtected
