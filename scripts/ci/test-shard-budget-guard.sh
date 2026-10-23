@@ -110,7 +110,7 @@ if command -v jq >/dev/null; then
   slow TestHuge 5
   ptexpect byte-bound-fails 1 'over the .* byte bound' RACE_JSON_MAX_BYTES=10
   slow TestHuge 5
-  ptexpect slowest-band-printed 0 'slowest top-level tests' RACE_TEST_BAND_SECONDS=1
+  ptexpect slowest-band-printed 0 'example/a TestHuge 5s' RACE_TEST_BAND_SECONDS=1
   # the two shapes the ticket names: an untagged proof with local constants or helpers is a duration, not a name
   slow TestSomeLocalConstantProof 600
   ptexpect local-constant-proof-caught-by-duration 1 'TestSomeLocalConstantProof'
