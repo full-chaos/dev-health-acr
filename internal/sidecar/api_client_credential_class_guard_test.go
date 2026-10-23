@@ -217,14 +217,15 @@ func assertRefusedBeforeSend(t *testing.T, h *guardHarness, row guardRow, err er
 	if h.handled() != 0 {
 		t.Fatalf("%s: the hosted API was contacted", row.name)
 	}
-	// The fixed refusal text names the accepted prefix, so a value that is
-	// only that prefix (or part of the fixed text) cannot be told apart from it.
+	// The fixed refusal text names the ACR prefix, so it is removed before the
+	// value is searched for: any repeat of the value beyond that text is a leak.
 	fixedText := ErrCredentialShapeInvalid.Error()
 	for _, text := range []string{err.Error(), h.logs.String()} {
-		if row.value != "" && !strings.Contains(fixedText, row.value) && strings.Contains(text, row.value) {
+		residue := strings.ReplaceAll(text, fixedText, "")
+		if row.value != "" && strings.Contains(residue, row.value) {
 			t.Fatalf("%s: refusal output repeats the credential value", row.name)
 		}
-		if row.needle != "" && !strings.Contains(fixedText, row.needle) && strings.Contains(text, row.needle) {
+		if row.needle != "" && strings.Contains(residue, row.needle) {
 			t.Fatalf("%s: refusal output repeats part of the credential value", row.name)
 		}
 	}
