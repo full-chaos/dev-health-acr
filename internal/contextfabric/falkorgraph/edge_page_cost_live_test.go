@@ -17,7 +17,6 @@ import (
 
 	"github.com/FalkorDB/falkordb-go/v2"
 	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"

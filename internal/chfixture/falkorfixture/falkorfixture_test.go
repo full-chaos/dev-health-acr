@@ -80,3 +80,21 @@ func TestRequestWaitsForAServingServerAndKeepsLabels(t *testing.T) {
 		t.Fatalf("unexpected request: %+v", req)
 	}
 }
+
+type nilPtrContainer struct{ testcontainers.Container }
+
+func (c *nilPtrContainer) Terminate(context.Context, ...testcontainers.TerminateOption) error {
+	_ = c.Container
+	return nil
+}
+
+func TestFailedStartWithATypedNilContainerDoesNotPanic(t *testing.T) {
+	startErr := errors.New("create container: no daemon")
+	_, err := start(context.Background(), request("falkordb/falkordb", nil), func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		var typedNil *nilPtrContainer
+		return typedNil, startErr
+	})
+	if !errors.Is(err, startErr) {
+		t.Fatalf("the start error must be returned: %v", err)
+	}
+}

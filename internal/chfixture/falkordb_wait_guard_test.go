@@ -42,7 +42,17 @@ func falkorWaitViolations(fset *token.FileSet, filename string, src []byte) (bad
 	if err != nil {
 		return nil, 0, true, err
 	}
+	callFuns := map[ast.Node]bool{}
 	ast.Inspect(file, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			callFuns[call.Fun] = true
+		}
+		return true
+	})
+	ast.Inspect(file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && !callFuns[sel] && (sel.Sel.Name == "GenericContainer" || sel.Sel.Name == "FalkorReady") {
+			bad = append(bad, filename+":"+strconv.Itoa(fset.Position(sel.Pos()).Line)+" "+sel.Sel.Name+" alias")
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -133,7 +143,7 @@ func TestEveryFalkorDBTestContainerWaitsForAServingServer(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("%d FalkorDB test container(s) start without falkorfixture.Start (bare listening-port wait, direct GenericContainer or FalkorReady); use falkorfixture.Start, which also terminates a container whose start fails:\n%s", len(bad), strings.Join(bad, "\n"))
 	}
-	if scanned < 100 || falkorFiles < 10 || ready < 15 {
+	if scanned < 100 || falkorFiles < 10 || ready < 17 {
 		t.Fatalf("the scan did not measure what it claims: scanned=%d falkorFiles=%d falkorfixture.Start uses=%d", scanned, falkorFiles, ready)
 	}
 }
@@ -143,5 +153,13 @@ func TestFalkorWaitScanFlagsABareListeningPortWait(t *testing.T) {
 	bad, ready, falkor, err := falkorWaitViolations(token.NewFileSet(), "x_test.go", src)
 	if err != nil || !falkor || ready != 1 || len(bad) != 3 {
 		t.Fatalf("scan must flag the planted wait: bad=%v ready=%d falkor=%v err=%v", bad, ready, falkor, err)
+	}
+}
+
+func TestFalkorWaitScanFlagsAFunctionValueAlias(t *testing.T) {
+	src := []byte("package x\nvar gc = testcontainers.GenericContainer\nvar fr = chfixture.FalkorReady\nconst image = \"falkordb/falkordb\"\n")
+	bad, _, _, err := falkorWaitViolations(token.NewFileSet(), "x_test.go", src)
+	if err != nil || len(bad) != 2 {
+		t.Fatalf("scan must flag both aliases: bad=%v err=%v", bad, err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func start(ctx context.Context, req testcontainers.GenericContainerRequest, crea
 	if err == nil {
 		return container, nil
 	}
-	if container != nil {
+	if !isNil(container) {
 		termCtx, cancel := context.WithTimeout(context.Background(), terminateBudget)
 		defer cancel()
 		if termErr := container.Terminate(termCtx); termErr != nil {
@@ -68,4 +69,12 @@ func start(ctx context.Context, req testcontainers.GenericContainerRequest, crea
 		}
 	}
 	return container, err
+}
+
+func isNil(c testcontainers.Container) bool {
+	if c == nil {
+		return true
+	}
+	v := reflect.ValueOf(c)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
