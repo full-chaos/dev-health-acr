@@ -184,6 +184,13 @@ func runFreshTupleCanonicalBound(t *testing.T, mode string) {
 	if !reflect.DeepEqual(f.client.phases, []string{"s1", "status", "status_since", "work"}) {
 		t.Fatalf("phases=%v", f.client.phases)
 	}
+	arrival := make([]string, 0, len(f.client.queries))
+	for _, query := range f.client.queries {
+		arrival = append(arrival, query.phase)
+	}
+	if !dependentPhasesInOrder(arrival) {
+		t.Fatalf("a dependent read ran out of order: %v", arrival)
+	}
 	for _, query := range f.client.queries {
 		if query.phase == "s1" {
 			found := false
@@ -491,4 +498,25 @@ func TestWorkItemFreshListedMembersBeyondTheModelsReadAreLabelledWithTheirTitles
 			t.Fatalf("a listed member is labelled %q, want its title", member.Subject.Label)
 		}
 	}
+}
+
+// dependentPhasesInOrder: the fact reads are independent of one another and
+// run together, so only the pairs that carry a data dependency keep an order
+// assertion: the membership read (s1) comes first, and the status_since probe
+// runs after the status read it follows.
+func dependentPhasesInOrder(arrival []string) bool {
+	status, since := -1, -1
+	for i, phase := range arrival {
+		switch phase {
+		case "s1":
+			if i != 0 {
+				return false
+			}
+		case "status":
+			status = i
+		case "status_since":
+			since = i
+		}
+	}
+	return since < 0 || (status >= 0 && status < since)
 }

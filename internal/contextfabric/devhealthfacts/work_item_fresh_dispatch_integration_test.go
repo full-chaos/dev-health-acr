@@ -170,6 +170,9 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 			if !reflect.DeepEqual(client.phases, phases) {
 				t.Fatalf("statements=%v want=%v", client.phases, phases)
 			}
+			if !dependentPhasesInOrder(client.arrival) {
+				t.Fatalf("a dependent read ran out of order: %v", client.arrival)
+			}
 			for _, sql := range client.statements {
 				for _, setting := range []string{"max_execution_time", "max_rows_to_read", "max_memory_usage", "max_result_rows", "read_overflow_mode = 'throw'", "result_overflow_mode = 'throw'"} {
 					if !strings.Contains(sql, setting) {
@@ -420,6 +423,7 @@ type freshLiveQuery struct {
 	t                  *testing.T
 	inner              contextpacket.ClickHouseQueryClient
 	phases, statements []string
+	arrival            []string
 	failure            string
 	injected           bool
 	beforeStatus       func()
@@ -438,6 +442,7 @@ func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []conte
 	}
 	c.mu.Lock()
 	c.phases = append(c.phases, phase)
+	c.arrival = append(c.arrival, phase)
 	sort.Strings(c.phases)
 	c.statements = append(c.statements, sql)
 	if phase == "status" && c.beforeStatus != nil {
@@ -652,4 +657,25 @@ func newFreshLiveEngine(t *testing.T, client contextpacket.ClickHouseQueryClient
 		t.Fatal(err)
 	}
 	return f
+}
+
+// dependentPhasesInOrder: the fact reads are independent of one another and
+// run together, so only the pairs that carry a data dependency keep an order
+// assertion: the membership read (s1) comes first, and the status_since probe
+// runs after the status read it follows.
+func dependentPhasesInOrder(arrival []string) bool {
+	status, since := -1, -1
+	for i, phase := range arrival {
+		switch phase {
+		case "s1":
+			if i != 0 {
+				return false
+			}
+		case "status":
+			status = i
+		case "status_since":
+			since = i
+		}
+	}
+	return since < 0 || (status >= 0 && status < since)
 }

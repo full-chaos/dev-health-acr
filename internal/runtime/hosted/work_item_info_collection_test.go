@@ -362,6 +362,13 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 	if scenario == "zero" || scenario == "s1" {
 		want = []string{"s1"}
 	}
+	arrival := make([]string, 0, len(client.queries))
+	for _, query := range client.queries {
+		arrival = append(arrival, query.phase)
+	}
+	if !dependentPhasesInOrder(arrival) {
+		t.Fatalf("a dependent read ran out of order: %v", arrival)
+	}
 	if !reflect.DeepEqual(client.phases, want) {
 		t.Fatalf("fresh phases=%v want=%v status=%s", client.phases, want, result.Status)
 	}
@@ -648,4 +655,25 @@ func requireInfoRetryTrigger(t *testing.T, log *certify.Log, collected []byte) {
 	if triggers != 1 {
 		t.Errorf("collected retry decision has %d pre-second-synthesis measured item-overrun records; want one with measured_items >= producer member+claim charge %.0f and > max_items, plus selected identity and false attempted/fit/failed before the retry call", triggers, initialMinimum)
 	}
+}
+
+// dependentPhasesInOrder: the fact reads are independent of one another and
+// run together, so only the pairs that carry a data dependency keep an order
+// assertion: the membership read (s1) comes first, and the status_since probe
+// runs after the status read it follows.
+func dependentPhasesInOrder(arrival []string) bool {
+	status, since := -1, -1
+	for i, phase := range arrival {
+		switch phase {
+		case "s1":
+			if i != 0 {
+				return false
+			}
+		case "status":
+			status = i
+		case "status_since":
+			since = i
+		}
+	}
+	return since < 0 || (status >= 0 && status < since)
 }
