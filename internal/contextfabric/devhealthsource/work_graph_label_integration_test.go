@@ -70,6 +70,9 @@ func seedWorkGraphLabelRows(t *testing.T, ctx context.Context, direct interface 
 	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'jira', 'team-own', ?, 'OWN', 'native', ?, NULL, ?)`, wgOrg, wgProject, now.Add(-48*time.Hour), now)
 	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', 'team-own', ?, 'acme/deploy-service', 'exact', 'native', 1, 100, 0, ?, NULL, ?)`, wgOrg, wgRepo, now.Add(-48*time.Hour), now)
 	edge("e-owned-project-jira", "pr", wgRepo+"#pr311", "issue", "PROJ-7", "implements", "")
+	// Not served: every writer gives a pull-request-sourced edge the repo_id of the
+	// repository in its source id (ops issuepredges.go:116-147, prcommit/fastpath.go:49-61),
+	// so this edge is outside the contract and the key-prefix scope does not read it.
 	edge("e-foreign-pr", "pr", wgOther+"#pr5", "pr", wgRepo+"#pr311", "relates_to", "")
 	edge("e-commit-issue", "commit", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "issue", "CHAOS-99", "implements", "")
 	edge("e-deploy", "pr", wgRepo+"#pr311", "deployment", wgDeployID, "deployed_as", "")
@@ -125,7 +128,6 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 			"e-pr-linked-jira":     pr + "implements PROJ-6 Jira issue linked by a native pull request",
 			"e-owned-project-jira": pr + "implements PROJ-7 Jira issue in an owned project",
 			"e-commit-issue":       "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 implements CHAOS-99",
-			"e-foreign-pr":         "pull request #5 relates to " + pr[:len(pr)-1],
 			"e-deploy":             pr + "deployed as deployment 40000000",
 		}},
 		"caller granted the scoped repository only": {[]string{"acme/deploy-service"}, map[string]string{
@@ -140,6 +142,9 @@ func TestWorkGraphLabelsServeIssueTitlesOnlyWhenReadable(t *testing.T) {
 		}},
 	} {
 		labels := workGraphLabelsFor(t, ctx, query, tc.grant)
+		if _, served := labels["e-foreign-pr"]; served {
+			t.Errorf("%s: e-foreign-pr is served; a pull-request-sourced edge outside its source repository's prefix is not in the writers' contract", name)
+		}
 		for id, want := range tc.want {
 			got, ok := labels[id]
 			if !ok {
@@ -269,8 +274,6 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows int) workGrap
 	return c
 }
 
-const workGraphReadVolumeFollowUp = "work_graph.v1 reads every edge of the org: no repo_id in the work_graph_edges key"
-
 // Three stages, each in its own database: the base, the base plus 150k other
 // work items only, and the base plus 20k other edges and 20k other pull
 // requests only. Neither addition may move the statement's read volume or
@@ -328,21 +331,71 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 			"issue gate read volume":    {stage.gateReadBytes, base.gateReadBytes},
 		} {
 			over := float64(pair[0]) > 1.15*float64(pair[1])+readSlack
-			if name == "+edges and pull requests" && (what == "work_graph.v1 read volume" || what == "freshness read volume") {
-				// Known defect: the production work_graph_edges key has no
-				// repo_id, so these statements read every edge of the org.
-				// The assertion flips when the statement is fixed.
-				if !over {
-					t.Errorf("%s: %s %d bytes against %d at the base is now within the 1.15x slope; the known defect (%s) is fixed, so restore the bound for this stage", name, what, pair[0], pair[1], workGraphReadVolumeFollowUp)
-				} else {
-					t.Logf("%s: %s %d bytes against %d at the base: KNOWN DEFECT %s, reads every edge of the org", name, what, pair[0], pair[1], workGraphReadVolumeFollowUp)
-				}
-				continue
-			}
 			if over {
 				t.Errorf("%s: %s %d bytes against %d at the base, over the 1.15x slope", name, what, pair[0], pair[1])
 			}
 		}
+	}
+}
+
+// The statement's edge scope must reach the primary key: with noise edges of
+// another repository in the same organization, the scoped read selects fewer
+// granules than the table holds. A read that prunes nothing would pass on a
+// small table, so the noise is sized to many granules.
+func TestWorkGraphEdgeScopePrunesThePrimaryKey(t *testing.T) {
+	ctx := context.Background()
+	_, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	seedWorkGraphLabelRows(t, ctx, direct)
+	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(200000)`, wgOther, wgOrg)); err != nil {
+		t.Fatalf("seed noise edges: %v", err)
+	}
+	if err := direct.Exec(ctx, "OPTIMIZE TABLE work_graph_edges FINAL"); err != nil {
+		t.Fatalf("optimize: %v", err)
+	}
+	scope := strings.ReplaceAll(contextpacket.WorkGraphEdgeScopeSQL("e."), "{repo_id:UUID}", "toUUID('"+wgRepo+"')")
+	granules := func(where string) (selected, total int) {
+		rows, err := direct.Query(ctx, "EXPLAIN indexes = 1 SELECT e.edge_id FROM work_graph_edges AS e FINAL WHERE e.org_id = '"+wgOrg+"' AND "+where)
+		if err != nil {
+			t.Fatalf("explain: %v", err)
+		}
+		defer rows.Close()
+		var lines []string
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatalf("scan explain: %v", err)
+			}
+			lines = append(lines, line)
+		}
+		inKey := false
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "PrimaryKey" {
+				inKey = true
+			}
+			if inKey && strings.HasPrefix(trimmed, "Granules:") {
+				if _, err := fmt.Sscanf(trimmed, "Granules: %d/%d", &selected, &total); err != nil {
+					t.Fatalf("parse %q: %v", trimmed, err)
+				}
+				return selected, total
+			}
+		}
+		t.Fatalf("measurement did not happen: no PrimaryKey granules in the explain output:\n%s", strings.Join(lines, "\n"))
+		return 0, 0
+	}
+	selected, total := granules(scope)
+	t.Logf("scoped edge read selects %d of %d granules", selected, total)
+	if total < 8 || selected*2 > total {
+		t.Errorf("the scope selects %d of %d granules: the primary key does not prune it", selected, total)
+	}
+	bare, bareTotal := granules("e.repo_id = toUUID('" + wgRepo + "')")
+	if bare != bareTotal {
+		t.Errorf("control: a bare repo_id equality selects %d of %d granules, want all (the control no longer shows the defect)", bare, bareTotal)
 	}
 }
 

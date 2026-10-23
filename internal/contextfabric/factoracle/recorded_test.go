@@ -36,12 +36,15 @@ var contractsAtCapture = map[string]string{
 	"cognitiveLoad":                  "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
 	"complexityTimeseries":           "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
 	"compoundingRisk":                "sha256:ded079a60583d070f41a5d5682bd77c32b22923d21843c2c9f2bdfe1ce0360e2",
-	// home is advanced past the capture: ops 5376c7c1 added home.filterEmptyReason and the capture holds no home case
-	// (TestTheCaptureHoldsNoHomeCaseWhileItsContractIsAdvanced); retake the capture on the next venue move.
-	"home":                     "sha256:24d5876a9283d3f652dd434440d08e8848fceecb5a2f51405a1c50578d70608b",
-	"hotspots":                 "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
-	"investmentBreakdown":      "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
-	"investmentFull":           "sha256:179a09e19ce83802c67b1b40fe4c2c1b3c003617d4b49acca225146db3737111",
+	// home is advanced past the capture: ops 5376c7c1 added home.filterEmptyReason and ops 51652ba7 more fields, and the capture
+	// holds no home case (TestTheCaptureHoldsNoHomeCaseWhileItsContractIsAdvanced); retake the capture on the next venue move.
+	"home":                "sha256:518dd7b5e00d9ab67289ce26a8dfe601dc961d971883fc05c2977929fbc2c525",
+	"hotspots":            "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
+	"investmentBreakdown": "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
+	// investmentFull is advanced past the capture: ops 51652ba7 added analytics.sankey.coverage.sizingCoverage and
+	// unsizedUnitCount and the ISSUE_SIZE measure. The recorded ops replies of root analytics lack those two paths, so the
+	// pinned outcome of analytics names them (make o4-oracle-repin); retake the capture on the next venue move.
+	"investmentFull":           "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
 	"recommendations":          "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
 	"securityOverview":         "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
 	"sourceHealth":             "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",

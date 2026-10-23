@@ -1,0 +1,816 @@
+{
+ "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, numbers replaced by 0 or 1 (fact totals synthetic), lists trimmed to 3",
+ "_source_sha256": "58413787663d6846",
+ "structured": {
+  "committed_subjects": [
+   {
+    "canonical_id": "syn:1",
+    "kind": "project",
+    "label": "synthetic"
+   }
+  ],
+  "completeness": {
+   "claimed_facts_count": 8,
+   "outcomes": [
+    {
+     "cause_observed": false,
+     "declared": 0,
+     "impact": "synthetic",
+     "obligation": "synthetic",
+     "outcome": "synthetic",
+     "requirement": "synthetic",
+     "served": 0,
+     "stage": "synthetic"
+    },
+    {
+     "cause_observed": false,
+     "declared": 0,
+     "impact": "synthetic",
+     "obligation": "synthetic",
+     "outcome": "synthetic",
+     "requirement": "synthetic",
+     "served": 0,
+     "stage": "synthetic"
+    },
+    {
+     "cause_observed": false,
+     "declared": 0,
+     "impact": "synthetic",
+     "obligation": "synthetic",
+     "outcome": "synthetic",
+     "requirement": "synthetic",
+     "served": 0,
+     "stage": "synthetic"
+    }
+   ],
+   "rows_count": 1,
+   "state": "partial",
+   "status_correction": {
+    "deciding_outcome": "synthetic",
+    "deciding_requirement": "synthetic",
+    "direction": "synthetic",
+    "replaced_status": "synthetic"
+   },
+   "terminal_reason": "synthetic",
+   "terminal_status": "synthetic"
+  },
+  "confirmed_structure": [
+   {
+    "applied_value": "synthetic",
+    "disposition": "synthetic",
+    "member": "synthetic",
+    "offer_source": "synthetic",
+    "prior_result_id": "synthetic",
+    "provenance": "synthetic",
+    "receipt_id": "synthetic",
+    "source": "synthetic"
+   },
+   {
+    "applied_value": "synthetic",
+    "disposition": "synthetic",
+    "member": "synthetic",
+    "offer_source": "synthetic",
+    "prior_result_id": "synthetic",
+    "provenance": "synthetic",
+    "receipt_id": "synthetic",
+    "source": "synthetic"
+   },
+   {
+    "applied_value": "synthetic",
+    "disposition": "synthetic",
+    "member": "synthetic",
+    "offer_source": "synthetic",
+    "prior_result_id": "synthetic",
+    "provenance": "synthetic",
+    "receipt_id": "synthetic",
+    "source": "synthetic"
+   }
+  ],
+  "coverage_details": [
+   {
+    "code": "synthetic",
+    "degrading": true,
+    "detail_id": "synthetic",
+    "fact_kind": "synthetic",
+    "label": "synthetic",
+    "phrasing": "synthetic",
+    "raw": "synthetic",
+    "source": "synthetic",
+    "source_state": "synthetic",
+    "supported_kinds": [
+     "synthetic",
+     "synthetic",
+     "synthetic"
+    ]
+   },
+   {
+    "code": "synthetic",
+    "degrading": true,
+    "detail_id": "synthetic",
+    "fact_kind": "synthetic",
+    "label": "synthetic",
+    "phrasing": "synthetic",
+    "raw": "synthetic",
+    "source": "synthetic",
+    "source_state": "synthetic",
+    "supported_kinds": [
+     "synthetic",
+     "synthetic",
+     "synthetic"
+    ]
+   },
+   {
+    "code": "synthetic",
+    "degrading": true,
+    "detail_id": "synthetic",
+    "fact_kind": "synthetic",
+    "label": "synthetic",
+    "phrasing": "synthetic",
+    "raw": "synthetic",
+    "source": "synthetic",
+    "source_state": "synthetic",
+    "supported_kinds": [
+     "synthetic",
+     "synthetic"
+    ]
+   }
+  ],
+  "coverage_partial": true,
+  "coverage_summary": [
+   {
+    "label": "synthetic",
+    "reason": "synthetic",
+    "source": "synthetic",
+    "state": "truncated",
+    "state_label": "synthetic"
+   },
+   {
+    "label": "synthetic",
+    "reason": "synthetic",
+    "source": "synthetic",
+    "state": "truncated",
+    "state_label": "synthetic"
+   },
+   {
+    "label": "synthetic",
+    "source": "synthetic",
+    "state": "available",
+    "state_label": "synthetic"
+   }
+  ],
+  "current_state": "synthetic",
+  "deterministic_answer": "synthetic",
+  "direct_judgment": "synthetic",
+  "effective_evidence_window": {
+   "end": "synthetic",
+   "provenance": "synthetic",
+   "relative_id": "synthetic",
+   "start": "synthetic"
+  },
+  "evidence_ref_ids": [
+   "synthetic",
+   "synthetic",
+   "synthetic"
+  ],
+  "evidence_ref_labels": {
+   "syn:10": "synthetic",
+   "syn:11": "synthetic",
+   "syn:3": "synthetic",
+   "syn:4": "synthetic",
+   "syn:5": "synthetic",
+   "syn:6": "synthetic",
+   "syn:7": "synthetic",
+   "syn:8": "synthetic",
+   "syn:9": "synthetic"
+  },
+  "generated_at": "synthetic",
+  "key_facts": [
+   {
+    "claim_id": "synthetic",
+    "field": "synthetic",
+    "kind": "health",
+    "rows": [
+     {
+      "fields": {
+       "compounding_risk": {
+        "number": 1
+       },
+       "computed_at": {
+        "string": "synthetic"
+       },
+       "scope": {
+        "string": "synthetic"
+       },
+       "scope_id": {
+        "string": "synthetic"
+       },
+       "scope_name": {
+        "string": "synthetic"
+       },
+       "severity": {
+        "string": "synthetic"
+       },
+       "severity_unavailable_reason": {
+        "string": "synthetic"
+       }
+      }
+     },
+     {
+      "fields": {
+       "compounding_risk": {
+        "number": 1
+       },
+       "computed_at": {
+        "string": "synthetic"
+       },
+       "scope": {
+        "string": "synthetic"
+       },
+       "scope_id": {
+        "string": "synthetic"
+       },
+       "scope_name": {
+        "string": "synthetic"
+       },
+       "severity": {
+        "string": "synthetic"
+       },
+       "severity_as_of": {
+        "string": "synthetic"
+       }
+      }
+     },
+     {
+      "fields": {
+       "compounding_risk": {
+        "number": 1
+       },
+       "computed_at": {
+        "string": "synthetic"
+       },
+       "scope": {
+        "string": "synthetic"
+       },
+       "scope_id": {
+        "string": "synthetic"
+       },
+       "scope_name": {
+        "string": "synthetic"
+       },
+       "severity": {
+        "string": "synthetic"
+       },
+       "severity_as_of": {
+        "string": "synthetic"
+       }
+      }
+     }
+    ],
+    "subject": {
+     "canonical_id": "syn:5",
+     "kind": "project",
+     "label": "synthetic"
+    },
+    "table": {
+     "field": "synthetic",
+     "key": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "measures": [
+      "synthetic"
+     ],
+     "observations": [
+      "synthetic",
+      "synthetic"
+     ],
+     "shape": "synthetic"
+    },
+    "time_series_rows": [
+     {
+      "fields": {
+       "compounding_risk": {
+        "number": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "severity": {
+        "string": "synthetic"
+       }
+      }
+     },
+     {
+      "fields": {
+       "compounding_risk": {
+        "number": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "severity": {
+        "string": "synthetic"
+       }
+      }
+     },
+     {
+      "fields": {
+       "compounding_risk": {
+        "number": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "severity": {
+        "string": "synthetic"
+       }
+      }
+     }
+    ],
+    "time_series_table": {
+     "field": "synthetic",
+     "key": [
+      "synthetic"
+     ],
+     "measures": [
+      "synthetic"
+     ],
+     "observations": [
+      "synthetic"
+     ],
+     "shape": "synthetic"
+    },
+    "value": {
+     "string": "synthetic"
+    }
+   },
+   {
+    "claim_id": "synthetic",
+    "field": "synthetic",
+    "kind": "readiness",
+    "rows": [
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "estimate_coverage_ratio": {
+        "number": 0
+       },
+       "estimated_count": {
+        "integer": 0
+       },
+       "provider": {
+        "string": "synthetic"
+       },
+       "team_id": {
+        "string": "synthetic"
+       },
+       "team_name": {
+        "string": "synthetic"
+       },
+       "unestimated_count": {
+        "integer": 1
+       },
+       "work_scope_id": {
+        "string": "synthetic"
+       }
+      }
+     }
+    ],
+    "subject": {
+     "canonical_id": "syn:6",
+     "kind": "project",
+     "label": "synthetic"
+    },
+    "table": {
+     "field": "synthetic",
+     "key": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "measures": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "shape": "synthetic"
+    },
+    "time_series_rows": [
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "estimate_coverage_ratio": {
+        "number": 0
+       },
+       "estimated_count": {
+        "integer": 0
+       },
+       "unestimated_count": {
+        "integer": 1
+       }
+      }
+     },
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "estimate_coverage_ratio": {
+        "number": 0
+       },
+       "estimated_count": {
+        "integer": 0
+       },
+       "unestimated_count": {
+        "integer": 1
+       }
+      }
+     },
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "estimate_coverage_ratio": {
+        "number": 0
+       },
+       "estimated_count": {
+        "integer": 0
+       },
+       "unestimated_count": {
+        "integer": 1
+       }
+      }
+     }
+    ],
+    "time_series_table": {
+     "field": "synthetic",
+     "key": [
+      "synthetic"
+     ],
+     "measures": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "shape": "synthetic"
+    },
+    "value": {
+     "number": 0
+    }
+   },
+   {
+    "claim_id": "synthetic",
+    "field": "synthetic",
+    "kind": "workload",
+    "rows": [
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "computed_at": {
+        "string": "synthetic"
+       },
+       "high_variance": {
+        "boolean": false
+       },
+       "insufficient_history": {
+        "boolean": false
+       },
+       "syn:1": {
+        "integer": 1
+       },
+       "team_id": {
+        "string": "synthetic"
+       },
+       "team_name": {
+        "string": "synthetic"
+       },
+       "throughput_mean": {
+        "number": 1
+       },
+       "throughput_stddev": {
+        "number": 1
+       },
+       "work_scope_id": {
+        "string": "synthetic"
+       }
+      }
+     },
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "computed_at": {
+        "string": "synthetic"
+       },
+       "high_variance": {
+        "boolean": true
+       },
+       "insufficient_history": {
+        "boolean": false
+       },
+       "syn:2": {
+        "integer": 1
+       },
+       "team_id": {
+        "string": "synthetic"
+       },
+       "team_name": {
+        "string": "synthetic"
+       },
+       "throughput_mean": {
+        "number": 1
+       },
+       "throughput_stddev": {
+        "number": 1
+       },
+       "work_scope_id": {
+        "string": "synthetic"
+       }
+      }
+     }
+    ],
+    "subject": {
+     "canonical_id": "syn:7",
+     "kind": "project",
+     "label": "synthetic"
+    },
+    "table": {
+     "field": "synthetic",
+     "key": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "measures": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "observations": [
+      "synthetic",
+      "synthetic"
+     ],
+     "shape": "synthetic"
+    },
+    "time_series_rows": [
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "throughput_mean": {
+        "number": 1
+       },
+       "throughput_stddev": {
+        "number": 1
+       }
+      }
+     },
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "throughput_mean": {
+        "number": 1
+       },
+       "throughput_stddev": {
+        "number": 1
+       }
+      }
+     },
+     {
+      "fields": {
+       "backlog_size": {
+        "integer": 1
+       },
+       "day": {
+        "string": "synthetic"
+       },
+       "throughput_mean": {
+        "number": 1
+       },
+       "throughput_stddev": {
+        "number": 1
+       }
+      }
+     }
+    ],
+    "time_series_table": {
+     "field": "synthetic",
+     "key": [
+      "synthetic"
+     ],
+     "measures": [
+      "synthetic",
+      "synthetic",
+      "synthetic"
+     ],
+     "shape": "synthetic"
+    },
+    "value": {
+     "boolean": true
+    }
+   }
+  ],
+  "limitations": [
+   "synthetic",
+   "synthetic",
+   "synthetic"
+  ],
+  "principal_drivers": [
+   {
+    "affected_subjects": [
+     {
+      "canonical_id": "syn:2",
+      "kind": "project",
+      "label": "synthetic"
+     }
+    ],
+    "category": "synthetic",
+    "claimed_fact_ids": [
+     "synthetic"
+    ],
+    "confidence": 1,
+    "driver_id": "synthetic",
+    "evidence_ref_ids": [
+     "synthetic"
+    ],
+    "standing": "synthetic",
+    "summary": "synthetic",
+    "title": "synthetic"
+   },
+   {
+    "affected_subjects": [
+     {
+      "canonical_id": "syn:3",
+      "kind": "project",
+      "label": "synthetic"
+     }
+    ],
+    "category": "synthetic",
+    "claimed_fact_ids": [
+     "synthetic"
+    ],
+    "confidence": 1,
+    "driver_id": "synthetic",
+    "evidence_ref_ids": [
+     "synthetic",
+     "synthetic"
+    ],
+    "standing": "synthetic",
+    "summary": "synthetic",
+    "title": "synthetic"
+   },
+   {
+    "affected_subjects": [
+     {
+      "canonical_id": "syn:4",
+      "kind": "project",
+      "label": "synthetic"
+     }
+    ],
+    "category": "synthetic",
+    "confidence": 1,
+    "driver_id": "synthetic",
+    "evidence_ref_ids": [
+     "synthetic",
+     "synthetic",
+     "synthetic"
+    ],
+    "standing": "synthetic",
+    "summary": "synthetic",
+    "title": "synthetic"
+   }
+  ],
+  "projection_budget": {
+   "candidates_omitted": 0,
+   "cohort_groups_omitted": 0,
+   "cohort_members_omitted": 0,
+   "coverage_omitted": 0,
+   "drivers_omitted": 0,
+   "evidence_refs_omitted": 0,
+   "facts_omitted": 0,
+   "full_result_omitted": false,
+   "limitations_omitted": 0,
+   "reasons_omitted": 0,
+   "render_shapes_omitted": 0,
+   "truncated": false,
+   "values_clamped": 0,
+   "warnings_omitted": 0,
+   "withheld_drivers_omitted": 0
+  },
+  "question": "synthetic",
+  "render_shapes": [
+   {
+    "axis_kind": "synthetic",
+    "axis_label": "synthetic",
+    "kind": "series",
+    "presentation": "synthetic",
+    "selected_by": "synthetic",
+    "series": [
+     {
+      "key": "synthetic",
+      "label": "synthetic",
+      "points": [
+       {
+        "label": "synthetic",
+        "source": {
+         "claim_id": "synthetic",
+         "field": "synthetic",
+         "kind": "claimed_fact_row",
+         "row_index": 1
+        },
+        "value": 0
+       },
+       {
+        "label": "synthetic",
+        "source": {
+         "claim_id": "synthetic",
+         "field": "synthetic",
+         "kind": "claimed_fact_row",
+         "row_index": 1
+        },
+        "value": 0
+       },
+       {
+        "label": "synthetic",
+        "source": {
+         "claim_id": "synthetic",
+         "field": "synthetic",
+         "kind": "claimed_fact_row",
+         "row_index": 1
+        },
+        "value": 0
+       }
+      ]
+     }
+    ],
+    "shape_id": "synthetic",
+    "title": "synthetic",
+    "value_label": "synthetic"
+   }
+  ],
+  "request_id": "synthetic",
+  "result_id": "synthetic",
+  "reused": false,
+  "schema_version": "context_fabric_answer_projection.v1",
+  "status": "partial",
+  "strongest_pressures": [
+   "synthetic",
+   "synthetic",
+   "synthetic"
+  ],
+  "subject_receipts": [
+   {
+    "receipt_id": "synthetic",
+    "result_id": "synthetic"
+   }
+  ],
+  "versions": {
+   "backend": "synthetic",
+   "canonical_service_version": "synthetic",
+   "contract_version": "synthetic",
+   "interpretation_model_identity": "synthetic",
+   "interpretation_source": "synthetic",
+   "interpretation_version": "synthetic",
+   "model_identity": "synthetic",
+   "projection_version": "synthetic",
+   "query_version": "synthetic",
+   "service_version": "synthetic",
+   "synthesis_source": "synthetic",
+   "synthesis_version": "synthetic"
+  },
+  "warnings": [
+   "synthetic",
+   "synthetic"
+  ]
+ }
+}

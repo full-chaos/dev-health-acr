@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "5376c7c1a999fb499a81385bc69d63d788ce3e13",
+    "commit": "51652ba7abd6f036948d87cdca62b3479a7ad30d",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462",
-    "registry_sha256": "6f447531f4d417c0ba7d4ff56790be7cc0db75960066d8878da7a5845078fa93",
+    "schema_digest": "sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821",
+    "registry_sha256": "c5536b7a429238912c69b38e99f728e65c8866d94376e115f94b9864912632de",
     "registry_rows": 64
   },
   "person_name_tokens": [
@@ -1653,8 +1653,8 @@
       "name": "home",
       "document_operation_name": "Home",
       "kind": "query",
-      "digest": "b42f3f95a8621cb7db6793b73b657144ce8681aff265767fa9d24d01ffc1fb4d",
-      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      hasData\n      hasPriorData\n      spark {\n        ts\n        value\n        __typename\n      }\n      rateState\n      rateCoverage\n      repoFilterApplied\n      repoLinkState\n      repoLinkBasis {\n        native\n        explicitText\n        heuristic\n        __typename\n      }\n      repoLinkMultiRepoItems\n      repoLinkCoverage {\n        linkedItems\n        itemsInWindow\n        __typename\n      }\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      coverage\n      repoFilterApplied\n      attribution {\n        items\n        sources {\n          source\n          items\n          share\n          __typename\n        }\n        confidence {\n          confidence\n          items\n          share\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    scopeDataConfidence {\n      level\n      coveragePct\n      lastIngestedAt\n      caveats\n      __typename\n    }\n    filterEmptyReason\n    __typename\n  }\n}",
+      "digest": "67b0b7e3c4cb0a88b1a842b384b4f62118971edbca8129cd83090733805ae0d9",
+      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      hasData\n      hasPriorData\n      priorValue\n      spark {\n        ts\n        value\n        __typename\n      }\n      rateState\n      rateCoverage\n      repoFilterApplied\n      repoLinkState\n      repoLinkBasis {\n        native\n        explicitText\n        heuristic\n        __typename\n      }\n      repoLinkMultiRepoItems\n      repoLinkCoverage {\n        linkedItems\n        itemsInWindow\n        __typename\n      }\n      changeFailureEvidence {\n        basis\n        deployments\n        deploymentsWithStatus\n        coverage\n        unknownReason\n        __typename\n      }\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      measure\n      denominator\n      sizingCoverage\n      unsizedUnitCount\n      workUnitCount\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      coverage\n      repoFilterApplied\n      driver\n      attribution {\n        items\n        sources {\n          source\n          items\n          share\n          __typename\n        }\n        confidence {\n          confidence\n          items\n          share\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    scopeDataConfidence {\n      level\n      coveragePct\n      lastIngestedAt\n      caveats\n      __typename\n    }\n    filterEmptyReason\n    __typename\n  }\n}",
       "cost_class": "series",
       "deadline_seconds": 30,
       "variables": [
@@ -2023,6 +2023,11 @@
           "leaf": "scalar"
         },
         {
+          "path": "home.deltas[*].priorValue",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
           "path": "home.deltas[*].spark[*].ts",
           "type": "String!",
           "leaf": "scalar"
@@ -2098,6 +2103,36 @@
           "leaf": "typename"
         },
         {
+          "path": "home.deltas[*].changeFailureEvidence.basis",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].changeFailureEvidence.deployments",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].changeFailureEvidence.deploymentsWithStatus",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].changeFailureEvidence.coverage",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].changeFailureEvidence.unknownReason",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].changeFailureEvidence.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
           "path": "home.deltas[*].__typename",
           "type": "String",
           "leaf": "typename"
@@ -2130,6 +2165,31 @@
         {
           "path": "home.reworkThemeAllocation[*].churnLoc",
           "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].measure",
+          "type": "SankeyValueUnit!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].denominator",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].sizingCoverage",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].unsizedUnitCount",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].workUnitCount",
+          "type": "Int",
           "leaf": "scalar"
         },
         {
@@ -2370,6 +2430,11 @@
         {
           "path": "home.signals[*].repoFilterApplied",
           "type": "Boolean",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].driver",
+          "type": "String",
           "leaf": "scalar"
         },
         {
@@ -2820,6 +2885,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -2949,6 +3015,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -3082,6 +3149,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -3223,6 +3291,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -3695,8 +3764,8 @@
       "name": "investmentFull",
       "document_operation_name": "InvestmentFull",
       "kind": "query",
-      "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d",
-      "document_text": "query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    sankey {\n      nodes {\n        id\n        label\n        dimension\n        value\n        __typename\n      }\n      edges {\n        source\n        target\n        value\n        __typename\n      }\n      coverage {\n        teamCoverage\n        repoCoverage\n        __typename\n      }\n      unit\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "f8b95e4455abf87f4dc7a13a147cac27535367db174d8e136d672c77b9bcbaa1",
+      "document_text": "query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    sankey {\n      nodes {\n        id\n        label\n        dimension\n        value\n        __typename\n      }\n      edges {\n        source\n        target\n        value\n        __typename\n      }\n      coverage {\n        teamCoverage\n        repoCoverage\n        sizingCoverage\n        unsizedUnitCount\n        __typename\n      }\n      unit\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "analytics_batch",
       "deadline_seconds": 30,
       "variables": [
@@ -3758,6 +3827,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -3887,6 +3957,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -4020,6 +4091,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -4161,6 +4233,7 @@
           "kind": "enum",
           "enum": [
             "COUNT",
+            "ISSUE_SIZE",
             "CHURN_LOC",
             "PR_REWORK_RATIO",
             "CYCLE_TIME_HOURS",
@@ -4641,6 +4714,16 @@
         {
           "path": "analytics.sankey.coverage.repoCoverage",
           "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.coverage.sizingCoverage",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.coverage.unsizedUnitCount",
+          "type": "Int",
           "leaf": "scalar"
         },
         {
@@ -6858,7 +6941,7 @@
     {
       "name": "operatingReview",
       "kind": "query",
-      "digest": "54a442197685a26436f6287e8377a26b6451de33e251e857afa30abe32df9ac9",
+      "digest": "986a912f2997f08d2f83197e2ce866ca2b14be1a99522ca2c2a1f4ce2f2020e4",
       "code": "unknown_operation",
       "reason": "its investment part reads investment_metrics_daily, neither the acr basis nor the canonical mix ([ops] operatingreview/operatingreview.go:840; K14 ruling, table K14-A)"
     },
@@ -6928,14 +7011,14 @@
     {
       "name": "testOpsCoverage",
       "kind": "query",
-      "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac",
+      "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "testOpsPipeline",
       "kind": "query",
-      "digest": "f380dda5b10c60b0887b888f4612bfd204409c1913b3e06458540a0295048df5",
+      "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },

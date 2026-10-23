@@ -216,3 +216,42 @@ def load_attempt(path):
     if not ok:
         return False, None, reason
     return True, data, None
+
+
+# ---------------------------------------------------------------- result shapes --------
+# A scorer is handed either the FULL investigation result (ask-dev route) or the MCP answer
+# PROJECTION. They carry the same facts under different names; reading one shape from the
+# other yields empty and scores a correct answer as wrong. Same discriminator as
+# quality_axis.view: the full result has `claimed_facts`/`subject_resolution`.
+
+def _is_full(doc):
+    return "claimed_facts" in doc or "subject_resolution" in doc
+
+
+def result_committed(doc):
+    if not isinstance(doc, dict):
+        return []
+    raw = ((doc.get("subject_resolution") or {}).get("committed") if _is_full(doc)
+           else doc.get("committed_subjects"))
+    return [s for s in (raw or []) if isinstance(s, dict)]
+
+
+def result_offered_ids(doc):
+    if not isinstance(doc, dict):
+        return []
+    raw = ((doc.get("subject_resolution") or {}).get("candidates") if _is_full(doc)
+           else (doc.get("clarification") or {}).get("candidates"))
+    return [((c.get("subject") or {}).get("canonical_id")) for c in (raw or [])
+            if isinstance(c, dict)]
+
+
+def result_claimed_n(doc):
+    """Full: len(claimed_facts). Projection: the un-clamped canonical total, never the
+    budget-clamped len(key_facts)."""
+    if not isinstance(doc, dict):
+        return 0
+    if _is_full(doc):
+        return len(doc.get("claimed_facts") or [])
+    n = (doc.get("completeness") or {}).get("claimed_facts_count")
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+

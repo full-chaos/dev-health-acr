@@ -48,6 +48,8 @@ type needTurnCall struct {
 type needTurnGraph struct {
 	response needTurnResponse
 	calls    []needTurnCall
+	// discovers counts DiscoverContext calls.
+	discovers int
 }
 
 func (g *needTurnGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
@@ -60,6 +62,7 @@ func (g *needTurnGraph) ResolveSubjects(_ context.Context, _ storage.Principal, 
 }
 
 func (g *needTurnGraph) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	g.discovers++
 	if g.response.context != nil {
 		return *g.response.context, nil
 	}

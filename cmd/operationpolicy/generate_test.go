@@ -72,8 +72,8 @@ func mutationRows(t *testing.T, in inputs) []registryRow {
 // acr's recomputation, and every row's kind equals acr's parse.
 func TestVendoredDigestsRecompute(t *testing.T) {
 	in := vendoredInputs(t)
-	if len(in.Registry.Rows) != 92 {
-		t.Fatalf("vendored registry has %d rows, the dump at ops 5376c7c1 has 92", len(in.Registry.Rows))
+	if len(in.Registry.Rows) != 101 {
+		t.Fatalf("vendored registry has %d rows, the dump at ops 51652ba7 has 101", len(in.Registry.Rows))
 	}
 	for _, row := range in.Registry.Rows {
 		if got := directread.DocumentDigest(row.Document); got != row.Digest {

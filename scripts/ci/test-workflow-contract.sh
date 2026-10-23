@@ -1446,6 +1446,22 @@ check_gomod_proxy_fallback() {
   return "$status"
 }
 
+# The content sanity gate (CHAOS-4640) judges HEAD^1..HEAD of the checkout: the
+# whole PR diff on a pull_request merge ref, the squash commit on a main push.
+# That only holds with a depth-2 checkout, and the gate and its own test must
+# both run in the `scripts` job (every event, no Go).
+check_content_sanity_steps() {
+  local file="$1" block status=0
+  block="$(job_block "$file" scripts)"
+  grep -qF 'fetch-depth: 2' <<<"$block" || {
+    printf 'scripts job checkout lacks fetch-depth: 2, so HEAD^1 is missing for the content sanity range\n' >&2; status=1; }
+  grep -qE '^ +run: scripts/ci/content-sanity\.sh HEAD\^1 HEAD$' <<<"$block" || {
+    printf 'scripts job does not run scripts/ci/content-sanity.sh HEAD^1 HEAD\n' >&2; status=1; }
+  grep -qE '^ +run: scripts/ci/test-content-sanity\.sh$' <<<"$block" || {
+    printf 'scripts job does not run scripts/ci/test-content-sanity.sh\n' >&2; status=1; }
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -1477,6 +1493,7 @@ run_all_checks() {
   check_observed_race_dedup "$file"
   check_race_json_all_jobs "$file"
   check_gomod_proxy_fallback "$file"
+  check_content_sanity_steps "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -1577,6 +1594,20 @@ fullstack_comma="$tmpdir/fullstack-comma.yml"
 sed 's/^  GOPROXY: https:\/\/proxy.golang.org|direct$/  GOPROXY: https:\/\/proxy.golang.org,direct/' "$fullstack_workflow" > "$fullstack_comma"
 cmp -s "$fullstack_workflow" "$fullstack_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: fullstack_comma did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'put the comma form back on fullstack-acceptance GOPROXY' check_gomod_proxy_fallback "$fullstack_comma"
+
+# (c4) the content sanity gate loses its depth, its run step or its own test.
+cs_shallow="$tmpdir/cs-shallow.yml"
+sed 's/fetch-depth: 2}/fetch-depth: 1}/' "$workflow" > "$cs_shallow"
+cmp -s "$workflow" "$cs_shallow" && { printf 'NEGATIVE CONTROL SETUP FAILED: cs_shallow did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'dropped the scripts job to a depth-1 checkout' check_content_sanity_steps "$cs_shallow"
+cs_no_run="$tmpdir/cs-no-run.yml"
+sed 's/run: scripts\/ci\/content-sanity.sh HEAD^1 HEAD/run: true/' "$workflow" > "$cs_no_run"
+cmp -s "$workflow" "$cs_no_run" && { printf 'NEGATIVE CONTROL SETUP FAILED: cs_no_run did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the content sanity run step with true' check_content_sanity_steps "$cs_no_run"
+cs_no_test="$tmpdir/cs-no-test.yml"
+sed 's/run: scripts\/ci\/test-content-sanity.sh/run: true/' "$workflow" > "$cs_no_test"
+cmp -s "$workflow" "$cs_no_test" && { printf 'NEGATIVE CONTROL SETUP FAILED: cs_no_test did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the content sanity test step with true' check_content_sanity_steps "$cs_no_test"
 
 # (c3) testcontainers jobs: reaper back on, session id dropped, reap step
 # gated off or moved before the tests.
