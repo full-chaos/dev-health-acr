@@ -36,11 +36,11 @@ func (g hintCommittingGraph) ResolveSubjects(ctx context.Context, principal stor
 // pendingTurns runs a window-gated turn whose offers-only pass proves alpha,
 // then the confirming turn with the switches as given and window as the
 // confirmed window. The graph commits a carried anchor and nothing else.
-func pendingTurns(t *testing.T, carryOn, pendingOn bool, window *RequestedEvidenceWindow) (*anchorProbeRig, anchorProbeTurn, anchorProbeTurn) {
+func pendingTurns(t *testing.T, carryOn bool, window *RequestedEvidenceWindow) (*anchorProbeRig, anchorProbeTurn, anchorProbeTurn) {
 	t.Helper()
 	rig := newAnchorProbeRig(t, false)
 	rig.engine.graph = hintCommittingGraph{rig.graph}
-	rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = carryOn, pendingOn
+	rig.engine.anchorBindingCarryEnabled = carryOn
 	rig.interpreter.read(SubjectRepository, true)
 	one := rig.turn(t, needTurnRequest("request_pending_one", false), identityProvenResponse(probeAlpha))
 	if held := bindingMember(one.saved); held == nil || held.State != AnchorBindingPendingWindowConfirmation || held.CanonicalID != probeAlpha.CanonicalID {
@@ -54,28 +54,27 @@ func pendingTurns(t *testing.T, carryOn, pendingOn bool, window *RequestedEviden
 	return rig, one, two
 }
 
-// TestAPendingProofCarriesIntoTheConfirmingTurnWithThePendingCarry: the
-// window gate's offers-only pass proves alpha; the user confirms the window
-// on the next turn, whose own resolution names nothing. Only with both the
-// carry and the pending carry on does the pending binding carry alpha into
-// that turn, where resolution commits it and the count is served on it.
-// The gated turn itself serves the same bytes in every arm; only its
-// ledger line says the proof is held (window_confirmation_gated_pending).
-func TestAPendingProofCarriesIntoTheConfirmingTurnWithThePendingCarry(t *testing.T) {
+// TestAPendingProofCarriesIntoTheConfirmingTurn: the window gate's
+// offers-only pass proves alpha; the user confirms the window on the next
+// turn, whose own resolution names nothing. Only with the carry on does the
+// pending binding carry alpha into that turn, where resolution commits it and
+// the count is served on it. The gated turn itself serves the same bytes in
+// both arms; its ledger line says the proof is held
+// (window_confirmation_gated_pending).
+func TestAPendingProofCarriesIntoTheConfirmingTurn(t *testing.T) {
 	var gatedServed []byte
 	for _, tc := range []struct {
-		name               string
-		carryOn, pendingOn bool
-		skip               CaptureSkipReason
-		carry              BoundAnchorCarry
-		served             bool
+		name    string
+		carryOn bool
+		skip    CaptureSkipReason
+		carry   BoundAnchorCarry
+		served  bool
 	}{
-		{"both off", false, false, CaptureSkipReasonWindowConfirmationGatedDiscard, BoundAnchorCarrySwitchOff, false},
-		{"carry only", true, false, CaptureSkipReasonWindowConfirmationGatedDiscard, BoundAnchorCarryPendingHeld, false},
-		{"carry and pending carry", true, true, CaptureSkipReasonWindowConfirmationGatedPending, BoundAnchorCarryInjected, true},
+		{"carry off", false, CaptureSkipReasonWindowConfirmationGatedDiscard, BoundAnchorCarrySwitchOff, false},
+		{"carry on", true, CaptureSkipReasonWindowConfirmationGatedPending, BoundAnchorCarryInjected, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rig, one, two := pendingTurns(t, tc.carryOn, tc.pendingOn, validConfirmedWindow())
+			rig, one, two := pendingTurns(t, tc.carryOn, validConfirmedWindow())
 			if gatedServed == nil {
 				gatedServed = one.served
 			} else if !bytes.Equal(one.served, gatedServed) {
@@ -102,7 +101,7 @@ func TestAPendingProofCarriesIntoTheConfirmingTurnWithThePendingCarry(t *testing
 // depend on the window, so confirming another window than the default
 // still carries it.
 func TestAPendingProofIsNotTiedToTheWindowConfirmed(t *testing.T) {
-	_, _, two := pendingTurns(t, true, true, &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D})
+	_, _, two := pendingTurns(t, true, &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D})
 	if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryInjected {
 		t.Fatalf("confirming turn admission/carry = %s/%s, want admitted/injected", line.Admission, line.BoundAnchorCarry)
 	}
@@ -116,7 +115,7 @@ func TestAPendingProofIsNotTiedToTheWindowConfirmed(t *testing.T) {
 func TestAnExpiredPendingProofDoesNotCarry(t *testing.T) {
 	rig := newAnchorProbeRig(t, false)
 	rig.engine.graph = hintCommittingGraph{rig.graph}
-	rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = true, true
+	rig.engine.anchorBindingCarryEnabled = true
 	rig.interpreter.read(SubjectRepository, true)
 	one := rig.turn(t, needTurnRequest("request_pending_one", false), identityProvenResponse(probeAlpha))
 	expiredBinding(rig.store)
@@ -131,12 +130,12 @@ func TestAnExpiredPendingProofDoesNotCarry(t *testing.T) {
 	}
 }
 
-// TestAGatedTurnThatProvesNothingStillReadsDiscard: with the pending carry
-// on, a window-gated turn whose offers-only pass proves no identity holds
-// nothing pending, and its ledger line keeps window_confirmation_gated_discard.
+// TestAGatedTurnThatProvesNothingStillReadsDiscard: a window-gated turn whose
+// offers-only pass proves no identity holds nothing pending, and its ledger
+// line keeps window_confirmation_gated_discard.
 func TestAGatedTurnThatProvesNothingStillReadsDiscard(t *testing.T) {
 	rig := newAnchorProbeRig(t, false)
-	rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingPendingCarryEnabled = true, true
+	rig.engine.anchorBindingCarryEnabled = true
 	rig.interpreter.read(SubjectRepository, true)
 	one := rig.turn(t, needTurnRequest("request_pending_none", false), emptyProbeResponse())
 	if held := bindingMember(one.saved); held != nil && held.State == AnchorBindingPendingWindowConfirmation {
@@ -147,11 +146,10 @@ func TestAGatedTurnThatProvesNothingStillReadsDiscard(t *testing.T) {
 	}
 }
 
-// TestPendingHeldOutranksTheCallerAndTheReceipt: with the pending carry off,
-// a pending parent reads pending_held even when the caller names a hint of
-// its kind or redeems an anchor receipt: the binding's own state decides
-// before either contest, and nothing is injected either way.
-func TestPendingHeldOutranksTheCallerAndTheReceipt(t *testing.T) {
+// TestAPendingParentYieldsToTheCallerAndTheReceipt: a pending parent carries
+// like a bound one, so a caller hint of its kind or a redeemed anchor receipt
+// supersedes the carry and nothing is injected either way.
+func TestAPendingParentYieldsToTheCallerAndTheReceipt(t *testing.T) {
 	toPending := mutateStoredBindings(func(s *PersistedSemanticState) {
 		editBindingMember(s, func(b *AnchorBinding) { b.State = AnchorBindingPendingWindowConfirmation })
 	})
@@ -160,8 +158,8 @@ func TestPendingHeldOutranksTheCallerAndTheReceipt(t *testing.T) {
 			r.RequestedScope.SubjectHints = []SubjectHint{{Kind: probeBeta.Kind, ID: probeBeta.CanonicalID, Label: probeBeta.Label, Source: "ask-dev"}}
 		}
 		rig, _, two := bindingCarryTurnsWith(t, carryTurnOptions{carryOn: true, edit: toPending, mutate: betaHint}, emptyProbeResponse())
-		if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryPendingHeld {
-			t.Fatalf("admission/carry = %s/%s, want admitted/pending_held", line.Admission, line.BoundAnchorCarry)
+		if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryCallerSuperseded {
+			t.Fatalf("admission/carry = %s/%s, want admitted/caller_superseded", line.Admission, line.BoundAnchorCarry)
 		}
 		if hints := carriedHintsOf(rig); len(hints) != 0 {
 			t.Fatalf("carried hints = %+v, want none", hints)
@@ -182,8 +180,8 @@ func TestPendingHeldOutranksTheCallerAndTheReceipt(t *testing.T) {
 		request := continuingNeedTurnAgain(needTurnRequest("request_carry_three", true), needTurnRequest("request_carry_two", true), two.result.ResultID)
 		request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: two.result.StructureNeeds.AnchorOptions[0].ReceiptID}}
 		three := rig.turn(t, request, emptyProbeResponse())
-		if line := three.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryPendingHeld {
-			t.Fatalf("admission/carry = %s/%s, want admitted/pending_held", line.Admission, line.BoundAnchorCarry)
+		if line := three.transitions[0]; line.Admission != AnchorBindingAdmissionAdmitted || line.BoundAnchorCarry != BoundAnchorCarryReceiptSuperseded {
+			t.Fatalf("admission/carry = %s/%s, want admitted/receipt_superseded", line.Admission, line.BoundAnchorCarry)
 		}
 		if hints := carriedHintsOf(rig); len(hints) != 0 {
 			t.Fatalf("carried hints = %+v, want none", hints)

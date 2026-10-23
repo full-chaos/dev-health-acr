@@ -94,7 +94,7 @@ func TestApplyBoundAnchorKindDecisionTable(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		on        bool
-		pendingOn bool
+		carryOn   bool
 		receipt   *confirmedStructureMember
 		parent    anchorBindingParent
 		admission AnchorBindingAdmission
@@ -114,12 +114,12 @@ func TestApplyBoundAnchorKindDecisionTable(t *testing.T) {
 		{"the receipt outranks the carry", true, false, receipt, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectRepository, frame, BoundAnchorKindAppliedReceipt, SubjectProject, ScopeAnchorKindAnchorBinding},
 		{"the frame refuses the member kind", true, false, nil, admitted(SubjectTeam), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindRejectedByFrame, SubjectProject, ""},
 		{"no scoped frame refuses every kind", true, false, nil, admitted(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, nil, BoundAnchorKindRejectedByFrame, SubjectProject, ""},
-		{"a pending carry names no kind without the pending carry", true, false, nil, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
-		{"a pending carry names its kind with the pending carry", true, true, nil, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
+		{"a pending binding names no kind without the carry", true, false, nil, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindNone, SubjectProject, ""},
+		{"a pending binding names its kind with the carry", true, true, nil, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectProject, frame, BoundAnchorKindAppliedCarried, SubjectRepository, ScopeAnchorKindAnchorBinding},
 		{"a receipt still names its kind beside a held pending binding", true, false, receipt, pending(SubjectRepository), AnchorBindingAdmissionAdmitted, SubjectRepository, frame, BoundAnchorKindAppliedReceipt, SubjectProject, ScopeAnchorKindAnchorBinding},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			engine := &Engine{anchorBindingCountEnabled: tc.on, anchorBindingPendingCarryEnabled: tc.pendingOn}
+			engine := &Engine{anchorBindingCountEnabled: tc.on, anchorBindingCarryEnabled: tc.carryOn}
 			tracker := &anchorBindingTracker{receipt: tc.receipt, parent: tc.parent, admission: tc.admission}
 			outcome := QuestionFamilyOutcome{Frame: tc.frame, WinningSample: FamilySample{ScopeAnchorKind: tc.model}}
 			got := engine.applyBoundAnchorKind(tracker, outcome)
