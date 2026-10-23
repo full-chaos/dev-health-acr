@@ -21,12 +21,15 @@ the (expect, terminal) table is imported, never copied):
 Conversation results NEVER fold into the single-turn series' counts: own table, own
 denominator, own golden file (golden_conversation_verdicts.json).
 """
+from pathlib import Path
+
 from expectations import CLARIFY, DECLINE, EXPECT_SERVE, VERDICTS, terminal_key
-from validators import EXPECT_VALUES
+from validators import EXPECT_VALUES, result_claimed_n, result_committed, result_offered_ids
 
 SERVED = {"complete", "partial", "degraded", "answered"}
 AGREE, AGREE_WEAK, DISAGREE, UNSCORED, NOT_MEASURED = (
     "agree", "agree_weak", "disagree", "unscored", "not_measured")
+ABSENT_WHY = "expected_subject_absent_from_graph"
 
 # conversation_identity_check verdicts
 OK, WRONG_SUBJECT_CARRIED, SILENT_SUBSTITUTION = "ok", "wrong_subject_carried", "silent_substitution"
@@ -70,14 +73,11 @@ def validate_conversation(conv):
 
 
 def committed_ids(result):
-    sr = (result or {}).get("subject_resolution") or {}
-    return [s.get("canonical_id") for s in (sr.get("committed") or []) if isinstance(s, dict)]
+    return [s.get("canonical_id") for s in result_committed(result)]
 
 
 def offered_ids(result):
-    sr = (result or {}).get("subject_resolution") or {}
-    return [((c.get("subject") or {}).get("canonical_id"))
-            for c in (sr.get("candidates") or []) if isinstance(c, dict)]
+    return result_offered_ids(result)
 
 
 def observe(http, result):
@@ -85,7 +85,7 @@ def observe(http, result):
     ok = isinstance(http, int) and 200 <= http < 300 and isinstance(result, dict) and bool(result)
     return {"http": http,
             "status": (result or {}).get("status") if ok else None,
-            "claimed_facts_n": len((result or {}).get("claimed_facts") or []) if ok else 0,
+            "claimed_facts_n": result_claimed_n(result) if ok else 0,
             "committed": committed_ids(result) if ok else [],
             "offered": offered_ids(result) if ok else []}
 
@@ -161,15 +161,54 @@ def conversation_identity_check(turns, observations):
     return out
 
 
-def score_conversation(conv, recorded):
+def load_absent_ids(path):
+    """Canonical ids the operator reports absent from the live graph: one per line, `#`
+    comments and blank lines ignored. A line holding more than one token is refused."""
+    ids = set()
+    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if len(line.split()) != 1:
+            raise ValueError(f"{path}:{n}: one canonical id per line")
+        ids.add(line)
+    return frozenset(ids)
+
+
+def turn_ids(turn):
+    ids = {(turn.get("expected_subject") or {}).get("canonical_id"),
+           (turn.get("redeem") or {}).get("canonical_id")}
+    ids |= {c.get("canonical_id") for c in (turn.get("clarify_candidates") or [])}
+    ids.discard(None)
+    return ids
+
+
+def marked_turns(conv, absent_ids):
+    """Indexes of turns that expect an id in `absent_ids` (exact match). A clarify turn is
+    marked with the redemption turn that follows it, so the pair is never half-scored."""
+    turns = conv["turns"]
+    marked = {i for i, t in enumerate(turns) if turn_ids(t) & absent_ids}
+    for i, t in enumerate(turns):
+        if t.get("expect") == CLARIFY and i + 1 in marked:
+            marked.add(i)
+        if t.get("redeem") is not None and i - 1 in marked:
+            marked.add(i)
+    return marked
+
+
+def score_conversation(conv, recorded, absent_ids=frozenset()):
     """`recorded` = per-turn dicts `{obs, ran, redeem_unavailable}` in turn order (one
-    replicate). Returns per-turn results plus `redeemed` per clarify turn."""
+    replicate). Returns per-turn results plus `redeemed` per clarify turn. A turn that expects
+    an id in `absent_ids` is `unscored` (why ABSENT_WHY), whether or not it ran."""
     turns = conv["turns"]
     if len(recorded) != len(turns):
         raise ValueError(f"{conv['id']}: {len(recorded)} recorded turns for {len(turns)} declared")
+    marked = marked_turns(conv, absent_ids) if absent_ids else set()
     res = []
-    for t, rec in zip(turns, recorded):
-        if not rec.get("ran"):
+    for i, (t, rec) in enumerate(zip(turns, recorded)):
+        if i in marked:
+            res.append({"n": t["n"], "verdict": UNSCORED, "why": ABSENT_WHY, "redeemed": None})
+        elif not rec.get("ran"):
             res.append({"n": t["n"], "verdict": NOT_MEASURED,
                         "why": rec.get("why") or "turn_not_run", "redeemed": None})
         else:
@@ -182,7 +221,7 @@ def score_conversation(conv, recorded):
             res[i]["redeemed"] = served_data
             if not served_data:
                 res[i]["verdict"], res[i]["why"] = DISAGREE, f"clarify_not_redeemed({nxt['why']})"
-        elif t.get("expect") == CLARIFY:
+        elif t.get("expect") == CLARIFY and i not in marked:
             res[i]["redeemed"] = False
     ident = conversation_identity_check(turns, [r["obs"] if r.get("ran") else {} for r in recorded])
     for r, v in zip(res, ident):

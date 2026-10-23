@@ -1,0 +1,97 @@
+{
+ "_note": "synthetic: shape of a stored MCP investigate_question structured answer; strings replaced, lists trimmed to 3",
+ "_source_sha256": "06015ae3d3868a57",
+ "structured": {
+  "committed_subjects": [],
+  "completeness": {
+   "claimed_facts_count": 0,
+   "outcomes": [
+    {
+     "cause_coverage": "synthetic",
+     "cause_observed": true,
+     "declared": 0,
+     "impact": "synthetic",
+     "obligation": "synthetic",
+     "outcome": "synthetic",
+     "requirement": "synthetic",
+     "served": 0,
+     "stage": "synthetic"
+    },
+    {
+     "cause_coverage": "synthetic",
+     "cause_observed": true,
+     "declared": 0,
+     "impact": "synthetic",
+     "obligation": "synthetic",
+     "outcome": "synthetic",
+     "requirement": "synthetic",
+     "served": 0,
+     "stage": "synthetic"
+    }
+   ],
+   "refusal_basis": "synthetic",
+   "rows_count": 0,
+   "state": "complete",
+   "terminal_reason": "synthetic",
+   "terminal_status": "synthetic"
+  },
+  "coverage_partial": false,
+  "coverage_summary": [
+   {
+    "label": "synthetic",
+    "source": "synthetic",
+    "state": "available",
+    "state_label": "synthetic"
+   }
+  ],
+  "current_state": "synthetic",
+  "deterministic_answer": "synthetic",
+  "direct_judgment": "synthetic",
+  "evidence_ref_ids": [],
+  "generated_at": "synthetic",
+  "key_facts": [],
+  "limitations": [
+   "synthetic"
+  ],
+  "principal_drivers": [],
+  "projection_budget": {
+   "candidates_omitted": 0,
+   "cohort_groups_omitted": 0,
+   "cohort_members_omitted": 0,
+   "coverage_omitted": 0,
+   "drivers_omitted": 0,
+   "evidence_refs_omitted": 0,
+   "facts_omitted": 0,
+   "full_result_omitted": false,
+   "limitations_omitted": 0,
+   "reasons_omitted": 0,
+   "render_shapes_omitted": 0,
+   "truncated": false,
+   "values_clamped": 0,
+   "warnings_omitted": 0,
+   "withheld_drivers_omitted": 0
+  },
+  "question": "synthetic",
+  "request_id": "synthetic",
+  "result_id": "synthetic",
+  "reused": false,
+  "schema_version": "context_fabric_answer_projection.v1",
+  "status": "no_match",
+  "strongest_pressures": [],
+  "subject_receipts": [],
+  "versions": {
+   "backend": "synthetic",
+   "canonical_service_version": "synthetic",
+   "contract_version": "synthetic",
+   "interpretation_model_identity": "synthetic",
+   "interpretation_source": "synthetic",
+   "interpretation_version": "synthetic",
+   "model_identity": "synthetic",
+   "projection_version": "synthetic",
+   "query_version": "synthetic",
+   "service_version": "synthetic",
+   "synthesis_version": "synthetic"
+  },
+  "warnings": []
+ }
+}
