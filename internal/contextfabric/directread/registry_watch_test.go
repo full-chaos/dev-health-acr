@@ -301,7 +301,7 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	if !strings.Contains(out, "registry digest drift") {
 		t.Fatalf("no schema digest drift line: %s", out)
 	}
-	changed := []string{"aiAttributedPrs", "aiAttributionOverview", "aiGovernanceSummary", "dataHealthIdentity", "testopsRisk", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "home", "hotspots", "improveOpportunities", "operatingReview", "reviewEdges"}
+	changed := []string{"aiAttributedPrs", "aiAttributionOverview", "aiGovernanceSummary", "dataHealthIdentity", "testopsRisk", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "home", "hotspots", "improveOpportunities", "investmentFull", "operatingReview", "reviewEdges", "testOpsCoverage", "testOpsPipeline"}
 	for _, op := range changed {
 		if !strings.Contains(out, "operation="+op+" ") || !strings.Contains(out, "reason=changed") {
 			t.Errorf("no changed drift line for %s: %s", op, out)
@@ -320,12 +320,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops 5376c7c1, written from the output of
+// Fixture: the GET /registry body of ops 51652ba7, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_5376c7c1.json")
+	body, err := os.ReadFile("testdata/query_registry_51652ba7.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462"
+	const want = "sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
@@ -405,8 +405,8 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_di
 			digest++
 		}
 	}
-	if digest != 1 || len(ws) != 9 {
-		t.Fatalf("want one digest drift warning + 8 changed documents: %q", ws)
+	if digest != 1 || len(ws) != 12 {
+		t.Fatalf("want one digest drift warning + 11 changed documents: %q", ws)
 	}
 }
 
@@ -424,13 +424,42 @@ func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_dr
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 4 {
-		t.Fatalf("want digest drift + 3 operation drift warnings: %q", ws)
+	if len(ws) != 7 {
+		t.Fatalf("want digest drift + 6 operation drift warnings: %q", ws)
 	}
 	if !strings.Contains(buf.String(), "registry digest drift") {
 		t.Errorf("no schema digest drift line: %s", buf)
 	}
-	for _, op := range []string{"compoundingRisk", "home", "operatingReview"} {
+	for _, op := range []string{"compoundingRisk", "home", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
+		if !strings.Contains(buf.String(), "operation="+op+" ") {
+			t.Errorf("no drift line for %s", op)
+		}
+	}
+}
+
+// The registry ops 5376c7c1 served (the prod fact until ops 51652ba7), against
+// the catalogue pinned now: the schema digest moved (home and investmentFull
+// gained fields) and five operations changed text: home, investmentFull and
+// the three that are not served (operatingReview, testOpsCoverage,
+// testOpsPipeline).
+func TestRegistryWatch_5376c7c1_served_registry_against_the_new_pin_shows_digest_drift_and_five_changed_documents(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_5376c7c1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newRegistryFixture(t)
+	f.set(200, body)
+	w, _, buf := newWatch(t, f, nil)
+	w.Start()
+	w.Wait()
+	ws := warns(buf.String())
+	if len(ws) != 6 {
+		t.Fatalf("want digest drift + 5 operation drift warnings: %q", ws)
+	}
+	if !strings.Contains(buf.String(), "registry digest drift") {
+		t.Errorf("no schema digest drift line: %s", buf)
+	}
+	for _, op := range []string{"home", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}
