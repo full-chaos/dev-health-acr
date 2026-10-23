@@ -38,7 +38,7 @@ func declaredNone(member SubjectKind) func(*anchorProbeRig) {
 func TestAFollowUpOfferEndsTheTurnWhenTheModelDeclaredNoAnchorKind(t *testing.T) {
 	for _, member := range []SubjectKind{SubjectTeam, SubjectProject} {
 		t.Run(string(member), func(t *testing.T) {
-			rig, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: declaredNone(member)}, declaredNoneCohortResponse(member))
+			rig, one, two := followUpTurns(t, carryTurnOptions{before: declaredNone(member)}, declaredNoneCohortResponse(member))
 			if line := two.transitions[0]; line.Admission != AnchorBindingAdmissionAdmittedFollowUp || line.BoundAnchorCarry != BoundAnchorCarryFollowUpOffered {
 				t.Fatalf("admission/carry = %s/%s, want admitted_follow_up/follow_up_offered", line.Admission, line.BoundAnchorCarry)
 			}
@@ -73,7 +73,7 @@ func TestAFollowUpOfferEndsTheTurnAfterTheStructureOfferIsReconciled(t *testing.
 	response := declaredNoneCohortResponse(SubjectTeam)
 	response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
 	response.material.AnchorOptions = []AnchorOption{anchorOptionFor(probeAlpha), anchorOptionFor(probeBeta)}
-	rig, one, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: declaredNone(SubjectTeam)}, response)
+	rig, one, two := followUpTurns(t, carryTurnOptions{before: declaredNone(SubjectTeam)}, response)
 	if line := two.transitions[0]; line.BoundAnchorCarry != BoundAnchorCarryFollowUpOfferedReconciled {
 		t.Fatalf("carry = %s, want follow_up_offered_reconciled", line.BoundAnchorCarry)
 	}
@@ -94,7 +94,7 @@ func TestAFollowUpOfferThatEndsTheTurnReportsTheCallersReceipts(t *testing.T) {
 	withReceipt := func(r *InvestigationRequest) {
 		r.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: r.ParentResultID, ReceiptID: subjectSubstitutionReceiptID(r.ParentResultID, probeAlpha)}}
 	}
-	_, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: declaredNone(SubjectTeam), mutate: withReceipt}, declaredNoneCohortResponse(SubjectTeam))
+	_, _, two := followUpTurns(t, carryTurnOptions{before: declaredNone(SubjectTeam), mutate: withReceipt}, declaredNoneCohortResponse(SubjectTeam))
 	if two.result.Status != InvestigationClarificationRequired {
 		t.Fatalf("status = %s, want clarification_required", two.result.Status)
 	}
@@ -108,7 +108,7 @@ func TestAFollowUpOfferThatEndsTheTurnReportsTheCallersReceipts(t *testing.T) {
 // offer.
 func TestAFollowUpOfferForACallerThatCannotClarifyServesNoCohort(t *testing.T) {
 	noClarify := func(r *InvestigationRequest) { r.Options.AllowClarification = false }
-	rig, _, two := followUpTurns(t, carryTurnOptions{followUpOn: true, before: declaredNone(SubjectTeam), mutate: noClarify}, declaredNoneCohortResponse(SubjectTeam))
+	rig, _, two := followUpTurns(t, carryTurnOptions{before: declaredNone(SubjectTeam), mutate: noClarify}, declaredNoneCohortResponse(SubjectTeam))
 	if two.result.Status == InvestigationComplete || two.result.Status == InvestigationPartial || two.result.Status == InvestigationClarificationRequired {
 		t.Fatalf("status = %s, want a refusal that serves no answer and asks no question", two.result.Status)
 	}
@@ -135,8 +135,8 @@ func TestAFollowUpThatOffersNothingStillReadsTheCohort(t *testing.T) {
 		carry BoundAnchorCarry
 		opts  carryTurnOptions
 	}{
-		{"frame refused", BoundAnchorCarryFollowUpFrameRefused, carryTurnOptions{followUpOn: true, before: noAnchorTerms}},
-		{"parent mismatch", BoundAnchorCarryFollowUpParentMismatch, carryTurnOptions{followUpOn: true, before: declaredNone(SubjectTeam), edit: holdBeta}},
+		{"frame refused", BoundAnchorCarryFollowUpFrameRefused, carryTurnOptions{before: noAnchorTerms}},
+		{"parent mismatch", BoundAnchorCarryFollowUpParentMismatch, carryTurnOptions{before: declaredNone(SubjectTeam), edit: holdBeta}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig, _, two := followUpTurns(t, tc.opts, declaredNoneCohortResponse(SubjectTeam))

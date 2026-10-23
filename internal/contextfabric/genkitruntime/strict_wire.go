@@ -2,6 +2,7 @@ package genkitruntime
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"slices"
 )
 
@@ -339,4 +340,48 @@ func restoreScalar(value any) (any, bool) {
 		return value, false
 	}
 	return map[string]any{kind: member}, true
+}
+
+// requireFrameDiscriminator returns a copy of the interpretation wire in
+// which question_frame, its subject_expression and the expression's kind are
+// required and kind is the closed vocabulary without an empty member. Only
+// the strict wire is built from it: the lenient wire and the local check keep
+// the optional form, so an out-of-vocabulary kind still degrades to an empty
+// discriminator that the frame gate refuses by name.
+func requireFrameDiscriminator(wire map[string]any) map[string]any {
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		return wire
+	}
+	var copied map[string]any
+	if err := json.Unmarshal(encoded, &copied); err != nil {
+		return wire
+	}
+	frame := childSchema(copied, "question_frame")
+	expression := childSchema(frame, "subject_expression")
+	kind := childSchema(expression, "kind")
+	if frame == nil || expression == nil || kind == nil {
+		return wire
+	}
+	vocabulary := contextfabric.SubjectExpressionKindVocabulary()
+	members := make([]any, 0, len(vocabulary))
+	for _, member := range vocabulary {
+		members = append(members, string(member))
+	}
+	kind["enum"] = members
+	addRequired(copied, "question_frame")
+	addRequired(frame, "subject_expression")
+	addRequired(expression, "kind")
+	return copied
+}
+
+func childSchema(node map[string]any, name string) map[string]any {
+	properties, _ := node["properties"].(map[string]any)
+	child, _ := properties[name].(map[string]any)
+	return child
+}
+
+func addRequired(node map[string]any, name string) {
+	list, _ := node["required"].([]any)
+	node["required"] = append(list, name)
 }

@@ -187,7 +187,7 @@ func (e *Engine) admitAnchorBindingParent(ctx context.Context, principal storage
 	in := anchorBindingAdmissionInput{
 		Held: held, Now: t.now, MaxAge: e.anchorBindingMaxAge(),
 		Movement: anchorOwnershipMovement(held, t.freshness),
-		FollowUp: e.anchorBindingFollowUpEnabled,
+		FollowUp: e.anchorBindingCarryEnabled,
 	}
 	if held.active() {
 		in.Question = e.carryOriginSameQuestionVerdict(ctx, principal, request, held.OriginResultID)

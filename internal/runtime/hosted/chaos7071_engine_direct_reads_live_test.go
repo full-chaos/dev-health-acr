@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
-
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
@@ -60,17 +59,7 @@ func (f *chaos7071RecordingFacts) ReadFacts(_ context.Context, _ storage.Princip
 func TestLiveChaos7071DirectReadsComposeFromTheRealEngine(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: chaos7071FalkorImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start FalkorDB container: %v", err)
-	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	container := falkorfixture.Start(ctx, t, chaos7071FalkorImage)
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatal(err)

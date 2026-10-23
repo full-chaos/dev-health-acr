@@ -89,7 +89,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v24 -> v25: a pull_request member's status value is one of a closed set, with the review phrases mapped onto it, and two worked examples.
 			// v31 -> v32: "system", "service" and "codebase" say repository.
 			// v32 -> v33: the commitment glossary line says the fact lists up to 25 dated issues.
-			digest: "7b73df8be5a9280f0fe64bbe15cdb1ac3e11970675e5787e9e2fc24d4b943947",
+			// v34 -> v35: the frame, its subject_expression and the kind are required on the Anthropic wire; the prompt says every question carries them.
+			digest: "b060bd7f99bf434d240657755be415d76187d00caa7a4d25d053aaf0d402f574",
 		},
 		{
 			name:    "synthesis system prompt",

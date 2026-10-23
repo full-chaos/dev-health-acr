@@ -48,3 +48,24 @@ func TestTheAnchorBindingCarrySwitchDefaultsOff(t *testing.T) {
 		t.Fatal("the startup attributes do not report the switch")
 	}
 }
+
+// The follow-up switch is retired: the follow-up is part of the carry. A
+// deployment that still sets the old variable, whatever its value, starts
+// as before and the value is ignored.
+func TestARetiredFollowUpSwitchIsIgnored(t *testing.T) {
+	for _, value := range []string{"true", "false", "sometimes"} {
+		lookup := func(key string) (string, bool) {
+			if key == "ACR_CONTEXT_FABRIC_ANCHOR_BINDING_FOLLOW_UP_ENABLED" {
+				return value, true
+			}
+			return "", false
+		}
+		var cfg Config
+		if err := loadHostedRuntimeValues(lookup, &cfg, false, false, false); err != nil {
+			t.Errorf("retired switch %q: %v", value, err)
+		}
+		if cfg.AnchorBindingCarryEnabled {
+			t.Errorf("retired switch %q turned the carry on", value)
+		}
+	}
+}

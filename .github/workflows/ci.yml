@@ -329,6 +329,8 @@ jobs:
         run: scripts/ci/test-unit-split-partition.sh
       - name: Test the observed race dedup of the dedicated unit legs
         run: scripts/ci/test-observed-race-dedup.sh
+      - name: Test the pruning of stale artifacts of dropped unit legs
+        run: scripts/ci/test-prune-dropped-unit-shards.sh
       - name: Test the shard budget guard
         run: scripts/ci/test-shard-budget-guard.sh
       - name: Test the isolated-job budget wrapper
@@ -2388,6 +2390,17 @@ jobs:
         with:
           pattern: go-unit-shard-*
           path: .tmp/unit-shards
+      # A --failed rerun reruns unit-dedup-plan when a race job reran, and the
+      # new plan may drop legs an earlier attempt ran; that attempt's passed
+      # go-unit-shard-N artifact is still in the run. Remove it (logged) so the
+      # merge below does not see an excluded leg's reports. A failed artifact is
+      # kept and the merge refuses it. The legs are the ones the recheck above
+      # re-derived from this attempt's race artifacts.
+      - name: Prune stale artifacts of dropped unit legs left by an earlier attempt
+        if: ${{ !cancelled() && needs.unit-dedup-plan.outputs.drop != '' && needs.unit-dedup-plan.outputs.drop != '[]' && steps.dedup.outcome == 'success' && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
+        env:
+          DROP: ${{ needs.unit-dedup-plan.outputs.drop }}
+        run: scripts/ci/prune-dropped-unit-shards.sh .tmp/unit-shards "$DROP"
       - name: Merge JUnit reports
         if: ${{ !cancelled() && (needs.unit.result != 'skipped' || needs.unit-dedicated.result != 'skipped') }}
         run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 10 -out .tmp/coverage/junit.xml -absent '${{ steps.dedup.outputs.absent }}'

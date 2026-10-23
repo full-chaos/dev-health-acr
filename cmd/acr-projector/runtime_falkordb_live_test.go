@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
@@ -19,7 +20,6 @@ import (
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -70,15 +70,7 @@ func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T
 	require.NoError(t, err, "apply migrations")
 
 	// --- FalkorDB: real graph backend, pinned digest. ---
-	falkorContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "start FalkorDB container")
-	t.Cleanup(func() { require.NoError(t, falkorContainer.Terminate(context.Background())) })
+	falkorContainer := falkorfixture.Start(ctx, t, falkordbImage)
 	falkorHost, err := falkorContainer.Host(ctx)
 	require.NoError(t, err)
 	falkorPort, err := falkorContainer.MappedPort(ctx, "6379/tcp")

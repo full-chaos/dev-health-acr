@@ -468,7 +468,7 @@ func followUpVocabularyScenario(response needTurnResponse, before func(*anchorPr
 		rig.interpreter.read(SubjectRepository, false)
 		one := rig.turn(t, needTurnRequest("request_vocab_follow_one", true), identityProvenResponse(probeAlpha))
 		rig.verify()
-		rig.engine.anchorBindingCarryEnabled, rig.engine.anchorBindingFollowUpEnabled = !off, !off
+		rig.engine.anchorBindingCarryEnabled = !off
 		if edit != nil {
 			edit(rig.store)
 		}
