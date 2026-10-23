@@ -273,7 +273,20 @@ func mayContainPair(s string) bool {
 	return false
 }
 
+var queryPair = regexp.MustCompile(`([?&])([A-Za-z0-9_.-]+)=([^\s&#"']*)`)
+
+func redactQuery(s string) string {
+	return queryPair.ReplaceAllStringFunc(s, func(m string) string {
+		sub := queryPair.FindStringSubmatch(m)
+		if classify(sub[2]) == classProtected {
+			return sub[1] + sub[2] + "=" + Redacted
+		}
+		return m
+	})
+}
+
 func redactPairs(s string) string {
+	s = redactQuery(s)
 	return kvPair.ReplaceAllStringFunc(s, func(m string) string {
 		sub := kvPair.FindStringSubmatch(m)
 		if classify(sub[2]) == classProtected {

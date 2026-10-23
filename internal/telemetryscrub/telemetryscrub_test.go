@@ -462,3 +462,35 @@ func TestNestedMapPathsAreJoined(t *testing.T) {
 		}
 	}
 }
+
+func TestURLQueryParametersAreScrubbed(t *testing.T) {
+	urls := []string{
+		"https://h/cb?access_token=SEKRET4&x=1",
+		"https://h/cb?x=1&client_secret=SEKRET5",
+		"https://u:SEKRET6@h/cb?access_token=SEKRET7&y=2",
+	}
+	leaks := []string{"SEKRET4", "SEKRET5", "SEKRET6", "SEKRET7"}
+	for _, u := range urls {
+		carriers := map[string]string{
+			"text": ScrubText(u),
+			"value": func() string {
+				o := record(t, func(l *slog.Logger) { l.Info("m", "note", u) })
+				s, _ := o["note"].(string)
+				return s
+			}(),
+			"msg":    func() string { o := record(t, func(l *slog.Logger) { l.Info(u) }); s, _ := o["msg"].(string); return s }(),
+			"map":    raw(t, func(l *slog.Logger) { l.Info("m", "payload", map[string]any{"url": u}) }),
+			"nested": raw(t, func(l *slog.Logger) { l.Info("m", "payload", map[string]any{"a": map[string]any{"b": []any{u}}}) }),
+		}
+		for name, got := range carriers {
+			for _, leak := range leaks {
+				if strings.Contains(got, leak) {
+					t.Errorf("%s carrier leaks %s for %q: %s", name, leak, u, got)
+				}
+			}
+		}
+	}
+	if got := ScrubText("https://h/cb?x=1&y=2"); got != "https://h/cb?x=1&y=2" {
+		t.Errorf("clean url changed: %q", got)
+	}
+}
