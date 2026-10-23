@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -82,7 +83,7 @@ func TestUndeclaredPropertiesAreDroppedAndTheDrawServes(t *testing.T) {
 		}
 		paths, _ := record.Attrs["paths"].([]string)
 		joined := strings.Join(paths, ",")
-		for _, want := range []string{"$.reasoning", "$.confidence_note", "$.claimed_facts[].citation"} {
+		for _, want := range []string{"$." + droppedKeyLabel("reasoning"), "$." + droppedKeyLabel("confidence_note"), "$.claimed_facts[]." + droppedKeyLabel("citation")} {
 			if !strings.Contains(joined, want) {
 				t.Fatalf("paths = %v, missing %s", paths, want)
 			}
@@ -161,5 +162,35 @@ func TestDropUndeclaredPropertiesKeepsLargeNumbersExact(t *testing.T) {
 	out, dropped := dropUndeclaredProperties(text, schema)
 	if len(dropped) != 1 || !strings.Contains(out, "9007199254740993") {
 		t.Fatalf("dropped=%v, large number rewritten in %s", dropped, out)
+	}
+}
+
+// A model-chosen key can be anything, a credential-shaped string included: the
+// log names it by digest only, never by its text, at any depth.
+func TestDroppedKeyNamesNeverReachTheLog(t *testing.T) {
+	const secretKey = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+	text := drawWithExtras(t, map[string]any{secretKey: "private-value"}, map[string]any{secretKey + "_nested": 1})
+	rt, logger, _ := scriptedSynthesisGenkitRuntime(t, []string{text})
+	if _, _, err := rt.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", err)
+	}
+	logger.mu.Lock()
+	defer logger.mu.Unlock()
+	var sawDrop bool
+	for _, record := range logger.records {
+		rendered := record.Message + " " + fmt.Sprint(record.Attrs)
+		if strings.Contains(rendered, "ghp_") || strings.Contains(rendered, "private-value") {
+			t.Fatalf("log line carries the model-chosen key or its value: %s", rendered)
+		}
+		if record.Message == llmUndeclaredDroppedMessage {
+			sawDrop = true
+			paths, _ := record.Attrs["paths"].([]string)
+			if !strings.Contains(strings.Join(paths, ","), droppedKeyLabel(secretKey)) {
+				t.Fatalf("paths = %v, want the digest label of the dropped key", paths)
+			}
+		}
+	}
+	if !sawDrop {
+		t.Fatal("no drop line logged")
 	}
 }

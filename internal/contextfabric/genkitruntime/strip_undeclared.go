@@ -2,8 +2,9 @@ package genkitruntime
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"regexp"
 	"sort"
 )
 
@@ -11,8 +12,6 @@ const (
 	llmUndeclaredDroppedMessage = "context fabric model reply had undeclared properties dropped"
 	maxLoggedDroppedPaths       = 5
 )
-
-var loggedKeyName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,40}$`)
 
 // stripUndeclared drops, from a decoded model reply, every property an object
 // node of a CLOSED schema (additionalProperties false) does not declare. It
@@ -32,21 +31,21 @@ func stripUndeclared(value any, schema map[string]any, path string) []string {
 			if closedProps, ok := schema["additionalProperties"].(bool); ok && !closedProps {
 				for key := range typed {
 					if _, declared := properties[key]; !declared {
-						dropped = append(dropped, path+"."+loggedKey(key))
+						dropped = append(dropped, path+"."+droppedKeyLabel(key))
 						delete(typed, key)
 					}
 				}
 			}
 			for key, child := range typed {
 				if childSchema, ok := properties[key].(map[string]any); ok {
-					dropped = append(dropped, stripUndeclared(child, childSchema, path+"."+loggedKey(key))...)
+					dropped = append(dropped, stripUndeclared(child, childSchema, path+"."+key)...)
 				}
 			}
 			return dropped
 		}
 		if mapSchema, ok := schema["additionalProperties"].(map[string]any); ok {
-			for key, child := range typed {
-				dropped = append(dropped, stripUndeclared(child, mapSchema, path+"."+loggedKey(key))...)
+			for _, child := range typed {
+				dropped = append(dropped, stripUndeclared(child, mapSchema, path+"{}")...)
 			}
 		}
 	case []any:
@@ -68,13 +67,13 @@ func hasCombinator(schema map[string]any) bool {
 	return false
 }
 
-// loggedKey keeps a model-chosen key name loggable: a short identifier as
-// written, anything else as "?".
-func loggedKey(key string) string {
-	if loggedKeyName.MatchString(key) {
-		return key
-	}
-	return "?"
+// droppedKeyLabel is how an undeclared key is named in a log path: a short
+// digest, never the model-chosen text, which can carry anything (a
+// credential-shaped string included). The same key always gets the same label,
+// so a recurring key is countable without being readable.
+func droppedKeyLabel(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "~" + hex.EncodeToString(sum[:4])
 }
 
 // dropUndeclaredProperties returns the candidate with undeclared properties
