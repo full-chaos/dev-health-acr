@@ -77,7 +77,7 @@ func TestAnswerOneSendsOneSystemMessageAndNoSamplingFields(t *testing.T) {
 	}
 	system, _ := messages[0].(map[string]any)
 	user, _ := messages[1].(map[string]any)
-	wantSystem := "system prompt\n\nproduce JSON matching output_schema; echo session_nonce" + genkitruntime.OutputFormatInstructions([]byte(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`))
+	wantSystem := "system prompt" + genkitruntime.OutputFormatInstructions([]byte(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`))
 	if system["role"] != "system" || system["content"] != wantSystem || user["role"] != "user" || user["content"] != "user prompt" {
 		t.Errorf("messages = %v, want system %q then user", messages, wantSystem)
 	}

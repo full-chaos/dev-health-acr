@@ -328,14 +328,11 @@ func TestAnswerOneFailsFastOnAuthError(t *testing.T) {
 	}
 }
 
-// TestAnswerOneSendsInstructionsToModel is the codex xhigh review round 1
-// (High, confirmed) red-first proof: an earlier draft decoded
-// exchangeRequest.Instructions but never included it in the request sent
-// to OpenAI, silently dropping the envelope's own grounding guidance
-// ("base your answer ONLY on system and prompt"). Captures the ACTUAL
-// request body the fake server receives and asserts the instructions text
-// appears in it as a distinct message.
-func TestAnswerOneSendsInstructionsToModel(t *testing.T) {
+// TestAnswerOneDoesNotSendFileExchangeInstructionsToModel pins the production
+// wire: the envelope's instructions text (written for a file-writing
+// responder) is not sent to a Chat Completions model, which production
+// never sends it.
+func TestAnswerOneDoesNotSendFileExchangeInstructionsToModel(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
@@ -367,9 +364,9 @@ func TestAnswerOneSendsInstructionsToModel(t *testing.T) {
 	if capturedBody == nil {
 		t.Fatal("fake server never received a request -- answerOne did not call the API at all")
 	}
-	const wantInstructions = "produce JSON matching output_schema; echo session_nonce"
-	if !strings.Contains(string(capturedBody), wantInstructions) {
-		t.Fatalf("request body does not contain the request's own instructions text %q -- instructions were decoded but never sent to the model.\nbody: %s", wantInstructions, capturedBody)
+	const envelopeInstructions = "produce JSON matching output_schema; echo session_nonce"
+	if strings.Contains(string(capturedBody), envelopeInstructions) {
+		t.Fatalf("request body carries the file-exchange instructions text %q; production sends a Chat Completions model no such text.\nbody: %s", envelopeInstructions, capturedBody)
 	}
 }
 
@@ -514,8 +511,8 @@ func TestAnswerOneOmitsReasoningEffortWhenUnset(t *testing.T) {
 // a false success. A live acceptance run (CHAOS-4313 case 57, kiac)
 // later found this needs to be RETRYABLE, not immediately terminal --
 // schema-non-conformant content is the model's own sampled output (this
-// schema is not strict-mode-compatible, see response_format's own comment
-// in answerOne, so nothing grammar-constrains the model), and a fresh
+// schema is sent as text only, see answerOne, so nothing grammar-constrains
+// the model), and a fresh
 // sampling attempt against the SAME request can plausibly produce
 // compliant output where the first attempt did not. So: one attempt must
 // NOT publish the mismatched output as (or alongside) a success, and must
@@ -746,19 +743,10 @@ func TestResponseAnswersRequestStillRejectsExhaustedWithMismatchedNonce(t *testi
 // TestAnswerOneRejectsOutputNotMatchingSchema's own doc comment): a fresh
 // sampling attempt can plausibly produce well-formed JSON where the first
 // did not, since nothing grammar-constrains the model here.
-// TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields is the
-// team-lead-directed lossless-strict-mode fix's own red-first proof:
-// strict mode's compiled schema can only express "this optional field is
-// absent" as an explicit JSON null (every property must be present under
-// strict mode) -- but the ORIGINAL schema this test's request carries
-// declares "note" as a bare {"type":"string"} (not required, and NOT
-// nullable in its own right), the shape genkitruntime's real schemas use
-// for every optional field. Without stripping null-valued keys before
-// post-response validation, a model response that correctly omits an
-// optional field the ONLY way strict mode allows (explicit null) would be
-// rejected as violating the original schema's own type constraint --
-// exactly the failure mode a live case-57 kiac run measured (0/1
-// exchanges succeeding under strict mode before this fix).
+// TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields: an explicit JSON
+// null on a property the ORIGINAL schema declares as a bare optional
+// {"type":"string"} must be treated as omitted, or the response would be
+// rejected for violating the schema's own type constraint.
 func TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
@@ -968,5 +956,20 @@ func TestProviderRejectionMessageIsReportedOnlyOnExplicitOptIn(t *testing.T) {
 	}
 	if got := providerErrorReason(400, body, true); !strings.Contains(got, "message=Invalid schema: at anyOf 0") {
 		t.Errorf("opt-in report %q lacks the flattened message", got)
+	}
+}
+
+func TestProviderRejectionReportsOnlyKnownTypeCodeAndParamValues(t *testing.T) {
+	body := []byte(`{"error":{"message":"m","type":"REQUEST-MARKER-IN-TYPE","code":"REQUEST-MARKER-IN-CODE","param":"REQUEST-MARKER-IN-PARAM"}}`)
+	got := providerErrorReason(400, body, false)
+	if strings.Contains(got, "REQUEST-MARKER") {
+		t.Errorf("report %q echoes a provider-controlled value outside the closed sets", got)
+	}
+	if want := "type=other code=other param=other"; !strings.Contains(got, want) {
+		t.Errorf("report %q lacks %q", got, want)
+	}
+	known := []byte(`{"error":{"message":"m","type":"invalid_request_error","code":"invalid_json_schema","param":"response_format"}}`)
+	if got := providerErrorReason(400, known, false); !strings.Contains(got, "type=invalid_request_error code=invalid_json_schema param=response_format") {
+		t.Errorf("report %q dropped known values", got)
 	}
 }

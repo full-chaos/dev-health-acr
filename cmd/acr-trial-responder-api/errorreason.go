@@ -52,15 +52,18 @@ func providerErrorReason(status int, body []byte, includeMessage bool) string {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	field := func(v any) string {
+	field := func(v any, known map[string]bool) string {
 		s, _ := v.(string)
-		return oneLine(s, 80)
+		if s == "" || known[s] {
+			return s
+		}
+		return "other"
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return "http=" + strconv.Itoa(status) + " body_not_json"
 	}
 	e := envelope.Error
-	return "http=" + strconv.Itoa(status) + " type=" + field(e.Type) + " code=" + field(e.Code) + " param=" + field(e.Param) + messagePart(e.Message, includeMessage)
+	return "http=" + strconv.Itoa(status) + " type=" + field(e.Type, knownProviderErrorTypes) + " code=" + field(e.Code, knownProviderErrorCodes) + " param=" + field(e.Param, knownProviderErrorParams) + messagePart(e.Message, includeMessage)
 }
 
 func messagePart(message string, include bool) string {
@@ -77,3 +80,21 @@ func oneLine(s string, limit int) string {
 	}
 	return s
 }
+
+// type, code and param are provider-controlled strings, so only members of
+// these closed sets are reported; anything else is reported as "other".
+var (
+	knownProviderErrorTypes = map[string]bool{
+		"invalid_request_error": true, "authentication_error": true, "permission_error": true,
+		"rate_limit_error": true, "server_error": true, "not_found_error": true, "insufficient_quota": true,
+	}
+	knownProviderErrorCodes = map[string]bool{
+		"invalid_json_schema": true, "invalid_value": true, "unsupported_value": true, "unsupported_parameter": true,
+		"context_length_exceeded": true, "invalid_api_key": true, "model_not_found": true,
+		"rate_limit_exceeded": true, "insufficient_quota": true, "invalid_type": true, "missing_required_parameter": true,
+	}
+	knownProviderErrorParams = map[string]bool{
+		"response_format": true, "messages": true, "model": true, "reasoning_effort": true,
+		"temperature": true, "max_tokens": true, "max_completion_tokens": true, "seed": true,
+	}
+)

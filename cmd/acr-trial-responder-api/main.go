@@ -435,23 +435,12 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	// actually right". The request carries the schema as text only (the
 	// production Chat Completions wire), so nothing upstream enforces it.
 	schemaLoader := gojsonschema.NewGoLoader(schemaAny)
-	// req.Instructions carries real behavioral guidance beyond formatting
-	// ("base your answer ONLY on system and prompt -- do not invent facts
-	// not present in them") -- codex xhigh review round 1 (High, confirmed):
-	// an earlier draft decoded this field but never sent it to the model at
-	// all, silently dropping that grounding instruction from every live
-	// call. Sent as its own system-role message (not concatenated into
-	// req.System) so the two stay visibly distinct in the request body --
-	// the exact request-body shape a caller (main_test.go) can assert
-	// against. The file-writing sentences in this text (written for
-	// run-responder-codex.sh's own file-based responder) are harmless noise
-	// to a model that has no file-write tool available here; the JSON
-	// schema response_format below is this transport's own enforcement of
-	// that same output contract.
+	// req.Instructions is the file-exchange envelope text (it tells a
+	// file-writing responder to write the response file). Production sends a
+	// Chat Completions model no such text, and with only a JSON-object
+	// format an instruction-following model could answer with the envelope
+	// instead of the schema payload, so it is not sent.
 	system := req.System
-	if req.Instructions != "" {
-		system += "\n\n" + req.Instructions
-	}
 	// The wire production sends a Chat Completions model (genkitruntime
 	// llm_generator.go complete): a JSON object answer and the schema as text
 	// at the end of the system message, never a schema on the wire. The text
@@ -495,14 +484,11 @@ func (r *responder) answerOne(ctx context.Context, reqPath, respPath, logDir str
 	// decode failure -- unlike the SDK/transport-level errors classifyError
 	// handles (which fail the exact same way every retry), a fresh sampling
 	// attempt against the SAME request can plausibly produce compliant
-	// output on a later try. response_format.strict is left unset (this
-	// schema's own optional fields -- not every property in "required" --
-	// make OpenAI's strict mode reject the request outright with a 400,
-	// confirmed live before this comment was written; see the git history
-	// on this line for that attempt and its revert), so nothing upstream
-	// grammar-constrains the model at all -- both failure modes below are
-	// therefore routed through retryOrExhaust (bounded, not immediately
-	// terminal) instead of failing this request on the first miss.
+	// output on a later try. The request carries the schema as text only (a
+	// JSON-object format), so nothing upstream grammar-constrains the model:
+	// both failure modes below are routed through retryOrExhaust (bounded,
+	// not immediately terminal) instead of failing this request on the first
+	// miss.
 	if !json.Valid([]byte(content)) {
 		logf("operation=%s seq=%d elapsed=%s class=%s: model content is not valid JSON (%d bytes), retrying", req.Operation, req.Seq, elapsed, classInvalidOutput, len(content))
 		r.retryOrExhaust(respPath, base, req.SessionNonce, logf)
