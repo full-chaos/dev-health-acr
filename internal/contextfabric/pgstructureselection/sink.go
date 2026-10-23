@@ -229,7 +229,7 @@ func (s *Sink) insert(event contextfabric.StructureSelectionEvent) {
 	defer cancel()
 	if err := s.insertContext(ctx, event); err != nil {
 		s.metrics.addFailure()
-		s.logger.Warn("structure selection capture failed", "error", telemetryscrub.ErrorClass(err))
+		s.logger.Warn("structure selection capture failed", "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(err)))
 		return
 	}
 	s.metrics.addDelivered()

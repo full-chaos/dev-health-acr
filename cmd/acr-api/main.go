@@ -94,6 +94,7 @@ func serve(args []string) error {
 	}
 	defer shutdownExporter(exporter)
 	logger := slog.New(telemetryscrub.Handler(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))))
+	telemetryscrub.InstallDefault(os.Stdout, cfg.LogLevel)
 	logStarting(logger, info, cfg, os.LookupEnv)
 	exporter.LogStart(ctx, logger)
 

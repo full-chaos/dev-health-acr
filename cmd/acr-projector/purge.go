@@ -65,6 +65,7 @@ func purge(args []string) error {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	logger := slog.New(telemetryscrub.Handler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	telemetryscrub.InstallDefault(os.Stdout, cfg.LogLevel)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

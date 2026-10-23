@@ -313,3 +313,29 @@ func TestLogStartCertified(t *testing.T) {
 		t.Fatalf("a nil exporter wrote a start line: %s", out.String())
 	}
 }
+
+func TestLogHandlerExportsScrubbedRecordsWhateverTheBase(t *testing.T) {
+	exporter, s := newTestExporter(t)
+	var stdout bytes.Buffer
+	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(&stdout, nil)))
+	logger.Info("m", "authorization", "otlp-raw-secret", "remote_ip", "203.0.113.77", slog.Group("api_secret", "value", "g-secret"))
+	logger.With("token", "bound-secret").WithGroup("client").Info("m2", "address", "198.51.100.9")
+	if err := exporter.ForceFlush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	var all strings.Builder
+	for _, r := range s.logs.all() {
+		r.WalkAttributes(func(kv attribute.KeyValue) bool {
+			all.WriteString(string(kv.Key) + "=" + kv.Value.Emit() + ";")
+			return true
+		})
+	}
+	for _, leak := range []string{"otlp-raw-secret", "203.0.113.77", "g-secret", "bound-secret", "198.51.100.9"} {
+		if strings.Contains(all.String(), leak) {
+			t.Errorf("exported attributes leak %q: %s", leak, all.String())
+		}
+	}
+	if !strings.Contains(all.String(), "203.0.113.0/24") {
+		t.Errorf("exported remote_ip is not a network prefix: %s", all.String())
+	}
+}

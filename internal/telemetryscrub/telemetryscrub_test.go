@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func record(t *testing.T, build func(*slog.Logger)) map[string]any {
@@ -122,5 +123,162 @@ func TestErrorClass(t *testing.T) {
 	}
 	if got := ErrorClass(errors.New("x password=1")); got != "*errors.errorString" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func raw(t *testing.T, build func(*slog.Logger)) string {
+	t.Helper()
+	var buf bytes.Buffer
+	build(slog.New(Handler(slog.NewJSONHandler(&buf, nil))))
+	return buf.String()
+}
+
+func TestGroupNamesAndWithGroupArePartOfTheKey(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) {
+		l.Info("m", slog.Group("api_secret", "value", "group-secret"))
+		l.With(slog.Group("token", "v", "with-group-token")).Info("m")
+		l.WithGroup("client").With("address", "203.0.113.77").Info("m")
+		l.WithGroup("auth_token").Info("m", "plain", "wg-secret")
+		l.Info("m", slog.Group("client", "address", "203.0.113.78"))
+	})
+	for _, leak := range []string{"group-secret", "with-group-token", "203.0.113.77", "203.0.113.78", "wg-secret"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leak %q in %s", leak, out)
+		}
+	}
+}
+
+type probeStringer struct{}
+
+func (probeStringer) String() string { return "stringer-secret" }
+
+type probeStruct struct {
+	Name     string
+	Password string
+	Err      error
+	hidden   string
+}
+
+func TestOpaqueAnyValuesAreWalkedNotFormatted(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) {
+		l.Info("m",
+			"struct", probeStruct{Name: "n", Password: "struct-pw", Err: errors.New("struct raw error"), hidden: "hid"},
+			"map", map[string]any{"password": "map-secret", "attempt": 3},
+			"stringer", probeStringer{},
+			"ptr", &probeStruct{Name: "p"},
+			"nilerr", error(nil),
+			"list", []any{errors.New("list raw error"), "ok"},
+		)
+	})
+	for _, leak := range []string{"struct-pw", "struct raw error", "map-secret", "stringer-secret", "list raw error", "hid"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("leak %q in %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, `"attempt":3`) {
+		t.Errorf("plain map shape lost: %s", out)
+	}
+}
+
+func TestSeparatorVariantsOfProtectedKeys(t *testing.T) {
+	fragments := []string{"token", "secret", "password", "passwd", "credential", "authorization", "bearer", "cookie", "api_key", "signature", "dsn", "jwt", "session", "private_key"}
+	for _, f := range fragments {
+		variants := []string{f, strings.ToUpper(f), strings.ReplaceAll(f, "_", "-"), strings.ReplaceAll(f, "_", "."), strings.ReplaceAll(f, "_", ""), "x." + f, f + "_value", "Svc" + strings.ToUpper(f[:1]) + f[1:]}
+		for _, key := range variants {
+			got := record(t, func(l *slog.Logger) { l.Info("m", key, "variant-secret") })
+			if got[key] != Redacted {
+				t.Errorf("key %q = %v", key, got[key])
+			}
+		}
+	}
+	for _, key := range []string{"windsnow", "handsnap", "org_id", "request_id", "output_tokens"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", key, "ok") })
+		if key != "output_tokens" && got[key] != "ok" {
+			t.Errorf("key %q = %v, want kept", key, got[key])
+		}
+	}
+}
+
+func TestPEMBlockRedactedWhole(t *testing.T) {
+	for _, v := range []string{
+		"a -----BEGIN PRIVATE KEY-----\nMIIE-body-secret-material\n-----END PRIVATE KEY----- z",
+		"a -----BEGIN RSA PRIVATE KEY-----\nMIIE-body-secret-material",
+	} {
+		out := raw(t, func(l *slog.Logger) { l.Info("m", "note", v) })
+		if strings.Contains(out, "MIIE") || strings.Contains(out, "END PRIVATE") {
+			t.Errorf("pem material in %s", out)
+		}
+	}
+}
+
+func TestMessageIsScrubbed(t *testing.T) {
+	out := raw(t, func(l *slog.Logger) { l.Info("failed with Bearer abcdefghijklmnop1234") })
+	if strings.Contains(out, "abcdefghijklmnop") {
+		t.Errorf("message leak: %s", out)
+	}
+}
+
+func TestDefaultLoggerCanBeScrubbed(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	slog.SetDefault(slog.New(Handler(slog.NewJSONHandler(&buf, nil))))
+	slog.Info("m", "token", "default-raw-secret")
+	if strings.Contains(buf.String(), "default-raw-secret") {
+		t.Errorf("package-level call leaked: %s", buf.String())
+	}
+}
+
+func TestScrubIsIdempotent(t *testing.T) {
+	var buf bytes.Buffer
+	l := slog.New(Handler(Handler(slog.NewJSONHandler(&buf, nil))))
+	l.Info("m", "remote_ip", "203.0.113.77", "error", errors.New("x"))
+	if !strings.Contains(buf.String(), `"remote_ip":"203.0.113.0/24"`) || strings.Contains(buf.String(), "REDACTED") {
+		t.Errorf("double scrub changed output: %s", buf.String())
+	}
+}
+
+func TestCleanRecordPassesThroughUnchanged(t *testing.T) {
+	var got slog.Record
+	h := Handler(captureHandler{rec: &got})
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "plain", 0)
+	r.AddAttrs(slog.String("org_id", "o1"), slog.Int("n", 1))
+	if err := h.Handle(context.Background(), r); err != nil || got.NumAttrs() != 2 {
+		t.Fatalf("err=%v attrs=%d", err, got.NumAttrs())
+	}
+}
+
+type captureHandler struct{ rec *slog.Record }
+
+func (captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (c captureHandler) Handle(_ context.Context, r slog.Record) error {
+	*c.rec = r
+	return nil
+}
+func (c captureHandler) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c captureHandler) WithGroup(string) slog.Handler      { return c }
+
+func BenchmarkHandleCleanRecord(b *testing.B) {
+	h := Handler(captureHandler{rec: new(slog.Record)})
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "plain message", 0)
+	r.AddAttrs(slog.String("org_id", "o1"), slog.String("request_id", "r1"), slog.Int("n", 1))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = h.Handle(context.Background(), r)
+	}
+}
+
+func TestKeyClass(t *testing.T) {
+	cases := []struct {
+		key        string
+		prot, netw bool
+	}{
+		{"api.key", true, false}, {"Authorization", true, false}, {"output_tokens", false, false},
+		{"org_id", false, false}, {"remote_ip", false, true}, {"client.address", false, true}, {"handsnap", false, false},
+	}
+	for _, c := range cases {
+		if p, n := KeyClass(c.key); p != c.prot || n != c.netw {
+			t.Errorf("KeyClass(%q) = %v,%v want %v,%v", c.key, p, n, c.prot, c.netw)
+		}
 	}
 }

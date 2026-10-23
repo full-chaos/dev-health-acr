@@ -294,7 +294,7 @@ func (s *Sink) insert(event contextfabric.ClarificationSelectionEvent) {
 	defer cancel()
 	if err := s.insertContext(ctx, event); err != nil {
 		s.metrics.addFailure()
-		s.logger.Warn("clarification selection capture failed", "error", telemetryscrub.ErrorClass(err))
+		s.logger.Warn("clarification selection capture failed", "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(err)))
 		return
 	}
 	s.metrics.addDelivered()

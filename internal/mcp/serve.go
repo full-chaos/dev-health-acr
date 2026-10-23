@@ -83,5 +83,6 @@ func causedByCallerCancellation(ctx context.Context, err error) bool {
 // redacted -- callers must never pass a bearer token or raw response body
 // as a logged field regardless of level.
 func newDiagnosticsLogger(diagnostics io.Writer, level slog.Level) *slog.Logger {
+	telemetryscrub.InstallDefault(diagnostics, level)
 	return slog.New(telemetryscrub.Handler(slog.NewJSONHandler(diagnostics, &slog.HandlerOptions{Level: level})))
 }

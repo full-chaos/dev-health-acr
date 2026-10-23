@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -276,7 +277,7 @@ func (e *Exporter) LogHandler(base slog.Handler) slog.Handler {
 		return base
 	}
 	bridged := otelslog.NewHandler(instrumentationScope, otelslog.WithLoggerProvider(e.logs))
-	return teeHandler{primary: base, export: bridged}
+	return teeHandler{primary: base, export: telemetryscrub.Handler(bridged)}
 }
 
 // teeHandler writes to primary and, for every record primary is enabled for,
