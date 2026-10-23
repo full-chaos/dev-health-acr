@@ -916,8 +916,10 @@ func TestBoundedResynthesisReserveWithoutFallbackIsOneExpectedDraw(t *testing.T)
 
 // The production caller passes a ctx that already ends the composition
 // reserve before the request deadline, so the gate must be satisfiable by the
-// time the REQUEST has left after one draw, with that reserve withheld: 69s
-// of request, an 11s draw, 5s withheld -> 53s left, a 44s reserve.
+// time the REQUEST has left after one draw, with that reserve withheld. The
+// fake clock does not consume real deadline time, so the request is given the
+// budget that is left after the 11s draw: 54s, 5s withheld by the wrapper ->
+// 49s seen by the runtime, which holds a 44s reserve but not a 49s one.
 func TestBoundedResynthesisRunsThroughTheProductionWrapperWithItsOwnWithheldReserve(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
@@ -926,7 +928,7 @@ func TestBoundedResynthesisRunsThroughTheProductionWrapperWithItsOwnWithheldRese
 	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
 	rt := mustRuntime(t, slowDrawGenerator{gen, clock, 11 * time.Second}, Config{Logger: logger, Timeout: 45 * time.Second, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: 3, Fallback: fallback})
 	rt.now = clock.read
-	ctx, cancel := context.WithTimeout(context.Background(), 69*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 54*time.Second)
 	defer cancel()
 
 	synthesizer := contextfabric.RuntimeAnswerSynthesizer{Runtime: rt}
