@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -216,6 +217,9 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('noise-', toString(number)), 'pr', concat('f', substring(toString(generateUUIDv4()), 2), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise edges: %v", err)
 		}
+		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('issue-noise-', toString(number)), 'issue', concat('NZ-', toString(number)), 'issue', concat('NZ-T-', toString(number)), 'relates_to', NULL, 'linear', 'native', 0.9, '', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOrg, noiseRows)); err != nil {
+			t.Fatalf("seed issue-sourced noise edges: %v", err)
+		}
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise pull requests: %v", err)
 		}
@@ -390,6 +394,9 @@ func TestWorkGraphEdgeScopePrunesThePrimaryKey(t *testing.T) {
 	if err := direct.Exec(ctx, workGraphCommitNoiseSQL(200000)); err != nil {
 		t.Fatalf("seed commit noise edges: %v", err)
 	}
+	if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('issue-noise-', toString(number)), 'issue', concat('NZ-', toString(number)), 'issue', concat('NZ-T-', toString(number)), 'relates_to', NULL, 'linear', 'native', 0.9, '', now64(3), now64(3), '%s' FROM numbers(300000)`, wgOrg)); err != nil {
+		t.Fatalf("seed issue-sourced noise edges: %v", err)
+	}
 	if err := direct.Exec(ctx, "OPTIMIZE TABLE work_graph_edges FINAL"); err != nil {
 		t.Fatalf("optimize: %v", err)
 	}
@@ -442,6 +449,92 @@ func TestWorkGraphEdgeScopePrunesThePrimaryKey(t *testing.T) {
 	if commitWhole < 8 || commitArm*4 > commitWhole {
 		t.Errorf("the commit arm selects %d granules against %d for the whole commit source type: the key prefix does not prune it", commitArm, commitWhole)
 	}
+	assertIssueGateEdgeReadsPrune(t, ctx, direct)
+}
+
+// The statement the issue-title gate read before its edge arms were scoped by
+// the table key: one arm per edge end, each filtered by repo_id alone.
+const priorIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND source_type = 'issue' ` +
+	`UNION ALL SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND target_type = 'issue')`
+
+// assertIssueGateEdgeReadsPrune runs on a table holding 200k pull-request-sourced,
+// 200k commit-sourced and 300k issue-sourced edges of other work (the
+// issue-sourced ones with no repo_id, as in production). The gate read must read
+// a small share of the rows the prior statement read, and the two statements
+// must name the same issue keys, also once issue-sourced edges of the scoped
+// repository's own work items exist.
+func assertIssueGateEdgeReadsPrune(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
+	t.Helper()
+	bind := strings.NewReplacer("{org_id:String}", "'"+wgOrg+"'", "{repo_id:UUID}", "toUUID('"+wgRepo+"')").Replace
+	rowsRead := func(label, statement string) uint64 {
+		rows, err := direct.Query(ctx, "SELECT DISTINCT * FROM "+bind(statement)+" SETTINGS log_comment = '"+label+"'")
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		returned := 0
+		for rows.Next() {
+			returned++
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		t.Logf("%s returned %d rows", label, returned)
+		if err := rows.Close(); err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+			t.Fatalf("flush logs (measurement did not happen): %v", err)
+		}
+		var read uint64
+		if err := direct.QueryRow(ctx, `SELECT read_rows FROM system.query_log WHERE type = 'QueryFinish' AND current_database = currentDatabase() AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, label).Scan(&read); err != nil {
+			t.Fatalf("%s: measurement did not happen: %v", label, err)
+		}
+		return read
+	}
+	before, after := rowsRead("gate-prior", priorIssueEndpointIDsSQL), rowsRead("gate-current", contextpacket.WorkGraphIssueEndpointIDsSQL)
+	t.Logf("gate read reads %d rows, the prior statement read %d", after, before)
+	if before < 100000 {
+		t.Errorf("control: the prior gate read read %d rows, want the noise read (the control no longer shows the defect)", before)
+	}
+	if after*4 > before {
+		t.Errorf("the gate read reads %d rows against %d for the prior statement: the primary key does not prune it", after, before)
+	}
+	keys := func(statement string) []string {
+		rows, err := direct.Query(ctx, "SELECT DISTINCT * FROM "+bind(statement)+" ORDER BY 1")
+		if err != nil {
+			t.Fatalf("issue keys: %v", err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan issue key: %v", err)
+			}
+			out = append(out, id)
+		}
+		return out
+	}
+	same := func(when string) {
+		t.Helper()
+		priorKeys, currentKeys := keys(priorIssueEndpointIDsSQL), keys(contextpacket.WorkGraphIssueEndpointIDsSQL)
+		if len(priorKeys) < 8 || strings.Join(priorKeys, ",") != strings.Join(currentKeys, ",") {
+			t.Errorf("%s: issue keys differ: prior %v, current %v (want the same, at least 8)", when, priorKeys, currentKeys)
+		}
+	}
+	same("seeded rows")
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	now := time.Now().UTC()
+	for _, item := range []struct{ id, repo string }{{"CHAOS-91", wgRepo}, {"CHAOS-92", wgOther}} {
+		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.id, item.repo, wgOrg, "Issue with an issue-sourced edge", "open", "", "", "linear", "", now, now)
+		exec(fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT 'e-issue-%s', 'issue', '%s', 'issue', 'CHAOS-77', 'relates_to', NULL, 'linear', 'native', 0.9, '', now64(3), now64(3), '%s'`, item.id, item.id, wgOrg))
+	}
+	same("with issue-sourced edges of work items")
 }
 
 // An evidence-reference or source-row re-resolution names a repository-less

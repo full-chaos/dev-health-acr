@@ -17,12 +17,16 @@ const (
 	maxReadableRepositorylessIssueIDs = 5000
 )
 
-// workGraphIssueEndpointIDsSQL is every issue key that is an endpoint of the
-// scoped repository's work-graph edges.
-const workGraphIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND source_type = 'issue' ` +
-	`UNION ALL SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND target_type = 'issue')`
+// WorkGraphIssueEndpointIDsSQL is every issue key that is the target of one of
+// the scoped repository's work-graph edges. It takes the same key-prefix scope
+// as the served statement (WorkGraphEdgeScopeSQL), because the edge table key
+// has no repo_id. An issue-sourced edge is not in that scope (it carries no
+// repo_id and the statement never serves it), so no issue key is named as a
+// source; seeking the issue-sourced edges by the repository's work item ids
+// would read every work item of the repository on each packet.
+var WorkGraphIssueEndpointIDsSQL = `(SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND ` + WorkGraphEdgeScopeSQL("") + ` AND target_type = 'issue')`
 
-// workGraphIssueTitlesSQL yields one row per issue key that is an endpoint of
+// workGraphIssueTitlesSQL yields one row per issue key that is the target of
 // the scoped repository's edges, with the title only when exactly one distinct
 // title is readable for that key and it fits a label (an empty title
 // otherwise): every readable title counts toward a collision, however long. The work_items
@@ -31,9 +35,9 @@ const workGraphIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WH
 // authorized upstream; a row with no repository is readable only when its key
 // is in readable_repositoryless_issue_ids, which the caller's grant decided
 // (ReadableRepositorylessIssueIDs).
-const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.title) = 1 AND lengthUTF8(any(w.title)) <= 1000, any(w.title), '') AS title ` +
+var workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.title) = 1 AND lengthUTF8(any(w.title)) <= 1000, any(w.title), '') AS title ` +
 	`FROM work_items AS w FINAL ` +
-	`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) AND w.work_item_id IN ` + workGraphIssueEndpointIDsSQL + ` ` +
+	`WHERE w.org_id = {org_id:String} AND w.repo_id IN ({repo_id:UUID}, toUUID('` + nilRepositoryUUID + `')) AND w.work_item_id IN ` + WorkGraphIssueEndpointIDsSQL + ` ` +
 	`AND (w.repo_id = {repo_id:UUID} OR w.work_item_id IN {readable_repositoryless_issue_ids:Array(String)}) ` +
 	`AND w.title != '' GROUP BY w.work_item_id`
 
@@ -43,7 +47,7 @@ const workGraphIssueTitlesSQL = `SELECT w.work_item_id AS id, if(uniqExact(w.tit
 // against 5.0 MB for a join per endpoint). It is inlined at each use because a
 // named alias would be an unqualified name the org-scope sweep cannot tell
 // from a column.
-const workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) FROM (` + workGraphIssueTitlesSQL + `))`
+var workGraphIssueTitlesMapSQL = `(SELECT mapFromArrays(groupArray(id), groupArray(title)) FROM (` + workGraphIssueTitlesSQL + `))`
 
 func workGraphIssueTitleOf(id string) string {
 	return "arrayElement(" + workGraphIssueTitlesMapSQL + ", " + id + ")"
@@ -68,7 +72,7 @@ func (e *ClickHouseSourceExecutor) ReadableRepositorylessIssueIDs(ctx context.Co
 	}
 	scope := readers.WorkItemScopeSQL(readers.AuthorizationScope{RepositorySelectors: &readers.RepositorySelectorScope{Granted: plan.WorkItemGrant}})
 	statement := `SELECT w.work_item_id FROM work_items AS w FINAL ` + scope.JoinSQL + ` ` +
-		`WHERE w.org_id = {org_id:String} AND w.repo_id = toUUID('` + nilRepositoryUUID + `') AND w.work_item_id IN ` + workGraphIssueEndpointIDsSQL + ` ` +
+		`WHERE w.org_id = {org_id:String} AND w.repo_id = toUUID('` + nilRepositoryUUID + `') AND w.work_item_id IN ` + WorkGraphIssueEndpointIDsSQL + ` ` +
 		`AND (` + scope.AuthorizationExpr + `) GROUP BY w.work_item_id LIMIT ` + fmt.Sprint(maxReadableRepositorylessIssueIDs) + ` SETTINGS max_threads = 1`
 	bindings := append([]ClickHouseBinding{{Name: "org_id", Value: plan.OrgID}, {Name: "repo_id", Value: plan.RepoID}}, scope.Bindings...)
 	rows, err := e.client.Query(ctx, statement, bindings)

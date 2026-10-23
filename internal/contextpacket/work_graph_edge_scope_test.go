@@ -38,3 +38,19 @@ func TestWorkGraphReadsUseTheKeyPrefixEdgeScope(t *testing.T) {
 		}
 	}
 }
+
+func TestIssueGateEdgeReadUsesTheKeyPrefixScope(t *testing.T) {
+	scope := WorkGraphEdgeScopeSQL("")
+	for name, statement := range map[string]string{"endpoint ids": WorkGraphIssueEndpointIDsSQL, "title map": workGraphIssueTitlesMapSQL} {
+		if n := strings.Count(statement, scope); n != 1 {
+			t.Errorf("issue gate %s carries the key-prefix edge scope %d times, want once", name, n)
+		}
+		outside := strings.ReplaceAll(statement, scope, "")
+		if strings.Contains(outside, "repo_id = {repo_id:UUID} AND target_type") || strings.Contains(outside, "source_type = 'issue'") {
+			t.Errorf("issue gate %s filters an edge read by a bare repo_id equality or an issue-sourced arm outside the scope", name)
+		}
+	}
+	if strings.Contains(WorkGraphIssueEndpointIDsSQL, "work_items") || strings.Contains(WorkGraphIssueEndpointIDsSQL, "UNION") {
+		t.Errorf("the issue gate edge read reads work_items or has a second arm, whose cost grows with the repository's work items: %s", WorkGraphIssueEndpointIDsSQL)
+	}
+}
