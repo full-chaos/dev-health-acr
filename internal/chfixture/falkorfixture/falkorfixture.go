@@ -45,10 +45,12 @@ func Start(ctx context.Context, t testing.TB, image string, opts ...Option) test
 }
 
 func request(image string, opts []Option) testcontainers.GenericContainerRequest {
+	// Not an `Image:` field on purpose: scripts/ci/test-testcontainers-image-pins.sh checks the pin at each Start call site.
 	req := testcontainers.ContainerRequest{
-		Image: image, ExposedPorts: []string{"6379/tcp"},
-		WaitingFor: chfixture.FalkorReady(),
+		ExposedPorts: []string{"6379/tcp"},
+		WaitingFor:   chfixture.FalkorReady(),
 	}
+	req.Image = image
 	for _, opt := range opts {
 		opt(&req)
 	}
