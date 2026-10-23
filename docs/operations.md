@@ -1440,6 +1440,8 @@ bounds one model attempt. Tell them apart by `error.details.deadline` and by the
 A `model` answer with request budget left over means the model attempt, not the
 request, was the limit: raising `ACR_REQUEST_TIMEOUT` alone does not help.
 
+A model attempt that times out during synthesis, with its retries used, is not a 504: the answer is served as `status=degraded` with coverage class `model_call_not_completed`.
+
 **`ACR_WRITE_TIMEOUT` must be raised alongside it (CHAOS-4330).** This is
 `http.Server.WriteTimeout` — the wire-level deadline for writing the
 response — a completely different budget from `ACR_REQUEST_TIMEOUT`
