@@ -84,21 +84,31 @@ func TestStartupLineNeverCarriesFreeTextNames(t *testing.T) {
 	line, raw := startupLine(t, map[string]string{
 		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":  "https://embed.example/v1",
 		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":  "provider secret=Bearer review-secret",
-		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "model?password=review-secret",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "sk-secret-token-12345-review-secret",
 		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION": "8",
 		"ACR_CONTEXT_FABRIC_EMBED_API_KEY":   "k",
 	})
-	if strings.Contains(raw, "review-secret") || line["embed_provider"] != "invalid_name" || line["embed_model"] != "invalid_name" {
+	if strings.Contains(raw, "review-secret") || line["embed_provider"] != "unlisted" || line["embed_model"] != "unlisted" {
 		t.Fatalf("free-text names reached the startup line: %s", raw)
+	}
+	hex, hexRaw := startupLine(t, map[string]string{
+		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":  "https://embed.example/v1",
+		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":  "lmstudio",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION": "8",
+		"ACR_CONTEXT_FABRIC_EMBED_API_KEY":   "k",
+	})
+	if hex["embed_model"] != "unlisted" || hex["embed_model_configured"] != true || strings.Contains(hexRaw, "9f86d081") {
+		t.Fatalf("a token-shaped model reached the startup line: %s", hexRaw)
 	}
 	ok, _ := startupLine(t, map[string]string{
 		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":  "https://embed.example/v1",
 		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":  "lmstudio",
-		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "Qwen/Qwen3-Embedding-0.6B",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "qwen3-embedding",
 		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION": "1024",
 		"ACR_CONTEXT_FABRIC_EMBED_API_KEY":   "k",
 	})
-	if ok["embed_model"] != "Qwen/Qwen3-Embedding-0.6B" {
+	if ok["embed_model"] != "qwen3-embedding" {
 		t.Fatalf("a real model name was redacted: %v", ok["embed_model"])
 	}
 }

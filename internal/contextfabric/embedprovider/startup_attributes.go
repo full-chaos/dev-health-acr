@@ -1,22 +1,26 @@
 package embedprovider
 
-import (
-	"errors"
-	"regexp"
+import "errors"
+
+const startupNameUnlisted = "unlisted"
+
+// The startup line names a provider or model only when it equals an entry of
+// these closed lists, which are owned by this code: provider kinds from the
+// package doc in config.go, model ids from config.go and provider_test.go. A
+// value outside the lists is never logged, not even in part.
+var (
+	startupKnownProviders = map[string]bool{"lmstudio": true, "ollama": true, "tei": true, "vllm": true, "openai": true}
+	startupKnownModels    = map[string]bool{
+		"qwen3-embedding": true, "embeddinggemma": true, "nomic-embed-text": true,
+		"text-embedding-3-small": true, "text-embedding-3-large": true, "text-embedding-nomic-embed-text-v1.5": true,
+	}
 )
 
-const startupNameRedacted = "invalid_name"
-
-var startupNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:-]{0,63}$`)
-
-// startupName passes only an identifier-shaped name (no spaces, quotes, "=",
-// "@" or other credential punctuation, at most 64 characters); free text from
-// the environment is replaced by a fixed marker so it never reaches the log.
-func startupName(value string) string {
-	if value == "" || startupNamePattern.MatchString(value) {
+func startupName(value string, known map[string]bool) string {
+	if value == "" || known[value] {
 		return value
 	}
-	return startupNameRedacted
+	return startupNameUnlisted
 }
 
 // StartupAttributes returns the startup-log fields that disclose the embed
@@ -41,8 +45,9 @@ func StartupAttributes(lookup func(string) (string, bool)) []any {
 	return []any{
 		"embed_provider_configured", Configured(lookup),
 		"embed_config_valid", valid,
-		"embed_provider", startupName(cfg.Provider),
-		"embed_model", startupName(cfg.Model),
+		"embed_provider", startupName(cfg.Provider, startupKnownProviders),
+		"embed_model_configured", cfg.Model != "",
+		"embed_model", startupName(cfg.Model, startupKnownModels),
 		"embed_dimension", cfg.Dimension,
 		"embed_key_present", cfg.APIKey != "",
 	}
