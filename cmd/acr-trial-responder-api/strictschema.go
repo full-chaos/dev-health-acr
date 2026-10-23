@@ -51,6 +51,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 )
 
 // stripNullFieldsJSON parses raw as JSON and returns an equivalent document
@@ -69,6 +70,9 @@ func stripNullFieldsJSON(raw []byte) ([]byte, error) {
 	var v any
 	if err := decoder.Decode(&v); err != nil {
 		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after the JSON document")
 	}
 	return json.Marshal(stripNullFields(v))
 }

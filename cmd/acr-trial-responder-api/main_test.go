@@ -918,3 +918,14 @@ func TestAnswerOnePublishesLargeIntegersExactlyWhileStrippingNulls(t *testing.T)
 		t.Errorf("log %q lacks %q: output_bytes must count the published bytes", logs, want)
 	}
 }
+
+func TestStripNullFieldsJSONRefusesTrailingData(t *testing.T) {
+	for _, raw := range []string{`{"a":1} {"b":2}`, `{"a":1}x`, `{"a":1}]`} {
+		if out, err := stripNullFieldsJSON([]byte(raw)); err == nil {
+			t.Errorf("stripNullFieldsJSON(%q) = %s, want an error: json.Unmarshal refused trailing data and so must this", raw, out)
+		}
+	}
+	if out, err := stripNullFieldsJSON([]byte(" {\"a\":null,\"b\":1}\n")); err != nil || string(out) != `{"b":1}` {
+		t.Errorf("surrounding whitespace: out=%s err=%v, want {\"b\":1}", out, err)
+	}
+}
