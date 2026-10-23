@@ -40,7 +40,7 @@ const followUpClarificationPrompt = "This follow-up does not name the subject it
 // offerFollowUpAnchor offers the remembered identity first on a follow-up
 // admitted as admitted_follow_up whose own resolution committed nothing, and
 // records the carry decision. Any other turn passes through unchanged.
-func (t *anchorBindingTracker) offerFollowUpAnchor(resolution SubjectResolution, frame *QuestionFrame, parent parentAnchorEvidence, namedParent string) SubjectResolution {
+func (t *anchorBindingTracker) offerFollowUpAnchor(resolution SubjectResolution, frame *QuestionFrame, parent parentAnchorEvidence, namedParent string, termless bool) SubjectResolution {
 	if t == nil || t.admissionOutcome() != AnchorBindingAdmissionAdmittedFollowUp {
 		return resolution
 	}
@@ -49,7 +49,7 @@ func (t *anchorBindingTracker) offerFollowUpAnchor(resolution SubjectResolution,
 	case len(resolution.Committed) != 0:
 		t.carry = BoundAnchorCarryFollowUpCommitted
 		return resolution
-	case ScopeAnchorRetrievalKind(frame, held.Kind) != held.Kind:
+	case !termless && ScopeAnchorRetrievalKind(frame, held.Kind) != held.Kind:
 		t.carry = BoundAnchorCarryFollowUpFrameRefused
 		return resolution
 	case !parent.held() || parent.Subject.Kind != held.Kind || parent.Subject.CanonicalID != held.ID:
@@ -117,4 +117,15 @@ func (t *anchorBindingTracker) reconcileFollowUpStructure(material StructureOffe
 	out.AnchorOptions = kept
 	t.carry = BoundAnchorCarryFollowUpOfferedReconciled
 	return out
+}
+
+// termlessContinuation: the turn's frame was refused only for naming no
+// terms, and the request itself states a continuation (a named parent
+// result or referenced prior results). Both halves are explicit; neither is
+// inferred from the question text or from memory.
+func termlessContinuation(familyOutcome QuestionFamilyOutcome, request InvestigationRequest) bool {
+	gate := familyOutcome.Gate
+	return gate.Outcome == FrameGateRejectedInvalid && gate.FailedInvariant == FrameInvariantI3 &&
+		familyOutcome.WinningSample.TermlessNamedSubject &&
+		(carryParentSeed(request) != "" || len(carryReferencedResultIDs(request, nil)) > 0)
 }
