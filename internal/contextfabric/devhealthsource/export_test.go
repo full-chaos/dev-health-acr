@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -594,4 +595,37 @@ func keysForTest(rows []candidate) []string {
 		out[i] = fmt.Sprintf("%s/%s/%s", row.table, row.position().UTC().Format(time.RFC3339Nano), row.sortKey)
 	}
 	return out
+}
+
+// MainCIRunsStatementForTest is queryCIRuns' statement as main had it, with
+// no SETTINGS clause: the control a memory budget must be red on.
+func MainCIRunsStatementForTest(since time.Time, after string) string {
+	return strings.TrimSuffix(ciRunsStatement(cursorState{Since: since, After: after, Space: cursorSpaceIngest}), ciRunsSettings)
+}
+
+// CIRunsStatementForTest is the statement queryCIRuns sends for one page.
+func CIRunsStatementForTest(since time.Time, after string) string {
+	return ciRunsStatement(cursorState{Since: since, After: after, Space: cursorSpaceIngest})
+}
+
+// ReadCIRunsStatementForTest runs statement as one CI run page and returns
+// every selected column of every row, formatted, in order.
+func ReadCIRunsStatementForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement, orgID string, since time.Time, after string, limit int) ([]string, error) {
+	cursor := cursorState{Since: since, After: after, Space: cursorSpaceIngest}
+	rows, err := client.Query(ctx, statement, rowLimitBindings(orgID, cursor, limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var runID, repoID, branch, status, repoSlug, pipelineName string
+		var observedAt, startedAt, finishedAt, lastSynced time.Time
+		var hasFinished uint8
+		if err := rows.Scan(&runID, &repoID, &branch, &status, &repoSlug, &observedAt, &startedAt, &hasFinished, &finishedAt, &pipelineName, &lastSynced); err != nil {
+			return nil, err
+		}
+		out = append(out, fmt.Sprint(runID, "|", repoID, "|", branch, "|", status, "|", repoSlug, "|", observedAt.UTC().Format(time.RFC3339Nano), "|", startedAt.UTC().Format(time.RFC3339Nano), "|", hasFinished, "|", finishedAt.UTC().Format(time.RFC3339Nano), "|", pipelineName, "|", lastSynced.UTC().Format(time.RFC3339Nano)))
+	}
+	return out, rows.Err()
 }
