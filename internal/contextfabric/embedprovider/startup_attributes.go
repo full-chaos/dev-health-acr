@@ -1,6 +1,23 @@
 package embedprovider
 
-import "errors"
+import (
+	"errors"
+	"regexp"
+)
+
+const startupNameRedacted = "invalid_name"
+
+var startupNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:-]{0,63}$`)
+
+// startupName passes only an identifier-shaped name (no spaces, quotes, "=",
+// "@" or other credential punctuation, at most 64 characters); free text from
+// the environment is replaced by a fixed marker so it never reaches the log.
+func startupName(value string) string {
+	if value == "" || startupNamePattern.MatchString(value) {
+		return value
+	}
+	return startupNameRedacted
+}
 
 // StartupAttributes returns the startup-log fields that disclose the embed
 // provider state the binary will use: names, mode and presence only, never a
@@ -24,8 +41,8 @@ func StartupAttributes(lookup func(string) (string, bool)) []any {
 	return []any{
 		"embed_provider_configured", Configured(lookup),
 		"embed_config_valid", valid,
-		"embed_provider", cfg.Provider,
-		"embed_model", cfg.Model,
+		"embed_provider", startupName(cfg.Provider),
+		"embed_model", startupName(cfg.Model),
 		"embed_dimension", cfg.Dimension,
 		"embed_key_present", cfg.APIKey != "",
 	}

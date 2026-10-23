@@ -79,3 +79,26 @@ func TestStartupLineReadsTheKeyFileAndTrimsValues(t *testing.T) {
 		t.Fatalf("a rejected configuration is not flagged: %v", rejected)
 	}
 }
+
+func TestStartupLineNeverCarriesFreeTextNames(t *testing.T) {
+	line, raw := startupLine(t, map[string]string{
+		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":  "https://embed.example/v1",
+		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":  "provider secret=Bearer review-secret",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "model?password=review-secret",
+		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION": "8",
+		"ACR_CONTEXT_FABRIC_EMBED_API_KEY":   "k",
+	})
+	if strings.Contains(raw, "review-secret") || line["embed_provider"] != "invalid_name" || line["embed_model"] != "invalid_name" {
+		t.Fatalf("free-text names reached the startup line: %s", raw)
+	}
+	ok, _ := startupLine(t, map[string]string{
+		"ACR_CONTEXT_FABRIC_EMBED_BASE_URL":  "https://embed.example/v1",
+		"ACR_CONTEXT_FABRIC_EMBED_PROVIDER":  "lmstudio",
+		"ACR_CONTEXT_FABRIC_EMBED_MODEL":     "Qwen/Qwen3-Embedding-0.6B",
+		"ACR_CONTEXT_FABRIC_EMBED_DIMENSION": "1024",
+		"ACR_CONTEXT_FABRIC_EMBED_API_KEY":   "k",
+	})
+	if ok["embed_model"] != "Qwen/Qwen3-Embedding-0.6B" {
+		t.Fatalf("a real model name was redacted: %v", ok["embed_model"])
+	}
+}
