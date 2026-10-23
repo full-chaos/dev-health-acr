@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -594,4 +595,72 @@ func keysForTest(rows []candidate) []string {
 		out[i] = fmt.Sprintf("%s/%s/%s", row.table, row.position().UTC().Format(time.RFC3339Nano), row.sortKey)
 	}
 	return out
+}
+
+// legacyCIRunsStatement is queryCIRuns' statement as it stood on main
+// (884a1010), kept so a live test can read the same page through it and
+// through the current statement.
+func legacyCIRunsStatement(cursor cursorState) string {
+	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
+	const rowKey = "concat(toString(c.repo_id), ':', c.run_id)"
+	return `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
+       c.started_at, ` + nullableTimestamp("c.finished_at") + `,
+       ifNull(c.pipeline_name, ''), c.last_synced
+FROM ci_pipeline_runs AS c FINAL
+INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+}
+
+// ciRunsVariantStatement returns the statement a live test reads a CI run page
+// through: legacy, current, or a candidate shape under measurement.
+func ciRunsVariantStatement(variant string, cursor cursorState) (string, error) {
+	legacy := legacyCIRunsStatement(cursor)
+	const join = "INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id\n"
+	const prunedJoin = "INNER JOIN (SELECT id, org_id, repo FROM repos FINAL WHERE org_id = {org_id:String}) AS repo ON repo.id = c.repo_id AND repo.org_id = c.org_id\n"
+	switch variant {
+	case "legacy":
+		return legacy, nil
+	case "current":
+		return ciRunsStatement(cursor), nil
+	case "joinpruned":
+		return strings.Replace(legacy, join, prunedJoin, 1), nil
+	case "joinpruned+prewhere":
+		pruned := strings.Replace(legacy, join, prunedJoin, 1)
+		if cursor.Since.IsZero() && cursor.After == "" {
+			return pruned, nil
+		}
+		return strings.Replace(pruned, "WHERE c.org_id", "PREWHERE c.last_synced >= "+sinceBoundSQL+"\nWHERE c.org_id", 1), nil
+	case "prewhere":
+		if cursor.Since.IsZero() && cursor.After == "" {
+			return legacy, nil
+		}
+		return strings.Replace(legacy, "WHERE c.org_id", "PREWHERE c.last_synced >= "+sinceBoundSQL+"\nWHERE c.org_id", 1), nil
+	}
+	return "", fmt.Errorf("unknown CI run statement variant %q", variant)
+}
+
+// ReadCIRunsForTest reads one CI run page through the named statement variant
+// and returns every selected column of every row, formatted, in order.
+func ReadCIRunsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, variant, orgID string, since time.Time, after string, limit int) ([]string, error) {
+	cursor := cursorState{Since: since, After: after, Space: cursorSpaceIngest}
+	statement, err := ciRunsVariantStatement(variant, cursor)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := client.Query(ctx, statement, rowLimitBindings(orgID, cursor, limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var runID, repoID, branch, status, repoSlug, pipelineName string
+		var observedAt, startedAt, finishedAt, lastSynced time.Time
+		var hasFinished uint8
+		if err := rows.Scan(&runID, &repoID, &branch, &status, &repoSlug, &observedAt, &startedAt, &hasFinished, &finishedAt, &pipelineName, &lastSynced); err != nil {
+			return nil, err
+		}
+		out = append(out, fmt.Sprint(runID, "|", repoID, "|", branch, "|", status, "|", repoSlug, "|", observedAt.UTC().Format(time.RFC3339Nano), "|", startedAt.UTC().Format(time.RFC3339Nano), "|", hasFinished, "|", finishedAt.UTC().Format(time.RFC3339Nano), "|", pipelineName, "|", lastSynced.UTC().Format(time.RFC3339Nano)))
+	}
+	return out, rows.Err()
 }

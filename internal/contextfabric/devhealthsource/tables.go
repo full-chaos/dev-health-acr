@@ -1602,14 +1602,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowK
 // rows sharing a run_id also tied at the SQL keyset-pagination tiebreaker,
 // which could silently skip one of them at a page boundary.
 func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
-	const rowKey = "concat(toString(c.repo_id), ':', c.run_id)"
-	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
-       c.started_at, ` + nullableTimestamp("c.finished_at") + `,
-       ifNull(c.pipeline_name, ''), c.last_synced
-FROM ci_pipeline_runs AS c FINAL
-INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+	statement := ciRunsStatement(cursor)
 	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var runID, repoID, branch, status, repoSlug, pipelineName string
 		var observedAt, startedAt, finishedAt time.Time
@@ -1653,6 +1646,18 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowK
 			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
 		}, nil
 	})
+}
+
+// ciRunsStatement is queryCIRuns' statement for one page at cursor.
+func ciRunsStatement(cursor cursorState) string {
+	const timestampExpr = "coalesce(c.finished_at, c.started_at)"
+	const rowKey = "concat(toString(c.repo_id), ':', c.run_id)"
+	return `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
+       c.started_at, ` + nullableTimestamp("c.finished_at") + `,
+       ifNull(c.pipeline_name, ''), c.last_synced
+FROM ci_pipeline_runs AS c FINAL
+INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
 }
 
 // dependencyCursorExpr is queryWorkItemDependencies' keyset position: the
