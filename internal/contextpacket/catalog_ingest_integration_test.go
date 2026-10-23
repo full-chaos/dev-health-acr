@@ -22,10 +22,6 @@ func TestQuietSyncedRepositoryReadsFreshOnARealStore(t *testing.T) {
 	for _, statement := range devhealthschema.DDL() {
 		scopeExec(t, ctx, direct, statement)
 	}
-	scopeExec(t, ctx, direct, `CREATE TABLE git_commits (org_id String, repo_id UUID, hash String, message Nullable(String), author_name Nullable(String), author_email Nullable(String), author_when DateTime64(3, 'UTC'), committer_name Nullable(String), committer_email Nullable(String), committer_when DateTime64(3, 'UTC'), parents UInt32, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`)
-	scopeExec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
-	// devhealthschema does not declare the work graph; the sync-time statement reads three columns of it.
-	scopeExec(t, ctx, direct, `CREATE TABLE work_graph_edges (org_id String, repo_id UUID, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id)`)
 	event := "now64(3) - toIntervalDay(9)"
 	rowsSynced := "now64(3) - toIntervalHour(2)"
 	repoSynced := "now64(3) - toIntervalHour(1)"

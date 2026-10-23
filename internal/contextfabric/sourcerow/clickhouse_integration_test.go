@@ -120,11 +120,6 @@ func seedIntegration(t *testing.T, ctx context.Context, direct clickhousedriver.
 	for _, statement := range devhealthschema.DDL() {
 		exec(t, ctx, direct, statement)
 	}
-	// devhealthschema does not declare the commit tables; these are the ops
-	// definitions (migrations/clickhouse/000_raw_tables.sql) with the org_id
-	// column and sorting key of migration 027.
-	exec(t, ctx, direct, `CREATE TABLE git_commits (org_id String, repo_id UUID, hash String, message Nullable(String), author_name Nullable(String), author_email Nullable(String), author_when DateTime64(3, 'UTC'), committer_name Nullable(String), committer_email Nullable(String), committer_when DateTime64(3, 'UTC'), parents UInt32, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`)
-	exec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
 	now := "'2026-09-01 12:00:00.000'"
 	past := "'2026-01-01 00:00:00.000000'"
 	for _, statement := range []string{
