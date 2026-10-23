@@ -493,6 +493,9 @@ trial_wire_common_env() {
   # FALKOR_ADDR, which would reintroduce the exact DSN-string-parsing class
   # this whole cutover just finished eliminating from the shell side.
   export ACR_TEST_TRIAL_CH_HOST="$ch_host"
+  if [[ -n "${ACR_TRIAL_FALKOR_GRAPH_PREFIX:-}" ]]; then
+    export ACR_TEST_TRIAL_FALKOR_GRAPH_PREFIX="$ACR_TRIAL_FALKOR_GRAPH_PREFIX"
+  fi
   export ACR_TEST_TRIAL_FALKOR_HOST="$falkor_host"
   # ACR_CONTEXT_FABRIC_FALKOR_TLS/ALLOW_INSECURE (CHAOS-4186 follow-up,
   # real incident during the VM resize): NOT ACR_TEST_TRIAL_*-prefixed --
@@ -530,7 +533,7 @@ trial_wire_common_env() {
   # a run against the standing `acr` database are different measurements
   # (different answer-reuse and structure-prior state), and before this the
   # line reported only host:port, which is identical for both.
-  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port}/${ACR_TRIAL_PG_DATABASE} ch=$(printf '%s' "$ch_dsn" | sed -E 's#.*@##') falkor=$falkor_addr" >&2
+  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port}/${ACR_TRIAL_PG_DATABASE} ch=$(printf '%s' "$ch_dsn" | sed -E 's#.*@##') falkor=$falkor_addr graph_prefix=${ACR_TRIAL_FALKOR_GRAPH_PREFIX:-acr-cf (default)}" >&2
 }
 
 # trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is

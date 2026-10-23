@@ -809,6 +809,59 @@ func TestAnswerOneTreatsExplicitNullAsOmittedForOptionalFields(t *testing.T) {
 	}
 }
 
+func TestAnswerOnePublishesOutputWithExplicitNullFieldsStripped(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	srv, _ := fakeChatCompletionsServer(t, `{"answer":"ok","note":null,"nested":{"keep":"x","drop":null}}`)
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+
+	name := "000001-interpret.json"
+	req := exchangeRequest{
+		Operation:    "interpret",
+		Seq:          1,
+		SessionNonce: "n1",
+		System:       "system prompt",
+		Prompt:       "user prompt",
+		OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"answer":{"type":"string"},"note":{"type":"string"},"nested":{"type":"object","additionalProperties":false,"properties":{"keep":{"type":"string"},"drop":{"type":"string"}}}},"required":["answer"]}`),
+		Instructions: "produce JSON matching output_schema",
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requests", name), body, 0o644); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	respPath := filepath.Join(dir, "responses", name)
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", name), respPath, filepath.Join(dir, "_responder_logs"))
+
+	raw, err := os.ReadFile(respPath)
+	if err != nil {
+		t.Fatalf("no response published: %v", err)
+	}
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != "" {
+		t.Fatalf("response = %s (%v), want a successful output", raw, err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(resp.Output, &out); err != nil {
+		t.Fatalf("output not JSON: %v", err)
+	}
+	if _, present := out["note"]; present {
+		t.Errorf("published output %s still carries the null-valued optional key note: the engine decoders treat a present null as a value (member_qualifier is rejected), so a validated-as-omitted field must be published omitted", resp.Output)
+	}
+	nested, _ := out["nested"].(map[string]any)
+	if _, present := nested["drop"]; present || nested["keep"] != "x" {
+		t.Errorf("published nested = %v, want only keep=x", nested)
+	}
+}
+
 func TestAnswerOneRetriesMalformedModelJSON(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
@@ -827,5 +880,52 @@ func TestAnswerOneRetriesMalformedModelJSON(t *testing.T) {
 
 	if _, err := os.Stat(respPath); err == nil {
 		t.Fatal("answerOne published a response after a single malformed-JSON attempt -- must be retried, not treated as terminal, on the first miss")
+	}
+}
+
+func TestAnswerOnePublishesLargeIntegersExactlyWhileStrippingNulls(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"requests", "responses", "_responder_logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	srv, _ := fakeChatCompletionsServer(t, `{"answer":"ok","note":null,"n":9007199254740993,"f":1.50}`)
+	defer srv.Close()
+	r := newTestResponder(t, dir, srv.URL)
+	name := "000001-interpret.json"
+	req := exchangeRequest{Operation: "interpret", Seq: 1, SessionNonce: "n1", System: "s", Prompt: "p",
+		OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"},"note":{"type":"string"},"n":{"type":"integer"},"f":{"type":"number"}},"required":["answer"]}`)}
+	body, _ := json.Marshal(req)
+	if err := os.WriteFile(filepath.Join(dir, "requests", name), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	respPath := filepath.Join(dir, "responses", name)
+	r.answerOne(t.Context(), filepath.Join(dir, "requests", name), respPath, filepath.Join(dir, "_responder_logs"))
+	raw, err := os.ReadFile(respPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp exchangeResponse
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Error != "" {
+		t.Fatalf("response = %s (%v)", raw, err)
+	}
+	if !strings.Contains(string(resp.Output), `"n":9007199254740993`) || !strings.Contains(string(resp.Output), `"f":1.50`) {
+		t.Errorf("published output %s altered a number token", resp.Output)
+	}
+	logs, _ := os.ReadFile(filepath.Join(dir, "_responder_logs", name+".log"))
+	if want := fmt.Sprintf("output_bytes=%d", len(resp.Output)); !strings.Contains(string(logs), want) {
+		t.Errorf("log %q lacks %q: output_bytes must count the published bytes", logs, want)
+	}
+}
+
+func TestStripNullFieldsJSONRefusesTrailingData(t *testing.T) {
+	for _, raw := range []string{`{"a":1} {"b":2}`, `{"a":1}x`, `{"a":1}]`} {
+		if out, err := stripNullFieldsJSON([]byte(raw)); err == nil {
+			t.Errorf("stripNullFieldsJSON(%q) = %s, want an error: json.Unmarshal refused trailing data and so must this", raw, out)
+		}
+	}
+	if out, err := stripNullFieldsJSON([]byte(" {\"a\":null,\"b\":1}\n")); err != nil || string(out) != `{"b":1}` {
+		t.Errorf("surrounding whitespace: out=%s err=%v, want {\"b\":1}", out, err)
 	}
 }

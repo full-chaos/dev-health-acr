@@ -48,8 +48,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 )
 
 // stripNullFieldsJSON parses raw as JSON and returns an equivalent document
@@ -59,12 +61,18 @@ import (
 // call site's own comment in answerOne) -- strict mode's only way to
 // represent "this optional field is absent" is an explicit null, and the
 // original schema was written expecting the key to be MISSING instead.
-// Never used on what gets published as the response's own Output: that
-// stays exactly what the model returned.
+// The same stripped bytes are what is published as the response's Output.
+// Number tokens are kept verbatim (UseNumber), so an integer above 2^53 is
+// never rounded.
 func stripNullFieldsJSON(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	if err := decoder.Decode(&v); err != nil {
 		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after the JSON document")
 	}
 	return json.Marshal(stripNullFields(v))
 }
