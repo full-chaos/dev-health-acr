@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -60,6 +62,43 @@ func TestAModelTimeoutNamesTheModelTimeoutNotTheRequestBudget(t *testing.T) {
 			entry := decodeFailureLog(t, logs.String())
 			if got := entry["failure_classification"]; got != testCase.wantClassified {
 				t.Fatalf("failure_classification = %v, want %q", got, testCase.wantClassified)
+			}
+		})
+	}
+}
+
+func TestAnExpiredRequestDeadlineIsReportedAsTheRequestDeadlineEvenWhenAModelAttemptTimedOut(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"a model-tagged deadline", fmt.Errorf("%w: %w", cf.ErrModelTimeout, context.DeadlineExceeded)},
+		{"a bare deadline", context.DeadlineExceeded},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			app, token, logs := newContextFabricTestAppWithLogs(t, nil)
+			response := httptest.NewRecorder()
+			request := investigationRequest(t, token)
+			ctx, cancel := context.WithDeadline(request.Context(), time.Now().Add(-time.Second))
+			defer cancel()
+
+			app.writeContextFabricError(response, request.WithContext(ctx), testCase.err)
+
+			var body struct {
+				Error struct {
+					Message string         `json:"message"`
+					Details map[string]any `json:"details"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusGatewayTimeout || body.Error.Details["deadline"] != "request" || strings.Contains(body.Error.Message, "ACR_CONTEXT_FABRIC_MODEL_TIMEOUT") {
+				t.Fatalf("status=%d body=%s, want 504 with details.deadline=request and no model-knob message", response.Code, response.Body.String())
+			}
+			if got := decodeFailureLog(t, logs.String())["failure_classification"]; got != "deadline_exceeded" {
+				t.Fatalf("failure_classification = %v, want deadline_exceeded", got)
 			}
 		})
 	}
