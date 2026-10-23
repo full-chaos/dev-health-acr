@@ -2,6 +2,9 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +18,7 @@ import (
 
 type recordedStatement struct {
 	reader     string
+	shape      string
 	start, end time.Duration
 }
 
@@ -51,7 +55,7 @@ func (c turnCountingClient) Query(ctx context.Context, statement string, binding
 	reader, _ := contextpacket.StatementReaderFromContext(ctx)
 	c.rec.mu.Lock()
 	idx := len(c.rec.items)
-	c.rec.items = append(c.rec.items, recordedStatement{reader: reader, start: time.Since(c.rec.origin)})
+	c.rec.items = append(c.rec.items, recordedStatement{reader: reader, shape: statementShape(statement), start: time.Since(c.rec.origin)})
 	c.rec.mu.Unlock()
 	rows, err := c.inner.Query(ctx, statement, bindings)
 	if err != nil {
@@ -85,6 +89,19 @@ func (r *turnStatementRecorder) chain() int {
 	return best
 }
 
+var statementTable = regexp.MustCompile(`(?is)\bfrom\s+\(?\s*(?:select.*?from\s+)?([a-z_][a-z0-9_.]*)`)
+
+// statementShape names a statement by its first table and a short hash of its
+// text, so repeats of one statement show as one name with a count.
+func statementShape(statement string) string {
+	table := "?"
+	if match := statementTable.FindStringSubmatch(statement); match != nil {
+		table = match[1]
+	}
+	sum := sha256.Sum256([]byte(statement))
+	return table + "#" + hex.EncodeToString(sum[:3])
+}
+
 func (r *turnStatementRecorder) readers() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -92,7 +109,7 @@ func (r *turnStatementRecorder) readers() string {
 	for _, item := range r.items {
 		name := item.reader
 		if name == "" {
-			name = "(unnamed)"
+			name = item.shape
 		}
 		counts[name]++
 	}
