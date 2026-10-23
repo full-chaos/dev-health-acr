@@ -555,7 +555,8 @@ func TestWorkGraphCommitArmPrefixServesTheSameWriterEdgesAsTheWholeCommitRead(t 
 	for _, row := range []struct{ id, source, repo string }{
 		{"w-commit-a", wgRepo + "@" + sha, wgRepo},
 		{"w-commit-b", wgRepo + "@c1c2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", wgRepo},
-		{"o-commit-a", wgOther + "@" + sha, wgOther},
+		// Distinct source ids: the table key has no edge id, so one source, edge type and target keeps one row.
+		{"o-commit-a", wgOther + "@c1c2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", wgOther},
 		{"x-commit-foreign", wgOther + "@" + sha, wgRepo},
 	} {
 		if err := direct.Exec(ctx, `INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) VALUES (?, 'commit', ?, 'issue', 'CHAOS-77', 'implements', ?, 'github', 'explicit_text', 0.9, '', now64(3), now64(3), ?)`, row.id, row.source, row.repo, wgOrg); err != nil {
