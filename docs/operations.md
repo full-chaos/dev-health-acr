@@ -1426,6 +1426,20 @@ synthesis that passes the budget still returns 504 `deadline_exceeded`. A
 second synthesis attempt needs a third of `ACR_REQUEST_TIMEOUT` left, so under
 a narrow budget it is refused and the first failure is what is served.
 
+**Two different deadlines end an investigation as `504 upstream_unavailable`.**
+`ACR_REQUEST_TIMEOUT` bounds the whole request; `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`
+bounds one model attempt. Tell them apart by `error.details.deadline` and by the
+`failure_classification` on the failure log line:
+
+| Deadline that passed | `details.deadline` | `failure_classification` | Setting to change |
+|---|---|---|---|
+| One model attempt reached its own timeout while the request deadline had not passed | `model` | `model_deadline_exceeded` | `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` (1s-2m), or the provider's latency |
+| The request deadline passed | `request` | `deadline_exceeded` | `ACR_REQUEST_TIMEOUT` |
+| A deadline from any other stage, with the request still live | absent | `deadline_exceeded` | read `failure_stage` |
+
+A `model` answer with request budget left over means the model attempt, not the
+request, was the limit: raising `ACR_REQUEST_TIMEOUT` alone does not help.
+
 **`ACR_WRITE_TIMEOUT` must be raised alongside it (CHAOS-4330).** This is
 `http.Server.WriteTimeout` — the wire-level deadline for writing the
 response — a completely different budget from `ACR_REQUEST_TIMEOUT`
