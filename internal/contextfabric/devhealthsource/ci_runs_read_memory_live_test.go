@@ -81,7 +81,7 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 		{name: "steady", since: base.Add(time.Duration(ciRunsRows-100) * time.Second)},
 		{name: "future", since: base.Add(60 * 24 * time.Hour)},
 	}
-	variants := []string{"legacy", "current", "joinpruned", "prewhere", "joinpruned+prewhere"}
+	variants := []string{"legacy", "current", "joinpruned", "prewhere", "joinpruned+prewhere", "threads1", "threads2", "block8192", "threads1+block8192", "narrowproxy"}
 	for _, cursor := range cursors {
 		var want []string
 		for _, variant := range variants {
@@ -98,6 +98,9 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 				}
 				continue
 			}
+			if variant == "narrowproxy" {
+				continue
+			}
 			if !slices.Equal(got, want) {
 				t.Errorf("%s: %d rows differ from main's %d rows", name, len(got), len(want))
 			}
@@ -111,7 +114,7 @@ func TestLiveCIRunsPageReadMemory(t *testing.T) {
 	}
 
 	var wantCount uint64
-	for _, variant := range []string{"legacy", "current", "joinpruned"} {
+	for _, variant := range []string{"legacy", "current", "joinpruned", "threads1"} {
 		got, err := devhealthsource.ReadCIRunCountForTest(contextpacket.WithStatementReader(ctx, "ci-count-"+variant), reader, variant, ciRunsOrganization)
 		if err != nil {
 			t.Errorf("count %s: %v", variant, err)

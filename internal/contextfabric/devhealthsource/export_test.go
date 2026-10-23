@@ -630,6 +630,16 @@ func ciRunsVariantStatement(variant string, cursor cursorState) (string, error) 
 			return pruned, nil
 		}
 		return strings.Replace(pruned, "WHERE c.org_id", "PREWHERE c.last_synced >= "+sinceBoundSQL+"\nWHERE c.org_id", 1), nil
+	case "threads1":
+		return legacy + " SETTINGS max_threads = 1", nil
+	case "threads2":
+		return legacy + " SETTINGS max_threads = 2", nil
+	case "block8192":
+		return legacy + " SETTINGS max_block_size = 8192", nil
+	case "threads1+block8192":
+		return legacy + " SETTINGS max_threads = 1, max_block_size = 8192", nil
+	case "narrowproxy":
+		return "SELECT c.run_id, toString(c.repo_id), repo.repo, c.last_synced\n" + legacy[strings.Index(legacy, "FROM ci_pipeline_runs"):], nil
 	case "prewhere":
 		if cursor.Since.IsZero() && cursor.After == "" {
 			return legacy, nil
@@ -653,6 +663,11 @@ func ReadCIRunsForTest(ctx context.Context, client contextpacket.ClickHouseQuery
 	}
 	defer rows.Close()
 	var out []string
+	if variant == "narrowproxy" {
+		for rows.Next() {
+		}
+		return nil, rows.Err()
+	}
 	for rows.Next() {
 		var runID, repoID, branch, status, repoSlug, pipelineName string
 		var observedAt, startedAt, finishedAt, lastSynced time.Time
@@ -683,6 +698,8 @@ func ReadCIRunCountForTest(ctx context.Context, client contextpacket.ClickHouseQ
 				statement = st.sql
 			}
 		}
+	case "threads1":
+		statement = legacyCIRunCountStatement + " SETTINGS max_threads = 1"
 	case "joinpruned":
 		statement = strings.Replace(legacyCIRunCountStatement, "INNER JOIN repos AS repo FINAL ON", "INNER JOIN (SELECT id, org_id FROM repos FINAL WHERE org_id = {org_id:String}) AS repo ON", 1)
 	}
