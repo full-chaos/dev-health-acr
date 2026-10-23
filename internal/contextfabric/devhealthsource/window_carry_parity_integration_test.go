@@ -30,16 +30,19 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 		mustExec(t, ctx, f.h.direct, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`,
 			id, fmt.Sprintf("acme/carry-%d", i), nil, base, nil, base, f.h.orgID, "github")
 	}
-	teams := []string{"T-1", "T-2", "T-3", "T-4", "T-5", "T-6"}
+	teams := make([]string, 12)
+	for i := range teams {
+		teams[i] = fmt.Sprintf("T-%d", i+1)
+	}
 	for _, id := range teams {
 		f.team(id, stamp(), stamp())
 	}
-	projects := make([]string, 8)
+	projects := make([]string, 12)
 	for i := range projects {
 		projects[i] = fmt.Sprintf("10715000-0000-4000-8000-0000000001%02d", i)
 		f.project(projects[i], fmt.Sprintf("K%d", i), stamp(), stamp())
 	}
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 50; i++ {
 		f.ownership(teams[rng.Intn(len(teams))], projects[rng.Intn(len(projects))], fmt.Sprintf("K%d", rng.Intn(len(projects))), stamp(), stamp())
 	}
 	for i := 0; i < 60; i++ {
