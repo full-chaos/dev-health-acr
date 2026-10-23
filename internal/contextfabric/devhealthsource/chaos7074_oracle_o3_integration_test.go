@@ -12,9 +12,9 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/testcontainers/testcontainers-go"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -62,17 +62,7 @@ func chaos7074FalkorAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adap
 func chaos7074FalkorAdapterWith(t *testing.T, ctx context.Context, configure func(*falkorgraph.Config)) *falkorgraph.Adapter {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: chaos7074FalkorImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start FalkorDB container: %v", err)
-	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	container := falkorfixture.Start(ctx, t, chaos7074FalkorImage)
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatal(err)

@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // newLiveAdapterWithIdentityUniverse mirrors newLiveAdapter (adapter_live_integration_test.go)
@@ -34,15 +34,7 @@ func newLiveAdapterWithIdentityUniverse(t *testing.T, ctx context.Context, ident
 func newLiveAdapterWithIdentityUniverseAndTracer(t *testing.T, ctx context.Context, identityUniverse func(ctx context.Context, orgID string) ([]graphrank.IdentityRow, time.Time, bool, error), telemetry falkorgraph.GraphTelemetry, tracer graphrank.ResolutionTracer) *falkorgraph.Adapter {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	require.NoError(t, err, "start FalkorDB container")
-	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
+	container := falkorfixture.Start(ctx, t, falkordbImage)
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
 	port, err := container.MappedPort(ctx, "6379/tcp")

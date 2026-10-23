@@ -20,6 +20,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
@@ -146,17 +147,7 @@ func (r *scopedRoundTracer) take() []graphrank.ResolutionTraceEvent {
 func scopedFalkor(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, tracer graphrank.ResolutionTracer) *Adapter {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: codexRoundFalkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady(),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start FalkorDB container: %v", err)
-	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	container := falkorfixture.Start(ctx, t, codexRoundFalkordbImage)
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatal(err)

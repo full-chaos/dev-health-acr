@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/falkorfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/orgpurge"
@@ -17,7 +18,6 @@ import (
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -65,13 +65,7 @@ func newRig(t *testing.T) *rig {
 	_, err = runner.Apply(ctx, db)
 	require.NoError(t, err)
 
-	fk, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{Image: falkordbImage, ExposedPorts: []string{"6379/tcp"},
-			WaitingFor: chfixture.FalkorReady()},
-		Started: true,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, fk.Terminate(context.Background())) })
+	fk := falkorfixture.Start(ctx, t, falkordbImage)
 	host, err := fk.Host(ctx)
 	require.NoError(t, err)
 	port, err := fk.MappedPort(ctx, "6379/tcp")
