@@ -424,11 +424,17 @@ func periodDeltaRequirements(kinds []SubjectKind) []FactRequirement {
 // subjects and the just-read facts to applyPeriodDelta. A turn with no
 // validated frame derives no obligations, so it changes nothing.
 func (e *Engine) applyPeriodDeltaForTurn(ctx context.Context, principal storage.Principal, frame *QuestionFrame, timeContext TimeContext, subjects []SubjectRef, facts []CanonicalFact) []CanonicalFact {
+	return e.applyPeriodDeltaForTurnWithPrior(ctx, principal, frame, timeContext, subjects, facts, nil)
+}
+
+// applyPeriodDeltaForTurnWithPrior is applyPeriodDeltaForTurn with the prior
+// read already started beside the current read (nil starts it here).
+func (e *Engine) applyPeriodDeltaForTurnWithPrior(ctx context.Context, principal storage.Principal, frame *QuestionFrame, timeContext TimeContext, subjects []SubjectRef, facts []CanonicalFact, prior *periodDeltaPrior) []CanonicalFact {
 	if frame == nil {
 		return facts
 	}
 	asOf, anchored := periodDeltaCurrentAsOf(timeContext, e.now())
-	return e.applyPeriodDelta(ctx, principal, *frame, subjects, facts, asOf, anchored)
+	return e.applyPeriodDeltaWithPrior(ctx, principal, *frame, subjects, facts, asOf, anchored, prior)
 }
 
 // applyPeriodDelta compares the current and prior health bands of every
@@ -445,6 +451,72 @@ func (e *Engine) applyPeriodDeltaForTurn(ctx context.Context, principal storage.
 // left off the served facts, and that count rides the event as
 // UnservedCount. Served fields of the producer are never replaced.
 func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Principal, frame QuestionFrame, subjects []SubjectRef, currentFacts []CanonicalFact, currentAsOf time.Time, anchored bool) []CanonicalFact {
+	return e.applyPeriodDeltaWithPrior(ctx, principal, frame, subjects, currentFacts, currentAsOf, anchored, nil)
+}
+
+// periodDeltaPrior is the prior-point health read, started on its own so it
+// can run beside the current read: it needs the frame, the subjects and the
+// as-of instant, never the current facts.
+type periodDeltaPrior struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	bundle CanonicalFactBundle
+	err    error
+	panics any
+}
+
+// stop ends a prior read nobody will wait for.
+func (p *periodDeltaPrior) stop() {
+	if p != nil {
+		p.cancel()
+	}
+}
+
+func (p *periodDeltaPrior) wait() (CanonicalFactBundle, error) {
+	<-p.done
+	if p.panics != nil {
+		panic(p.panics)
+	}
+	return p.bundle, p.err
+}
+
+// startPeriodDeltaPriorRead begins the prior-point read when the turn owes a
+// period delta for an eligible subject at an anchored instant, and returns nil
+// otherwise.
+func (e *Engine) startPeriodDeltaPriorRead(ctx context.Context, principal storage.Principal, frame QuestionFrame, subjects []SubjectRef, currentAsOf time.Time, anchored bool) *periodDeltaPrior {
+	if !anchored || !frame.HasObligation(ObligationPeriodDelta) {
+		return nil
+	}
+	eligible := periodDeltaEligibleSubjects(subjects)
+	if len(eligible) == 0 {
+		return nil
+	}
+	touchedKinds := periodDeltaTouchedSubjectKinds(eligible)
+	priorAsOf := currentAsOf.Add(-PeriodDeltaWindowDays * 24 * time.Hour)
+	readCtx, cancel := context.WithCancel(ctx)
+	prior := &periodDeltaPrior{done: make(chan struct{}), cancel: cancel}
+	go func() {
+		defer close(prior.done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				prior.panics = recovered
+			}
+		}()
+		prior.bundle, prior.err = e.facts.ReadFacts(readCtx, principal, CanonicalFactRequest{
+			Question: InterpretedQuestion{
+				TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &priorAsOf},
+			},
+			Subjects:     eligible,
+			Requirements: periodDeltaRequirements(touchedKinds),
+		})
+	}()
+	return prior
+}
+
+// applyPeriodDeltaWithPrior is applyPeriodDelta with the prior read already
+// started (prior, from startPeriodDeltaPriorRead); nil starts it here.
+func (e *Engine) applyPeriodDeltaWithPrior(ctx context.Context, principal storage.Principal, frame QuestionFrame, subjects []SubjectRef, currentFacts []CanonicalFact, currentAsOf time.Time, anchored bool, prior *periodDeltaPrior) []CanonicalFact {
+	defer prior.stop()
 	if !frame.HasObligation(ObligationPeriodDelta) {
 		return currentFacts
 	}
@@ -462,14 +534,11 @@ func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Princip
 	} else {
 		// The prior point is exactly PeriodDeltaWindowDays before the
 		// CURRENT point's own as-of instant.
-		priorAsOf := currentAsOf.Add(-PeriodDeltaWindowDays * 24 * time.Hour)
-		priorBundle, err := e.facts.ReadFacts(ctx, principal, CanonicalFactRequest{
-			Question: InterpretedQuestion{
-				TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &priorAsOf},
-			},
-			Subjects:     eligible,
-			Requirements: periodDeltaRequirements(touchedKinds),
-		})
+		if prior == nil {
+			prior = e.startPeriodDeltaPriorRead(ctx, principal, frame, subjects, currentAsOf, anchored)
+			defer prior.stop()
+		}
+		priorBundle, err := prior.wait()
 		switch {
 		case err != nil:
 			failure = periodDeltaFailureReasonOf(err)

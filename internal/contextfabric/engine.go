@@ -3681,12 +3681,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// with no subjects fails here as a NAMED condition the route classifies,
 	// instead of rediscovering the unclassified 500.
 	var facts CanonicalFactBundle
+	var periodPrior *periodDeltaPrior
+	defer func() { periodPrior.stop() }()
 	if workItemTuple {
 		facts.Version = nonEmptyVersion("", "")
 	}
 	if !workItemTuple || len(subjects) > 0 {
 		if len(factRequest.Subjects) == 0 {
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
+		}
+		if !workItemTuple && familyOutcome.Frame != nil {
+			priorAsOf, anchored := periodDeltaCurrentAsOf(clampedInterpretedTime, e.now())
+			periodPrior = e.startPeriodDeltaPriorRead(ctx, principal, *familyOutcome.Frame, subjects, priorAsOf, anchored)
 		}
 		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
 		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
@@ -3743,7 +3749,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// different, fixed plan), so period-delta has nothing to enrich on
 	// that path.
 	if !workItemTuple {
-		facts.Facts = e.applyPeriodDeltaForTurn(ctx, principal, familyOutcome.Frame, clampedInterpretedTime, subjects, facts.Facts)
+		facts.Facts = e.applyPeriodDeltaForTurnWithPrior(ctx, principal, familyOutcome.Frame, clampedInterpretedTime, subjects, facts.Facts, periodPrior)
 	}
 
 	if workItemTuple {
