@@ -94,7 +94,7 @@ func TestGraphCountCheckDisabledReportsNothing(t *testing.T) {
 
 func TestSlogObserverGraphCountCheckInfoLineIsCertified(t *testing.T) {
 	t.Parallel()
-	first := projectionrun.GraphCountCheck{OrgID: "org-a", Instance: "inst-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Pass: 1, Duration: 42 * time.Millisecond}
+	first := projectionrun.GraphCountCheck{OrgID: "org-a", Instance: "inst-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, RelationsCompared: 3, EdgeGaps: 2, RelationsDeferred: 8, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Pass: 1, Duration: 42 * time.Millisecond}
 	second := projectionrun.GraphCountCheck{OrgID: "org-a", Instance: "inst-a", SourcesChecked: 2, KindsCompared: 7, Outcome: projectionrun.GraphCountCheckCompleted, Pass: 2, Duration: 5 * time.Millisecond}
 	certifyLog := func(t *testing.T, checks []projectionrun.GraphCountCheck, want map[string]any) {
 		t.Helper()
@@ -113,12 +113,12 @@ func TestSlogObserverGraphCountCheckInfoLineIsCertified(t *testing.T) {
 	}
 	certifyLog(t, []projectionrun.GraphCountCheck{first}, map[string]any{
 		"org_id_hash": "527a4c0a7e94", "instance": "inst-a", "pass": 1, "outcome": "failed", "sources_checked": 2,
-		"kinds_compared": 7, "gap_count": 1, "error_count": 3, "duration_ms": 42,
+		"kinds_compared": 7, "gap_count": 1, "relations_compared": 3, "edge_gap_count": 2, "relations_deferred": 8, "error_count": 3, "duration_ms": 42,
 	})
 	// Two recurring checks of one organization are two passes, not a duplicate.
 	certifyLog(t, []projectionrun.GraphCountCheck{first, second}, map[string]any{
 		"org_id_hash": "527a4c0a7e94", "instance": "inst-a", "pass": 2, "outcome": "completed", "sources_checked": 2,
-		"kinds_compared": 7, "gap_count": 0, "error_count": 0, "duration_ms": 5,
+		"kinds_compared": 7, "gap_count": 0, "relations_compared": 0, "edge_gap_count": 0, "relations_deferred": 0, "error_count": 0, "duration_ms": 5,
 	})
 }
 

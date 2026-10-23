@@ -17669,6 +17669,21 @@
         "presence": "required"
       },
       {
+        "key": "relations_compared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edge_gap_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "relations_deferred",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "error_count",
         "type": "int",
         "presence": "required"

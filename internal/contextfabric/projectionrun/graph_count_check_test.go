@@ -22,6 +22,24 @@ type countingSource struct {
 	err      error
 	callsFor atomic.Int64
 	onCount  func()
+
+	edges       map[contextfabric.EdgeCountKey]int64
+	edgeErr     error
+	deferred    []contextfabric.RelationshipType
+	edgeCalls   atomic.Int64
+	onEdgeCount func()
+}
+
+func (s *countingSource) ProjectionSourceEdgeCounts(context.Context, string) (map[contextfabric.EdgeCountKey]int64, error) {
+	s.edgeCalls.Add(1)
+	if s.onEdgeCount != nil {
+		s.onEdgeCount()
+	}
+	return s.edges, s.edgeErr
+}
+
+func (s *countingSource) DeferredEdgeRelations() []contextfabric.RelationshipType {
+	return s.deferred
 }
 
 func (s *countingSource) ProjectionSourceCounts(context.Context, string) (map[contextfabric.SubjectKind]int64, error) {
@@ -36,6 +54,13 @@ type countingBackend struct {
 	*fakeBackend
 	graph map[contextfabric.SubjectKind]int64
 	err   error
+
+	edgeGraph map[contextfabric.EdgeCountKey]int64
+	edgeErr   error
+}
+
+func (b *countingBackend) CountEdges(_ context.Context, _ string, key contextfabric.EdgeCountKey) (int64, error) {
+	return b.edgeGraph[key], b.edgeErr
 }
 
 func (b *countingBackend) CountKind(_ context.Context, _ string, kind contextfabric.SubjectKind) (int64, error) {
@@ -43,9 +68,16 @@ func (b *countingBackend) CountKind(_ context.Context, _ string, kind contextfab
 }
 
 type belowObserver struct {
-	mu     sync.Mutex
-	events []projectionrun.GraphBelowSource
-	checks []projectionrun.GraphCountCheck
+	mu         sync.Mutex
+	events     []projectionrun.GraphBelowSource
+	edgeEvents []projectionrun.GraphEdgesBelowSource
+	checks     []projectionrun.GraphCountCheck
+}
+
+func (o *belowObserver) ObserveGraphEdgesBelowSource(e projectionrun.GraphEdgesBelowSource) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.edgeEvents = append(o.edgeEvents, e)
 }
 
 func (o *belowObserver) ObserveGraphCountCheck(c projectionrun.GraphCountCheck) {
@@ -65,6 +97,7 @@ func (o *belowObserver) ObserveGraphBelowSource(e projectionrun.GraphBelowSource
 
 type countHarness struct {
 	source   *countingSource
+	backend  *countingBackend
 	observer *belowObserver
 	log      *bytes.Buffer
 	marker   *fakeRebuildMarker
@@ -74,6 +107,31 @@ type countHarness struct {
 
 func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.SubjectKind]int64, sourceErr, graphErr error, interval time.Duration, fetchErr ...error) *countHarness {
 	t.Helper()
+	return buildCountHarness(t, sourceCounts, graphCounts, sourceErr, graphErr, interval, nil, nil, fetchErr...)
+}
+
+// nodeOnlySource and nodeOnlyBackend expose the node count capabilities and
+// none of the edge ones, as a source or backend that predates the edge check.
+type nodeOnlySource struct {
+	*fakeSource
+	inner *countingSource
+}
+
+func (s nodeOnlySource) ProjectionSourceCounts(ctx context.Context, org string) (map[contextfabric.SubjectKind]int64, error) {
+	return s.inner.ProjectionSourceCounts(ctx, org)
+}
+
+type nodeOnlyBackend struct {
+	*fakeBackend
+	inner *countingBackend
+}
+
+func (b nodeOnlyBackend) CountKind(ctx context.Context, org string, kind contextfabric.SubjectKind) (int64, error) {
+	return b.inner.CountKind(ctx, org, kind)
+}
+
+func buildCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.SubjectKind]int64, sourceErr, graphErr error, interval time.Duration, wrapSource func(*countingSource) contextfabric.ProjectionSource, wrapBackend func(*countingBackend) contextfabric.ProjectionBackend, fetchErr ...error) *countHarness {
+	t.Helper()
 	var sourceFetchErr error
 	if len(fetchErr) > 0 {
 		sourceFetchErr = fetchErr[0]
@@ -82,6 +140,14 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 	logger := slog.New(slog.NewJSONHandler(buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	source := &countingSource{fakeSource: &fakeSource{name: "source-a", dormant: true, err: sourceFetchErr}, counts: sourceCounts, err: sourceErr}
 	backend := &countingBackend{fakeBackend: newFakeBackend(), graph: graphCounts, err: graphErr}
+	var sourceUnderTest contextfabric.ProjectionSource = source
+	if wrapSource != nil {
+		sourceUnderTest = wrapSource(source)
+	}
+	var backendUnderTest contextfabric.ProjectionBackend = backend
+	if wrapBackend != nil {
+		backendUnderTest = wrapBackend(backend)
+	}
 	observer := &belowObserver{}
 	marker := newFakeRebuildMarker()
 	var clock atomic.Pointer[time.Time]
@@ -89,8 +155,8 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 	clock.Store(&start)
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:                  []string{"org-a"},
-		Sources:                 []projectionrun.SourcePair{{Name: "source-a", Source: source}},
-		Backend:                 backend,
+		Sources:                 []projectionrun.SourcePair{{Name: "source-a", Source: sourceUnderTest}},
+		Backend:                 backendUnderTest,
 		Checkpoints:             newFakeCheckpointStore(),
 		RebuildMarkers:          marker,
 		Observer:                observer,
@@ -103,7 +169,7 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return &countHarness{source: source, observer: observer, log: buffer, marker: marker, cancel: cancel, run: func(now time.Time) {
+	return &countHarness{source: source, backend: backend, observer: observer, log: buffer, marker: marker, cancel: cancel, run: func(now time.Time) {
 		clock.Store(&now)
 		coordinator.Tick(ctx)
 	}}

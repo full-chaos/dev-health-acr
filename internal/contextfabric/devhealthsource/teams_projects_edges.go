@@ -464,22 +464,41 @@ func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger, ingest b
 }
 
 func membershipStatement(cursor cursorState, ingest, pruned bool) string {
-	// event_id is part of the row key (codex xhigh review R1, HIGH,
-	// confirmed real -- see membershipIntervalsSubquery's own doc comment):
-	// two transition-arm intervals for the SAME (subject, project) pair CAN
-	// legally share an observed_at down to the millisecond, and without
-	// event_id in the tiebreaker, both the RelationshipID (below) and the
-	// keyset-pagination cursor would collide on it.
-	rowKey := rowKeySQL("subject_kind", "repo_id_str", "subject_id", "provider", "project_id", "event_id")
-	var changedTouches, changedSuperseded, changedPresence, incrementalSettings string
+	var incrementalSettings string
+	if pruned && !cursor.Since.IsZero() {
+		// Measured on a real server: with the subjects pruned, the memory
+		// left is the per-thread buffers of the three arms (about 50 MB at
+		// 4 threads, 17 MB at one), not the data.
+		incrementalSettings = " SETTINGS max_threads = 1"
+	}
+	cursorColumn := "observed_at"
+	if ingest {
+		cursorColumn = "ingest_at"
+	}
+	rowKey := membershipRowKey()
+	return membershipRows(cursor, ingest, pruned) + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey) + incrementalSettings
+}
+
+// membershipRowKey is the keyset tiebreaker of the membership statement.
+//
+// event_id is part of the row key (codex xhigh review R1, HIGH,
+// confirmed real -- see membershipIntervalsSubquery's own doc comment):
+// two transition-arm intervals for the SAME (subject, project) pair CAN
+// legally share an observed_at down to the millisecond, and without
+// event_id in the tiebreaker, both the RelationshipID (below) and the
+// keyset-pagination cursor would collide on it.
+func membershipRowKey() string {
+	return rowKeySQL("subject_kind", "repo_id_str", "subject_id", "provider", "project_id", "event_id")
+}
+
+// membershipRows is the membership statement up to and including its
+// WHERE 1 = 1: every row of the three arms, before the keyset predicate,
+// ordering and page limit. The edge count reads it through
+// membershipEdgeCountSQL, so the count and the producer share one row source.
+func membershipRows(cursor cursorState, ingest, pruned bool) string {
+	var changedTouches, changedSuperseded, changedPresence string
 	if pruned {
 		changedTouches, changedSuperseded, changedPresence = changedMembershipFilters(cursor, ingest)
-		if !cursor.Since.IsZero() {
-			// Measured on a real server: with the subjects pruned, the memory
-			// left is the per-thread buffers of the three arms (about 50 MB at
-			// 4 threads, 17 MB at one), not the data.
-			incrementalSettings = " SETTINGS max_threads = 1"
-		}
 	}
 	// toDateTime64(0, 3, 'UTC') matches project_membership_transitions.
 	// occurred_at's own declared scale (DateTime64(3)) -- the NULL branch of
@@ -489,9 +508,9 @@ func membershipStatement(cursor cursorState, ingest, pruned bool) string {
 	// ingest: the cursor pages on the ingest stamp (the transitions'
 	// ingested_at, folded with the adjacent touches, and the presence view's
 	// last_synced) selected as the LAST column; otherwise on observed_at.
-	cursorColumn, ingestSelect, transitionIngest, columnIngest, supersededIngest := "observed_at", "", "", "", ""
+	ingestSelect, transitionIngest, columnIngest, supersededIngest := "", "", "", ""
 	if ingest {
-		cursorColumn, ingestSelect = "ingest_at", ", ingest_at"
+		ingestSelect = ", ingest_at"
 		transitionIngest, columnIngest, supersededIngest = ", m.ingest_at AS ingest_at", ", m.last_synced AS ingest_at", ", m.ingest_at AS ingest_at"
 	}
 	return `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
@@ -518,7 +537,7 @@ FROM (
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 )
-WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey) + incrementalSettings
+WHERE 1 = 1`
 }
 
 func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger, ingest bool) ([]candidate, bool, error) {

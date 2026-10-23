@@ -34,6 +34,13 @@ type GraphCountObserver interface {
 	ObserveGraphCountCheck(GraphCountCheck)
 }
 
+// GraphEdgeCountObserver is an OPTIONAL Observer extension: when the configured
+// Observer implements it, every edge population the count check finds below its
+// source is reported as a counter event.
+type GraphEdgeCountObserver interface {
+	ObserveGraphEdgesBelowSource(GraphEdgesBelowSource)
+}
+
 const (
 	GraphCountCheckCompleted = "completed"
 	GraphCountCheckCancelled = "cancelled"
@@ -56,10 +63,19 @@ type GraphCountCheck struct {
 	KindsCompared  int
 	// Gaps counts the confirmed graph_below_source gaps this check reported.
 	Gaps int
-	// Errors counts the source or graph count reads that failed this check.
-	Errors   int
-	Duration time.Duration
-	At       time.Time
+	// Errors counts the source or graph count reads that failed this check, and
+	// every measurement the check could not make at all (a source or backend with
+	// node counts and no edge counts).
+	Errors int
+	// RelationsCompared counts the edge populations (relation type, arm) whose
+	// source and graph counts were both read. EdgeGaps counts the confirmed
+	// graph_edges_below_source gaps. RelationsDeferred counts the distinct
+	// relation types the sources produce and do not measure yet.
+	RelationsCompared int
+	EdgeGaps          int
+	RelationsDeferred int
+	Duration          time.Duration
+	At                time.Time
 }
 
 // GraphBelowSource is one kind whose graph node count trails its source count
@@ -68,6 +84,20 @@ type GraphBelowSource struct {
 	OrgID       string
 	Source      string
 	Kind        contextfabric.SubjectKind
+	SourceCount int64
+	GraphCount  int64
+	Tolerance   int64
+	At          time.Time
+}
+
+// GraphEdgesBelowSource is one edge population (relation type and arm) whose
+// graph edge count trails its source count by more than the tolerance. Counts
+// only; content-safe.
+type GraphEdgesBelowSource struct {
+	OrgID       string
+	Source      string
+	Relation    contextfabric.RelationshipType
+	Arm         string
 	SourceCount int64
 	GraphCount  int64
 	Tolerance   int64
@@ -202,9 +232,11 @@ func (g *graphCountState) due(orgID string, sources []string, now time.Time, int
 }
 
 // checkGraphCounts compares, per kind, the source's row count against the
-// graph's node count and warns `graph_below_source` when the graph trails the
-// source beyond the tolerance. It never fails or blocks the tick: a count
-// error is its own Warn class.
+// graph's node count and, per relation type and arm, the source's distinct edge
+// count against the graph's edge count. It warns `graph_below_source` and
+// `graph_edges_below_source` when the graph trails the source beyond the
+// tolerance. It never fails or blocks the tick: a count error is its own Warn
+// class, and a measurement the check could not make is `graph_edge_count_unmeasured`.
 func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	if c.graphCountInterval <= 0 || ctx.Err() != nil {
 		return
@@ -216,15 +248,14 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	if !c.graphCounts.due(orgID, c.sourceNames, c.now(), c.graphCountInterval) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, graphCountCheckTimeout)
-	defer cancel()
 	hash := orgIDHash(orgID)
 	started := c.now()
 	result := GraphCountCheck{OrgID: orgID, Instance: c.graphCounts.instanceID(), Pass: c.graphCounts.nextPass(orgID), At: started}
+	cancelled := false
 	defer func() {
 		result.Duration = c.now().Sub(started)
 		switch {
-		case ctx.Err() != nil:
+		case cancelled || ctx.Err() != nil:
 			result.Outcome = GraphCountCheckCancelled
 		case result.Errors > 0:
 			result.Outcome = GraphCountCheckFailed
@@ -235,6 +266,22 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 			obs.ObserveGraphCountCheck(result)
 		}
 	}()
+	// Each phase has its own timeout: the edge read walks a full history and
+	// must not starve the node read, nor the other way round.
+	nodeCtx, cancelNodes := context.WithTimeout(ctx, graphCountCheckTimeout)
+	c.checkNodeCounts(nodeCtx, orgID, hash, graph, &result)
+	cancelled = nodeCtx.Err() != nil
+	cancelNodes()
+	if ctx.Err() != nil {
+		return
+	}
+	edgeCtx, cancelEdges := context.WithTimeout(ctx, graphCountCheckTimeout)
+	defer cancelEdges()
+	c.checkEdgeCounts(edgeCtx, orgID, hash, &result)
+	cancelled = cancelled || edgeCtx.Err() != nil
+}
+
+func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, graph contextfabric.ProjectionGraphCounts, result *GraphCountCheck) {
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
 		if !ok {
@@ -279,6 +326,82 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 			result.Gaps++
 			if obs, ok := c.observer.(GraphCountObserver); ok {
 				obs.ObserveGraphBelowSource(GraphBelowSource{OrgID: orgID, Source: source, Kind: kind, SourceCount: sourceCount, GraphCount: graphCount, Tolerance: tolerance, At: c.now()})
+			}
+		}
+	}
+}
+
+// checkEdgeCounts is the edge phase of the check. Every source the node phase
+// measured must also be measurable here: a source or backend that reads node
+// counts and no edge counts is reported (graph_edge_count_unmeasured) and fails
+// the check, never skipped.
+func (c *Coordinator) checkEdgeCounts(ctx context.Context, orgID, hash string, result *GraphCountCheck) {
+	graph, ok := c.backend.(contextfabric.ProjectionGraphEdgeCounts)
+	if !ok {
+		result.Errors++
+		c.logger.WarnContext(ctx, "context_fabric: graph_edge_count_unmeasured", "check", "graph_edge_count", "reason", "backend_no_edge_counts",
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash))
+		return
+	}
+	deferred := map[contextfabric.RelationshipType]bool{}
+	defer func() { result.RelationsDeferred = len(deferred) }()
+	for _, source := range c.sourceNames {
+		if _, measured := c.sources[source].(contextfabric.ProjectionSourceCounts); !measured {
+			continue
+		}
+		counter, ok := c.sources[source].(contextfabric.ProjectionSourceEdgeCounts)
+		if !ok {
+			result.Errors++
+			c.logger.WarnContext(ctx, "context_fabric: graph_edge_count_unmeasured", "check", "graph_edge_count", "reason", "source_no_edge_counts",
+				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash))
+			continue
+		}
+		for _, relation := range counter.DeferredEdgeRelations() {
+			deferred[relation] = true
+		}
+		sourceCounts, err := counter.ProjectionSourceEdgeCounts(ctx, orgID)
+		if err != nil {
+			result.Errors++
+			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "edge_source_count",
+				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+			continue
+		}
+		keys := make([]contextfabric.EdgeCountKey, 0, len(sourceCounts))
+		for key := range sourceCounts {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].Relation != keys[j].Relation {
+				return keys[i].Relation < keys[j].Relation
+			}
+			return keys[i].Arm < keys[j].Arm
+		})
+		for _, key := range keys {
+			sourceCount := sourceCounts[key]
+			graphCount, err := graph.CountEdges(ctx, orgID, key)
+			if err != nil {
+				result.Errors++
+				c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "edge_graph_count",
+					"source", contextfabric.SanitizeLogAttr(source), "relation_type", contextfabric.SanitizeLogAttr(string(key.Relation)), "arm", contextfabric.SanitizeLogAttr(key.Arm),
+					"org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+				continue
+			}
+			result.RelationsCompared++
+			tolerance := graphCountTolerance(sourceCount, graphCount)
+			gapKey := pairKey(orgID, source) + "\x00edge\x00" + string(key.Relation) + "\x00" + key.Arm
+			if sourceCount-graphCount <= tolerance {
+				c.graphCounts.clearGap(gapKey)
+				continue
+			}
+			if !c.graphCounts.confirmGap(gapKey) {
+				continue
+			}
+			c.logger.WarnContext(ctx, "context_fabric: graph_edges_below_source", "check", "graph_edges_below_source",
+				"source", contextfabric.SanitizeLogAttr(source), "relation_type", contextfabric.SanitizeLogAttr(string(key.Relation)), "arm", contextfabric.SanitizeLogAttr(key.Arm),
+				"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source_count", sourceCount, "graph_count", graphCount, "tolerance", tolerance)
+			result.EdgeGaps++
+			if obs, ok := c.observer.(GraphEdgeCountObserver); ok {
+				obs.ObserveGraphEdgesBelowSource(GraphEdgesBelowSource{OrgID: orgID, Source: source, Relation: key.Relation, Arm: key.Arm, SourceCount: sourceCount, GraphCount: graphCount, Tolerance: tolerance, At: c.now()})
 			}
 		}
 	}

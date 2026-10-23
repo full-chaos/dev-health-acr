@@ -1435,6 +1435,42 @@ type ProjectionGraphCounts interface {
 	CountKind(ctx context.Context, orgID string, kind SubjectKind) (int64, error)
 }
 
+// EdgeCountKey names one measured edge population: a relation type and, for a
+// relation whose producer has arms of different weight (BELONGS_TO_PROJECT:
+// transition intervals and the plain work-item column), the arm. Arm is empty
+// for a relation with one arm.
+type EdgeCountKey struct {
+	Relation RelationshipType
+	Arm      string
+}
+
+// The arms of BELONGS_TO_PROJECT: an interval edge (it carries a validity start)
+// and the plain work-item column edge (it carries none).
+const (
+	EdgeArmTransition     = "transition"
+	EdgeArmWorkItemColumn = "work_item_column"
+)
+
+// ProjectionSourceEdgeCounts is an OPTIONAL capability a ProjectionSource
+// implements to report, per measured edge population, how many DISTINCT edges
+// (relationship identities, never scanned rows) its producers currently assert
+// for an organization, counted over the producers' own row shape. Every
+// measured key is present in the map, zero included. DeferredEdgeRelations
+// names the relation types the source produces but does not measure, so a
+// reader can tell "not measured by design" from "measured and clean".
+// Read-only; never advances a cursor.
+type ProjectionSourceEdgeCounts interface {
+	ProjectionSourceEdgeCounts(ctx context.Context, orgID string) (map[EdgeCountKey]int64, error)
+	DeferredEdgeRelations() []RelationshipType
+}
+
+// ProjectionGraphEdgeCounts is an OPTIONAL capability a ProjectionBackend
+// implements to count the distinct edges of one measured population that the
+// organization holds in its ACTIVE graph.
+type ProjectionGraphEdgeCounts interface {
+	CountEdges(ctx context.Context, orgID string, key EdgeCountKey) (int64, error)
+}
+
 // ProjectionPeeker is an OPTIONAL capability a ProjectionSource implements only
 // when it can answer "would NextProjectionBatch offer a batch at this
 // checkpoint?" with NO side effects: no consumed-progress memo, no ledger or
