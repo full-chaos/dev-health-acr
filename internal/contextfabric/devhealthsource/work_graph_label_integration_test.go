@@ -504,7 +504,9 @@ func TestWorkGraphCommitShaFilterServesTheWriterFormEdges(t *testing.T) {
 	const sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
 	const other = "f9e8d7c6e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
 	for _, row := range []struct{ id, srcType, source, tgtType, target, edgeType string }{
-		{"w-commit-writer", "commit", wgRepo + "@" + sha, "issue", "CHAOS-99", "implements"},
+		// A different edge type from the seed twin e-commit-issue-writer: the table key has no
+		// edge id, so the same source, edge type and target would collapse the two rows.
+		{"w-commit-writer", "commit", wgRepo + "@" + sha, "issue", "CHAOS-99", "relates_to"},
 		{"w-pr-contains-commit", "pr", wgRepo + "#pr311", "commit", wgRepo + "@" + sha, "contains"},
 		{"w-commit-other", "commit", wgRepo + "@" + other, "issue", "CHAOS-77", "implements"},
 	} {
@@ -515,7 +517,7 @@ func TestWorkGraphCommitShaFilterServesTheWriterFormEdges(t *testing.T) {
 	labels := workGraphLabelsForCommit(t, ctx, query, nil, sha)
 	want := map[string]string{
 		"e-commit-issue-writer": "commit a1b2c3d4 implements CHAOS-99 (repository-wide)",
-		"w-commit-writer":       "commit a1b2c3d4 implements CHAOS-99 (repository-wide)",
+		"w-commit-writer":       "commit a1b2c3d4 relates to CHAOS-99 (repository-wide)",
 		"w-pr-contains-commit":  "acme/deploy-service#311 Rework deploy pipeline stages contains commit a1b2c3d4 (repository-wide)",
 	}
 	if len(labels) != len(want) {
