@@ -1,12 +1,16 @@
 package devhealthfacts_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -90,16 +94,48 @@ func TestTurnScopeStatementsOfATeamTurnThatExpandsSeveralKinds(t *testing.T) {
 		}
 	}
 	counted := countTurnStatements(t, query)
-	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(counted), contextfabric.FactRegistryOptions{ScopeExpander: recordScopeSpans(counted, devhealthfacts.NewScopeExpander(counted))})
+	fixedNow := func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(counted), contextfabric.FactRegistryOptions{Now: fixedNow, ScopeExpander: recordScopeSpans(counted, devhealthfacts.NewScopeExpander(counted))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}, severalKindsTeamRequest()); err != nil {
+	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/allowed"}}
+	bundle, err := registry.ReadFacts(ctx, principal, severalKindsTeamRequest())
+	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
 	scopeLineOf(t, counted, 2)
 	_, statements, chain := counted.(turnCountingClient).rec.scopeMetrics()
 	if chain >= 4 {
 		t.Fatalf("scope_chain = %d over %d scope statements, want < 4: the independent scope reads of one team turn run in series", chain, statements)
+	}
+
+	// The same turn read the serial way (one read at a time, no side by side
+	// scope reads) must serve the same answer, byte for byte, and the same
+	// scope.
+	serialRegistry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{Now: fixedNow, ReadFanout: 1, ScopeExpander: devhealthfacts.NewScopeExpander(query)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialBundle, err := serialRegistry.ReadFacts(ctx, principal, severalKindsTeamRequest())
+	if err != nil {
+		t.Fatalf("serial ReadFacts: %v", err)
+	}
+	got, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(serialBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Facts) == 0 {
+		t.Fatal("the turn served no fact: an empty answer proves nothing about identity")
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("answer differs from the serial walk:\nside by side %s\nserial       %s", got, want)
+	}
+	if bundle.Scope == nil || serialBundle.Scope == nil || !reflect.DeepEqual(*bundle.Scope, *serialBundle.Scope) {
+		t.Fatalf("scope differs from the serial walk:\nside by side %+v\nserial       %+v", bundle.Scope, serialBundle.Scope)
 	}
 }

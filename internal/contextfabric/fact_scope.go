@@ -1840,12 +1840,18 @@ type scopeRequirementJob struct {
 // scopeTokensKey carries the expansion budget of one Resolve to the expander.
 type scopeTokensKey struct{}
 
-// GoScopeBounded runs fn beside the caller when the Resolve that owns ctx has
-// a free expansion slot, and inline otherwise. The returned wait always has to
-// be called before the caller returns. The budget is the resolver's fan-out,
-// shared by the requirements and by these helpers, so one turn never has more
-// than that many scope reads in flight.
-func GoScopeBounded(ctx context.Context, fn func()) (wait func()) {
+// GoScopeBounded starts fn beside the caller when the Resolve that owns ctx
+// has a free expansion slot. Without one, fn is held back and runs inside join,
+// after the caller's own read, which is the order of the serial walk. The
+// budget is the resolver's fan-out, shared by the requirements and by these
+// helpers, so one turn never has more than that many scope reads in flight.
+//
+// join(true) waits for fn (running it there when it was held back) and raises
+// a panic of fn in the caller. join(false) abandons fn: it cancels the context
+// fn received, does not wait, and never runs a held-back fn, so a caller that
+// already failed returns as fast as the serial walk did.
+func GoScopeBounded(ctx context.Context, fn func(ctx context.Context)) (join func(wait bool)) {
+	fnCtx, cancel := context.WithCancel(ctx)
 	tokens, _ := ctx.Value(scopeTokensKey{}).(chan struct{})
 	if tokens != nil {
 		select {
@@ -1856,10 +1862,15 @@ func GoScopeBounded(ctx context.Context, fn func()) (wait func()) {
 				defer close(done)
 				defer func() { <-tokens }()
 				defer func() { recovered = recover() }()
-				fn()
+				fn(fnCtx)
 			}()
-			return func() {
+			return func(wait bool) {
+				if !wait {
+					cancel()
+					return
+				}
 				<-done
+				cancel()
 				if recovered != nil {
 					panic(recovered)
 				}
@@ -1867,13 +1878,18 @@ func GoScopeBounded(ctx context.Context, fn func()) (wait func()) {
 		default:
 		}
 	}
-	fn()
-	return func() {}
+	return func(wait bool) {
+		defer cancel()
+		if wait {
+			fn(fnCtx)
+		}
+	}
 }
 
 type scopeJobSlot struct {
 	scope      FactReadScope
 	panicked   bool
+	cancelled  bool
 	panicValue any
 }
 
@@ -1928,9 +1944,29 @@ func (r *FactReadScopeResolver) resolveJobs(
 				Gaps:            map[FactKind]FactScopeGap{},
 			}
 			r.resolveRequirement(runCtx, principal, &slots[i].scope, jobs[i].kind, jobs[i].roots, timeContext, pullRequestStatus)
+			slots[i].cancelled = ctx.Err() != nil
 		}(i)
 	}
 	running.Wait()
+	// The serial walk starts every requirement after the first one that saw the
+	// cancel on an already cancelled context. Requirements that finished
+	// beside it kept their answers, so they are read again the serial way.
+	for i := range jobs {
+		if !slots[i].cancelled || slots[i].panicked {
+			continue
+		}
+		for later := i + 1; later < len(jobs); later++ {
+			if slots[later].panicked {
+				continue
+			}
+			slots[later].scope = FactReadScope{
+				DerivedSubjects: map[FactKind][]SubjectRef{},
+				Gaps:            map[FactKind]FactScopeGap{},
+			}
+			r.resolveRequirement(ctx, principal, &slots[later].scope, jobs[later].kind, jobs[later].roots, timeContext, pullRequestStatus)
+		}
+		break
+	}
 	for i := range jobs {
 		if slots[i].panicked {
 			panic(slots[i].panicValue)

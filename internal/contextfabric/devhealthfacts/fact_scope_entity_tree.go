@@ -225,15 +225,15 @@ ORDER BY repo_id_str
 LIMIT ` + strconv.Itoa(limitPlusOne)
 	var unlinked int
 	var unlinkedErr error
-	waitUnlinked := contextfabric.GoScopeBounded(ctx, func() {
-		unlinked, unlinkedErr = e.teamUnlinkedIssueCount(ctx, orgID, teamIDs)
+	joinUnlinked := contextfabric.GoScopeBounded(ctx, func(readCtx context.Context) {
+		unlinked, unlinkedErr = e.teamUnlinkedIssueCount(readCtx, orgID, teamIDs)
 	})
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
 		{Name: "team_ids", Value: teamIDs},
 	})
 	if err != nil {
-		waitUnlinked()
+		joinUnlinked(false)
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	closed := false
@@ -251,7 +251,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		var repoID, repoSlug, bestSource, originTeamID string
 		var originTeamIDs []string
 		if err := rows.Scan(&repoID, &repoSlug, &bestSource, &originTeamID, &originTeamIDs); err != nil {
-			waitUnlinked()
+			joinUnlinked(false)
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		repositoryRows++
@@ -270,13 +270,13 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		})
 	}
 	if err := rows.Err(); err != nil {
-		waitUnlinked()
+		joinUnlinked(false)
 		return nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
 	closed = true
 	rows.Close()
 	counts.Truncated = repositoryRows >= limitPlusOne
-	waitUnlinked()
+	joinUnlinked(true)
 	if unlinkedErr != nil {
 		return nil, contextfabric.FactScopeExpansionCounts{}, unlinkedErr
 	}

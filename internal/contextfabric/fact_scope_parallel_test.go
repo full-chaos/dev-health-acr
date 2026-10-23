@@ -24,7 +24,9 @@ type scopeProbeExpander struct {
 	barrier int
 	dwell   time.Duration
 	arrived int
-	opened  chan struct{}
+	// completed counts the calls that have returned.
+	completed int
+	opened    chan struct{}
 }
 
 func (e *scopeProbeExpander) ExpandFactScope(ctx context.Context, request FactScopeExpansionRequest) (FactScopeExpansionResult, error) {
@@ -37,8 +39,12 @@ func (e *scopeProbeExpander) ExpandFactScope(ctx context.Context, request FactSc
 	defer func() {
 		e.mu.Lock()
 		e.inFlight--
+		e.completed++
 		e.mu.Unlock()
 	}()
+	if err := ctx.Err(); err != nil {
+		return FactScopeExpansionResult{}, err
+	}
 	if e.started != nil {
 		e.started <- request.RequirementKind
 	}
@@ -254,27 +260,127 @@ func TestScopeResolvePanicSurfacesInCallerAtItsPlace(t *testing.T) {
 
 func TestGoScopeBoundedSharesTheResolveBudget(t *testing.T) {
 	ran := false
-	GoScopeBounded(context.Background(), func() { ran = true })()
+	GoScopeBounded(context.Background(), func(context.Context) { ran = true })(true)
 	if !ran {
-		t.Fatal("without a budget the work runs inline")
+		t.Fatal("without a budget the work runs at join")
 	}
 	tokens := make(chan struct{}, 1)
 	ctx := context.WithValue(context.Background(), scopeTokensKey{}, tokens)
 	tokens <- struct{}{}
-	inline := false
-	GoScopeBounded(ctx, func() { inline = true })()
-	if !inline {
-		t.Fatal("with no free slot the work runs inline, not queued")
+	started := false
+	join := GoScopeBounded(ctx, func(context.Context) { started = true })
+	if started {
+		t.Fatal("with no free slot the work is held back, not started beside the caller")
+	}
+	join(true)
+	if !started {
+		t.Fatal("a held-back read runs at join(true)")
+	}
+	started = false
+	GoScopeBounded(ctx, func(context.Context) { started = true })(false)
+	if started {
+		t.Fatal("a held-back read never runs after join(false): the serial walk would not have started it")
 	}
 	<-tokens
 	release := make(chan struct{})
-	wait := GoScopeBounded(ctx, func() { <-release })
+	wait := GoScopeBounded(ctx, func(context.Context) { <-release })
 	if len(tokens) != 1 {
 		t.Fatal("a free slot is taken by the helper")
 	}
 	close(release)
-	wait()
+	wait(true)
 	if len(tokens) != 0 {
 		t.Fatal("the slot is returned when the helper ends")
+	}
+}
+
+func TestGoScopeBoundedAbandonCancelsAndDoesNotWait(t *testing.T) {
+	tokens := make(chan struct{}, 1)
+	ctx := context.WithValue(context.Background(), scopeTokensKey{}, tokens)
+	release := make(chan struct{})
+	sawCancel := make(chan struct{})
+	join := GoScopeBounded(ctx, func(readCtx context.Context) {
+		<-readCtx.Done()
+		close(sawCancel)
+		<-release
+	})
+	returned := make(chan struct{})
+	go func() { join(false); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("join(false) waited for the read it abandoned")
+	}
+	select {
+	case <-sawCancel:
+	case <-time.After(5 * time.Second):
+		t.Fatal("join(false) did not cancel the read's context")
+	}
+	close(release)
+}
+
+func TestGoScopeBoundedRaisesAPanicAtJoin(t *testing.T) {
+	tokens := make(chan struct{}, 1)
+	ctx := context.WithValue(context.Background(), scopeTokensKey{}, tokens)
+	join := GoScopeBounded(ctx, func(context.Context) { panic("boom") })
+	defer func() {
+		if recover() == nil {
+			t.Fatal("the panic of the read did not reach the caller")
+		}
+	}()
+	join(true)
+}
+
+func (e *scopeProbeExpander) completedCalls() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.completed
+}
+
+// The first requirement is held while the others finish, then the turn is
+// cancelled. The serial walk starts the others after the cancel, so they fail;
+// the side by side walk must serve the same scope, not the answers the others
+// finished with before the cancel.
+func TestScopeResolveCancelAfterTheOthersFinishedMatchesSerial(t *testing.T) {
+	run := func(fanout int) FactReadScope {
+		never := make(chan struct{})
+		expander := &scopeProbeExpander{hold: map[FactKind]chan struct{}{FactPullRequests: never}}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan FactReadScope, 1)
+		go func() { done <- resolveProbe(t, ctx, fanout, expander, scopeProbeKinds...) }()
+		want := 0
+		if fanout > 1 {
+			want = 2
+		}
+		for deadline := time.Now().Add(5 * time.Second); expander.completedCalls() < want; {
+			if time.Now().After(deadline) {
+				t.Fatalf("fan-out %d: the other requirements did not finish", fanout)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		select {
+		case scope := <-done:
+			return scope
+		case <-time.After(5 * time.Second):
+			t.Fatalf("fan-out %d: Resolve did not return after cancel", fanout)
+		}
+		return FactReadScope{}
+	}
+	serial, parallel := run(1), run(4)
+	if len(serial.Events) != 3 || len(parallel.Events) != 3 {
+		t.Fatalf("events = %d and %d, want 3 each", len(serial.Events), len(parallel.Events))
+	}
+	for i := range serial.Events {
+		s, p := serial.Events[i], parallel.Events[i]
+		if s.RequirementKind != p.RequirementKind || s.Outcome != p.Outcome || len(s.Policy) != len(p.Policy) {
+			t.Fatalf("event %d: serial %s/%s, side by side %s/%s", i, s.RequirementKind, s.Outcome, p.RequirementKind, p.Outcome)
+		}
+		if s.Outcome != FactScopeFailed {
+			t.Fatalf("event %d outcome = %s, want failed after the cancel", i, s.Outcome)
+		}
+	}
+	if len(parallel.DerivedSubjects) != len(serial.DerivedSubjects) || len(parallel.Derivations) != len(serial.Derivations) {
+		t.Fatalf("derived subjects/derivations differ: serial %d/%d, side by side %d/%d", len(serial.DerivedSubjects), len(serial.Derivations), len(parallel.DerivedSubjects), len(parallel.Derivations))
 	}
 }
