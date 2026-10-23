@@ -358,6 +358,7 @@ const (
 	contextFabricClassSynthesisAborted  = "synthesis_aborted"
 	contextFabricClassPanic             = "panic"
 	contextFabricClassServedShape       = "served_shape_invariant"
+	contextFabricClassModelSourceMixed  = "model_source_mixed"
 	// contextFabricClassBudgetRefusal (CHAOS-4636) is decision D5's PLANNED
 	// refusal: the engine measured its own assembled answer, re-synthesized
 	// once with a smaller input, and it still did not fit. It is a distinct
@@ -631,6 +632,10 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	}
 	if _, fired := contextfabric.WorkItemTupleRuleFiredBy(err); fired {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassServedShape, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
+	if errors.Is(err, contextfabric.ErrModelSourceMixed) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassModelSourceMixed, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return
 	}
 	if errors.Is(err, contextfabric.ErrInvalidResult) {

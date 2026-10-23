@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -26,21 +27,38 @@ func (f *fakeRuntime) SynthesizeAnswer(context.Context, storage.Principal, conte
 	return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("fake runtime " + f.name + " answered")
 }
 
-// TestWrapWithOrgModelRuntimeResolver_passesThroughUnchanged_withNoOrgStore
-// locks that a deployment with no encryption key configured gets the
-// deployment-default runtime completely unwrapped -- pre-CHAOS-3775
-// behavior, bit for bit, including the nil case.
-func TestWrapWithOrgModelRuntimeResolver_passesThroughUnchanged_withNoOrgStore(t *testing.T) {
+// TestWrapWithOrgModelRuntimeResolver_labelsTheDeploymentModel_withNoOrgStore
+// locks that a deployment with no per-organization store still runs on the
+// deployment-default runtime, and that every service-side model call on it
+// records the platform as its model source: an unlabelled model answer could
+// otherwise be served and stored. The second return stays nil (offer phrasing
+// builds its own resolver over the default), and a nil default stays nil.
+func TestWrapWithOrgModelRuntimeResolver_labelsTheDeploymentModel_withNoOrgStore(t *testing.T) {
 	deploymentDefault := &fakeRuntime{name: "default"}
 	runtime, resolver, err := wrapWithOrgModelRuntimeResolver(deploymentDefault, nil, envLookup(nil), nil, discardLogger())
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
-	if runtime != contextfabric.ModelRuntime(deploymentDefault) {
-		t.Fatal("wrapWithOrgModelRuntimeResolver() wrapped the runtime despite a nil org store")
-	}
 	if resolver != nil {
 		t.Fatalf("resolver = %#v, want nil when no org store is configured", resolver)
+	}
+	for name, call := range map[string]func(context.Context) error{
+		"interpret": func(ctx context.Context) error {
+			_, _, err := runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, contextfabric.InvestigationRequest{})
+			return err
+		},
+		"synthesize": func(ctx context.Context) error {
+			_, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, contextfabric.SynthesisInput{})
+			return err
+		},
+	} {
+		ctx := contextfabric.WithModelSourceRecorder(context.Background())
+		if err := call(ctx); err == nil || !strings.Contains(err.Error(), "fake runtime default answered") {
+			t.Fatalf("%s: err = %v, want the deployment default to answer", name, err)
+		}
+		if got, err := contextfabric.ModelSourceOf(ctx); err != nil || got != contractsv1.ContextFabricModelSourcePlatform {
+			t.Fatalf("%s: model source = %q, %v, want platform", name, got, err)
+		}
 	}
 
 	nilRuntime, nilResolver, err := wrapWithOrgModelRuntimeResolver(nil, nil, envLookup(nil), nil, discardLogger())

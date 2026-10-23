@@ -32,7 +32,15 @@ import (
 // never a second, independently-resolved instance.
 func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs contextfabric.OrgModelConfigResolver, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
 	if orgConfigs == nil {
-		return deploymentDefault, nil, nil
+		if deploymentDefault == nil || isNilRuntime(deploymentDefault) {
+			return deploymentDefault, nil, nil
+		}
+		// The deployment default still goes through a resolver, with no
+		// per-organization support, so every service-side model call on it
+		// records the platform as its model source and a withheld turn is
+		// honored here as it is everywhere else. The second return stays nil:
+		// offer phrasing builds the same resolver over the default itself.
+		return modelruntimeresolver.New(deploymentDefault, nil, nil), nil, nil
 	}
 	defaults, err := contextFabricModelDefaults(lookup, logger)
 	if err != nil {

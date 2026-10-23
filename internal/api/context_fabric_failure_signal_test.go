@@ -129,6 +129,11 @@ func TestContextFabricInvestigationFailuresCarryStageAndClassification(t *testin
 			wantStage: "unknown", wantClassified: "invalid_time_bound", wantLevel: "WARN",
 		},
 		{
+			name: "a turn that mixed model sources is named", wantStatus: http.StatusInternalServerError,
+			err:       fmt.Errorf("finalize served: %w", contextfabric.ErrModelSourceMixed),
+			wantStage: "unknown", wantClassified: "model_source_mixed", wantLevel: "ERROR",
+		},
+		{
 			name: "an unstaged, unclassified error is named as such", wantStatus: http.StatusInternalServerError,
 			err:       errors.New("something unexpected broke"),
 			wantStage: "unknown", wantClassified: "unclassified", wantLevel: "ERROR",
