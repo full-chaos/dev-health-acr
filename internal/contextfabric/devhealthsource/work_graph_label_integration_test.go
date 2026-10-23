@@ -210,8 +210,13 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 			t.Fatalf("seed filler work items: %v", err)
 		}
 	}
+	// The noise source ids start with "f" so every one sorts after the scoped
+	// repository's "2..." rows: the scoped pull-request rows then always sit at the
+	// start of the pull-request group, in the granule that also holds the commit to
+	// pull-request boundary, whatever the noise size. With random ids their position
+	// moved with the noise count and the read cost moved by whole granules.
 	if noiseRows > 0 {
-		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('noise-', toString(number)), 'pr', concat(toString(generateUUIDv4()), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
+		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('noise-', toString(number)), 'pr', concat('f', substring(toString(generateUUIDv4()), 2), '#pr', toString(number)), 'issue', concat('NOISE-', toString(number)), 'implements', toUUID('%s'), 'linear', 'native', 0.9, 'linear_attachment', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
 			t.Fatalf("seed noise edges: %v", err)
 		}
 		if err := direct.Exec(ctx, fmt.Sprintf(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) SELECT toUUID('%s'), '%s', toUInt32(number + 1000), concat('noise ', toString(number)), 'open', now64(3) FROM numbers(%d)`, wgOther, wgOrg, noiseRows)); err != nil {
