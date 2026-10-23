@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"os"
 	"reflect"
@@ -147,7 +148,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// Logged loud, never fatal; the identical check runs again before every
 	// ClickHouse-backed request once the pod is up.
 	if err := dataStoreChecks[0].Check(ctx); err != nil {
-		request.options.Logger.WarnContext(ctx, "initial clickhouse readiness check failed; starting anyway, auth surface unaffected", "error", err)
+		request.options.Logger.WarnContext(ctx, "initial clickhouse readiness check failed; starting anyway, auth surface unaffected", "error", telemetryscrub.ErrorClass(err))
 	}
 
 	manager, err := limits.NewManager(request.config.LimitOptions())

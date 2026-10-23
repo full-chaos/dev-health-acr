@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"net/http"
 	"os"
@@ -112,7 +113,7 @@ func rebuild(args []string) error {
 		return fmt.Errorf("configuration: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	logger := slog.New(telemetryscrub.Handler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -169,7 +170,7 @@ func rollback(args []string) error {
 		return fmt.Errorf("configuration: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	logger := slog.New(telemetryscrub.Handler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -226,7 +227,7 @@ func serve(args []string) error {
 		return fmt.Errorf("initialize otel export: %w", err)
 	}
 	defer shutdownExporter(exporter)
-	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	logger := slog.New(telemetryscrub.Handler(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))))
 	logStarting(logger, info, cfg, os.LookupEnv)
 	exporter.LogStart(ctx, logger)
 

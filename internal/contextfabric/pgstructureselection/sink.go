@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"strings"
 	"sync"
@@ -228,7 +229,7 @@ func (s *Sink) insert(event contextfabric.StructureSelectionEvent) {
 	defer cancel()
 	if err := s.insertContext(ctx, event); err != nil {
 		s.metrics.addFailure()
-		s.logger.Warn("structure selection capture failed", "error", err)
+		s.logger.Warn("structure selection capture failed", "error", telemetryscrub.ErrorClass(err))
 		return
 	}
 	s.metrics.addDelivered()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"io"
 	"log/slog"
 
@@ -82,5 +83,5 @@ func causedByCallerCancellation(ctx context.Context, err error) bool {
 // redacted -- callers must never pass a bearer token or raw response body
 // as a logged field regardless of level.
 func newDiagnosticsLogger(diagnostics io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(diagnostics, &slog.HandlerOptions{Level: level}))
+	return slog.New(telemetryscrub.Handler(slog.NewJSONHandler(diagnostics, &slog.HandlerOptions{Level: level})))
 }
