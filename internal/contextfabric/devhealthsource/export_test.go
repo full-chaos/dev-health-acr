@@ -509,6 +509,7 @@ type CarryProducerForTest struct {
 type CarryTrialForTest struct {
 	Skipped          bool
 	Equal            bool
+	NonEmpty         bool
 	Carried, Fetched []string
 }
 
@@ -581,7 +582,9 @@ func CarryTrialRunForTest(ctx context.Context, client contextpacket.ClickHouseQu
 		return CarryTrialForTest{}, err
 	}
 	trial := CarryTrialForTest{Carried: keysForTest(carried), Fetched: keysForTest(fetched)}
-	trial.Equal = !fetchedTruncated && reflect.DeepEqual(carried, fetched)
+	// A nil slice and an empty one are the same page; DeepEqual says otherwise.
+	trial.NonEmpty = len(fetched) > 0
+	trial.Equal = !fetchedTruncated && ((len(carried) == 0 && len(fetched) == 0) || reflect.DeepEqual(carried, fetched))
 	return trial, nil
 }
 

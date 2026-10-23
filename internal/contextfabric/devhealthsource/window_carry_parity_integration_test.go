@@ -77,7 +77,7 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 		if len(positions) < 8 {
 			t.Fatalf("%s: the seed produced %d positions, want at least 8", producer.Name, len(positions))
 		}
-		trials, skipped, mismatches := 0, 0, 0
+		trials, skipped, mismatches, nonEmpty := 0, 0, 0, 0
 		for trial := 0; trial < 60; trial++ {
 			i, j := rng.Intn(len(positions)+1)-1, rng.Intn(len(positions))
 			if i > j {
@@ -97,6 +97,9 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 				continue
 			}
 			trials++
+			if result.NonEmpty && result.Equal {
+				nonEmpty++
+			}
 			if !result.Equal {
 				mismatches++
 				if producer.Carry {
@@ -104,9 +107,12 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 				}
 			}
 		}
-		t.Logf("carry-parity table=%s carry=%v trials=%d skipped=%d mismatches=%d", producer.Name, producer.Carry, trials, skipped, mismatches)
+		t.Logf("carry-parity table=%s carry=%v trials=%d skipped=%d mismatches=%d non_empty_equal=%d", producer.Name, producer.Carry, trials, skipped, mismatches, nonEmpty)
 		if trials < 15 {
 			t.Errorf("%s: only %d of 60 trials read a complete table; the seed or the limits are too small to decide", producer.Name, trials)
+		}
+		if nonEmpty < 5 {
+			t.Errorf("%s: only %d trials compared a non-empty page; the parity of empty pages decides nothing", producer.Name, nonEmpty)
 		}
 		if !producer.Carry && mismatches == 0 {
 			t.Logf("table %s is excluded from the carry and passed every trial", producer.Name)
