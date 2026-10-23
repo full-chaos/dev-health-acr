@@ -39,18 +39,18 @@ func TestWorkGraphReadsUseTheKeyPrefixEdgeScope(t *testing.T) {
 	}
 }
 
-func TestIssueGateEdgeArmsUseTheKeyPrefixScope(t *testing.T) {
+func TestIssueGateEdgeReadUsesTheKeyPrefixScope(t *testing.T) {
 	scope := WorkGraphEdgeScopeSQL("")
 	for name, statement := range map[string]string{"endpoint ids": WorkGraphIssueEndpointIDsSQL, "title map": workGraphIssueTitlesMapSQL} {
 		if n := strings.Count(statement, scope); n != 1 {
 			t.Errorf("issue gate %s carries the key-prefix edge scope %d times, want once", name, n)
 		}
-		if strings.Contains(strings.ReplaceAll(statement, scope, ""), "AND repo_id = {repo_id:UUID} AND source_type = 'issue'") || strings.Contains(strings.ReplaceAll(statement, scope, ""), "repo_id = {repo_id:UUID} AND target_type") {
-			t.Errorf("issue gate %s filters an edge arm by a bare repo_id equality outside the scope", name)
+		outside := strings.ReplaceAll(statement, scope, "")
+		if strings.Contains(outside, "repo_id = {repo_id:UUID} AND target_type") || strings.Contains(outside, "source_type = 'issue'") {
+			t.Errorf("issue gate %s filters an edge read by a bare repo_id equality or an issue-sourced arm outside the scope", name)
 		}
 	}
-	const seek = "source_type = 'issue' AND source_id IN (SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID})"
-	if !strings.Contains(WorkGraphIssueEndpointIDsSQL, seek) {
-		t.Errorf("the issue-sourced arm does not seek by the repository's work item ids: %s", WorkGraphIssueEndpointIDsSQL)
+	if strings.Contains(WorkGraphIssueEndpointIDsSQL, "work_items") || strings.Contains(WorkGraphIssueEndpointIDsSQL, "UNION") {
+		t.Errorf("the issue gate edge read reads work_items or has a second arm, whose cost grows with the repository's work items: %s", WorkGraphIssueEndpointIDsSQL)
 	}
 }

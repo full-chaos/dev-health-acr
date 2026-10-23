@@ -457,25 +457,17 @@ func TestWorkGraphEdgeScopePrunesThePrimaryKey(t *testing.T) {
 const priorIssueEndpointIDsSQL = `(SELECT source_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND source_type = 'issue' ` +
 	`UNION ALL SELECT target_id FROM work_graph_edges WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND target_type = 'issue')`
 
-// assertIssueGateEdgeReadsPrune runs on a table holding 200k pull-request-sourced
-// and 300k issue-sourced edges of other work (the issue-sourced ones with no
-// repo_id, as in production). Each arm of the gate read must read a small share
-// of the rows the prior arm read, the two statements must name the same issue
-// keys, and an issue-sourced edge must be found by the repository's own work
-// items and by no one else's.
+// assertIssueGateEdgeReadsPrune runs on a table holding 200k pull-request-sourced,
+// 200k commit-sourced and 300k issue-sourced edges of other work (the
+// issue-sourced ones with no repo_id, as in production). The gate read must read
+// a small share of the rows the prior statement read, and the two statements
+// must name the same issue keys, also once issue-sourced edges of the scoped
+// repository's own work items exist.
 func assertIssueGateEdgeReadsPrune(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 	t.Helper()
 	bind := strings.NewReplacer("{org_id:String}", "'"+wgOrg+"'", "{repo_id:UUID}", "toUUID('"+wgRepo+"')").Replace
-	arms := func(statement string) []string {
-		inner := strings.TrimSuffix(strings.TrimPrefix(bind(statement), "("), ")")
-		parts := strings.Split(inner, " UNION ALL ")
-		if len(parts) != 2 {
-			t.Fatalf("measurement did not happen: want two arms in %q, got %d", statement, len(parts))
-		}
-		return parts
-	}
 	rowsRead := func(label, statement string) uint64 {
-		rows, err := direct.Query(ctx, statement+" SETTINGS log_comment = '"+label+"'")
+		rows, err := direct.Query(ctx, "SELECT DISTINCT * FROM "+bind(statement)+" SETTINGS log_comment = '"+label+"'")
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
@@ -499,19 +491,16 @@ func assertIssueGateEdgeReadsPrune(t *testing.T, ctx context.Context, direct cli
 		}
 		return read
 	}
-	prior, current := arms(priorIssueEndpointIDsSQL), arms(contextpacket.WorkGraphIssueEndpointIDsSQL)
-	for i, arm := range []string{"issue-sourced", "issue-target"} {
-		before, after := rowsRead("gate-prior-"+arm, prior[i]), rowsRead("gate-current-"+arm, current[i])
-		t.Logf("gate %s arm reads %d rows, the prior arm read %d", arm, after, before)
-		if before < 100000 {
-			t.Errorf("control: the prior %s arm read %d rows, want the noise read (the control no longer shows the defect)", arm, before)
-		}
-		if after*4 > before {
-			t.Errorf("the %s arm of the gate read reads %d rows against %d for the prior arm: the primary key does not prune it", arm, after, before)
-		}
+	before, after := rowsRead("gate-prior", priorIssueEndpointIDsSQL), rowsRead("gate-current", contextpacket.WorkGraphIssueEndpointIDsSQL)
+	t.Logf("gate read reads %d rows, the prior statement read %d", after, before)
+	if before < 100000 {
+		t.Errorf("control: the prior gate read read %d rows, want the noise read (the control no longer shows the defect)", before)
+	}
+	if after*4 > before {
+		t.Errorf("the gate read reads %d rows against %d for the prior statement: the primary key does not prune it", after, before)
 	}
 	keys := func(statement string) []string {
-		rows, err := direct.Query(ctx, "SELECT DISTINCT source_id FROM "+bind(statement)+" ORDER BY source_id")
+		rows, err := direct.Query(ctx, "SELECT DISTINCT * FROM "+bind(statement)+" ORDER BY 1")
 		if err != nil {
 			t.Fatalf("issue keys: %v", err)
 		}
@@ -526,10 +515,14 @@ func assertIssueGateEdgeReadsPrune(t *testing.T, ctx context.Context, direct cli
 		}
 		return out
 	}
-	priorKeys, currentKeys := keys(priorIssueEndpointIDsSQL), keys(contextpacket.WorkGraphIssueEndpointIDsSQL)
-	if len(priorKeys) < 8 || strings.Join(priorKeys, ",") != strings.Join(currentKeys, ",") {
-		t.Errorf("issue keys differ: prior %v, current %v (want the same, at least 8)", priorKeys, currentKeys)
+	same := func(when string) {
+		t.Helper()
+		priorKeys, currentKeys := keys(priorIssueEndpointIDsSQL), keys(contextpacket.WorkGraphIssueEndpointIDsSQL)
+		if len(priorKeys) < 8 || strings.Join(priorKeys, ",") != strings.Join(currentKeys, ",") {
+			t.Errorf("%s: issue keys differ: prior %v, current %v (want the same, at least 8)", when, priorKeys, currentKeys)
+		}
 	}
+	same("seeded rows")
 	exec := func(statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -541,10 +534,7 @@ func assertIssueGateEdgeReadsPrune(t *testing.T, ctx context.Context, direct cli
 		exec(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.id, item.repo, wgOrg, "Issue with an issue-sourced edge", "open", "", "", "linear", "", now, now)
 		exec(fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT 'e-issue-%s', 'issue', '%s', 'issue', 'CHAOS-77', 'relates_to', NULL, 'linear', 'native', 0.9, '', now64(3), now64(3), '%s'`, item.id, item.id, wgOrg))
 	}
-	got := strings.Join(keys(contextpacket.WorkGraphIssueEndpointIDsSQL), ",")
-	if !strings.Contains(","+got+",", ",CHAOS-91,") || strings.Contains(got, "CHAOS-92") {
-		t.Errorf("issue-sourced edges of work items: got %s, want CHAOS-91 (the scoped repository's) and not CHAOS-92 (another repository's)", got)
-	}
+	same("with issue-sourced edges of work items")
 }
 
 // An evidence-reference or source-row re-resolution names a repository-less
