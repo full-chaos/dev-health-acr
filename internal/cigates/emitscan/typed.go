@@ -29,6 +29,13 @@ const refusalDetail = "refusal:typecheck"
 // It is never pinnable.
 const shadowDetail = "refusal:shadowed-key"
 
+// keyReceiverDetail is the R10 detail of an attribute.Key method call or method value whose receiver the scan cannot
+// read: a pointer, a type parameter or interface that may hold a Key, or a method value that escapes. Never pinnable.
+const keyReceiverDetail = "refusal:key-receiver"
+
+// keyMethodValueDetail is the R10 detail of an attribute.Key method value that is not a plain local alias that is only called.
+const keyMethodValueDetail = "refusal:key-method-value"
+
 const attributePkg = "go.opentelemetry.io/otel/attribute"
 
 // typedPackage is the type-check of one package directory. err is set when the package does not type-check.
@@ -157,7 +164,7 @@ func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Inf
 			}
 		},
 	}
-	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 	_, checkErr := cfg.Check(files[0].Name.Name, fset, files, info)
 	if first != nil {
 		return nil, nil, first
@@ -486,13 +493,18 @@ func (f *typedFold) callKind(call *ast.CallExpr, ctx *foldCtx) string {
 type flowInfo struct {
 	inits   map[*types.Var]ast.Expr
 	written map[types.Object]bool
+	callees map[*ast.Ident]bool // identifiers that are the callee of a call
+	uses    map[types.Object][]*ast.Ident
 }
 
 func (t *typedPackage) flowInfo() *flowInfo {
 	if t.flow != nil {
 		return t.flow
 	}
-	flow := &flowInfo{inits: map[*types.Var]ast.Expr{}, written: map[types.Object]bool{}}
+	flow := &flowInfo{inits: map[*types.Var]ast.Expr{}, written: map[types.Object]bool{}, callees: map[*ast.Ident]bool{}, uses: map[types.Object][]*ast.Ident{}}
+	for ident, obj := range t.info.Uses {
+		flow.uses[obj] = append(flow.uses[obj], ident)
+	}
 	mark := func(expr ast.Expr) {
 		if expr == nil {
 			return
@@ -560,6 +572,33 @@ func (t *typedPackage) flowInfo() *flowInfo {
 				if n.Op == token.AND {
 					mark(n.X)
 				}
+			case *ast.CallExpr:
+				if ident, ok := ast.Unparen(n.Fun).(*ast.Ident); ok {
+					flow.callees[ident] = true
+				}
+			case *ast.SelectorExpr:
+				// a method with a pointer receiver called on a variable takes its address; a selection the checker did not
+				// resolve is read the same way
+				ident, ok := ast.Unparen(n.X).(*ast.Ident)
+				if !ok {
+					break
+				}
+				v, isVar := objectOf(t.info, ident).(*types.Var)
+				if !isVar {
+					break
+				}
+				selection := t.info.Selections[n]
+				if selection == nil {
+					flow.written[v] = true
+					break
+				}
+				if fn, isFunc := selection.Obj().(*types.Func); isFunc {
+					if sig, isSig := fn.Type().(*types.Signature); isSig && sig.Recv() != nil {
+						if _, pointer := types.Unalias(sig.Recv().Type()).(*types.Pointer); pointer {
+							flow.written[v] = true
+						}
+					}
+				}
 			}
 			return true
 		})
@@ -568,16 +607,123 @@ func (t *typedPackage) flowInfo() *flowInfo {
 	return flow
 }
 
-// isAttributeKey reports an identifier whose static type is attribute.Key. known is false when the package has no types.
-func (s *fileScan) isAttributeKey(ident *ast.Ident) (isKey, known bool) {
+const (
+	keyMethodNone = iota
+	keyMethodKey
+	keyMethodRefuse
+	keyMethodNoTypes
+)
+
+// attrKeyMethod classifies a selector that names an attribute constructor method (String, Int, ...). keyMethodKey: the
+// method of attribute.Key on a receiver the scan can read (recv). keyMethodRefuse: the same method on a receiver it cannot
+// (a pointer, a dereference, a type parameter or interface that can hold a Key). keyMethodNoTypes: the package has no types.
+func (s *fileScan) attrKeyMethod(sel *ast.SelectorExpr) (recv ast.Expr, class int) {
+	if !attrConstructors[sel.Sel.Name] {
+		return nil, keyMethodNone
+	}
+	if x, ok := sel.X.(*ast.Ident); ok && s.imports[x.Name] != "" {
+		return nil, keyMethodNone
+	}
 	typed := s.pkg.typedInfo()
 	if typed.err != nil {
-		return false, false
+		return nil, keyMethodNoTypes
 	}
-	obj := objectOf(typed.info, ident)
-	if obj == nil {
-		return false, false
+	selection := typed.info.Selections[sel]
+	if selection == nil || selection.Kind() != types.MethodVal {
+		return nil, keyMethodNone
 	}
-	named, ok := types.Unalias(obj.Type()).(*types.Named)
-	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == attributePkg && named.Obj().Name() == "Key", true
+	fn, isFunc := selection.Obj().(*types.Func)
+	if !isFunc {
+		return nil, keyMethodNone
+	}
+	sig, isSig := fn.Type().(*types.Signature)
+	if !isSig || sig.Results().Len() != 1 || !isNamed(sig.Results().At(0).Type(), attributePkg, "KeyValue") {
+		return nil, keyMethodNone
+	}
+	recvType := types.Unalias(selection.Recv())
+	pointer := false
+	if ptr, ok := recvType.(*types.Pointer); ok {
+		pointer, recvType = true, types.Unalias(ptr.Elem())
+	}
+	switch recvType.Underlying().(type) {
+	case *types.Interface:
+		return nil, keyMethodRefuse
+	}
+	if _, isParam := recvType.(*types.TypeParam); isParam {
+		return nil, keyMethodRefuse
+	}
+	if !isNamed(recvType, attributePkg, "Key") {
+		return nil, keyMethodNone
+	}
+	receiver := ast.Unparen(sel.X)
+	if _, deref := receiver.(*ast.StarExpr); deref || pointer {
+		return nil, keyMethodRefuse
+	}
+	return receiver, keyMethodKey
+}
+
+func isNamed(t types.Type, pkgPath, name string) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == pkgPath && named.Obj().Name() == name
+}
+
+// keyMethodValue reads an attribute.Key method value (k.String not called where it is written): bound once to a local that
+// is only ever called it is followed (keyAliases); any other use (returned, stored, passed, rebound) is a refusal.
+func (s *fileScan) keyMethodValue(sel *ast.SelectorExpr) {
+	if !attrConstructors[sel.Sel.Name] {
+		return
+	}
+	depth := len(s.nodes) - 2
+	var node ast.Node = sel
+	for depth >= 0 {
+		if _, paren := s.nodes[depth].(*ast.ParenExpr); !paren {
+			break
+		}
+		node = s.nodes[depth]
+		depth--
+	}
+	var parent ast.Node
+	if depth >= 0 {
+		parent = s.nodes[depth]
+	}
+	if call, isCall := parent.(*ast.CallExpr); isCall && call.Fun == node {
+		return
+	}
+	recv, class := s.attrKeyMethod(sel)
+	switch class {
+	case keyMethodNone:
+		return
+	case keyMethodNoTypes:
+		s.add(RuleBenignKind, sel.Pos(), refusalDetail)
+		return
+	case keyMethodRefuse:
+		s.add(RuleBenignKind, sel.Pos(), keyReceiverDetail)
+		return
+	}
+	var bound *ast.Ident
+	switch p := parent.(type) {
+	case *ast.AssignStmt:
+		if p.Tok == token.DEFINE && len(p.Lhs) == 1 && len(p.Rhs) == 1 && p.Rhs[0] == node {
+			bound, _ = p.Lhs[0].(*ast.Ident)
+		}
+	case *ast.ValueSpec:
+		if len(p.Names) == 1 && len(p.Values) == 1 && p.Values[0] == node {
+			bound = p.Names[0]
+		}
+	}
+	typed := s.pkg.typedInfo()
+	if bound != nil {
+		if v, isVar := typed.info.Defs[bound].(*types.Var); isVar {
+			flow := typed.flowInfo()
+			onlyCalled := !flow.written[v]
+			for _, use := range flow.uses[v] {
+				onlyCalled = onlyCalled && flow.callees[use]
+			}
+			if onlyCalled {
+				s.pkg.keyAliases[v] = recv
+				return
+			}
+		}
+	}
+	s.add(RuleBenignKind, sel.Pos(), keyMethodValueDetail)
 }

@@ -20,6 +20,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -302,6 +303,7 @@ type pkgInfo struct {
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
 	root        string                        // the scan root: the module of the type-checked load is the nearest go.mod at or above it
 	group       []parsedFile                  // the files of the package directory, type-checked together on the first R10 need
+	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver
 	typed       *typedPackage                 // the type-check of the package, made once and only when a benign key is read
 	budget      *budget
 }
@@ -344,7 +346,7 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
+		stringTypes: map[string]bool{}, keyAliases: map[types.Object]ast.Expr{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
@@ -912,6 +914,8 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 		}
 	case *ast.CallExpr:
 		s.call(fn)
+	case *ast.SelectorExpr:
+		s.keyMethodValue(fn)
 	case *ast.CompositeLit:
 		s.attrLiteral(fn)
 		if isAnySlice(fn.Type) {
@@ -1362,17 +1366,27 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 	if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && attrConstructors[sel.Sel.Name] && len(call.Args) >= 1 {
 		if ident, isIdent := sel.X.(*ast.Ident); isIdent && s.pkg.constNames[ident.Name] {
 			return ident, call.Args[0], true // const k = attribute.Key("..."); k.String(v)
-		} else if isIdent && s.imports[ident.Name] == "" {
-			isKey, known := s.isAttributeKey(ident)
-			if !known {
-				s.add(RuleBenignKind, call.Pos(), refusalDetail)
-			} else if isKey {
-				return ident, call.Args[0], true // k := attribute.Key("..."); k.String(v)
-			}
 		}
 		if inner, isCall := sel.X.(*ast.CallExpr); isCall && len(inner.Args) == 1 {
 			if pkg, name, found := s.qualified(inner.Fun); found && pkg == "attribute" && name == "Key" {
 				return inner.Args[0], call.Args[0], true
+			}
+		}
+	}
+	if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && attrConstructors[sel.Sel.Name] && len(call.Args) >= 1 {
+		switch recv, class := s.attrKeyMethod(sel); class {
+		case keyMethodKey:
+			return recv, call.Args[0], true // a receiver of static type attribute.Key: a local, a parenthesised one, a call
+		case keyMethodRefuse:
+			s.add(RuleBenignKind, call.Pos(), keyReceiverDetail)
+		case keyMethodNoTypes:
+			s.add(RuleBenignKind, call.Pos(), refusalDetail)
+		}
+	}
+	if ident, isIdent := ast.Unparen(call.Fun).(*ast.Ident); isIdent && len(call.Args) >= 1 && len(s.pkg.keyAliases) > 0 {
+		if typed := s.pkg.typedInfo(); typed.err == nil {
+			if recv, found := s.pkg.keyAliases[typed.info.Uses[ident]]; found {
+				return recv, call.Args[0], true // emit := k.String; emit(v)
 			}
 		}
 	}

@@ -137,3 +137,63 @@ func TestKeyScopeLocalChainBeyondTheDepthCapIsUnprovable(t *testing.T) {
 	b.WriteString("\tl.Info(\"m\", v12, \"x\")\n}")
 	runKeyCases(t, []keyCase{{"twelve locals deep", b.String(), "R9:unresolvable key"}})
 }
+
+func TestKeyScopeMethodThatMayWriteALocalKeyMakesItUnprovable(t *testing.T) {
+	runKeyCases(t, []keyCase{
+		{"pointer receiver method on a local", `type K string
+func (k *K) Promote() { *k = "api_token" }
+func f(l *slog.Logger) { key := K("safe"); key.Promote(); l.Info("m", string(key), "secret") }`, "R9:unresolvable key"},
+		{"pointer receiver method value on a local", `type K string
+func (k *K) Promote() { *k = "api_token" }
+func f(l *slog.Logger) { key := K("safe"); p := key.Promote; p(); l.Info("m", string(key), "secret") }`, "R9:unresolvable key"},
+		{"control: value receiver method does not write", `type K string
+func (k K) Same() K { return k }
+func f(l *slog.Logger) { key := K("api_token"); _ = key.Same(); l.Info("m", string(key), "x") }`, "R1:api_token"},
+		{"control: attribute.Key value receiver method does not write", `func f(v string) { k := attribute.Key("api_token"); _ = k.Defined(); _ = k.String(v) }`, "R1:api_token"},
+	})
+}
+
+func TestKeyScopeAttributeKeyReceiverForms(t *testing.T) {
+	runKeyCases(t, []keyCase{
+		{"parenthesised receiver", `func f(v string) { k := attribute.Key("api_token"); _ = (k).String(v) }`, "R1:api_token"},
+		{"pointer receiver is refused", `func f(v string) { k := attribute.Key("api_token"); p := &k; _ = p.String(v) }`, "R10:refusal:key-receiver"},
+		{"dereferenced receiver is refused", `func f(v string) { k := attribute.Key("api_token"); p := &k; _ = (*p).String(v) }`, "R10:refusal:key-receiver"},
+		{"type parameter receiver is refused", `func g[T interface{ String(string) attribute.KeyValue }](k T, v string) { _ = k.String(v) }`, "R10:refusal:key-receiver"},
+		{"interface receiver is refused", `func g(k interface{ String(string) attribute.KeyValue }, v string) { _ = k.String(v) }`, "R10:refusal:key-receiver"},
+		{"control: a String method of another type", `type s struct{}
+func (s) String(v string) attribute.KeyValue { return attribute.String("count", v) }
+func f(v string) { _ = s{}.String(v) }`, ""},
+		{"control: an Int method that returns another type", `type n struct{}
+func (n) Int(v int) int { return v }
+func f(v int) { _ = n{}.Int(v) }`, ""},
+	})
+}
+
+func TestKeyScopeAttributeKeyMethodValues(t *testing.T) {
+	runKeyCases(t, []keyCase{
+		{"bound to a local and called", `func f(v string) { k := attribute.Key("api_token"); emit := k.String; _ = emit(v) }`, "R1:api_token"},
+		{"bound in a var declaration and called", `func f(v string) { k := attribute.Key("api_token"); var emit = k.String; _ = emit(v) }`, "R1:api_token"},
+		{"method value on a call receiver", `func f(v string) { emit := attribute.Key("api_token").String; _ = emit(v) }`, "R1:api_token"},
+		{"returned", `func g(k attribute.Key) func(string) attribute.KeyValue { return k.String }`, "R10:refusal:key-method-value"},
+		{"passed to a function", `func run(f func(string) attribute.KeyValue) {}
+func g() { k := attribute.Key("api_token"); run(k.String) }`, "R10:refusal:key-method-value"},
+		{"stored in a struct field", `type h struct{ e func(string) attribute.KeyValue }
+func g() h { k := attribute.Key("api_token"); return h{e: k.String} }`, "R10:refusal:key-method-value"},
+		{"bound to a local that is also passed on", `func run(f func(string) attribute.KeyValue) {}
+func g(v string) { k := attribute.Key("api_token"); emit := k.String; run(emit); _ = emit(v) }`, "R10:refusal:key-method-value"},
+		{"bound to a local that is reassigned", `func g(v string, o attribute.Key) { k := attribute.Key("api_token"); emit := k.String; emit = o.String; _ = emit(v) }`, "R10:refusal:key-method-value"},
+		{"control: direct call", `func f(v string) { k := attribute.Key("api_token"); _ = k.String(v) }`, "R1:api_token"},
+	})
+}
+
+func TestKeyScopeTypeSwitchBindingShadowsAKnownKey(t *testing.T) {
+	runKeyCases(t, []keyCase{
+		{"binding hides a protected const", `const keyName = "api_token"
+func f(l *slog.Logger, x any) { switch keyName := x.(type) { case string: l.Info("m", keyName, "x") } }`, "R10:refusal:shadowed-key,R9:unresolvable key"},
+		{"binding hides a benign const in the default clause", `const passKey = "pass"
+func f(l *slog.Logger, x any) { switch passKey := x.(type) { default: l.Info("m", passKey, 3) } }`, "R10:refusal:shadowed-key,R9:unresolvable key"},
+		{"control: no outer const", `func f(l *slog.Logger, x any) { switch key := x.(type) { case string: l.Info("m", key, "x") } }`, "R9:unresolvable key"},
+		{"control: outer const is not a known key", `const other = "count"
+func f(l *slog.Logger, x any) { switch other := x.(type) { case string: l.Info("m", other, "x") } }`, "R9:unresolvable key"},
+	})
+}
