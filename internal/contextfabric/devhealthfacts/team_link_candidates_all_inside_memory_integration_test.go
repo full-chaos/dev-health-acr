@@ -49,7 +49,7 @@ func TestTeamLinkCandidateStatementStaysUnderItsBoundWhereEveryLinkIsInsideTheOw
 		t.Fatalf("control: a peak 1 byte over the %d-byte bound passed the candidate row", candidateAllInsideBound)
 	}
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})

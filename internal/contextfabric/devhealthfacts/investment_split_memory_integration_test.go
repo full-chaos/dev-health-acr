@@ -100,7 +100,7 @@ SELECT '%s', 'issue', concat('n', toString(number)), concat('wu-', toString(numb
 // are measured and logged beside them.
 func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {

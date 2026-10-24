@@ -26,7 +26,7 @@ func pullRequestSubjectByRepoLabel(label string, number uint32) contextfabric.Su
 // covered by the issue; proj-4 keeps its uncovered heuristic link.
 func TestPullRequestProjectRowsDropFallbackLinksCoveredByNativeAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {

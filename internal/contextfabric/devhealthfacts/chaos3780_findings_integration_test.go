@@ -21,22 +21,25 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// newCHAOS3780IntegrationClient starts a real (non-TLS) ClickHouse
-// container -- mirroring devhealthsource's
+// newDedicatedClickHouseIntegrationClient starts a real (non-TLS) ClickHouse
+// container of its own, for a test that measures or changes the server itself
+// (system tables, SYSTEM statements, memory or read accounting); every other
+// real-ClickHouse test uses newCHAOS3780IntegrationClient, which shares one
+// container. The container -- mirroring devhealthsource's
 // newDevHealthClickHouseIntegrationClient -- because none of the findings
 // below (row_number()/PARTITION BY tie-breaking, ReplacingMergeTree FINAL
 // dedup, a real LIMIT clause) can be exercised by this package's fakeClient:
 // it returns whatever rows a test hands it verbatim, it does not execute
 // SQL. Proving CHAOS-3780's Codex round-1 fixes (F1-F4) actually hold
 // requires a real server evaluating the real query text.
-func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
+func newDedicatedClickHouseIntegrationClient(t *testing.T, ctx context.Context) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
-	return newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
+	return newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, nil)
 }
 
-// newCHAOS3780IntegrationClientWithOptions is newCHAOS3780IntegrationClient
-// with tune applied to the production query client's Options.
-func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context, tune func(*runtimeclickhouse.Options)) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
+// newDedicatedClickHouseIntegrationClientWithOptions is
+// newDedicatedClickHouseIntegrationClient with tune applied to the production query client's Options.
+func newDedicatedClickHouseIntegrationClientWithOptions(t *testing.T, ctx context.Context, tune func(*runtimeclickhouse.Options)) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
 	chfixture.RequireContainers(t)
 	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
