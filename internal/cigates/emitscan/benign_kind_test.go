@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/tools/go/packages"
+
 	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
@@ -291,5 +293,27 @@ func TestWrongKindIsNeverPinnable(t *testing.T) {
 		if finding.Rule == emitscan.RuleBenignKind && pinnable[finding.Detail] {
 			t.Errorf("finding %q could be silenced by a kind=int pin of the key", finding.Detail)
 		}
+	}
+}
+
+func TestRealTreeTypeChecks(t *testing.T) {
+	cfg := &packages.Config{
+		Dir:  benignRepoRoot(t),
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+	}
+	loaded, err := packages.Load(cfg, "./internal/...", "./cmd/...")
+	if err != nil {
+		t.Fatalf("packages.Load: %v", err)
+	}
+	errs := 0
+	packages.Visit(loaded, nil, func(p *packages.Package) {
+		for _, e := range p.Errors {
+			errs++
+			t.Errorf("type-check error in %s: %v", p.PkgPath, e)
+		}
+	})
+	t.Logf("real tree type-check: packages=%d errors=%d", len(loaded), errs)
+	if len(loaded) == 0 {
+		t.Error("no package loaded")
 	}
 }
