@@ -198,7 +198,7 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 				// built once, 6 or more when the linked set is built per copy.
 				var misses uint64
 				if err := direct.QueryRow(ctx, `SELECT max(ProfileEvents['ScalarSubqueriesCacheMiss']) FROM system.query_log
-WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'uniqExact(m.repo_uuid)') > 0`, mark).Scan(&misses); err != nil {
+WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'uniqExactIf(m.repo_uuid, NOT m.gated)') > 0`, mark).Scan(&misses); err != nil {
 					t.Fatalf("%s: read scalar subquery events: %v", s.org, err)
 				}
 				t.Logf("%s: linked mix scalar subquery cache misses %d", s.org, misses)
