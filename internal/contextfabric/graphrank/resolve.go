@@ -3942,8 +3942,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// under offersOnly would silently withhold the low-population-kind
 	// offer from the one call whose entire purpose is building offers.
 	var kindScopedSemanticCandidates []contextfabric.SubjectCandidate
-	if (confirmedKind == nil || len(candidatesBySubject) == 0) && len(resolution.Committed) == 0 {
-		if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
+	var semanticHinted []contextfabric.SubjectKind
+	switch {
+	case confirmedKind == nil:
+		semanticHinted = hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind)
+	case len(candidatesBySubject) == 0 && isAliasLookupScopedKind(contextfabric.SubjectKind(confirmedKind.Kind)):
+		// A confirmed turn whose filtered pool is empty searches only the
+		// confirmed kind: the other frame kinds were not what the caller picked.
+		semanticHinted = []contextfabric.SubjectKind{contextfabric.SubjectKind(confirmedKind.Kind)}
+	}
+	if len(resolution.Committed) == 0 {
+		if hinted := semanticHinted; len(hinted) > 0 {
 			semantic, semanticErr := applyKindScopedSemanticOffers(ctx, principal, request, deps, terms, hinted, admission)
 			if semanticErr != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, semanticErr
@@ -4159,8 +4168,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	// The semantic arm's admitted finds reach ONLY the candidate offer: they
 	// are held out of kindOfferCandidates, which also feeds the expected_kind
-	// offer, the handle offer, the pool-held kinds and the boundary telemetry,
-	// so the override cannot widen any of them.
+	// offer, the handle offer, the pool-held input and the boundary telemetry,
+	// so the override cannot widen any of them. The one deliberate exception is
+	// poolHeld below, which also reads these finds so a declared kind they
+	// evidence is not withheld.
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
 	candidateOfferInput := kindOfferCandidates
 	if len(semanticAdmitted) > 0 {

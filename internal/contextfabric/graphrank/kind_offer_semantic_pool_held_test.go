@@ -94,3 +94,28 @@ func TestResolveSubjects_ConfirmedKindSemanticArmNeverOffersAnUnauthorizedReposi
 		t.Fatalf("unauthorized semantic find surfaced: %#v %v", resolution, offered)
 	}
 }
+
+func TestResolveSubjects_ConfirmedKindSemanticArmSearchesOnlyTheConfirmedKind(t *testing.T) {
+	t.Parallel()
+	b := chaos10941Backend(true, chaos10941Semantic(chaos10941Repo))
+	b.kindScopedSemanticResults[chaos10941Term][contextfabric.SubjectTeam] = []CandidateNode{chaos10941Semantic(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:other", Label: "other"})}
+	frame := namedSubjectFrame(chaos10941Term, kindOf(contractsv1.ContextFabricSubjectTeam))
+	request := testRequest()
+	request.ExpectedKinds = []contextfabric.SubjectKind{contextfabric.SubjectTeam}
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectRepository}
+	_, offer, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(chaos10941Term), b.deps(), confirmed, nil, frame, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.kindScopedSemanticCalls) == 0 {
+		t.Fatal("semantic arm never ran")
+	}
+	for _, call := range b.kindScopedSemanticCalls {
+		if call.kind != contextfabric.SubjectRepository {
+			t.Fatalf("semantic calls = %v, want only the confirmed kind", b.kindScopedSemanticCalls)
+		}
+	}
+	if offered := chaos10941Offered(offer); len(offered) != 1 || offered[0] != chaos10941Repo.CanonicalID {
+		t.Fatalf("candidate offer = %v, want only the confirmed-kind repository", offered)
+	}
+}
