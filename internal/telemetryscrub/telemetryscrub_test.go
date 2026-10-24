@@ -580,17 +580,34 @@ func TestShortSchemeCredentialsRedacted(t *testing.T) {
 		{"Basic\tUjU=", "UjU="},
 		{"sent Basic ab+1 now", "ab+1"},
 		{"sent Basic abcdefgh now", "abcdefgh"},
+		{"Bearer Bearer ab12", "ab12"},
+		{"Basic Basic YWJjMTIz", "YWJjMTIz"},
+		{"Bearer Basic ab12", "ab12"},
+		{"Authorization: Bearer Bearer ab12", "ab12"},
+		{"Authorization: Basic Basic YWJjMTIz", "YWJjMTIz"},
+		{"Authorization: Bearer \"ab12\"", "ab12"},
+		{"authorization=Bearer 'ab12'", "ab12"},
+		{"Authorization: Basic \"UjU=\"", "UjU="},
+		{"Bearer\vab12", "ab12"},
+		{"Basic\vUjU=", "UjU="},
+		{"Bearer\u00a0ab12", "ab12"},
+		{"Bearer\u2003ab12", "ab12"},
+		{"Basic\u3000UjU=", "UjU="},
+		{"Authorization:\vBearer\vab12", "ab12"},
+		{"Authorization: Bearer\u00a0ab12", "ab12"},
 	}
 	for _, c := range cases {
 		if got := ScrubText(c.in); strings.Contains(got, c.leak) || !strings.Contains(got, Redacted) {
 			t.Errorf("ScrubText(%q) = %q", c.in, got)
 		}
 		rec := record(t, func(l *slog.Logger) { l.Info(c.in, "note", c.in) })
-		if s, _ := rec["note"].(string); strings.Contains(s, c.leak) {
-			t.Errorf("attr leaked %q: %q", c.in, s)
+		note, ok := rec["note"].(string)
+		if !ok || strings.Contains(note, c.leak) {
+			t.Errorf("attr for %q = %v", c.in, rec["note"])
 		}
-		if s, _ := rec["msg"].(string); strings.Contains(s, c.leak) {
-			t.Errorf("message leaked %q: %q", c.in, s)
+		msg, ok := rec["msg"].(string)
+		if !ok || strings.Contains(msg, c.leak) {
+			t.Errorf("message for %q = %v", c.in, rec["msg"])
 		}
 	}
 }
@@ -608,5 +625,17 @@ func TestShortSchemeFloorAndControls(t *testing.T) {
 		if got := ScrubText(v); got != Redacted {
 			t.Errorf("ScrubText(%q) = %q", v, got)
 		}
+	}
+}
+
+func TestSchemeRedactionIsIdempotent(t *testing.T) {
+	for _, in := range []string{"Authorization: Bearer ab12", "Authorization: Bearer Bearer ab12", "sent Bearer ab12 now", "Authorization: Basic UjU="} {
+		once := ScrubText(in)
+		if twice := ScrubText(once); twice != once {
+			t.Errorf("%q: once %q twice %q", in, once, twice)
+		}
+	}
+	if got := ScrubText("Authorization: Bearer ab12"); got != "Authorization: "+Redacted {
+		t.Errorf("got %q", got)
 	}
 }

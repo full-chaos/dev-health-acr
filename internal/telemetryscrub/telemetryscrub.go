@@ -73,29 +73,46 @@ var valueShapes = []*regexp.Regexp{
 	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
 }
 
+// schemeSpace is every separator accepted between a scheme word and its token: Go's \s misses \v and the Unicode spaces.
+const schemeSpace = `[ \t\r\n\v\f\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]`
+
 // A scheme word followed by a short token is a credential only with a digit or symbol in it, or at 8+ characters;
 // under a protected key (kvPair) any length is redacted, so prose like "Bearer of news" stays clean.
 var (
-	bearerShape = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{4,}`)
-	basicShape  = regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/=]{4,}`)
+	bearerShape = regexp.MustCompile(`(?i)\bbearer` + schemeSpace + `+([A-Za-z0-9._~+/=-]{4,})`)
+	basicShape  = regexp.MustCompile(`(?i)\bbasic` + schemeSpace + `+([A-Za-z0-9+/=]{4,})`)
 )
 
-func schemeCredential(m string) bool {
-	i := strings.LastIndexAny(m, " \t\r\n\v\f")
-	tok := m[i+1:]
+func schemeCredential(tok string) bool {
 	return len(tok) >= 8 || strings.ContainsAny(tok, "0123456789._~+/=-")
 }
 
-func redactSchemeCredentials(s string) string {
-	for _, re := range []*regexp.Regexp{bearerShape, basicShape} {
-		s = re.ReplaceAllStringFunc(s, func(m string) string {
-			if schemeCredential(m) {
-				return Redacted
-			}
-			return m
-		})
+// redactScheme redacts credential tokens after a scheme word. A token that is not a credential is
+// rescanned, so "Bearer Bearer ab12" still reaches the second scheme word.
+func redactScheme(s string, re *regexp.Regexp) string {
+	var out strings.Builder
+	pos := 0
+	for pos < len(s) {
+		loc := re.FindStringSubmatchIndex(s[pos:])
+		if loc == nil {
+			break
+		}
+		start, ts, te := pos+loc[0], pos+loc[2], pos+loc[3]
+		if schemeCredential(s[ts:te]) {
+			out.WriteString(s[pos:start])
+			out.WriteString(Redacted)
+			pos = te
+			continue
+		}
+		out.WriteString(s[pos:ts])
+		pos = ts
 	}
-	return s
+	out.WriteString(s[pos:])
+	return out.String()
+}
+
+func redactSchemeCredentials(s string) string {
+	return redactScheme(redactScheme(s, bearerShape), basicShape)
 }
 
 // shapeMarkers are lowercase; a value is checked against them case-insensitively before any regex runs.
@@ -322,7 +339,7 @@ func redactUserinfo(s string) string {
 	return out.String()
 }
 
-var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|(?i:bearer|basic)\s+[^\s,;&"'}\]]+|[^\s,;&"'}\]]+)`)
+var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?` + schemeSpace + `*[=:]` + schemeSpace + `*)("[^"]*"|'[^']*'|(?i:bearer|basic)` + schemeSpace + `+(?:"[^"]*"|'[^']*'|\[REDACTED\]|[^\s,;&"'}\]]+)|\[REDACTED\]|[^\s,;&"'}\]]+)`)
 
 // kvWords: a key=value or "key":"value" pair can only name a protected key if one of these fragments appears.
 var kvWords = []string{"token", "secret", "pass", "pwd", "key", "auth", "code", "otp", "pin", "mfa", "session", "credential", "cookie", "signature", "jwt", "dsn", "bearer"}
