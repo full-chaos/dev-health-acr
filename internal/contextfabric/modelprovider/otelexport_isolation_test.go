@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -81,7 +82,8 @@ func TestModelCallTelemetryNeverExported(t *testing.T) {
 	global.RegisterSpanProcessor(modelProcessor)
 	defer global.UnregisterSpanProcessor(modelProcessor)
 
-	requestCtx, requestSpan := exporter.Tracer().Start(ctx, "POST /api/v1/context-fabric/investigations")
+	requestCtx, requestSpan := exporter.Tracer().Start(ctx, "POST /api/v1/context-fabric/investigations", oteltrace.WithAttributes(
+		attribute.String("http.request.method", "POST"), attribute.String("http.route", "/api/v1/context-fabric/investigations")))
 	request := testRequest()
 	request.Question = secret
 	if _, _, err := runtime.InterpretQuestion(requestCtx, storage.Principal{OrgID: "org_test"}, request); err != nil {
