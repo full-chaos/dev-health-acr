@@ -45,7 +45,7 @@ type sourceRowTables struct {
 	// orgRows are organization-level rows by (query, locator); gate is the
 	// subject gate the resolver is built with (nil: none composed).
 	orgRows map[string][]contextpacket.OrganizationRowReference
-	// discoveries are the repositories a discovered row (an incident) maps to, by entity id.
+	// discoveries are the repositories a discovered row (an incident) maps to, by "<discovery>|<entity id>".
 	discoveries map[string][]contractsv1.ResolvedScope
 	gate        sourcerow.SubjectGate
 }
@@ -63,7 +63,7 @@ func (s *sourceRowTables) RepositoryByID(_ context.Context, orgID, repoID string
 
 func (s *sourceRowTables) SourceRowRepositories(_ context.Context, orgID string, discovery contextpacket.SourceRowDiscovery, entityID string) ([]contractsv1.ResolvedScope, error) {
 	s.reads = append(s.reads, "discover:"+orgID+":"+string(discovery)+":"+entityID)
-	if scopes, ok := s.discoveries[entityID]; ok {
+	if scopes, ok := s.discoveries[string(discovery)+"|"+entityID]; ok {
 		return scopes, s.err
 	}
 	return []contractsv1.ResolvedScope{}, s.err
@@ -890,7 +890,7 @@ func TestEvidenceRouteIncidentRefExpandsWithoutResultID(t *testing.T) {
 	}
 	incident := func(mapped ...contractsv1.ResolvedScope) *sourceRowTables {
 		tables := newSourceRowTables()
-		tables.discoveries = map[string][]contractsv1.ResolvedScope{"INC-1": mapped}
+		tables.discoveries = map[string][]contractsv1.ResolvedScope{string(contextpacket.SourceRowDiscoveryIncident) + "|INC-1": mapped}
 		for _, mappedScope := range mapped {
 			tables.repos[mappedScope.RepoID] = mappedScope.RepoSlug
 			tables.withKindRow(mappedScope.RepoID, mappedScope.RepoSlug, locator, "incidents.v1", "incident", "INC-1")

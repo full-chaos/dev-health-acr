@@ -806,7 +806,7 @@ The server lists read-only guide resources and prompts (see [Guide resources](#g
    {"evidence_ref_id": "ev_01J0ACR001"}
    ```
 
-   A reference that starts with `acr:v1:` names its subject, not its answer, and many results cite it. Pass the answer's `result_id` too (`{"evidence_ref_id": "acr:v1:team:CHAOS", "result_id": "result_..."}`); the citation returned is then that result's. Without `result_id` the call fails with `evidence_ref_unscoped`. A repository, pull-request, work-item, ci, deployment, review.v2 or incident reference (`acr:v1:pull-request:...`, `acr:v1:work-item:...`, `acr:v1:ci:...` and so on) names one row, not a subject, and needs no `result_id`: it is read from the source row you may read, and an absent row is not found.
+   A reference that starts with `acr:v1:` names its subject, not its answer, and many results cite it. Pass the answer's `result_id` too (`{"evidence_ref_id": "acr:v1:team:CHAOS", "result_id": "result_..."}`); the citation returned is then that result's. Without `result_id` the call fails with `evidence_ref_unscoped`. A repository, pull-request, work-item, ci, deployment, review.v2, incident or .v2 edge reference (`acr:v1:pull-request:...`, `acr:v1:work-item:...`, `acr:v1:ci:...` and so on) names one row, not a subject, and needs no `result_id`: it is read from the source row you may read, and an absent row is not found.
 
    The reply carries provenance and a bounded excerpt. URLs in it are references; the server never fetches them.
 

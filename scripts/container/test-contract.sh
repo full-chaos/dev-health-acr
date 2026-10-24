@@ -62,12 +62,20 @@ grep -q 'create-context.sh' "${repo_root}/scripts/container/build.sh"
 # 1. QEMU binfmt image and BuildKit driver image must be pinned by immutable
 # digest; the Buildx CLI version must be pinned to an explicit release.
 ci_workflow="${repo_root}/.github/workflows/ci.yml"
-while IFS= read -r action_ref; do
-  [[ "$action_ref" =~ @[0-9a-f]{40}$ ]] || {
-    printf 'GitHub action is not pinned to a full commit SHA: %s\n' "$action_ref" >&2
-    exit 1
-  }
-done < <(awk '/^[[:space:]]*- uses:/ { print $3 }' "$ci_workflow")
+# Prints every `uses:` ref in the given files that is neither a 40-hex pinned
+# remote ref nor exactly a repo-local ./.github/actions/<name> action.
+unpinned_action_refs() {
+  local action_ref
+  while IFS= read -r action_ref; do
+    [[ "$action_ref" =~ ^\./\.github/actions/[a-z0-9-]+$ ]] && continue
+    [[ "$action_ref" =~ @[0-9a-f]{40}$ ]] || printf '%s\n' "$action_ref"
+  done < <(awk '/^[[:space:]]*(- )?uses:/ { sub(/^[[:space:]]*(- )?uses:[[:space:]]*/, ""); sub(/[[:space:]].*$/, ""); print }' "$@")
+}
+unpinned="$(unpinned_action_refs "$ci_workflow" "${repo_root}"/.github/actions/*/action.yml)"
+[ -z "$unpinned" ] || {
+  printf 'GitHub action is not pinned to a full commit SHA: %s\n' "$unpinned" >&2
+  exit 1
+}
 # CHAOS-4855: both are consumed through ACR_IMAGE_MIRROR_PREFIX (ghcr.io/
 # full-chaos/ in CI, empty -- i.e. straight from Docker Hub -- locally), so
 # the literal ref appears with an optional `${{ env.ACR_IMAGE_MIRROR_PREFIX }}`
@@ -273,8 +281,7 @@ fi
 grep -q '"$mcp_image" workspace' "${repo_root}/scripts/container/verify.sh"
 
 # 13. Compilation must run network-isolated after module download; only
-# the module-download step and the two checksum-pinned git-lfs ADDs of the
-# MCP root (git-lfs-apks stage) may reach the network.
+# the module-download step may reach the network.
 test "$(grep -c -- '--network=none' "${repo_root}/Dockerfile")" -eq 1
 
 # 14. Runtime probes must drop all Linux capabilities and block privilege
@@ -397,6 +404,25 @@ require scripts/container/test-trivy-db-provenance.sh
 # evasions they were tightened for, against synthetic fixtures -- not just
 # today's compliant scan.sh.
 pin_fixture="$(mktemp -d)"
+
+# The action-pin rule must reject a remote ref without a 40-hex SHA anywhere a
+# `uses:` can sit (a workflow step, a local composite action), a local path
+# that climbs out of .github/actions or nests, and still accept the real files.
+printf '      - uses: actions/cache@v4\n' >"${pin_fixture}/remote-unpinned.yml"
+printf '    - name: x\n      uses: actions/cache/restore@v4\n' >"${pin_fixture}/composite-unpinned.yml"
+printf '      - uses: ./.github/actions/../x\n' >"${pin_fixture}/local-escape.yml"
+printf '      - uses: ./.github/actions/a/b\n' >"${pin_fixture}/local-nested.yml"
+for bad_uses in remote-unpinned composite-unpinned local-escape local-nested; do
+  [ -n "$(unpinned_action_refs "${pin_fixture}/${bad_uses}.yml")" ] || {
+    printf 'action pin rule accepted a %s uses: ref\n' "$bad_uses" >&2
+    exit 1
+  }
+done
+printf '      - uses: ./.github/actions/go-modcache\n' >"${pin_fixture}/local-ok.yml"
+[ -z "$(unpinned_action_refs "${pin_fixture}/local-ok.yml")" ] || {
+  printf 'action pin rule rejected a repo-local ./.github/actions/<name> ref\n' >&2
+  exit 1
+}
 
 tag_and_digest_evasion="${pin_fixture}/tag-and-digest.sh"
 printf 'trivy_db_ref="ghcr.io/aquasecurity/trivy-db:2@sha256:%s"\n' \
@@ -544,10 +570,6 @@ bash "${repo_root}/scripts/container/test-trivy-db-provenance.sh"
 # use is pruned before the final scratch target.
 grep -q 'FROM scratch AS acr-mcp' "${repo_root}/Dockerfile"
 grep -q 'rm -f /mcp-root/usr/bin/sh /mcp-root/usr/bin/dash' "${repo_root}/Dockerfile"
-grep -qE '^ADD --checksum=sha256:[0-9a-f]{64} https://packages\.wolfi\.dev/os/x86_64/git-lfs-3\.8\.0-r4\.apk /amd64\.apk$' "${repo_root}/Dockerfile"
-grep -qE '^ADD --checksum=sha256:[0-9a-f]{64} https://packages\.wolfi\.dev/os/aarch64/git-lfs-3\.8\.0-r4\.apk /arm64\.apk$' "${repo_root}/Dockerfile"
-grep -q 'apk version -t' "${repo_root}/Dockerfile"
-grep -q -- '--no-logfile' "${repo_root}/Dockerfile"
 test "$(grep -c 'assert_git_lfs_fixed .* MCP' "${repo_root}/scripts/container/verify.sh")" -eq 1
 if grep -q 'documented base-image exception' "${repo_root}/docs/container-images.md"; then
   printf 'MCP documentation must not retain a runtime shell exception\n' >&2

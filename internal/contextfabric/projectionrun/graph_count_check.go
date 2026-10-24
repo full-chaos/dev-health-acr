@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -412,6 +413,18 @@ func (c *Coordinator) checkEdgeCounts(ctx context.Context, orgID, hash string, r
 			deferred[relation] = true
 		}
 		sourceCounts, err := counter.ProjectionSourceEdgeCounts(ctx, orgID)
+		unmeasured := map[contextfabric.EdgeCountKey]bool{}
+		var partial *contextfabric.EdgeCountsUnmeasured
+		if errors.As(err, &partial) {
+			for _, key := range partial.Keys {
+				unmeasured[key] = true
+				result.Errors++
+				c.logger.WarnContext(ctx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "edge", "reason", contextfabric.SanitizeLogAttr(partial.Reason),
+					"source", contextfabric.SanitizeLogAttr(source), "relation_type", contextfabric.SanitizeLogAttr(string(key.Relation)), "arm", contextfabric.SanitizeLogAttr(key.Arm),
+					"org_id_hash", contextfabric.SanitizeLogAttr(hash))
+			}
+			err = nil
+		}
 		if err != nil {
 			result.Errors++
 			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "edge_source_count",
@@ -419,7 +432,7 @@ func (c *Coordinator) checkEdgeCounts(ctx context.Context, orgID, hash string, r
 			continue
 		}
 		for _, key := range counter.EdgeCountKeys() {
-			if _, present := sourceCounts[key]; present {
+			if _, present := sourceCounts[key]; present || unmeasured[key] {
 				continue
 			}
 			result.Errors++

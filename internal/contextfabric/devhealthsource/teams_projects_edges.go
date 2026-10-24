@@ -826,6 +826,18 @@ const workItemTeamsCurrentOrder = "tuple(toUInt8(a.is_primary != 1), -toUnixTime
 // repo_id).
 var workItemTeamsWinner = "argMinIf(tuple(toString(a.source), toString(a.confidence), toString(a.repo_id)), " + workItemTeamsCurrentOrder + ", " + workItemTeamsQualifies + ")"
 
+// workItemTeamsFromGroupSQL is the row source and GROUP BY of the work item
+// team groups: one row per (work item, team). The edge count reads the same
+// text.
+func workItemTeamsFromGroupSQL() string {
+	return `FROM work_item_team_attributions AS a FINAL
+INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
+INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = ifNull(a.team_id, '')
+LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+WHERE a.org_id = {org_id:String} AND ifNull(a.team_id, '') != ''
+GROUP BY ` + strings.Join(workItemTeamsGroupColumns, ", ")
+}
+
 // workItemTeamsStatement reads one row per (work item, team). The table keys
 // on source, so a pair can hold a primary row and a co-owner row, or rows of
 // two sources, and the edge id is per pair: left apart, they reach the batch
@@ -838,12 +850,7 @@ func workItemTeamsStatement(cursor cursorState) string {
        ` + workItemTeamsWatermark + ` AS observed_at,
        ` + workItemTeamsWinner + `.3 AS attribution_repo_id,
        countIf(` + workItemTeamsQualifies + `) AS group_rows
-FROM work_item_team_attributions AS a FINAL
-INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
-INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("") + `) AS t ON t.id = ifNull(a.team_id, '')
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE a.org_id = {org_id:String} AND ifNull(a.team_id, '') != ''
-GROUP BY ` + strings.Join(workItemTeamsGroupColumns, ", ") + havingSincePredicate(cursor, workItemTeamsWatermark, workItemTeamsRowKey) + orderBy(workItemTeamsWatermark, workItemTeamsRowKey)
+` + workItemTeamsFromGroupSQL() + havingSincePredicate(cursor, workItemTeamsWatermark, workItemTeamsRowKey) + orderBy(workItemTeamsWatermark, workItemTeamsRowKey)
 }
 
 func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, ledger *presenceTelemetryLedger) ([]candidate, bool, error) {
@@ -1656,7 +1663,26 @@ func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 // (projectTeamsStatementFor) and the project-team source-row read selects one
 // group from it (ProjectTeamSourceRowStatement), so the two cannot disagree
 // on which groups exist.
+// projectTeamsSuppressedSQL is true for a group none of whose ownership rows
+// can be asserted: the group projects a retraction, not an edge.
+const projectTeamsSuppressedSQL = "countIf(o.unassertable = 0) = 0"
+
 func projectTeamsGroupSQL(ingest bool) string {
+	return `SELECT o.project_id, o.team_id, o.source_name,
+       minIf(o.first_valid_from, o.unassertable = 0) AS first_valid_from,
+       argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1 IS NULL AS latest_is_open,
+       ifNull(argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       ` + projectTeamsWatermark + ` AS observed_at, o.provider,
+       toUInt8(` + projectTeamsSuppressedSQL + `) AS edge_suppressed,
+       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
+       toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present` + ingestStampSQL(ingest, projectTeamsIngestWatermark+" AS ingest_at") + `
+` + projectTeamsFromGroupSQL(ingest)
+}
+
+// projectTeamsFromGroupSQL is the row source and GROUP BY of the ownership
+// groups: one row per (project, provider, team, source). The edge count reads
+// the same text.
+func projectTeamsFromGroupSQL(ingest bool) string {
 	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
 	// The provider-wide project stamp widens WHICH groups a cursor revisits. It
 	// belongs in the cursor position only: observed_at is the edge's own
@@ -1668,15 +1694,7 @@ func projectTeamsGroupSQL(ingest bool) string {
 	if !ingest {
 		legacyProviderTerm = ", max(provider_updated_at)" + identityPartition
 	}
-	return `SELECT o.project_id, o.team_id, o.source_name,
-       minIf(o.first_valid_from, o.unassertable = 0) AS first_valid_from,
-       argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1 IS NULL AS latest_is_open,
-       ifNull(argMaxIf(tuple(o.valid_to), ` + ownershipFactOrder + `, o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
-       ` + projectTeamsWatermark + ` AS observed_at, o.provider,
-       toUInt8(countIf(o.unassertable = 0) = 0) AS edge_suppressed,
-       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
-       toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present` + ingestStampSQL(ingest, projectTeamsIngestWatermark+" AS ingest_at") + `
-FROM (
+	return `FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, first_valid_from, valid_from, valid_to, retraction_only,
 	       greatest(updated_at, max(project_updated_at)` + identityPartition + legacyProviderTerm + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+", max(provider_ingest_at)"+identityPartition+") AS row_ingest,") + `
 	       toUInt8(retraction_only = 1 OR min(project_id)` + identityPartition + ` != max(project_id)` + identityPartition + `) AS unassertable
@@ -2043,7 +2061,14 @@ func repositoryTeamsGroupedSQL() string {
        argMax(tuple(o.valid_to), ` + repositoryTeamsLatestOrder + `).1 IS NULL AS latest_is_open,
        ifNull(argMax(tuple(o.valid_to), ` + repositoryTeamsLatestOrder + `).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        ` + repositoryTeamsWatermark + ` AS observed_at
-FROM (
+` + repositoryTeamsFromGroupSQL()
+}
+
+// repositoryTeamsFromGroupSQL is the row source and GROUP BY of the repository
+// ownership groups: one row per (provider, repository, team, source). The edge
+// count reads the same text.
+func repositoryTeamsFromGroupSQL() string {
+	return `FROM (
 	SELECT rto.provider AS provider, rto.repo_key AS repo_key,
 	       rto.repo_full_name AS repo_full_name, ifNull(r.repo, '') AS repo_slug,
 	       rto.team_id AS team_id, toString(rto.source) AS source_name,

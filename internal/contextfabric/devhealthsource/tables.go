@@ -1026,6 +1026,17 @@ func dependencyRowKey(repoID, sourceID, targetID, relationshipType string) strin
 	return identity.JoinSegments(repoID, sourceID, targetID, relationshipType)
 }
 
+// dependencyFromSQL is the row source of queryWorkItemDependencies up to its
+// organization predicate. The dependency edge counts read the same text.
+func dependencyFromSQL() string {
+	return `FROM work_item_dependencies AS d FINAL
+INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
+LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+` + endedLinksJoinSQL + `
+WHERE d.org_id = {org_id:String}`
+}
+
 // queryWorkItemDependencies mints work_item.v2 endpoint references (design
 // brief D-4/§1.3) AND, since S2b, closes §1.5 (P5) for the one endpoint
 // that can genuinely fail to resolve: a row whose target_work_item_id does
@@ -1081,12 +1092,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
        ` + nullableTimestamp("t.created_at") + `, ` + nullableTimestamp("coalesce(t.completed_at, t.closed_at)") + `, toString(t.repo_id),
        toUInt8(` + isEnded + `), ` + position + `, ` + position + `
-FROM work_item_dependencies AS d FINAL
-INNER JOIN work_items AS w FINAL ON w.org_id = d.org_id AND w.work_item_id = d.source_work_item_id
-LEFT JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-` + endedLinksJoinSQL + `
-WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + orderBy(position, rowKey)
+` + dependencyFromSQL() + sincePredicate(cursor, position, rowKey) + orderBy(position, rowKey)
 	return fetchIngest(ctx, client, statement, append(rowLimitBindings(orgID, cursor, limit), ended.bindings()...), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var sourceID, targetID, relationshipType, repoID, repoSlug, targetRepoID string
 		var observedAt, sourceCreatedAt, sourceEndedAt, targetCreatedAt, targetEndedAt, endedAt time.Time

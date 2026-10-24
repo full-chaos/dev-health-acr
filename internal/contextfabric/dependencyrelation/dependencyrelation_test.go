@@ -3,6 +3,8 @@ package dependencyrelation
 import (
 	"strings"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func TestKeyAndEmittedSpelling(t *testing.T) {
@@ -95,5 +97,21 @@ func TestResolveKeepsIdentityOfAlreadyCanonicalSpellings(t *testing.T) {
 		if _, _, got := Resolve(raw); got != raw {
 			t.Errorf("Resolve(%q) identity = %q, want it unchanged", raw, got)
 		}
+	}
+}
+
+func TestResolveFoldsAsciiOnlyLikeKeyAndKeySQL(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"i\u017f_blocked_by", "\u00a0blocked_by\u00a0", "BLOCKED_BY\u00a0"} {
+		typ, swap, _ := Resolve(raw)
+		if typ == contractsv1.ContextFabricRelationshipBlocks || swap {
+			t.Errorf("Resolve(%q) = %s swap=%v: a spelling Key and KeySQL do not fold must not map onto an alias", raw, typ, swap)
+		}
+		if key := Key(raw); strings.HasSuffix(key, ":inv") {
+			t.Errorf("Key(%q) = %q", raw, key)
+		}
+	}
+	if typ, swap, _ := Resolve(" \tblocked_by\n"); typ != contractsv1.ContextFabricRelationshipBlocks || !swap {
+		t.Errorf("ascii padding and case must still fold: %s %v", typ, swap)
 	}
 }

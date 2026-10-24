@@ -89,6 +89,13 @@ func (s *TeamsProjectsSource) ProjectionSourceEdgeCounts(ctx context.Context, or
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("devhealthsource: count %s edges: %w", contractsv1.ContextFabricRelationshipBelongsToProject, err)
 	}
+	owned, err := runEdgePopulations(ctx, s.client, orgID, ownedByTeamPopulations(ingest))
+	if err != nil {
+		return nil, err
+	}
+	for key, total := range owned {
+		counts[key] = total
+	}
 	return counts, nil
 }
 
@@ -97,21 +104,25 @@ func (s *TeamsProjectsSource) EdgeCountKeys() []contextfabric.EdgeCountKey {
 	if !s.enabled {
 		return nil
 	}
-	return append([]contextfabric.EdgeCountKey(nil), membershipEdgeKeys...)
+	keys := append([]contextfabric.EdgeCountKey(nil), membershipEdgeKeys...)
+	for _, population := range ownedByTeamPopulations(false) {
+		keys = append(keys, population.keys()...)
+	}
+	return keys
 }
 
 // DeferredEdgeRelations implements contextfabric.ProjectionSourceEdgeCounts:
-// the relation types this source produces and does not measure yet.
+// every relation type this source produces is measured.
 func (s *TeamsProjectsSource) DeferredEdgeRelations() []contextfabric.RelationshipType {
-	if !s.enabled {
-		return nil
-	}
-	return []contextfabric.RelationshipType{contractsv1.ContextFabricRelationshipOwnedByTeam}
+	return nil
 }
 
 // ProjectionSourceEdgeCounts implements contextfabric.ProjectionSourceEdgeCounts.
 // Each population is counted over the producer's own joins (edge_counts_relations.go).
 func (s *ClickHouseProjectionSource) ProjectionSourceEdgeCounts(ctx context.Context, orgID string) (map[contextfabric.EdgeCountKey]int64, error) {
+	if s.endedLinksBound > 0 {
+		ctx = withEndedLinkMemo(s.endedLinksBound, ctx)
+	}
 	return runEdgePopulations(ctx, s.client, orgID, clickHouseEdgePopulations)
 }
 
@@ -128,8 +139,8 @@ func (s *ClickHouseProjectionSource) EdgeCountKeys() []contextfabric.EdgeCountKe
 // produced relation types no population measures.
 func (s *ClickHouseProjectionSource) DeferredEdgeRelations() []contextfabric.RelationshipType {
 	measured := map[contextfabric.RelationshipType]bool{}
-	for _, population := range clickHouseEdgePopulations {
-		measured[population.relation] = true
+	for _, key := range s.EdgeCountKeys() {
+		measured[key.Relation] = true
 	}
 	var deferred []contextfabric.RelationshipType
 	for _, relation := range ProducedRelationshipTypes() {
