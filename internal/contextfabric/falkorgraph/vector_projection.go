@@ -296,17 +296,30 @@ func (a *Adapter) embedProjectionBatch(ctx context.Context, key string, batch co
 	// node either re-embedded or cleared. Anything else fails the batch, so
 	// the checkpoint holds and the next tick reconciles.
 	dimension, state, err := a.vectorIndexDimension(ctx, key)
+	if err == nil && state == vectorIndexKnown {
+		a.vectorIndexSeen(key)
+	}
 	switch {
 	case err != nil:
 		// Transient: the probe itself failed, so nothing is known about the
 		// index and clearing cannot be reasoned about either. Replay.
 		a.recordVectorDegraded(ctx, batch.OrgID)
 		return fmt.Errorf("verify vector index before embedding: %w", err)
-	case state == vectorIndexUnknown, state == vectorIndexAbsent:
-		// UNDER CONSTRUCTION, an undecodable status, or an index that has
-		// vanished. All are expected to resolve on their own -- bootstrap
-		// creates and waits for the index -- so replay rather than commit
-		// against an index this batch could not reason about.
+	case state == vectorIndexAbsent:
+		// An index that has vanished after this process bootstrapped: another
+		// process purged the graph key (a rebuild run by exec), taking every
+		// index and constraint with it. This process's bootstrapDone cache
+		// would never bootstrap again, so drop it (throttled) and let the next
+		// tick recreate the schema. This batch still replays: it may not
+		// commit against an index it could not reason about.
+		a.recordVectorDegraded(ctx, batch.OrgID)
+		a.rebootstrapAfterAbsentIndex(ctx, key, batch.OrgID)
+		return errVectorIndexNotReady
+	case state == vectorIndexUnknown:
+		// UNDER CONSTRUCTION or an undecodable status. Expected to resolve on
+		// its own -- bootstrap creates and waits for the index -- so replay
+		// rather than commit against an index this batch could not reason
+		// about.
 		a.recordVectorDegraded(ctx, batch.OrgID)
 		return errVectorIndexNotReady
 	case dimension != a.embedder.Identity().Dimension:

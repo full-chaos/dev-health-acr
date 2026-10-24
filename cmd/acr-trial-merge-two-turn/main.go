@@ -357,7 +357,7 @@ import (
 // qualified/provisional rather than RankingComputed -- see the producer's
 // own reportSchemaVersion "44" doc comment for why the old predicate
 // false-greened the bar, and why this is a rename rather than a redefinition.
-const expectedSchemaVersion = "44"
+const expectedSchemaVersion = "45"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -451,6 +451,7 @@ type twoTurnCaseResult struct {
 	Turn1Status            string `json:"turn1_status"`
 	Turn2Status            string `json:"turn2_status"`
 	OfferMiss              bool   `json:"offer_miss"`
+	NotApplicableReason    string `json:"not_applicable_reason,omitempty"`
 	Applied                bool   `json:"applied"`
 	Reused                 bool   `json:"reused"`
 	TierRoutedCorrectly    bool   `json:"tier_routed_correctly,omitempty"`
@@ -791,6 +792,7 @@ type twoTurnReport struct {
 	GateReachableCount                      int            `json:"gate_reachable_count"`
 	StructureAndWindowDisclosureAbsentCount int            `json:"structure_and_window_disclosure_absent_count"`
 	OfferMissCount                          map[string]int `json:"offer_miss_count"`
+	NotApplicableCount                      map[string]int `json:"not_applicable_count"`
 	WrongCommitCount                        int            `json:"wrong_commit_count"`
 	// OracleIDSchemeMismatchCount (CHAOS-4348 measurement-layer fix, schema
 	// v38) mirrors twoTurnReport's identically-named field byte-for-byte --
@@ -1066,6 +1068,7 @@ func run(outPath string, shardPaths []string, stdout io.Writer) error {
 		return fmt.Errorf("close %s: %w", outPath, err)
 	}
 
+	fmt.Fprintln(stdout, notApplicableSummary(merged.NotApplicableCount, merged.CasesRun))
 	if gateErr := evaluateGates(merged); gateErr != nil {
 		fmt.Fprintf(stdout, "merged report written to %s -- INVALID:\n%v\n", outPath, gateErr)
 		return gateErr
@@ -1297,6 +1300,7 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		// by construction.
 		MaxSerializedBytesConfigured:        first.MaxSerializedBytesConfigured,
 		OfferMissCount:                      map[string]int{},
+		NotApplicableCount:                  map[string]int{},
 		ConfirmedWrongRedeemedCount:         map[string]int{},
 		MutationProbesTripped:               map[string]int{},
 		MutationProbesRun:                   map[string]int{},
@@ -1361,6 +1365,9 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 
 		for k, v := range s.OfferMissCount {
 			merged.OfferMissCount[k] += v
+		}
+		for k, v := range s.NotApplicableCount {
+			merged.NotApplicableCount[k] += v
 		}
 		for k, v := range s.ConfirmedWrongRedeemedCount {
 			merged.ConfirmedWrongRedeemedCount[k] += v
@@ -1683,4 +1690,22 @@ func evaluateGates(r twoTurnReport) error {
 		msg += "  - " + f + "\n"
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// notApplicableSummary states the merged n_not_applicable per reason and the
+// offer-arm denominator left after the exclusion.
+func notApplicableSummary(counts map[string]int, casesRun int) string {
+	keys := make([]string, 0, len(counts))
+	total := 0
+	for k, n := range counts {
+		keys = append(keys, k)
+		total += n
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	fmt.Fprintf(&b, "offer arms: n_not_applicable=%d of cases_run=%d (offer-arm denominator %d)", total, casesRun, casesRun-total)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "; %s n_not_applicable=%d (positive and inferred_tier)", k, counts[k])
+	}
+	return b.String()
 }
