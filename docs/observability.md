@@ -107,6 +107,10 @@ dimensions use `unknown`; no backend-specific dynamic label may be added.
 Per-organization and per-credential request/resource totals come from the bounded
 `internal/limits.Manager.Usage` interface and are not emitted as metric labels.
 
+## What leaves a span
+
+Exported spans pass through one scrub in `internal/otelexport`: only the attribute keys of `otelexport.SafeSpanKey` leave the process (`server.address` and `server.port` only on server spans), values are redacted for credential shapes and capped, the span name is `METHOD <route template>`, `HTTP METHOD` or a fixed internal name, and events keep only the error type, links keep no attributes, and a status keeps its code without text. Resource attributes are redacted for credential shapes and credential-named keys.
+
 ## SLOs and alerts
 
 The measurements below name snapshot-derived series (`acr_observation_*`,

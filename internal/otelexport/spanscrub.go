@@ -1,0 +1,152 @@
+package otelexport
+
+import (
+	"context"
+	"strings"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
+)
+
+const (
+	redactedValue   = telemetryscrub.Redacted
+	maxSpanTextRune = 256
+	fallbackName    = "span"
+)
+
+var knownMethods = map[string]bool{
+	"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "CONNECT": true, "OPTIONS": true, "TRACE": true,
+}
+
+// scrubSpanExporter sits in front of the real span exporter. A recorded span is immutable and a processor sees only a
+// read-only snapshot, so the scrub is the exporter: every span leaves the process through it. Exported spans carry only
+// the safe attribute keys, a closed name, scrubbed values, no event text, no link attributes, no status text.
+type scrubSpanExporter struct{ sdktrace.SpanExporter }
+
+func (e scrubSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	out := make([]sdktrace.ReadOnlySpan, len(spans))
+	for i, span := range spans {
+		out[i] = scrubbedSpan{ReadOnlySpan: span}
+	}
+	return e.SpanExporter.ExportSpans(ctx, out)
+}
+
+type scrubbedSpan struct{ sdktrace.ReadOnlySpan }
+
+func clip(s string) string {
+	s = telemetryscrub.ScrubText(s)
+	if r := []rune(s); len(r) > maxSpanTextRune {
+		return string(r[:maxSpanTextRune])
+	}
+	return s
+}
+
+func scrubValue(kv attribute.KeyValue) attribute.KeyValue {
+	switch kv.Value.Type() {
+	case attribute.STRING:
+		return attribute.String(string(kv.Key), clip(kv.Value.AsString()))
+	case attribute.STRINGSLICE:
+		in := kv.Value.AsStringSlice()
+		out := make([]string, len(in))
+		for i, s := range in {
+			out[i] = clip(s)
+		}
+		return attribute.StringSlice(string(kv.Key), out)
+	}
+	return kv
+}
+
+func (s scrubbedSpan) Attributes() []attribute.KeyValue {
+	kind := s.ReadOnlySpan.SpanKind()
+	var out []attribute.KeyValue
+	for _, kv := range s.ReadOnlySpan.Attributes() {
+		key := string(kv.Key)
+		if !SafeSpanKey(key) || (serverOnlySpanKeys[key] && kind != trace.SpanKindServer) {
+			continue
+		}
+		out = append(out, scrubValue(kv))
+	}
+	return out
+}
+
+// Name is one of: "<METHOD> <route template>", "HTTP <METHOD>", "HTTP", a closed internal name, or "span". It is never
+// built from a host or a raw path: the route comes from the http.route attribute (the matched mux pattern).
+func (s scrubbedSpan) Name() string {
+	method, route := "", ""
+	for _, kv := range s.ReadOnlySpan.Attributes() {
+		switch kv.Key {
+		case "http.request.method":
+			method = kv.Value.AsString()
+		case "http.route":
+			route = kv.Value.AsString()
+		}
+	}
+	if method != "" || route != "" {
+		if !knownMethods[method] {
+			return "HTTP"
+		}
+		if strings.HasPrefix(route, "/") && !strings.Contains(route, "://") {
+			return method + " " + clip(route)
+		}
+		return "HTTP " + method
+	}
+	if safeInternalSpanNames[s.ReadOnlySpan.Name()] {
+		return s.ReadOnlySpan.Name()
+	}
+	return fallbackName
+}
+
+func (s scrubbedSpan) Events() []sdktrace.Event {
+	in := s.ReadOnlySpan.Events()
+	out := make([]sdktrace.Event, len(in))
+	for i, ev := range in {
+		ev.Name = "event"
+		if in[i].Name == "exception" {
+			ev.Name = "exception"
+		}
+		ev.Attributes = nil
+		for _, kv := range in[i].Attributes {
+			if safeEventKeys[string(kv.Key)] {
+				ev.Attributes = append(ev.Attributes, scrubValue(kv))
+			}
+		}
+		out[i] = ev
+	}
+	return out
+}
+
+func (s scrubbedSpan) Links() []sdktrace.Link {
+	in := s.ReadOnlySpan.Links()
+	out := make([]sdktrace.Link, len(in))
+	for i, l := range in {
+		out[i] = sdktrace.Link{SpanContext: l.SpanContext, DroppedAttributeCount: l.DroppedAttributeCount}
+	}
+	return out
+}
+
+// Status keeps the code and drops the description: error text carries hosts, paths and request content.
+func (s scrubbedSpan) Status() sdktrace.Status {
+	st := s.ReadOnlySpan.Status()
+	st.Description = ""
+	return st
+}
+
+func (s scrubbedSpan) Resource() *resource.Resource {
+	in := s.ReadOnlySpan.Resource()
+	if in == nil {
+		return nil
+	}
+	var attrs []attribute.KeyValue
+	for _, kv := range in.Attributes() {
+		if protected, network := telemetryscrub.KeyClass(string(kv.Key)); protected || network {
+			attrs = append(attrs, attribute.String(string(kv.Key), redactedValue))
+			continue
+		}
+		attrs = append(attrs, scrubValue(kv))
+	}
+	return resource.NewWithAttributes(in.SchemaURL(), attrs...)
+}
