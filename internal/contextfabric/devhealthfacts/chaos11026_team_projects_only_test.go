@@ -139,21 +139,71 @@ func TestChaos11026_MetricsKeepsTheTeamRowOfAProjectOnlyTeam(t *testing.T) {
 
 // The project read only explains a state already decided: when it fails (the
 // oracle store has no projects table, ClickHouse code 60) the kind is NOT
-// failed, no fact or state moves and the old text stays.
-func TestChaos11026_AFailedProjectReadKeepsTheOldTextAndFailsNothing(t *testing.T) {
+// failed and no fact or state moves, but the cause text says the check could not
+// run instead of claiming the team owns no repository, which would present a
+// missing check as a measured absence.
+const (
+	chaos11070SubjectText = "devhealthfacts: the project-link check could not run for this team, so ownership through projects is unknown; no repository rollup applies; this is not a measured zero"
+	chaos11070KindText    = "devhealthfacts: the project-link check could not run for the requested teams, so ownership through projects is unknown; no repository rollup applies; this is not a measured zero"
+)
+
+func TestChaos11070_AFailedProjectReadSaysTheCheckCouldNotRun(t *testing.T) {
 	for _, kind := range chaos11026NotApplicableKinds {
 		t.Run(string(kind), func(t *testing.T) {
 			team := teamSubject("jira-team")
 			result, _ := chaos11026Read(t, kind, []contextfabric.SubjectRef{team},
 				fakeTable{match: chaos11026Summaries, err: errors.New("code: 60, UNKNOWN_TABLE")})
-			if result.State != contextfabric.SourceNotApplicable || result.Reason != chaos11026OldReason {
-				t.Fatalf("state %q reason %q, want the unchanged not_applicable text", result.State, result.Reason)
+			if result.State != contextfabric.SourceNotApplicable {
+				t.Fatalf("state %q, want not_applicable unchanged", result.State)
 			}
-			if got := result.SubjectReasons[contextfabric.FactSubjectKey(team)]; !strings.Contains(got, chaos11026OldReason) {
-				t.Fatalf("subject reason %q, want the old text", got)
+			if result.Reason != chaos11070KindText {
+				t.Fatalf("kind reason %q, want the check-could-not-run limitation", result.Reason)
+			}
+			if got := result.SubjectReasons[contextfabric.FactSubjectKey(team)]; !strings.Contains(got, chaos11070SubjectText) {
+				t.Fatalf("subject reason %q, want it to carry the check-could-not-run limitation", got)
+			}
+			for name, text := range map[string]string{"reason": result.Reason, "subject": result.SubjectReasons[contextfabric.FactSubjectKey(team)]} {
+				if strings.Contains(text, "owns no repository") {
+					t.Fatalf("%s still claims the team owns no repository: %q", name, text)
+				}
 			}
 			if len(result.Facts) != 0 {
 				t.Fatalf("facts moved: %d", len(result.Facts))
+			}
+		})
+	}
+}
+
+func TestChaos11070_AFailedProjectReadWithTwoTeamsKeepsBothUnknown(t *testing.T) {
+	a, b := teamSubject("team-a"), teamSubject("team-b")
+	result, _ := chaos11026Read(t, contextfabric.FactPullRequests, []contextfabric.SubjectRef{a, b},
+		fakeTable{match: chaos11026Summaries, err: errors.New("code: 60, UNKNOWN_TABLE")})
+	if result.State != contextfabric.SourceNotApplicable || result.Reason != chaos11070KindText {
+		t.Fatalf("state %q reason %q, want not_applicable with the limitation", result.State, result.Reason)
+	}
+	for _, team := range []contextfabric.SubjectRef{a, b} {
+		if got := result.SubjectReasons[contextfabric.FactSubjectKey(team)]; got != chaos11070SubjectText {
+			t.Fatalf("%s reason %q, want the limitation", team.CanonicalID, got)
+		}
+	}
+}
+
+// A team that owns repositories beside one whose check failed keeps its state;
+// the request note counts the unchecked team with the limitation wording.
+func TestChaos11070_ARequestNoteCountsTheTeamsThatWereNotChecked(t *testing.T) {
+	for _, kind := range []contextfabric.FactKind{contextfabric.FactHealth, contextfabric.FactOperationalDeficiencies} {
+		t.Run(string(kind), func(t *testing.T) {
+			client := teamOwningClient(kind, "OWNER")
+			client.tables = append(client.tables, fakeTable{match: chaos11026Summaries, err: errors.New("code: 60, UNKNOWN_TABLE")})
+			result := readTeamsKind(t, client, kind, "OWNER", "NOTHING")
+			if !strings.Contains(result.RequestNote, "the project-link check could not run for 1 of 2 requested teams") || strings.Contains(result.RequestNote, "own no repository") {
+				t.Fatalf("request note %q, want the unchecked team counted with the limitation wording and no ownership claim", result.RequestNote)
+			}
+			if got := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("NOTHING"))]; !strings.Contains(got, chaos11070SubjectText) {
+				t.Fatalf("unchecked team reason %q, want the limitation", got)
+			}
+			if got, has := result.SubjectReasons[contextfabric.FactSubjectKey(teamSubject("OWNER"))]; has && strings.Contains(got, "project-link check") {
+				t.Fatalf("the owner carries the limitation %q", got)
 			}
 		})
 	}

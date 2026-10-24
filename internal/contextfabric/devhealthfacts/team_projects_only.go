@@ -69,6 +69,22 @@ func teamOwnsProjectsOnlyReason(summary teamOwnedProjectSummary) string {
 // not applicable and every one of them owns a project.
 const teamsOwnProjectsOnlyReason = "devhealthfacts: the requested teams own projects; no linked pull request reaches a repository, so no repository rollup applies; this is not a measured zero"
 
+// teamProjectCheckFailedReason is the per-team limitation when the project read
+// failed: the check did not run, so ownership through projects is unknown. It
+// replaces the "owns no repository" text, which would present a missing check
+// as a measured absence.
+const teamProjectCheckFailedReason = "devhealthfacts: the project-link check could not run for this team, so ownership through projects is unknown; no repository rollup applies; this is not a measured zero"
+
+// teamsProjectCheckFailedReason is the kind-wide form when every queried team is
+// not applicable and the check could not run for any of them.
+const teamsProjectCheckFailedReason = "devhealthfacts: the project-link check could not run for the requested teams, so ownership through projects is unknown; no repository rollup applies; this is not a measured zero"
+
+// teamsProjectCheckFailedNote is the request note when N of M requested teams
+// were told the check could not run.
+func teamsProjectCheckFailedNote(failed, requested int) string {
+	return fmt.Sprintf("devhealthfacts: the project-link check could not run for %d of %d requested teams, so ownership through projects is unknown for them; no repository rollup applies to them; this is not a measured zero", failed, requested)
+}
+
 // teamsOwnProjectsOnlyNote is the request note when N of M requested teams own
 // a project and reach no repository.
 func teamsOwnProjectsOnlyNote(owning, requested int) string {
@@ -109,12 +125,15 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 	summaries, err := teamOwnedProjectSummaries(ctx, client, orgID, ids, bound)
 	if err != nil {
 		// Best effort: this read only explains an already-decided not-applicable
-		// state, so a failure keeps the old cause text and changes no fact or state.
+		// state, so a failure changes no fact, no state and fails no kind. The
+		// cause text says the check did not run instead of claiming a measured
+		// absence.
 		attrs := []any{"action", contextfabric.SanitizeLogAttr("query team owned projects"), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err))}
 		if code, ok := clickHouseExceptionCode(err); ok {
 			attrs = append(attrs, "clickhouse_code", int(code))
 		}
 		slog.WarnContext(ctx, "devhealthfacts.read_failed", attrs...)
+		applyTeamProjectCheckFailed(result, teams, requested)
 		return
 	}
 	owning := 0
@@ -137,5 +156,28 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 			result.Reason = teamsOwnProjectsOnlyReason
 		}
 		result.RequestNote = strings.Replace(result.RequestNote, teamsOwningNoRepositoriesReason(owning, requested), teamsOwnProjectsOnlyNote(owning, requested), 1)
+	}
+}
+
+// applyTeamProjectCheckFailed rewrites the not-applicable wording that
+// applyTeamsOwningNothing set for the teams whose project read failed. The
+// state is unchanged: only the cause text moves, because the check did not
+// run and ownership through projects is unknown.
+func applyTeamProjectCheckFailed(result *contextfabric.FactProviderResult, teams []contextfabric.SubjectRef, requested int) {
+	failed := 0
+	for _, subject := range teams {
+		key := contextfabric.FactSubjectKey(subject)
+		if old := result.SubjectReasons[key]; strings.Contains(old, teamNoOwnedRepositoriesReason) {
+			result.SubjectReasons[key] = strings.Replace(old, teamNoOwnedRepositoriesReason, teamProjectCheckFailedReason, 1)
+		} else {
+			addSubjectReasons(result, []contextfabric.SubjectRef{subject}, teamProjectCheckFailedReason)
+		}
+		failed++
+	}
+	if failed > 0 {
+		if result.State == contextfabric.SourceNotApplicable && result.Reason == teamNoOwnedRepositoriesReason {
+			result.Reason = teamsProjectCheckFailedReason
+		}
+		result.RequestNote = strings.Replace(result.RequestNote, teamsOwningNoRepositoriesReason(failed, requested), teamsProjectCheckFailedNote(failed, requested), 1)
 	}
 }
