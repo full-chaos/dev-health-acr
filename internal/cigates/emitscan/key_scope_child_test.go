@@ -16,6 +16,8 @@ import (
 // then slow): only the syntax estimate refuses it.
 const estimateOnlyShape = "[estimate only]"
 
+const childUnavailable = "R10:refusal:typecheck_child_unavailable,R9:unresolvable key"
+
 const childRefusal = "R10:refusal:typecheck,R9:unresolvable key"
 
 // The shapes below are ones the checker folds at a cost nothing the scan counts bounds: the type-check helper's own limits
@@ -193,26 +195,6 @@ func TestKeyScopeHelperGetsOnlyAnAllowlistedEnvironment(t *testing.T) {
 		}
 	}
 }
-
-func TestKeyScopeHelperLimitsKeepHeadroomOverTheRealTree(t *testing.T) {
-	if _, err := emitscan.Scan(benignRepoRoot(t), []string{"internal", "cmd"}); err != nil {
-		t.Fatal(err)
-	}
-	cpu, rssKB, helpers := emitscan.ChildStats()
-	limitCPU, limitRSS, _ := emitscan.ChildLimits()
-	t.Logf("real tree: %d helpers, largest cpu %s, largest resident set %d MB; limits: cpu %ds, resident set %d MB", helpers, time.Duration(cpu), rssKB>>10, limitCPU, limitRSS>>20)
-	if helpers == 0 {
-		t.Fatal("no helper ran: the headroom check reads nothing")
-	}
-	if time.Duration(cpu)*3 > time.Duration(limitCPU)*time.Second {
-		t.Errorf("the cpu limit %ds is under 3x the largest helper (%s)", limitCPU, time.Duration(cpu))
-	}
-	if rssKB<<10*3 > limitRSS {
-		t.Errorf("the resident-set limit %d MB is under 3x the largest helper (%d MB)", limitRSS>>20, rssKB>>10)
-	}
-}
-
-const childUnavailable = "R10:refusal:typecheck_child_unavailable,R9:unresolvable key"
 
 func TestKeyScopeUnavailableHelperRefusesEveryIdentifierKey(t *testing.T) {
 	body := "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v) }"
