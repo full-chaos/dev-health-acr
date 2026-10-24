@@ -32,8 +32,17 @@ func chaos11026ProjectOwner(teamID string, count int64, names ...string) fakeTab
 	return fakeTable{match: chaos11026Summaries, rows: [][]any{{teamID, count, names}}}
 }
 
+// Every kind that stays not_applicable for a project-only team carries the new
+// text: a repository-derived kind (or, for investment, the repository-owned
+// mix, held by a separate ruling) has nothing to roll up, and says why.
+var chaos11026NotApplicableKinds = []contextfabric.FactKind{
+	contextfabric.FactBlockers, contextfabric.FactPullRequests, contextfabric.FactDeployments,
+	contextfabric.FactIncidents, contextfabric.FactMetrics, contextfabric.FactHealth,
+	contextfabric.FactInvestment, contextfabric.FactOperationalDeficiencies,
+}
+
 func TestChaos11026_TeamOwningOnlyAProjectIsToldSoNotThatItOwnsNoRepository(t *testing.T) {
-	for _, kind := range []contextfabric.FactKind{contextfabric.FactPullRequests, contextfabric.FactDeployments} {
+	for _, kind := range chaos11026NotApplicableKinds {
 		t.Run(string(kind), func(t *testing.T) {
 			team := teamSubject("jira-team")
 			result, _ := chaos11026Read(t, kind, []contextfabric.SubjectRef{team}, chaos11026ProjectOwner("jira-team", 1, "DEV"))
@@ -55,14 +64,33 @@ func TestChaos11026_TeamOwningOnlyAProjectIsToldSoNotThatItOwnsNoRepository(t *t
 	}
 }
 
-func TestChaos11026_TeamOwningNothingKeepsTheOldTextByteForByte(t *testing.T) {
-	team := teamSubject("empty-team")
-	result, _ := chaos11026Read(t, contextfabric.FactPullRequests, []contextfabric.SubjectRef{team})
-	if result.State != contextfabric.SourceNotApplicable || result.Reason != chaos11026OldReason {
-		t.Fatalf("state %q reason %q, want the unchanged not_applicable text", result.State, result.Reason)
+// A kind that already computes a team fact from project data keeps it for a
+// project-only team, with its own provenance: the team health row is served.
+func TestChaos11026_HealthKeepsTheTeamRowOfAProjectOnlyTeam(t *testing.T) {
+	team := teamSubject("jira-team")
+	result, _ := chaos11026Read(t, contextfabric.FactHealth, []contextfabric.SubjectRef{team},
+		fakeTable{match: healthScalarMatch, rows: [][]any{healthRow("jira-team")}},
+		chaos11026ProjectOwner("jira-team", 1, "DEV"))
+	if len(result.Facts) != 1 || result.State == contextfabric.SourceNotApplicable {
+		t.Fatalf("facts=%d state=%q, want the team health row served", len(result.Facts), result.State)
 	}
-	if got := result.SubjectReasons[contextfabric.FactSubjectKey(team)]; got != chaos11026OldReason {
-		t.Fatalf("subject reason %q, want the unchanged text", got)
+	if _, na := result.NotApplicableSubjects[contextfabric.FactSubjectKey(team)]; na {
+		t.Fatal("the team with a served health fact was marked not applicable")
+	}
+}
+
+func TestChaos11026_TeamOwningNothingKeepsTheOldTextByteForByte(t *testing.T) {
+	for _, kind := range chaos11026NotApplicableKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			team := teamSubject("empty-team")
+			result, _ := chaos11026Read(t, kind, []contextfabric.SubjectRef{team})
+			if result.State != contextfabric.SourceNotApplicable || result.Reason != chaos11026OldReason {
+				t.Fatalf("state %q reason %q, want the unchanged not_applicable text", result.State, result.Reason)
+			}
+			if got := result.SubjectReasons[contextfabric.FactSubjectKey(team)]; !strings.Contains(got, chaos11026OldReason) {
+				t.Fatalf("subject reason %q, want it to carry the unchanged text", got)
+			}
+		})
 	}
 }
 
