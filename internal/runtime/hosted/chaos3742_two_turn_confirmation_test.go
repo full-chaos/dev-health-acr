@@ -3855,7 +3855,11 @@ type twoTurnCaseResult struct {
 	Turn1Status string `json:"turn1_status"`
 	Turn2Status string `json:"turn2_status"`
 	OfferMiss   bool   `json:"offer_miss"`
-	Applied     bool   `json:"applied"`
+	// NotApplicableReason is set on the row of a case whose offer arms are not
+	// applicable (twoTurnNotApplicableReason). Such a row is never an
+	// offer_miss, pair_invalid or false_no_match.
+	NotApplicableReason string `json:"not_applicable_reason,omitempty"`
+	Applied             bool   `json:"applied"`
 	// Reused (CHAOS-4040 harness follow-up, codex round 3, confirmed):
 	// this arm's own turn 2 InvestigationResult.Reused, so a caller can
 	// tell a fresh decisive answer from a replayed stored row. Needed
@@ -4851,7 +4855,10 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // NOTE the two ladders are independent: nTurnReportSchemaVersion is
 // separately at "42" for CHAOS-4386's own n-turn terminal fields. They
 // are different classes' artifacts and have never been one sequence.
-const reportSchemaVersion = "44"
+// "45" (offer arms not applicable): rows gain not_applicable_reason and the
+// report gains not_applicable_count; a case whose turn 1 makes no offer by
+// design no longer scores offer_miss, pair_invalid or false_no_match.
+const reportSchemaVersion = "45"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5553,7 +5560,13 @@ type twoTurnReport struct {
 	// not instrumented by this harness at all.
 	StructureAndWindowDisclosureAbsentCount int            `json:"structure_and_window_disclosure_absent_count"`
 	OfferMissCount                          map[string]int `json:"offer_miss_count"`
-	WrongCommitCount                        int            `json:"wrong_commit_count"`
+	// NotApplicableCount counts cases whose offer arms (positive, inferred_tier)
+	// were not run because turn 1 made no offer by design, keyed
+	// "<member>/<reason>". Each such case is one n_not_applicable for BOTH
+	// offer arms. These cases are in CasesRun but excluded from every offer
+	// numerator and denominator; see twoTurnNotApplicableReason.
+	NotApplicableCount map[string]int `json:"not_applicable_count"`
+	WrongCommitCount   int            `json:"wrong_commit_count"`
 	// OracleIDSchemeMismatchCount (CHAOS-4348 measurement-layer fix, schema
 	// v38) sums twoTurnCaseResult.OracleIDSchemeMismatch across every row,
 	// ACROSS EVERY ARM (like FactlessCommittedCount, unlike
@@ -7698,6 +7711,57 @@ func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCas
 	return row
 }
 
+// twoTurnNotApplicableSummary states n_not_applicable per offer arm with its
+// reason, and the denominator left for the offer bars after the exclusion.
+func twoTurnNotApplicableSummary(counts map[string]int, casesRun int) string {
+	keys := make([]string, 0, len(counts))
+	total := 0
+	for k, n := range counts {
+		keys = append(keys, k)
+		total += n
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	fmt.Fprintf(&b, "two-turn offer arms: n_not_applicable=%d of cases_run=%d (offer-arm denominator %d)", total, casesRun, casesRun-total)
+	for _, k := range keys {
+		for _, arm := range []twoTurnArm{twoTurnArmPositive, twoTurnArmInferredTier} {
+			fmt.Fprintf(&b, "; arm=%s %s n_not_applicable=%d", arm, k, counts[k])
+		}
+	}
+	return b.String()
+}
+
+const (
+	twoTurnNotApplicableIdentityCommit  = "turn1_committed_expected_by_identity"
+	twoTurnNotApplicableKindOfferSingle = "kind_offer_suppressed_by_cardinality"
+)
+
+// twoTurnNotApplicableReason returns why the offer arms of a case do not apply,
+// or "". It reads only turn-1 facts and the turn-1 resolution, never turn 2.
+//   - turn 1 committed the expected subject by the identity gate: there is no
+//     offer left to make (a wrong commit is NOT exempt: it stays scored).
+//   - member expected_kind, and turn 1's kind offer was suppressed because the
+//     offer floor left a single kind: a pick among one kind is correctly absent.
+func twoTurnNotApplicableReason(facts twoTurnTurn1Facts, turn1Committed []contractsv1.ContextFabricSubjectRef, tc trialCase, member string) string {
+	if facts.CommitGate == "identity_fast_path" && committedMatchesTrial(turn1Committed, tc) {
+		return twoTurnNotApplicableIdentityCommit
+	}
+	if member == "expected_kind" && facts.KindOfferSuppressedByCardinality && facts.KindOfferDistinctKindCount == 1 {
+		return twoTurnNotApplicableKindOfferSingle
+	}
+	return ""
+}
+
+// twoTurnNotApplicableRow is the row appended for a not-applicable case.
+func twoTurnNotApplicableRow(index int, member string, tc trialCase, turn1 contractsv1.ContextFabricInvestigationResult, synthesisOverride *contextfabric.SynthesisStatusOverrideOutcome, turn1Facts twoTurnTurn1Facts, reason string) twoTurnCaseResult {
+	row := chaos4386PositiveArmNeverAttemptedRow(index, member, tc, &turn1, "", nil)
+	row.ArmInvalidReason = ""
+	row.NotApplicableReason = reason
+	twoTurnFoldSynthesisStatusOverride(&row, synthesisOverride)
+	twoTurnStampTurn1Facts(&row, turn1Facts)
+	return row
+}
+
 // chaos4386NoDisclosureRow builds the exact row the main replay loop's
 // disclosure-absent branch appends -- CHAOS-4386 red-on-parent audit
 // follow-up: extracted so this SAME production call path (not a
@@ -9569,6 +9633,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		OracleAnnexPath: annexPath, OracleAnnexCorpusSHA: annex.CorpusSHA256, OracleAnnexSignedOff: annex.SignedOff,
 		AnnexSignoffStale:           annex.SignoffStale,
 		OfferMissCount:              map[string]int{},
+		NotApplicableCount:          map[string]int{},
 		MutationProbesTripped:       map[string]int{},
 		MutationProbesRun:           map[string]int{},
 		ConfirmedWrongRedeemedCount: map[string]int{},
@@ -10024,150 +10089,158 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			continue
 		}
 
-		modelCallCapture.reset()
-		positiveStarted := time.Now()
-		// CHAOS-4234: on a regime-A case the positive arm's turn 2 also
-		// redeems the oracle's window receipt -- see
-		// twoTurnCaseResult.Turn2WindowReceiptAttached's own doc comment.
-		regimeAWindowBand := ""
-		if turn1Facts.Regime == twoTurnRegimeAWindowGated {
-			regimeAWindowBand = windowBandByIndex[entry.Index]
+		notApplicable := twoTurnNotApplicableReason(turn1Facts, turn1.SubjectResolution.Committed, tc, entry.Member)
+		if notApplicable != "" {
+			report.NotApplicableCount[entry.Member+"/"+notApplicable]++
+			report.Results = append(report.Results, twoTurnNotApplicableRow(entry.Index, entry.Member, tc, turn1, turn1SynthesisOverride, turn1Facts, notApplicable))
 		}
-		positive := runTwoTurnPositiveArm(t, ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture, regimeAWindowBand)
-		twoTurnFoldSynthesisStatusOverride(&positive, turn1SynthesisOverride)
-		twoTurnStampTurn1Facts(&positive, turn1Facts)
-		positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
-		if positive.OfferMiss {
-			report.OfferMissCount[entry.Member]++
-		}
-		if positive.Applied {
-			// PositiveAppliedCount (pre-existing, pooled across every
-			// member) does NOT check turn1.Reused/positive.Reused --
-			// unchanged by this follow-up, since its own bar only ever
-			// claimed "conversion happened", never "gate 2 ran fresh" the
-			// way the window-specific counters below do.
-			report.PositiveAppliedCount++
-			// WindowPositiveAppliedCount (see its own doc comment): the
-			// winr_ positive-control proof, scoped to window specifically
-			// so it cannot hide behind kind/handle/anchor conversions the
-			// way the pooled PositiveAppliedCount bar above can.
-			//
-			// !turn1.Reused && !positive.Reused (codex xhigh review round
-			// 3, confirmed HIGH confidence): answer-reuse only rejects
-			// DECISIVE candidates carrying an INFERRED window
-			// (answer_reuse.go) -- a CONFIRMED-window decisive row is
-			// fully reuse-eligible. Without both guards, this bar could be
-			// satisfied by a stale row (turn 1's offer replayed, or turn
-			// 2's own confirmed decisive answer replayed) that this run's
-			// redemption code never actually produced -- the same
-			// reuse-vacuity class round 2 found on WindowClassDefaultGatedCount,
-			// reapplied here to both calls this arm makes.
-			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) &&
-				positive.CommittedCount > 0 && !turn1.Reused && !positive.Reused {
-				report.WindowPositiveAppliedCount++
+		var positive, inferred twoTurnCaseResult
+		if notApplicable == "" {
+			modelCallCapture.reset()
+			positiveStarted := time.Now()
+			// CHAOS-4234: on a regime-A case the positive arm's turn 2 also
+			// redeems the oracle's window receipt -- see
+			// twoTurnCaseResult.Turn2WindowReceiptAttached's own doc comment.
+			regimeAWindowBand := ""
+			if turn1Facts.Regime == twoTurnRegimeAWindowGated {
+				regimeAWindowBand = windowBandByIndex[entry.Index]
 			}
-		}
-		if positive.CommittedCount > 0 {
-			report.GateReachableCount++
-		}
-		if positive.WrongCommit {
-			report.WrongCommitCount++
-		}
-		// FalseNoMatchCount (CHAOS-4120): the positive arm's own contribution
-		// to this widened, no-longer-inferred_tier-only bar -- see
-		// FalseNoMatch's own doc comment (twoTurnCaseResult).
-		if positive.FalseNoMatch {
-			report.FalseNoMatchCount++
-		}
-		if turn1Facts.Regime == twoTurnRegimeAWindowGated && twoTurnStatusAnswered(positive.Turn2Status) {
-			report.RegimeATurn2AnsweredCount++
-		}
-		// CHAOS-4307: fold BEFORE the tail redaction pass
-		// (twoTurnRedactNonAnomalousTraceEvents) clears positive.TraceEvents
-		// on every non-anomalous row -- see foldConfirmedKindVectorCensus's
-		// own doc comment.
-		foldConfirmedKindVectorCensus(&report, positive.TraceEvents)
-		report.Results = append(report.Results, positive)
-
-		modelCallCapture.reset()
-		inferredStarted := time.Now()
-		inferred := runTwoTurnInferredTierArmWithPairRetry(t, ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
-		twoTurnFoldSynthesisStatusOverride(&inferred, turn1SynthesisOverride)
-		twoTurnStampTurn1Facts(&inferred, turn1Facts)
-		inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
-		if inferred.PairInvalid {
-			report.InferredPairInvalidCount++
-		}
-		if inferred.PairRetried {
-			report.PairRetriedCount++
-		}
-		if inferred.FalseNoMatch {
-			report.FalseNoMatchCount++
-		}
-		if inferred.WrongCommit {
-			report.WrongCommitCount++
-		}
-		if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
-			// CHAOS-4040 harness follow-up (non-vacuity, see
-			// twoTurnReport's own doc comments on these fields): window
-			// gets its OWN counting block, not the CommittedCount>0-gated
-			// one below -- WindowInferredTierRanCount/WindowGatedCount
-			// need to be computed for EVERY ran case, not only the
-			// (should-be-nonexistent, post-gate) ones that committed.
-			//
-			// For window specifically, ArmInvalidReason is set ONLY by
-			// runTwoTurnInferredTierArm's investigate-error branch (window
-			// has no PairInvalid/structural-exemption path of its own to
-			// conflate it with -- that function's own doc comment), so
-			// ArmInvalidReason != "" here always means the call errored.
-			//
-			// twoTurnClassifyWindowGateOutcome (CHAOS-4336) is extracted
-			// from this block so its own logic -- specifically, which field
-			// WindowGatedOfferedCount/WindowGatedSilentCount reads -- has a
-			// direct unit test; see that function's own doc comment for the
-			// bug it fixes.
-			outcome := twoTurnClassifyWindowGateOutcome(inferred)
-			if outcome.ArmError {
-				report.WindowArmErrorCount++
-			} else {
-				report.WindowInferredTierRanCount++
-				if outcome.Committed {
-					report.WindowCommitCount++
+			positive = runTwoTurnPositiveArm(t, ctx, investigator, principal, entry.Index, tc, entry, turn1, caseTimeout, traceCapture, regimeAWindowBand)
+			twoTurnFoldSynthesisStatusOverride(&positive, turn1SynthesisOverride)
+			twoTurnStampTurn1Facts(&positive, turn1Facts)
+			positiveTiming = buildTwoTurnArmTiming(string(twoTurnArmPositive), positiveStarted, modelCallCapture)
+			if positive.OfferMiss {
+				report.OfferMissCount[entry.Member]++
+			}
+			if positive.Applied {
+				// PositiveAppliedCount (pre-existing, pooled across every
+				// member) does NOT check turn1.Reused/positive.Reused --
+				// unchanged by this follow-up, since its own bar only ever
+				// claimed "conversion happened", never "gate 2 ran fresh" the
+				// way the window-specific counters below do.
+				report.PositiveAppliedCount++
+				// WindowPositiveAppliedCount (see its own doc comment): the
+				// winr_ positive-control proof, scoped to window specifically
+				// so it cannot hide behind kind/handle/anchor conversions the
+				// way the pooled PositiveAppliedCount bar above can.
+				//
+				// !turn1.Reused && !positive.Reused (codex xhigh review round
+				// 3, confirmed HIGH confidence): answer-reuse only rejects
+				// DECISIVE candidates carrying an INFERRED window
+				// (answer_reuse.go) -- a CONFIRMED-window decisive row is
+				// fully reuse-eligible. Without both guards, this bar could be
+				// satisfied by a stale row (turn 1's offer replayed, or turn
+				// 2's own confirmed decisive answer replayed) that this run's
+				// redemption code never actually produced -- the same
+				// reuse-vacuity class round 2 found on WindowClassDefaultGatedCount,
+				// reapplied here to both calls this arm makes.
+				if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) &&
+					positive.CommittedCount > 0 && !turn1.Reused && !positive.Reused {
+					report.WindowPositiveAppliedCount++
 				}
-				if outcome.Gated {
-					report.WindowGatedCount++
-					switch {
-					case outcome.GatedOffered:
-						report.WindowGatedOfferedCount++
-					case outcome.GatedAlreadyWidest:
-						report.WindowGatedAlreadyWidestCount++
-					default:
-						report.WindowGatedSilentCount++
+			}
+			if positive.CommittedCount > 0 {
+				report.GateReachableCount++
+			}
+			if positive.WrongCommit {
+				report.WrongCommitCount++
+			}
+			// FalseNoMatchCount (CHAOS-4120): the positive arm's own contribution
+			// to this widened, no-longer-inferred_tier-only bar -- see
+			// FalseNoMatch's own doc comment (twoTurnCaseResult).
+			if positive.FalseNoMatch {
+				report.FalseNoMatchCount++
+			}
+			if turn1Facts.Regime == twoTurnRegimeAWindowGated && twoTurnStatusAnswered(positive.Turn2Status) {
+				report.RegimeATurn2AnsweredCount++
+			}
+			// CHAOS-4307: fold BEFORE the tail redaction pass
+			// (twoTurnRedactNonAnomalousTraceEvents) clears positive.TraceEvents
+			// on every non-anomalous row -- see foldConfirmedKindVectorCensus's
+			// own doc comment.
+			foldConfirmedKindVectorCensus(&report, positive.TraceEvents)
+			report.Results = append(report.Results, positive)
+
+			modelCallCapture.reset()
+			inferredStarted := time.Now()
+			inferred = runTwoTurnInferredTierArmWithPairRetry(t, ctx, investigator, principal, entry.Index, tc, entry, caseTimeout, traceCapture, windowBandByIndex[entry.Index])
+			twoTurnFoldSynthesisStatusOverride(&inferred, turn1SynthesisOverride)
+			twoTurnStampTurn1Facts(&inferred, turn1Facts)
+			inferredTiming = buildTwoTurnArmTiming(string(twoTurnArmInferredTier), inferredStarted, modelCallCapture)
+			if inferred.PairInvalid {
+				report.InferredPairInvalidCount++
+			}
+			if inferred.PairRetried {
+				report.PairRetriedCount++
+			}
+			if inferred.FalseNoMatch {
+				report.FalseNoMatchCount++
+			}
+			if inferred.WrongCommit {
+				report.WrongCommitCount++
+			}
+			if entry.Member == string(contractsv1.ContextFabricStructureNeedWindow) {
+				// CHAOS-4040 harness follow-up (non-vacuity, see
+				// twoTurnReport's own doc comments on these fields): window
+				// gets its OWN counting block, not the CommittedCount>0-gated
+				// one below -- WindowInferredTierRanCount/WindowGatedCount
+				// need to be computed for EVERY ran case, not only the
+				// (should-be-nonexistent, post-gate) ones that committed.
+				//
+				// For window specifically, ArmInvalidReason is set ONLY by
+				// runTwoTurnInferredTierArm's investigate-error branch (window
+				// has no PairInvalid/structural-exemption path of its own to
+				// conflate it with -- that function's own doc comment), so
+				// ArmInvalidReason != "" here always means the call errored.
+				//
+				// twoTurnClassifyWindowGateOutcome (CHAOS-4336) is extracted
+				// from this block so its own logic -- specifically, which field
+				// WindowGatedOfferedCount/WindowGatedSilentCount reads -- has a
+				// direct unit test; see that function's own doc comment for the
+				// bug it fixes.
+				outcome := twoTurnClassifyWindowGateOutcome(inferred)
+				if outcome.ArmError {
+					report.WindowArmErrorCount++
+				} else {
+					report.WindowInferredTierRanCount++
+					if outcome.Committed {
+						report.WindowCommitCount++
+					}
+					if outcome.Gated {
+						report.WindowGatedCount++
+						switch {
+						case outcome.GatedOffered:
+							report.WindowGatedOfferedCount++
+						case outcome.GatedAlreadyWidest:
+							report.WindowGatedAlreadyWidestCount++
+						default:
+							report.WindowGatedSilentCount++
+						}
 					}
 				}
+			} else if inferred.ArmInvalidReason == "" && inferred.CommittedCount > 0 && !inferred.PairInvalid {
+				// PairInvalid outcomes are excluded from the partition
+				// entirely (InferredClassification is deliberately left
+				// empty for them, never defaulted into "unjustified" --
+				// see runTwoTurnInferredTierArm's own comment on why).
+				report.InferredKindHandleDecisiveCount++
+				switch inferred.InferredClassification {
+				case "baseline_equivalent":
+					report.InferredBaselineEquivalentCount++
+				case "kind_insensitivity_attested":
+					report.InferredKindInsensitivityAttestedCount++
+				default:
+					report.InferredUnjustifiedCount++
+				}
 			}
-		} else if inferred.ArmInvalidReason == "" && inferred.CommittedCount > 0 && !inferred.PairInvalid {
-			// PairInvalid outcomes are excluded from the partition
-			// entirely (InferredClassification is deliberately left
-			// empty for them, never defaulted into "unjustified" --
-			// see runTwoTurnInferredTierArm's own comment on why).
-			report.InferredKindHandleDecisiveCount++
-			switch inferred.InferredClassification {
-			case "baseline_equivalent":
-				report.InferredBaselineEquivalentCount++
-			case "kind_insensitivity_attested":
-				report.InferredKindInsensitivityAttestedCount++
-			default:
-				report.InferredUnjustifiedCount++
-			}
+			// CHAOS-4307: two independent resolve calls on this arm -- the
+			// hinted call (TraceEvents) and, for non-window members, the paired
+			// no-hint baseline call (BaselineTraceEvents) -- both folded, same
+			// "before redaction" discipline as the positive arm above.
+			foldConfirmedKindVectorCensus(&report, inferred.TraceEvents)
+			foldConfirmedKindVectorCensus(&report, inferred.BaselineTraceEvents)
+			report.Results = append(report.Results, inferred)
 		}
-		// CHAOS-4307: two independent resolve calls on this arm -- the
-		// hinted call (TraceEvents) and, for non-window members, the paired
-		// no-hint baseline call (BaselineTraceEvents) -- both folded, same
-		// "before redaction" discipline as the positive arm above.
-		foldConfirmedKindVectorCensus(&report, inferred.TraceEvents)
-		foldConfirmedKindVectorCensus(&report, inferred.BaselineTraceEvents)
-		report.Results = append(report.Results, inferred)
 
 		modelCallCapture.reset()
 		confirmedWrongStarted := time.Now()
@@ -10400,6 +10473,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	}
 	t.Logf("two-turn report written to %s: cases_run=%d gate_reachable=%d wrong_commits=%d anti_vacuity_valid=%v",
 		outPath, report.CasesRun, report.GateReachableCount, report.WrongCommitCount, report.AntiVacuityValid)
+	t.Log(twoTurnNotApplicableSummary(report.NotApplicableCount, report.CasesRun))
 
 	// sharded (codex round-2 finding, BLOCK): every non-vacuity/coverage
 	// gate below assumes THIS PROCESS ran the whole corpus. A shard split
