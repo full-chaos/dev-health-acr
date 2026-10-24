@@ -1255,6 +1255,19 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, position, rowKey) + o
 // own window bounds the edge), so those rows bring the child back.
 const hierarchyCursorExpr = "greatest(c.last_synced, pa.latest_synced)"
 
+const hierarchyParentRef = "c.parent_ref"
+
+// hierarchyFromSQL is the row source of queryWorkItemHierarchy up to its
+// organization predicate: one row per work item with its parent candidates. The
+// PART_OF edge count reads the same text.
+func hierarchyFromSQL(parentRef string) string {
+	return `FROM (SELECT org_id, work_item_id, repo_id, created_at, completed_at, closed_at, updated_at, last_synced, ` + devhealthschema.WorkItemParentRefSQL("") + ` AS parent_ref FROM work_items FINAL WHERE org_id = {org_id:String}) AS c
+LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = ` + parentRef + ` AND p.repo_id = c.repo_id
+LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, max(last_synced) AS latest_synced, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = ` + parentRef + `
+LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
+WHERE c.org_id = {org_id:String}`
+}
+
 // queryWorkItemHierarchy (CHAOS-3779, §19.5.3 PART_OF) projects
 // work_items.parent_id, or epic_id where parent_id is empty -- a distinct column from work_item_dependencies,
 // carrying real hierarchy data (verified live: 2082 of 3282 work_items
@@ -1300,18 +1313,14 @@ func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouse
 	// row: its parent, or a row that retracts its PART_OF edges.
 	// The reference is a column of the child's derived table, so no JOIN ON
 	// holds an expression (chaos4549_join_on_shape_test.go).
-	parentRef := "c.parent_ref"
+	const parentRef = hierarchyParentRef
 	qualified := qualifiedParentSQL(parentRef)
 	statement := `SELECT c.work_item_id, ` + parentRef + `, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
        if(` + qualified + `, pa.created_at, p.created_at), ` + nullableTimestamp("if("+qualified+", pa.ended_at, coalesce(p.completed_at, p.closed_at))") + `,
        if(` + qualified + `, pa.repo, toString(p.repo_id)),
        toUInt32(ifNull(pa.candidates, 0)), toUInt8(ifNull(p.work_item_id, '') != ''), toUInt8(` + qualified + `), toUInt8(` + emptyKeyParentSQL(parentRef) + `), ` + hierarchyCursorExpr + `
-FROM (SELECT org_id, work_item_id, repo_id, created_at, completed_at, closed_at, updated_at, last_synced, ` + devhealthschema.WorkItemParentRefSQL("") + ` AS parent_ref FROM work_items FINAL WHERE org_id = {org_id:String}) AS c
-LEFT JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = ` + parentRef + ` AND p.repo_id = c.repo_id
-LEFT JOIN (SELECT work_item_id AS parent_key, count() AS candidates, max(last_synced) AS latest_synced, any(created_at) AS created_at, any(coalesce(completed_at, closed_at)) AS ended_at, toString(any(repo_id)) AS repo FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS pa ON pa.parent_key = ` + parentRef + `
-LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, hierarchyCursorExpr, rowKey) + orderBy(hierarchyCursorExpr, rowKey)
+` + hierarchyFromSQL(parentRef) + sincePredicate(cursor, hierarchyCursorExpr, rowKey) + orderBy(hierarchyCursorExpr, rowKey)
 	notResolved := map[string]int{}
 	unmapped := map[string]int{}
 	items, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
