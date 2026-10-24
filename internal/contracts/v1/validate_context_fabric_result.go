@@ -1613,6 +1613,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if r.SchemaVersion != expectedSchemaVersion || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !boundedText(r.Question, 1, 8000, bounds) || !validInvestigationStatus(r.Status) {
 		return fmt.Errorf("result identity or status violates v1 bounds")
 	}
+	if err := r.ModelSource.Validate(); err != nil {
+		return err
+	}
 	if err := r.Interpretation.validate(bounds); err != nil {
 		return fmt.Errorf("interpretation: %w", err)
 	}

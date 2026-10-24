@@ -221,6 +221,8 @@ type ContextFabricAnswerProjection struct {
 	// SemanticReading mirrors the canonical result's field: the
 	// read's disclosure that the stored accepted reading was unavailable.
 	SemanticReading *ContextFabricSemanticReading `json:"semantic_reading,omitempty"`
+	// ModelSource mirrors the canonical result's field.
+	ModelSource ContextFabricModelSource `json:"model_source,omitempty"`
 }
 
 // ContextFabricProjectedClarification carries the ambiguity a caller must

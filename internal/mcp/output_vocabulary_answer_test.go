@@ -463,6 +463,16 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			name: "model_source",
+			kind: vocabFrozen,
+			why:  "state-machine",
+			// Go: context_fabric_model_source.go "Validate admits exactly the closed members": whose model served the turn is a two-way partition, organization or platform.
+			sites: []string{"context_fabric_answer_projection.v1.model_source", "context_fabric_investigation_result.v1.model_source"},
+			// schema: "organization", "platform"
+			goSet:      []string{string(contractsv1.ContextFabricModelSourceOrganization), string(contractsv1.ContextFabricModelSourcePlatform)},
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:           "semantic_reading.reason",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
