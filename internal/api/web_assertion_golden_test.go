@@ -1,0 +1,440 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/auth"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
+)
+
+const (
+	goldenIssuer   = "https://web.example.test"
+	goldenAudience = "acr-api"
+	goldenPacket   = "/api/v1/agent-context/context-packets"
+)
+
+type goldenRoute struct {
+	Method       string `json:"method"`
+	Path         string `json:"path"`
+	Scope        string `json:"scope"`
+	WebAssertion bool   `json:"web_assertion"`
+}
+
+type goldenFixture struct {
+	HeaderKeys []string      `json:"header_keys"`
+	ClaimKeys  []string      `json:"claim_keys"`
+	Routes     []goldenRoute `json:"routes"`
+}
+
+func loadGolden(t *testing.T) goldenFixture {
+	t.Helper()
+	raw, err := os.ReadFile(repopath.Path(t, "internal", "api", "testdata", "web_assertion_golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture goldenFixture
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+type goldenHarness struct {
+	t       *testing.T
+	now     time.Time
+	valid   ed25519.PrivateKey
+	foreign ed25519.PrivateKey
+	app     *App
+	jti     int
+}
+
+func newGoldenHarness(t *testing.T) *goldenHarness {
+	t.Helper()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	public, valid, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, foreign, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{Issuer: goldenIssuer, Audience: goldenAudience, JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entitled := EntitlementFunc(func(_ context.Context, org, _ string) (bool, error) { return org == "org_1" || org == "org_2", nil })
+	app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, entitled, nil, verifier)
+	return &goldenHarness{t: t, now: now, valid: valid, foreign: foreign, app: app}
+}
+
+func (h *goldenHarness) claims(method, path string, body []byte, permissions []string) map[string]any {
+	h.jti++
+	digest := sha256.Sum256(body)
+	return map[string]any{
+		"iss": goldenIssuer, "aud": goldenAudience, "sub": "user_123", "org_id": "org_1",
+		"repository_scopes": []string{hostedTestRepository}, "permissions": permissions,
+		"iat": h.now.Unix(), "nbf": h.now.Unix(), "exp": h.now.Add(30 * time.Second).Unix(), "jti": fmt.Sprintf("golden_%d", h.jti),
+		"method": method, "path": path, "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
+	}
+}
+
+func goldenHeader() map[string]any {
+	return map[string]any{"alg": "EdDSA", "typ": "JWT", "kid": "current"}
+}
+
+func goldenSign(t *testing.T, key ed25519.PrivateKey, header, claims map[string]any) string {
+	t.Helper()
+	h, err := json.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(c)
+	return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, []byte(input)))
+}
+
+func (h *goldenHarness) do(request *http.Request) *httptest.ResponseRecorder {
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	response := httptest.NewRecorder()
+	h.app.Handler().ServeHTTP(response, request)
+	return response
+}
+
+func goldenPacketBody(t *testing.T, repository string) []byte {
+	t.Helper()
+	body, err := json.Marshal(contextRequestFor(repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func goldenRequest(method, path string, body []byte) *http.Request {
+	request := httptest.NewRequest(method, path, bytes.NewReader(body))
+	if len(body) > 0 {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	return request
+}
+
+func TestWebAssertionGolden_positiveControls(t *testing.T) {
+	h := newGoldenHarness(t)
+	fixture := loadGolden(t)
+	keys := func(m map[string]any) []string {
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}
+	body := goldenPacketBody(t, hostedTestRepository)
+	claims := h.claims(http.MethodPost, goldenPacket, body, []string{auth.ScopeContextRead})
+	if !slices.Equal(keys(claims), fixture.ClaimKeys) || !slices.Equal(keys(goldenHeader()), fixture.HeaderKeys) {
+		t.Fatalf("assertion shape drifted from the copied web shape: %v %v", keys(claims), keys(goldenHeader()))
+	}
+	request := goldenRequest(http.MethodPost, goldenPacket, body)
+	request.Header.Set(auth.WebAssertionHeader, goldenSign(t, h.valid, goldenHeader(), claims))
+	if response := h.do(request); response.Code != http.StatusOK {
+		t.Fatalf("control status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestWebAssertionGolden_refusesEachWrongField(t *testing.T) {
+	h := newGoldenHarness(t)
+	body := goldenPacketBody(t, hostedTestRepository)
+	rows := []struct {
+		name   string
+		claims func(map[string]any)
+		header func(map[string]any)
+		send   func(*http.Request) *http.Request
+	}{
+		{name: "issuer", claims: func(c map[string]any) { c["iss"] = "https://other.example.test" }},
+		{name: "issuer empty", claims: func(c map[string]any) { c["iss"] = "" }},
+		{name: "aud", claims: func(c map[string]any) { c["aud"] = "other-audience" }},
+		{name: "aud missing", claims: func(c map[string]any) { delete(c, "aud") }},
+		{name: "alg HS256", header: func(m map[string]any) { m["alg"] = "HS256" }},
+		{name: "alg none", header: func(m map[string]any) { m["alg"] = "none" }},
+		{name: "alg RS256", header: func(m map[string]any) { m["alg"] = "RS256" }},
+		{name: "typ", header: func(m map[string]any) { m["typ"] = "at+jwt" }},
+		{name: "kid unknown", header: func(m map[string]any) { m["kid"] = "removed" }},
+		{name: "kid missing", header: func(m map[string]any) { delete(m, "kid") }},
+		{name: "signature foreign key"},
+		{name: "time expired", claims: func(c map[string]any) { c["exp"] = h.now.Add(-6 * time.Second).Unix() }},
+		{name: "time nbf future", claims: func(c map[string]any) { c["nbf"] = h.now.Add(6 * time.Second).Unix() }},
+		{name: "time iat future", claims: func(c map[string]any) { c["iat"] = h.now.Add(6 * time.Second).Unix() }},
+		{name: "time overlong", claims: func(c map[string]any) { c["exp"] = h.now.Add(31 * time.Second).Unix() }},
+		{name: "time missing", claims: func(c map[string]any) { delete(c, "exp") }},
+		{name: "method", claims: func(c map[string]any) { c["method"] = http.MethodGet }},
+		{name: "path", claims: func(c map[string]any) { c["path"] = "/api/v1/agent-context/capabilities" }},
+		{name: "path query", send: func(r *http.Request) *http.Request { r.URL.RawQuery = "x=1"; return r }},
+		{name: "body digest", claims: func(c map[string]any) { c["body_sha256"] = "AAAA" }},
+		{name: "body swapped", send: func(r *http.Request) *http.Request {
+			r.Body = nopBody(goldenPacketBody(t, "example-org/other-service"))
+			return r
+		}},
+		{name: "org empty", claims: func(c map[string]any) { c["org_id"] = "" }},
+		{name: "org too long", claims: func(c map[string]any) { c["org_id"] = string(bytes.Repeat([]byte("o"), 257)) }},
+		{name: "repo empty", claims: func(c map[string]any) { c["repository_scopes"] = []string{} }},
+		{name: "repo global wildcard", claims: func(c map[string]any) { c["repository_scopes"] = []string{"*"} }},
+		{name: "repo owner wildcard", claims: func(c map[string]any) { c["repository_scopes"] = []string{"example-org/*"} }},
+		{name: "repo duplicate", claims: func(c map[string]any) { c["repository_scopes"] = []string{hostedTestRepository, hostedTestRepository} }},
+		{name: "repo not normalized", claims: func(c map[string]any) { c["repository_scopes"] = []string{"Example-Org/Widget-Service"} }},
+		{name: "permission empty", claims: func(c map[string]any) { c["permissions"] = []string{} }},
+		{name: "permission unknown", claims: func(c map[string]any) { c["permissions"] = []string{"admin:all"} }},
+		{name: "permission write", claims: func(c map[string]any) { c["permissions"] = []string{auth.ScopeEpisodeWrite} }},
+		{name: "permission duplicate", claims: func(c map[string]any) {
+			c["permissions"] = []string{auth.ScopeContextRead, auth.ScopeContextRead}
+		}},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			claims := h.claims(http.MethodPost, goldenPacket, body, []string{auth.ScopeContextRead})
+			header := goldenHeader()
+			if row.claims != nil {
+				row.claims(claims)
+			}
+			if row.header != nil {
+				row.header(header)
+			}
+			key := h.valid
+			if row.name == "signature foreign key" {
+				key = h.foreign
+			}
+			request := goldenRequest(http.MethodPost, goldenPacket, body)
+			request.Header.Set(auth.WebAssertionHeader, goldenSign(t, key, header, claims))
+			if row.send != nil {
+				request = row.send(request)
+			}
+			assertErrorResponse(t, h.do(request), http.StatusUnauthorized, "invalid_token")
+		})
+	}
+}
+
+type nopBodyReader struct{ *bytes.Reader }
+
+func (nopBodyReader) Close() error { return nil }
+
+func nopBody(b []byte) nopBodyReader { return nopBodyReader{bytes.NewReader(b)} }
+
+func (h *goldenHarness) signed(method, path string, body []byte, mutate func(map[string]any)) *http.Request {
+	claims := h.claims(method, path, body, []string{auth.ScopeContextRead, auth.ScopeEvidenceRead})
+	if mutate != nil {
+		mutate(claims)
+	}
+	request := goldenRequest(method, path, body)
+	request.Header.Set(auth.WebAssertionHeader, goldenSign(h.t, h.valid, goldenHeader(), claims))
+	return request
+}
+
+func TestWebAssertionGolden_authorizationOnValidCredential(t *testing.T) {
+	h := newGoldenHarness(t)
+	packet := goldenPacketBody(t, hostedTestRepository)
+	evidence := "/api/v1/agent-context/evidence/evidence-ref-00000001"
+	rows := []struct {
+		name    string
+		request *http.Request
+		status  int
+		code    string
+	}{
+		{"org unknown", h.signed(http.MethodPost, goldenPacket, packet, func(c map[string]any) { c["org_id"] = "org_unknown" }), http.StatusForbidden, "feature_not_enabled"},
+		{"repo foreign", h.signed(http.MethodPost, goldenPacket, goldenPacketBody(t, "other-org/other-repo"), nil), http.StatusForbidden, "repo_forbidden"},
+		{"permission evidence only on context route", h.signed(http.MethodPost, goldenPacket, packet, func(c map[string]any) { c["permissions"] = []string{auth.ScopeEvidenceRead} }), http.StatusForbidden, "insufficient_scope"},
+		{"permission context only on evidence route", h.signed(http.MethodGet, evidence, nil, func(c map[string]any) { c["permissions"] = []string{auth.ScopeContextRead} }), http.StatusForbidden, "insufficient_scope"},
+		{"permission credential issue on read route", h.signed(http.MethodPost, goldenPacket, packet, func(c map[string]any) {
+			c["permissions"] = []string{auth.WebAssertionPermissionCredentialIssue}
+		}), http.StatusForbidden, "insufficient_scope"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			assertErrorResponse(t, h.do(row.request), row.status, row.code)
+		})
+	}
+}
+
+func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
+	h := newGoldenHarness(t)
+	body := goldenPacketBody(t, hostedTestRepository)
+	userClaims := map[string]any{"iss": goldenIssuer, "aud": goldenAudience, "sub": "user_123", "org_id": "org_1", "iat": h.now.Unix(), "exp": h.now.Add(time.Hour).Unix(), "jti": "user_session_1"}
+	userByValid := goldenSign(t, h.valid, goldenHeader(), userClaims)
+	userByForeign := goldenSign(t, h.foreign, goldenHeader(), userClaims)
+	workload := goldenSign(t, h.foreign, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "workload"}, map[string]any{
+		"iss": "https://kubernetes.default.svc", "aud": []string{"acr-workload"}, "sub": "system:serviceaccount:ns:consumer", "exp": h.now.Add(time.Hour).Unix(),
+	})
+	valid := h.signed(http.MethodPost, goldenPacket, body, nil).Header.Get(auth.WebAssertionHeader)
+	rows := []struct {
+		name   string
+		header string
+		bearer string
+	}{
+		{name: "user token as assertion, valid key", header: userByValid},
+		{name: "user token as assertion, foreign key", header: userByForeign},
+		{name: "user token as bearer", bearer: userByValid},
+		{name: "workload token as assertion", header: workload},
+		{name: "workload token as bearer", bearer: workload},
+		{name: "workload bearer beside valid assertion", header: valid, bearer: workload},
+		{name: "user bearer beside valid assertion", header: valid, bearer: userByValid},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			request := goldenRequest(http.MethodPost, goldenPacket, body)
+			if row.header != "" {
+				request.Header.Set(auth.WebAssertionHeader, row.header)
+			}
+			if row.bearer != "" {
+				request.Header.Set("Authorization", "Bearer "+row.bearer)
+			}
+			assertErrorResponse(t, h.do(request), http.StatusUnauthorized, "invalid_token")
+		})
+	}
+}
+
+func TestWebAssertionGolden_routeToPermissionPin(t *testing.T) {
+	h := newGoldenHarness(t)
+	fixture := loadGolden(t)
+	constants := map[string]string{
+		"/api/v1/context-fabric/data/catalog": ContextFabricDataCatalogPath, "/api/v1/context-fabric/data/subjects": ContextFabricDataSubjectsPath,
+		"/api/v1/context-fabric/data/facts": ContextFabricDataFactsPath, "/api/v1/context-fabric/data/operations": ContextFabricDataOperationsPath,
+		"/api/v1/context-fabric/data/graphql": ContextFabricDataGraphQLPath, "/api/v1/context-fabric/data/relationships": ContextFabricDataRelationshipsPath,
+	}
+	for path, constant := range constants {
+		if path != constant {
+			t.Fatalf("route constant %q drifted from the golden %q", constant, path)
+		}
+	}
+	profiles, err := os.ReadFile(repopath.Path(t, "contracts", "auth", "v1", "endpoint-profiles.acr.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile struct {
+		Rows []struct {
+			Method string `json:"method"`
+			Route  string `json:"route"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(profiles, &profile); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range fixture.Routes {
+		pattern := route.Path
+		if route.Path == "/api/v1/agent-context/evidence/evidence-ref-00000001" {
+			pattern = "/api/v1/agent-context/evidence/{evidence_ref_id}"
+		}
+		if !slices.ContainsFunc(profile.Rows, func(row struct {
+			Method string `json:"method"`
+			Route  string `json:"route"`
+		}) bool {
+			return row.Method == route.Method && row.Route == pattern
+		}) {
+			t.Fatalf("%s %s is not an endpoint-profile row", route.Method, pattern)
+		}
+	}
+	for _, route := range fixture.Routes {
+		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+			var body []byte
+			if route.Method == http.MethodPost {
+				body = goldenPacketBody(t, hostedTestRepository)
+			}
+			grant := func(permission string) *http.Request {
+				return h.signed(route.Method, route.Path, body, func(c map[string]any) { c["permissions"] = []string{permission} })
+			}
+			if !route.WebAssertion {
+				assertErrorResponse(t, h.do(grant(auth.ScopeContextRead)), http.StatusUnauthorized, "invalid_token")
+				return
+			}
+			other := auth.ScopeEvidenceRead
+			if route.Scope == auth.ScopeEvidenceRead {
+				other = auth.ScopeContextRead
+			}
+			assertErrorResponse(t, h.do(grant(other)), http.StatusForbidden, "insufficient_scope")
+			if response := h.do(grant(route.Scope)); response.Code == http.StatusUnauthorized || response.Code == http.StatusForbidden {
+				t.Fatalf("scope %s refused on %s: %d %s", route.Scope, route.Path, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func goldenIdentifyingLeaves(value any, key string, out *[]string) {
+	switch v := value.(type) {
+	case string:
+		for _, suffix := range []string{"id", "ids", "uri", "title", "summary", "excerpt", "citation", "label"} {
+			if len(v) >= 8 && strings.HasSuffix(key, suffix) {
+				*out = append(*out, v)
+				return
+			}
+		}
+	case []any:
+		for _, item := range v {
+			goldenIdentifyingLeaves(item, key, out)
+		}
+	case map[string]any:
+		for k, item := range v {
+			goldenIdentifyingLeaves(item, k, out)
+		}
+	}
+}
+
+// known gap: CHAOS-11278 (refuse instead of degraded)
+func TestWebAssertionGolden_ForeignOrgRepoScopeReturnsNoForeignData(t *testing.T) {
+	h := newGoldenHarness(t)
+	packet := goldenPacketBody(t, hostedTestRepository)
+	own := h.do(h.signed(http.MethodPost, goldenPacket, packet, nil))
+	if own.Code != http.StatusOK {
+		t.Fatalf("owner status = %d", own.Code)
+	}
+	var ownPacket map[string]any
+	if err := json.Unmarshal(own.Body.Bytes(), &ownPacket); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := ownPacket["items"].([]any)
+	if len(items) == 0 {
+		t.Fatal("owner control returned no items; the scan below would prove nothing")
+	}
+	foreignValues := []string{"org_1", "fixture:"}
+	identifying := len(foreignValues)
+	goldenIdentifyingLeaves(items, "", &foreignValues)
+	goldenIdentifyingLeaves(ownPacket["resolved_scope"], "", &foreignValues)
+	if len(foreignValues) <= identifying {
+		t.Fatal("no org_1 identifying values collected; the scan would prove nothing")
+	}
+
+	response := h.do(h.signed(http.MethodPost, goldenPacket, packet, func(c map[string]any) { c["org_id"] = "org_2" }))
+	if response.Code >= 500 {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if response.Code != http.StatusOK {
+		return
+	}
+	var got contractsv1.ContextPacket
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == contractsv1.PacketComplete || len(got.Items) != 0 || strings.Contains(got.Repository.RepoID, "fixture:") || !strings.HasPrefix(got.Repository.RepoID, "unresolved:") {
+		t.Fatalf("foreign-org packet carries data: status=%q items=%d", got.Status, len(got.Items))
+	}
+	for _, value := range foreignValues {
+		if bytes.Contains(response.Body.Bytes(), []byte(value)) {
+			t.Fatalf("foreign-org response contains an org_1 value %q", value)
+		}
+	}
+}

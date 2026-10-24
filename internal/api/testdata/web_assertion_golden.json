@@ -1,0 +1,84 @@
+{
+  "header_keys": [
+    "alg",
+    "kid",
+    "typ"
+  ],
+  "claim_keys": [
+    "aud",
+    "body_sha256",
+    "exp",
+    "iat",
+    "iss",
+    "jti",
+    "method",
+    "nbf",
+    "org_id",
+    "path",
+    "permissions",
+    "repository_scopes",
+    "sub"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/agent-context/capabilities",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/agent-context/context-packets",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/agent-context/evidence/evidence-ref-00000001",
+      "scope": "evidence:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/agent-context/episodes",
+      "scope": "episode:write",
+      "web_assertion": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/context-fabric/data/catalog",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/context-fabric/data/subjects",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/context-fabric/data/facts",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/context-fabric/data/operations",
+      "scope": "data:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/context-fabric/data/graphql",
+      "scope": "data:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/context-fabric/data/relationships",
+      "scope": "context:read",
+      "web_assertion": false
+    }
+  ]
+}
