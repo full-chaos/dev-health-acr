@@ -55,7 +55,7 @@ checksum() {
 archive_member() {
   local archive="$1"
   local expected="$2"
-  tar -tf "$archive" | awk -v expected="$expected" '$0 == expected || $0 == "./" expected { print; exit }'
+  tar -tf "$archive" | awk -v expected="$expected" '$0 == expected || $0 == "./" expected && !found { print; found = 1 }'
 }
 
 for product in acr-api acr-mcp; do

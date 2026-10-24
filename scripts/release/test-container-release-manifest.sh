@@ -28,6 +28,19 @@ create_archive() {
 create_archive "$tmp/source/acr-api.tar"
 create_archive "$tmp/source/acr-mcp.tar"
 
+# Many members after index.json: a matcher that exits at the first hit closes
+# the pipe while tar is still writing.
+mkdir "$tmp/many-source"
+create_archive "$tmp/many-source/acr-api.tar"
+for n in $(seq 1 3000); do printf '%s\n' "$n" >"$tmp/layout/zz-$n"; done
+tar -cf "$tmp/many-source/acr-api.tar" -C "$tmp/layout" .
+cp "$tmp/many-source/acr-api.tar" "$tmp/many-source/acr-mcp.tar"
+mkdir "$tmp/many-output"
+"$root/scripts/release/write-container-release-manifest.sh" \
+  --source "$tmp/many-source" --output "$tmp/many-output" \
+  --tag v1.2.3 --version 1.2.3 \
+  --commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --date 2026-07-23T00:00:00Z
+
 "$root/scripts/release/write-container-release-manifest.sh" \
   --source "$tmp/source" \
   --output "$tmp/output" \
