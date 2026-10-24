@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"go/types"
 	"os"
@@ -20,7 +21,7 @@ func Load(root string, patterns []string, goos, goarch string) (*Loader, error) 
 	cfg := &packages.Config{
 		Dir:  root,
 		Env:  append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch),
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedDeps,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedDeps | packages.NeedModule,
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -32,8 +33,10 @@ func Load(root string, patterns []string, goos, goarch string) (*Loader, error) 
 		Units: map[string]*Unit{},
 		Roots: pkgs,
 	}
+	loader.listErr = map[string][]packages.Error{}
 	for _, pkg := range pkgs {
 		loader.isRoot(pkg.ID, true)
+		loader.listErr[pkg.ID] = append([]packages.Error(nil), pkg.Errors...)
 	}
 	for _, pkg := range pkgs {
 		loader.check(pkg)
@@ -55,6 +58,8 @@ type Loader struct {
 	Units   map[string]*Unit
 	Roots   []*packages.Package
 	rootIDs map[string]bool
+	shaped  bool
+	listErr map[string][]packages.Error
 }
 
 func (l *Loader) isRoot(id string, set bool) bool {
@@ -75,7 +80,7 @@ func (l *Loader) check(pkg *packages.Package) *Unit {
 	l.Units[pkg.ID] = unit
 	root := l.isRoot(pkg.ID, false)
 	for _, name := range pkg.GoFiles {
-		file, err := parser.ParseFile(l.Fset, name, nil, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(l.Fset, name, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if err != nil {
 			unit.Errs = append(unit.Errs, err)
 		}
@@ -83,7 +88,12 @@ func (l *Loader) check(pkg *packages.Package) *Unit {
 			unit.Files = append(unit.Files, file)
 		}
 	}
+	goVersion := ""
+	if pkg.Module != nil && pkg.Module.GoVersion != "" {
+		goVersion = "go" + pkg.Module.GoVersion
+	}
 	conf := types.Config{
+		GoVersion:        goVersion,
 		IgnoreFuncBodies: !root,
 		FakeImportC:      true,
 		Sizes:            l.sizes,
@@ -101,12 +111,14 @@ func (l *Loader) check(pkg *packages.Package) *Unit {
 	}
 	if root {
 		unit.Info = &types.Info{
-			Types:      map[ast.Expr]types.TypeAndValue{},
-			Defs:       map[*ast.Ident]types.Object{},
-			Uses:       map[*ast.Ident]types.Object{},
-			Implicits:  map[ast.Node]types.Object{},
-			Instances:  map[*ast.Ident]types.Instance{},
-			Selections: map[*ast.SelectorExpr]*types.Selection{},
+			Types:        map[ast.Expr]types.TypeAndValue{},
+			Defs:         map[*ast.Ident]types.Object{},
+			Uses:         map[*ast.Ident]types.Object{},
+			Implicits:    map[ast.Node]types.Object{},
+			Instances:    map[*ast.Ident]types.Instance{},
+			Selections:   map[*ast.SelectorExpr]*types.Selection{},
+			Scopes:       map[ast.Node]*types.Scope{},
+			FileVersions: map[*ast.File]string{},
 		}
 	}
 	unit.Types, _ = conf.Check(pkg.PkgPath, l.Fset, unit.Files, unit.Info)
@@ -125,7 +137,7 @@ func (l *Loader) Problems(goos, goarch string) []string {
 	used := map[string]bool{}
 	for _, pkg := range l.Roots {
 		unit := l.Units[pkg.ID]
-		for _, listErr := range pkg.Errors {
+		for _, listErr := range l.listErr[pkg.ID] {
 			out = append(out, fmt.Sprintf("LOAD error in %s (%s/%s): %v", pkg.PkgPath, goos, goarch, listErr))
 		}
 		for _, err := range unit.Errs {
@@ -145,4 +157,53 @@ func (l *Loader) Problems(goos, goarch string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Packages returns the root packages as go/packages values filled from the source-checked units, so an analysis that
+// reads Fset, Syntax, Types, TypesInfo, Imports and Errors needs no other change than the load call. Only roots carry
+// Syntax and TypesInfo; a dependency carries its declared types and its own declaration errors. A dependency's
+// function bodies are not checked, so a type error inside one is not reported.
+func (l *Loader) Packages() []*packages.Package {
+	if l.shaped {
+		return l.Roots
+	}
+	l.shaped = true
+	packages.Visit(l.Roots, nil, func(pkg *packages.Package) {
+		pkg.Fset = l.Fset
+		pkg.TypesSizes = l.sizes
+		if pkg.PkgPath == "unsafe" {
+			pkg.Types = types.Unsafe
+			return
+		}
+		unit := l.Units[pkg.ID]
+		if unit == nil {
+			return
+		}
+		pkg.Types = unit.Types
+		if l.isRoot(pkg.ID, false) {
+			pkg.Syntax = unit.Files
+			pkg.TypesInfo = unit.Info
+		}
+		for _, err := range unit.Errs {
+			switch typed := err.(type) {
+			case scanner.ErrorList:
+				for _, one := range typed {
+					pkg.Errors = append(pkg.Errors, packages.Error{Pos: one.Pos.String(), Msg: one.Msg, Kind: packages.ParseError})
+				}
+			case types.Error:
+				pkg.Errors = append(pkg.Errors, packages.Error{Pos: l.Fset.Position(typed.Pos).String(), Msg: typed.Msg, Kind: packages.TypeError})
+			default:
+				pkg.Errors = append(pkg.Errors, packages.Error{Msg: err.Error(), Kind: packages.UnknownError})
+			}
+		}
+		if len(unit.Errs) > 0 {
+			pkg.IllTyped = true
+		}
+		for _, imp := range pkg.Imports {
+			if imp.IllTyped {
+				pkg.IllTyped = true
+			}
+		}
+	})
+	return l.Roots
 }
