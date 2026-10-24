@@ -64,10 +64,40 @@ rc=0; out="$(rvc_check_views "$tmp/meta" default dh_1022)" || rc=$?
 expect "unparseable backup metadata fails closed" 1 "$rc" "UNPARSEABLE backup metadata: broken" "$out"
 rm "$tmp/meta/broken.sql"
 
-: >"$tmp/meta/empty.sql"
 printf 'ATTACH TABLE _ UUID 1 (a UInt8) ENGINE = Memory\n' >"$tmp/meta/not_a_view.sql"
 rc=0; out="$(rvc_check_views "$tmp/meta" default dh_1022)" || rc=$?
-expect "empty and table metadata files are ignored" 0 "$rc"
+expect "table metadata files are ignored" 0 "$rc"
+
+: >"$tmp/meta/empty.sql"
+rc=0; out="$(rvc_check_views "$tmp/meta" default dh_1022)" || rc=$?
+expect "empty metadata file fails closed" 1 "$rc" "UNPARSEABLE backup metadata: empty.sql" "$out"
+rm "$tmp/meta/empty.sql"
+
+printf "CREATE VIEW default.lit (n String) AS SELECT 'default.foo' AS n\n" >"$tmp/meta/lit.sql"
+saved_fn="$(declare -f rvc_restored_create_query)"
+rvc_restored_create_query() {
+  case "$2" in
+    lit) printf "CREATE VIEW dh_1022.lit (n String) AS SELECT 'dh_1022.foo' AS n" ;;
+    *) return 1 ;;
+  esac
+}
+mkdir -p "$tmp/meta2"; cp "$tmp/meta/lit.sql" "$tmp/meta2/"
+rc=0; out="$(rvc_check_views "$tmp/meta2" default dh_1022)" || rc=$?
+expect "a changed string literal is not normalized away" 1 "$rc" "DEFINITION DIFFERS: lit" "$out"
+
+printf "ATTACH MATERIALIZED VIEW _ UUID 'a-b' TO default.tgt (n String) AS SELECT 1 AS n\n" >"$tmp/meta3.sql"
+mkdir -p "$tmp/meta3"; mv "$tmp/meta3.sql" "$tmp/meta3/mv%2Done.sql"
+rvc_restored_create_query() {
+  [[ "$2" == "mv-one" ]] || return 1
+  printf "CREATE MATERIALIZED VIEW dh_1022.\`mv-one\` UUID 'c-d' TO %s (n String) AS SELECT 1 AS n" "$mv_target"
+}
+mv_target=dh_1022.tgt
+rc=0; out="$(rvc_check_views "$tmp/meta3" default dh_1022)" || rc=$?
+expect "escaped file name and matching materialized view pass" 0 "$rc" "" "$out"
+mv_target=dh_1022.other
+rc=0; out="$(rvc_check_views "$tmp/meta3" default dh_1022)" || rc=$?
+expect "a changed TO target is reported" 1 "$rc" "DEFINITION DIFFERS: mv-one" "$out"
+eval "$saved_fn"
 
 rc=0; out="$(rvc_check_views "$tmp/nope" default dh_1022)" || rc=$?
 expect "missing metadata dir fails closed" 1 "$rc"

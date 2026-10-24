@@ -417,9 +417,10 @@ cmd_restore_clickhouse() {
     # itself.
     chmod -R a+rwX "$extractdir"
     mkdir -p "$workdir/views-$name"
-    if [[ -d "$extractdir/metadata/$db" ]]; then
-      cp "$extractdir/metadata/$db/"*.sql "$workdir/views-$name/" 2>/dev/null || true
-    fi
+    local metadir
+    metadir="$extractdir/metadata/$(rvc_escape_name "$db")"
+    [[ -d "$metadir" ]] || die "backup $base has no metadata directory for database $db (looked for metadata/$(rvc_escape_name "$db")); cannot verify views"
+    cp "$metadir/"*.sql "$workdir/views-$name/" || die "could not copy view metadata from $base"
     log "copying extracted $name/ into $pod:/backups/"
     kubectl -n "$NAMESPACE" cp "$extractdir" "$pod:/backups/$name"
     rm -rf "$extractdir"

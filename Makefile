@@ -395,6 +395,7 @@ codegraph-contract:
 shard-plan:
 	bash scripts/trial/test-shard-plan.sh
 	bash scripts/trial/test-seed-corpus-cases.sh
+	$(MAKE) trial-data-checks
 
 trial-data-checks:
 	bash deploy/local/test-restore-clickhouse-name.sh
