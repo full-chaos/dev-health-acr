@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -200,8 +201,7 @@ func dependencyEdgeCountSQL() string {
 	source := "concat('w.', " + encodeSegmentSQL("toString(w.repo_id)") + ", ':', " + encodeSegmentSQL("d.source_work_item_id") + ")"
 	target := "if(" + resolved + ", concat('w.', " + encodeSegmentSQL("toString(t.repo_id)") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + "), concat('r.', " + encodeSegmentSQL("d.target_work_item_id") + "))"
 	refFits := fmt.Sprintf("length(concat('%s:', %s)) <= %d", identity.KindWorkItemRef, encodeSegmentSQL("d.target_work_item_id"), identity.MaxNaturalKeyBytes)
-	ref := "concat('" + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2) + ":', " +
-		encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
+	ref := evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", "k")
 	refOK := fmt.Sprintf("lengthUTF8(%s) <= %d AND position(%s, '|') = 0", ref, contractsv1.ContextFabricEvidenceRefIDMaxLength, ref)
 	arms := make([]string, 0, len(dependencyEdgeRelations))
 	for arm := range dependencyEdgeRelations {

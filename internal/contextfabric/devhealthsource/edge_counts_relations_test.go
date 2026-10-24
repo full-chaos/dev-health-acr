@@ -260,7 +260,7 @@ func TestDependencyEdgeCountsAreUnmeasuredWhenTheRemovedLinkSetIsCut(t *testing.
 func TestDependencyEdgeCountDropsARelationWhoseEvidenceReferenceBreaksTheBound(t *testing.T) {
 	t.Parallel()
 	statement := dependencyEdgeCountSQL()
-	ref := "concat('acr:v1:work-item-dependency.v2:', " + encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
+	ref := evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", "k")
 	for _, want := range []string{"lengthUTF8(" + ref + ") <= 256", "position(" + ref + ", '|') = 0", "AND ref_ok"} {
 		if !strings.Contains(statement, want) {
 			t.Errorf("statement lacks the evidence-reference bound %q:\n%s", want, statement)
