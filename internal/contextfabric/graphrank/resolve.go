@@ -3928,7 +3928,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// ticket's scope; see the CHAOS-4417 follow-up ticket. Reached when NO
 	// receipt has confirmed a kind (confirmedKind == nil) and the
 	// resolution-wide search truncated with nothing committed -- exactly
-	// turn 1's shape for a repository/project/team question.
+	// turn 1's shape for a repository/project/team question. The kind-scoped
+	// semantic arm below also runs on a confirmed turn, but only for the
+	// confirmed kind and only when the confirmed-kind-filtered pool is empty.
 	//
 	// Deliberately NOT guarded by `!offersOnly` (codex R4, confirmed):
 	// unlike the confirmedKind commit block above -- which the offers-only
@@ -3942,8 +3944,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// under offersOnly would silently withhold the low-population-kind
 	// offer from the one call whose entire purpose is building offers.
 	var kindScopedSemanticCandidates []contextfabric.SubjectCandidate
-	if confirmedKind == nil && len(resolution.Committed) == 0 {
-		if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
+	var semanticHinted []contextfabric.SubjectKind
+	switch {
+	case confirmedKind == nil:
+		semanticHinted = hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind)
+	case len(candidatesBySubject) == 0 && isAliasLookupScopedKind(contextfabric.SubjectKind(confirmedKind.Kind)):
+		// A confirmed turn whose filtered pool is empty searches only the
+		// confirmed kind: the other frame kinds were not what the caller picked.
+		semanticHinted = []contextfabric.SubjectKind{contextfabric.SubjectKind(confirmedKind.Kind)}
+	}
+	if len(resolution.Committed) == 0 {
+		if hinted := semanticHinted; len(hinted) > 0 {
 			semantic, semanticErr := applyKindScopedSemanticOffers(ctx, principal, request, deps, terms, hinted, admission)
 			if semanticErr != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, semanticErr
@@ -4159,8 +4170,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	// The semantic arm's admitted finds reach ONLY the candidate offer: they
 	// are held out of kindOfferCandidates, which also feeds the expected_kind
-	// offer, the handle offer, the pool-held kinds and the boundary telemetry,
-	// so the override cannot widen any of them.
+	// offer, the handle offer, the pool-held input and the boundary telemetry,
+	// so the override cannot widen any of them. The one deliberate exception is
+	// poolHeld below, which also reads these finds so a declared kind they
+	// evidence is not withheld.
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
 	candidateOfferInput := kindOfferCandidates
 	if len(semanticAdmitted) > 0 {
@@ -4252,7 +4265,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// the wrong authority and why the offer-only finds must be included.
 	// Computed once and reused for both calls below, mirroring declaredKinds'
 	// own "read once, read twice" shape.
-	poolHeld := poolHeldKindsOf(offerFullPool, kindOfferCandidates)
+	poolHeld := poolHeldKindsOf(offerFullPool, append(slices.Clone(kindOfferCandidates), semanticAdmitted...))
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
