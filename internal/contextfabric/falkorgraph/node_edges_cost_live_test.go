@@ -23,7 +23,7 @@ import (
 const (
 	nodeEdgesCostItems = 1200
 	nodeEdgesCostRepos = 20
-	// the single-pattern in arm scans the organization's 1222 nodes, fewer under a window
+	// under a window the single-pattern in arm starts at every node of the organization (1222 here)
 	nodeEdgesCostLegacyScanFloor = 100
 )
 
@@ -211,6 +211,8 @@ func TestNodeEdgesReadOnlyTheNodesOwnEdges(t *testing.T) {
 		{UUID: nodeEdgesCostRID("item-item", 6), SourceNodeUUID: itemUUID(6), TargetNodeUUID: leafUUID},
 	})
 	window := temporalFilter{active: true, startNs: nsTimestamp(v.now.Add(-120 * 24 * time.Hour)), endNs: nsTimestamp(v.now)}
+	asOf := nsTimestamp(v.now.Add(-10 * 24 * time.Hour))
+	instant := temporalFilter{active: true, startNs: asOf, endNs: asOf}
 	cases := []struct {
 		name     string
 		subject  contextfabric.SubjectRef
@@ -221,6 +223,7 @@ func TestNodeEdgesReadOnlyTheNodesOwnEdges(t *testing.T) {
 	}{
 		{"leaf_current", leaf, temporalFilter{}, 4, 1, wantLeaf},
 		{"leaf_range", leaf, window, 4, 1, wantLeaf},
+		{"leaf_as_of", leaf, instant, 4, 1, wantLeaf},
 		{"repository_range", v.repos[7], window, 1 + nodeEdgesCostItems/nodeEdgesCostRepos, -1, nil},
 		{"hub_current", v.team, temporalFilter{}, nodeEdgesCostItems/2 + nodeEdgesCostRepos, nodeEdgesCostItems/2 + nodeEdgesCostRepos, nil},
 	}
@@ -270,7 +273,7 @@ func TestNodeEdgesReadOnlyTheNodesOwnEdges(t *testing.T) {
 		if scanned > 2 || traversed > 2*c.degree {
 			t.Errorf("%s: the edge read went beyond the node: scanned %d nodes for one origin, traversed %d edges for degree %d", c.name, scanned, traversed, c.degree)
 		}
-		if legacyScanned < nodeEdgesCostLegacyScanFloor {
+		if c.temporal.active && legacyScanned < nodeEdgesCostLegacyScanFloor {
 			t.Errorf("%s: the single-pattern in arm scanned only %d nodes: the control no longer shows the organization-wide scan this bound exists to catch", c.name, legacyScanned)
 		}
 	}
