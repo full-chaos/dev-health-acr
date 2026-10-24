@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan"
 )
@@ -196,4 +197,27 @@ func f(l *slog.Logger, x any) { switch passKey := x.(type) { default: l.Info("m"
 		{"control: outer const is not a known key", `const other = "count"
 func f(l *slog.Logger, x any) { switch other := x.(type) { case string: l.Info("m", other, "x") } }`, "R9:unresolvable key"},
 	})
+}
+
+func TestKeyScopeOversizedExpressionIsNeverTypeChecked(t *testing.T) {
+	big := strings.Repeat(`"a" + `, 5000) + `"a"`
+	cases := []keyCase{
+		{"readable const key beside an oversized const", "const big = " + big + "\nconst k = \"api_token\"\nfunc f(l *slog.Logger, v string) { l.Info(\"m\", k, v); _ = big }", "R1:api_token"},
+		{"local key beside an oversized const needs typing and fails closed", "const big = " + big + "\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = big }", "R9:unresolvable key"},
+		{"local key beside an oversized key expression", "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); l.Info(\"m\", " + big + ", v) }", "R9:unresolvable key"},
+		{"benign key kind beside an oversized const is refused, not typed", "const big = " + big + "\nfunc f(l *slog.Logger) { l.Info(\"m\", \"pass\", 3); _ = big }", "R10:refusal:typecheck,R1:pass"},
+		{"control: no oversized expression, the local key is read", "const small = \"a\" + \"b\"\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = small }", "R1:api_token"},
+	}
+	for _, c := range cases {
+		start := cpuTime(t)
+		got := keyFindings(scanSource(t, header+c.body+"\n"))
+		used := cpuTime(t) - start
+		t.Logf("%s: %s cpu", c.name, used)
+		if used > time.Second {
+			t.Errorf("%s: used %s cpu, want < 1s even under the race detector", c.name, used)
+		}
+		if got != c.want {
+			t.Errorf("%s: key findings %q want %q", c.name, got, c.want)
+		}
+	}
 }

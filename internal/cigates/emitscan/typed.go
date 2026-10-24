@@ -24,6 +24,10 @@ import (
 // refusalDetail is the R10 detail of a package whose types the scan cannot read. It is never pinnable.
 const refusalDetail = "refusal:typecheck"
 
+// errOversize is the type-check error of a package that holds an expression the scan's fold bound refuses: it is not
+// checked, because the checker's work on it is not bounded by the scan's budget; the scan reads its keys by name, fail closed.
+var errOversize = errors.New("package holds an expression larger than the scan's fold bound")
+
 // shadowDetail is the R10 detail of a parameter or local variable that hides a constant holding a key the redactor
 // knows (protected, network or benign): the name reads as the constant to a reader and as something else to the compiler.
 // It is never pinnable.
@@ -49,6 +53,9 @@ type typedPackage struct {
 // typedInfo type-checks the package once, on the first benign key it meets: the files that match the default build
 // context are checked together against the export data of the module's dependencies.
 func (p *pkgInfo) typedInfo() *typedPackage {
+	if p.typed == nil && p.oversize {
+		p.typed = &typedPackage{err: errOversize}
+	}
 	if p.typed == nil {
 		info, files, err := typeCheck(p.budget.ctx, p.root, p.group)
 		p.typed = &typedPackage{info: info, files: files, err: err}

@@ -303,6 +303,7 @@ type pkgInfo struct {
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
 	root        string                        // the scan root: the module of the type-checked load is the nearest go.mod at or above it
 	group       []parsedFile                  // the files of the package directory, type-checked together on the first R10 need
+	oversize    bool                          // a + chain larger than one fold may visit: the package is never type-checked (the checker's own work on it is not bounded by the scan's budget)
 	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver
 	typed       *typedPackage                 // the type-check of the package, made once and only when a benign key is read
 	budget      *budget
@@ -335,6 +336,28 @@ func (p *pkgInfo) censusSites() []Site {
 	return out
 }
 
+// concatSize counts the operands and operators of one + chain (parentheses included); anything else is one leaf. Every
+// inner + node is marked so a chain is counted once, from its outermost node.
+func concatSize(root *ast.BinaryExpr, marked map[*ast.BinaryExpr]bool) int {
+	size := 0
+	stack := []ast.Expr{root}
+	for len(stack) > 0 && size <= maxFoldWork {
+		expr := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		size++
+		switch e := expr.(type) {
+		case *ast.ParenExpr:
+			stack = append(stack, e.X)
+		case *ast.BinaryExpr:
+			if e.Op == token.ADD {
+				marked[e] = true
+				stack = append(stack, e.X, e.Y)
+			}
+		}
+	}
+	return size
+}
+
 func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo {
 	nodes := 0
 	for _, parsed := range group {
@@ -355,6 +378,19 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 				}
 			}
 			return true
+		})
+	}
+	for _, parsed := range group {
+		marked := map[*ast.BinaryExpr]bool{}
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			outer, ok := node.(*ast.BinaryExpr)
+			if !ok || marked[outer] || info.oversize {
+				return !info.oversize
+			}
+			if outer.Op == token.ADD && concatSize(outer, marked) > maxFoldWork {
+				info.oversize = true
+			}
+			return !info.oversize
 		})
 	}
 	saturate := func(name string) {
@@ -1292,7 +1328,9 @@ func unquote(literal string) string {
 // package, concatenations included). ok is false for any other expression.
 func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
 	ctx := newFoldCtx(s.pkg.budget, s.pkg.consts, s.imports, s.pkg.stringTypes)
-	ctx.typed = &typedFold{s: s}
+	if !s.pkg.oversize {
+		ctx.typed = &typedFold{s: s}
+	}
 	values := foldString(expr, ctx, 0)
 	if ctx.refusal != "" {
 		s.add(RuleBenignKind, expr.Pos(), ctx.refusal)
