@@ -21,7 +21,7 @@ func Load(root string, patterns []string, goos, goarch string) (*Loader, error) 
 	cfg := &packages.Config{
 		Dir:  root,
 		Env:  append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch),
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedDeps,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedDeps | packages.NeedModule,
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -85,7 +85,12 @@ func (l *Loader) check(pkg *packages.Package) *Unit {
 			unit.Files = append(unit.Files, file)
 		}
 	}
+	goVersion := ""
+	if pkg.Module != nil && pkg.Module.GoVersion != "" {
+		goVersion = "go" + pkg.Module.GoVersion
+	}
 	conf := types.Config{
+		GoVersion:        goVersion,
 		IgnoreFuncBodies: !root,
 		FakeImportC:      true,
 		Sizes:            l.sizes,

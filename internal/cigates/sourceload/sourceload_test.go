@@ -153,3 +153,36 @@ func TestPackagesFeedSSAExactlyWhenWellTyped(t *testing.T) {
 		t.Fatalf("a root over an ill-typed import was admitted to SSA: %v", broken)
 	}
 }
+
+func TestLoadChecksEachPackageAtItsModulesGoVersion(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module rootmod\n\ngo 1.22\n\nrequire oldmod v0.0.0\n\nreplace oldmod => ./old\n")
+	write("root.go", "package rootmod\n\nimport \"oldmod\"\n\nvar V oldmod.T\n")
+	write("old/go.mod", "module oldmod\n\ngo 1.17\n")
+	write("old/old.go", "package oldmod\n\ntype T any\n")
+	loader, err := Load(dir, []string{"rootmod"}, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := loader.Packages()[0]
+	dep := root.Imports["oldmod"]
+	if dep == nil || len(dep.Errors) == 0 || !strings.Contains(dep.Errors[0].Msg, "requires go1.18") {
+		t.Fatalf("a go 1.17 module that declares `type T any` must be rejected as go/packages rejects it, got %v", dep)
+	}
+	if !root.IllTyped {
+		t.Fatal("the root over a rejected dependency must be ill-typed")
+	}
+	if _, ssaPkgs := ssautil.Packages(loader.Packages(), 0); len(ssaPkgs) != 1 || ssaPkgs[0] != nil {
+		t.Fatalf("a root over a rejected dependency was admitted to SSA: %v", ssaPkgs)
+	}
+}
