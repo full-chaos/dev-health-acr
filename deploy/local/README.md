@@ -233,6 +233,10 @@ six-var escape hatch can point a store at an IPv6 endpoint.
    `RESTORE ... FROM Zip(...)` fails `BACKUP_ENGINE_NOT_FOUND`. `trial-data.sh`
    unzips client-side and restores via `FROM Disk('trial_backups', <dir>)`
    instead (see the `backup-disk.xml` ConfigMap in the manifest).
+   `restore-clickhouse --as <newdb> <zip>` restores under another database
+   name; after every restore each view is compared with the backup's own
+   definition (database qualifiers normalized) and a missing, unparseable or
+   differing view fails the command with its name.
 4. **`kubectl cp` does not reliably carry local file permissions into the
    container** -- ClickHouse's own `.backup` metadata file lands unreadable
    by the server's UID regardless of local `chmod`. Fixed server-side

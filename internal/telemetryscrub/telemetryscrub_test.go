@@ -698,3 +698,280 @@ func TestEncodedBoundaryKeepsThePrefixAndRedactsOnlyTheCredential(t *testing.T) 
 		}
 	}
 }
+
+var typedBenignCases = []struct {
+	key  string
+	kind string
+}{
+	{"authorization_dropped_count", "int"}, {"repo_less_authorization_dropped_count", "int"},
+	{"authorization_grant_exact_selectors", "int"}, {"authorization_grant_owner_selectors", "int"},
+	{"authorization_batches", "int"}, {"authorization_batch_size", "int"},
+	{"device_authorizations", "int"}, {"device_authorizations_remaining", "int"},
+	{"pass", "int"}, {"evaluated_pass", "int"},
+	{"authorization_grant_measured", "bool"}, {"authorization_grant_organization_wide", "bool"},
+	{"dev_health_entitlement_token_file_configured", "bool"}, {"coverage_bypass", "bool"},
+	{"authorization_reason", "string"},
+}
+
+func sampleOfKind(kind string) any {
+	switch kind {
+	case "int":
+		return 7
+	case "bool":
+		return true
+	}
+	return "subjects_admitted"
+}
+
+func TestTypedBenignKeysKeepTheirOneKind(t *testing.T) {
+	for _, c := range typedBenignCases {
+		want := sampleOfKind(c.kind)
+		got := record(t, func(l *slog.Logger) { l.Info("m", c.key, want) })
+		if fmt.Sprint(got[c.key]) != fmt.Sprint(want) {
+			t.Errorf("%s=%v want kept %v", c.key, got[c.key], want)
+		}
+		if BenignKind(c.key) != c.kind {
+			t.Errorf("BenignKind(%q) = %q want %q", c.key, BenignKind(c.key), c.kind)
+		}
+	}
+}
+
+func TestTypedBenignKeysRedactEveryOtherKind(t *testing.T) {
+	for _, c := range typedBenignCases {
+		for _, other := range []string{"int", "bool", "string"} {
+			if other == c.kind {
+				continue
+			}
+			v := sampleOfKind(other)
+			if other == "string" {
+				v = "leaky-value"
+			}
+			got := record(t, func(l *slog.Logger) { l.Info("m", c.key, v) })
+			if got[c.key] != Redacted {
+				t.Errorf("%s with %s value = %v want redacted", c.key, other, got[c.key])
+			}
+		}
+		for _, v := range []any{1.5, time.Second} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", c.key, v) })
+			if got[c.key] != Redacted {
+				t.Errorf("%s with %T value = %v want redacted", c.key, v, got[c.key])
+			}
+		}
+	}
+}
+
+func TestTypedBenignNearVariantsStayRedacted(t *testing.T) {
+	for _, c := range typedBenignCases {
+		for _, k := range []string{c.key + "_token", c.key + "_secret", c.key + "_password", c.key + "s_token", "session_" + c.key, "authorization_" + c.key + "_x"} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", k, sampleOfKind(c.kind)) })
+			if got[k] != Redacted {
+				t.Errorf("near variant %q = %v want redacted", k, got[k])
+			}
+		}
+	}
+	for _, k := range []string{"authorization_batches_token", "authorization_dropped_count_password", "evaluated_pass_token", "pass_phrase", "request_pass", "pass_token", "authorization", "authorization_header", "credential", "session_id", "otp_count"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, 3) })
+		if got[k] != Redacted {
+			t.Errorf("%q = %v want redacted", k, got[k])
+		}
+	}
+}
+
+func TestTypedBenignKeysNeedNoGroup(t *testing.T) {
+	got := record(t, func(l *slog.Logger) { l.WithGroup("g").Info("m", "authorization_batches", 3) })
+	if g, _ := got["g"].(map[string]any); g["authorization_batches"] != Redacted {
+		t.Errorf("under WithGroup: %v", got["g"])
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", slog.Group("credentials", slog.Int("authorization_batches", 3))) })
+	if got["credentials"] != Redacted {
+		t.Errorf("under protected group: %v", got["credentials"])
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", slog.Group("span", slog.Int("authorization_batches", 3))) })
+	if g, _ := got["span"].(map[string]any); g["authorization_batches"] != Redacted {
+		t.Errorf("under clean group: %v", got["span"])
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", "o", map[string]any{"pass": 3, "authorization_batches": 4}) })
+	if o, _ := got["o"].(map[string]any); o["pass"] != Redacted || o["authorization_batches"] != Redacted {
+		t.Errorf("opaque map: %v", got["o"])
+	}
+}
+
+func TestTypedBenignStringStillShapeScrubbed(t *testing.T) {
+	got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", secretShapedReason) })
+	if got["authorization_reason"] == secretShapedReason {
+		t.Errorf("a registered value with a secret shape reached the log: %v", got["authorization_reason"])
+	}
+	if s, _ := got["authorization_reason"].(string); strings.Contains(s, "abcdefghijklmnop") {
+		t.Errorf("shape leaked: %q", s)
+	}
+}
+
+func TestTypedBenignWithAttrsAndRecordAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	l := slog.New(Handler(slog.NewJSONHandler(&buf, nil))).With("pass", 2, "coverage_bypass", true, "pass_x", "v")
+	l.Info("m", "evaluated_pass", 5)
+	var out map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["pass"] != float64(2) || out["coverage_bypass"] != true || out["evaluated_pass"] != float64(5) {
+		t.Errorf("got %v", out)
+	}
+}
+
+var testReasons = []string{"subjects_admitted", "subject_denied", "grant_mismatch"}
+
+const secretShapedReason = "ghp_abcdefghijklmnopqrstuvwx"
+
+func init() {
+	RegisterClosedValues("authorization_reason", append(append([]string{}, testReasons...), secretShapedReason))
+}
+
+func TestClosedValueKeyRedactsEveryValueOutsideTheSet(t *testing.T) {
+	for _, v := range testReasons {
+		got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", v) })
+		if got["authorization_reason"] != v {
+			t.Errorf("%q = %v want kept", v, got["authorization_reason"])
+		}
+	}
+	for _, v := range []string{"", "subjects_admitted ", "Subjects_Admitted", "subjects_admitted2", "Bearer abcdefgh1", "pq: password authentication failed for user x", "Authorization: Bearer abc", "x-api-key: k123", "plain text"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", v) })
+		if got["authorization_reason"] != Redacted {
+			t.Errorf("%q = %v want redacted", v, got["authorization_reason"])
+		}
+		got = record(t, func(l *slog.Logger) { l.With("authorization_reason", v).Info("m") })
+		if got["authorization_reason"] != Redacted {
+			t.Errorf("With %q = %v want redacted", v, got["authorization_reason"])
+		}
+	}
+}
+
+func TestClosedValueRegistrationNeedsAStringTypedBenignKey(t *testing.T) {
+	for _, key := range []string{"authorization_batches", "unlisted_key", "token"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("RegisterClosedValues(%q) did not panic", key)
+				}
+			}()
+			RegisterClosedValues(key, []string{"a"})
+		}()
+	}
+}
+
+func TestCompactEqualSpellingsAreOneKeyForOneKindOnly(t *testing.T) {
+	for _, k := range []string{"AuthorizationBatches", "authorization-batches", "authorization.batches", "AUTHORIZATION_BATCHES", "authorization batches"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, 3) })
+		if got[k] != float64(3) {
+			t.Errorf("%q int = %v want kept", k, got[k])
+		}
+		got = record(t, func(l *slog.Logger) { l.Info("m", k, "x") })
+		if got[k] != Redacted {
+			t.Errorf("%q string = %v want redacted", k, got[k])
+		}
+		got = record(t, func(l *slog.Logger) { l.WithGroup("g").Info("m", k, 3) })
+		if g, _ := got["g"].(map[string]any); g[k] != Redacted {
+			t.Errorf("%q under group = %v want redacted", k, g[k])
+		}
+	}
+	// A key that is protected by a rule beyond its compact letters stays protected even though those
+	// letters equal an exempt key: the joined path of a group and the key is not the exempt key.
+	for _, group := range []string{"api", "span", "x"} {
+		got := record(t, func(l *slog.Logger) { l.WithGroup(group).Info("m", "pass", 1) })
+		if g, _ := got[group].(map[string]any); g["pass"] != Redacted {
+			t.Errorf("group %q pass = %v want redacted", group, g["pass"])
+		}
+	}
+}
+
+func registerPanics(key string, values []string) (msg string) {
+	defer func() {
+		if r := recover(); r != nil {
+			msg = fmt.Sprint(r)
+		}
+	}()
+	RegisterClosedValues(key, values)
+	return ""
+}
+
+func TestClosedValuesRegisterOnceAndOnlyCodeShapedValues(t *testing.T) {
+	if msg := registerPanics("authorization_reason", []string{"another_code"}); !strings.Contains(msg, "already registered") {
+		t.Errorf("second registration: %q", msg)
+	}
+	if msg := registerPanics("AuthorizationReason", testReasons); !strings.Contains(msg, "already registered") {
+		t.Errorf("second registration, other spelling: %q", msg)
+	}
+	for _, bad := range []string{"has space", "has:colon", "a/b", "", "UPPER", strings.Repeat("a", 65), "tab\there", "ünï"} {
+		if msg := registerPanics("authorization_reason", []string{"ok_code", bad}); !strings.Contains(msg, "code shape") {
+			t.Errorf("value %q: %q", bad, msg)
+		}
+	}
+	if msg := registerPanics("authorization_reason", nil); !strings.Contains(msg, "no closed values") {
+		t.Errorf("empty set: %q", msg)
+	}
+	for _, v := range []string{"another_code", "has space", "x"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", v) })
+		if got["authorization_reason"] != Redacted {
+			t.Errorf("%q = %v after rejected registrations, want redacted", v, got["authorization_reason"])
+		}
+	}
+	if got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", "grant_mismatch") }); got["authorization_reason"] != "grant_mismatch" {
+		t.Errorf("registered value changed: %v", got["authorization_reason"])
+	}
+	if !closedValueShape.MatchString(strings.Repeat("a", 64)) || !closedValueShape.MatchString("a1_b2") {
+		t.Error("shape rejects a valid code")
+	}
+}
+
+type uintValuer uint64
+
+func (u uintValuer) LogValue() slog.Value { return slog.Uint64Value(uint64(u)) }
+
+func TestIntExemptionNeverCoversUnsignedValues(t *testing.T) {
+	for _, c := range typedBenignCases {
+		if c.kind != "int" {
+			continue
+		}
+		k := c.key
+		for name, v := range map[string]any{"uint": uint(41), "uint64": uint64(42), "uint8": uint8(1), "uintptr": uintptr(2), "Uint64Value": slog.Uint64Value(43), "uint valuer": uintValuer(44)} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", k, v) })
+			if got[k] != Redacted {
+				t.Errorf("%s with %s = %v want redacted", k, name, got[k])
+			}
+		}
+		if got := record(t, func(l *slog.Logger) { l.Info("m", k, 5) }); got[k] != float64(5) {
+			t.Errorf("%s with int = %v want kept", k, got[k])
+		}
+		if got := record(t, func(l *slog.Logger) { l.Info("m", k, int64(6)) }); got[k] != float64(6) {
+			t.Errorf("%s with int64 = %v want kept", k, got[k])
+		}
+	}
+}
+
+func TestUnnamedGroupsCountAsGroups(t *testing.T) {
+	cases := map[string]func(*slog.Logger){
+		"empty group": func(l *slog.Logger) {
+			l.Info("m", slog.Group("", slog.Int("authorization_batches", 3), slog.Bool("coverage_bypass", true)))
+		},
+		"nested empty":     func(l *slog.Logger) { l.Info("m", slog.Group("", slog.Group("", slog.Int("pass", 3)))) },
+		"With empty group": func(l *slog.Logger) { l.With(slog.Group("", slog.Int("evaluated_pass", 3))).Info("m") },
+		"empty then named": func(l *slog.Logger) { l.Info("m", slog.Group("", slog.Group("span", slog.Int("pass", 3)))) },
+		"empty group string": func(l *slog.Logger) {
+			l.Info("m", slog.Group("", slog.String("authorization_reason", "subjects_admitted")))
+		},
+	}
+	for name, build := range cases {
+		got := record(t, build)
+		for _, k := range []string{"authorization_batches", "coverage_bypass", "pass", "evaluated_pass", "authorization_reason"} {
+			if v, ok := got[k]; ok && v != Redacted {
+				t.Errorf("%s: %s = %v want redacted", name, k, v)
+			}
+		}
+		if g, ok := got["span"].(map[string]any); ok && g["pass"] != Redacted {
+			t.Errorf("%s: span.pass = %v want redacted", name, g["pass"])
+		}
+	}
+	if got := record(t, func(l *slog.Logger) { l.Info("m", "pass", 3) }); got["pass"] != float64(3) {
+		t.Errorf("ungrouped pass = %v want kept", got["pass"])
+	}
+}

@@ -167,10 +167,42 @@ spec:
                   key: {{ .Values.contextFabric.falkor.passwordKey | default "ACR_CONTEXT_FABRIC_FALKOR_PASSWORD" | quote }}
             {{- end }}
             {{- end }}
+            {{- /* acr-api's optional QUERY embedder (the kind-scoped semantic
+                 retrieval embeds the question at answer time). Cost-bearing,
+                 so it has its own explicit switch, contextFabric.embed.
+                 apiEnabled (default false), on top of embed.baseURL: a
+                 projector that already embeds must not silently start
+                 billing the API too. The keys, names and the secretKeyRef
+                 are the projector's own (templates/projector-deployment.yaml),
+                 so both pods build the same embedder identity. */}}
+            {{- if .Values.contextFabric.embed.apiEnabled }}
+            {{- if not .Values.contextFabric.embed.baseURL }}
+            {{- fail "contextFabric.embed.apiEnabled requires contextFabric.embed.baseURL" }}
+            {{- end }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_BASE_URL
+              value: {{ .Values.contextFabric.embed.baseURL | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_PROVIDER
+              value: {{ .Values.contextFabric.embed.provider | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_MODEL
+              value: {{ .Values.contextFabric.embed.model | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_DIMENSION
+              value: {{ .Values.contextFabric.embed.dimension | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_TIMEOUT
+              value: {{ .Values.contextFabric.embed.timeout | quote }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES
+              value: {{ .Values.contextFabric.embed.maxTransportRetries | quote }}
+            {{- if .Values.contextFabric.embed.existingSecret }}
+            - name: ACR_CONTEXT_FABRIC_EMBED_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.contextFabric.embed.existingSecret | quote }}
+                  key: {{ .Values.contextFabric.embed.apiKeyKey | default "ACR_CONTEXT_FABRIC_EMBED_API_KEY" | quote }}
+            {{- end }}
+            {{- end }}
             {{- /* CHAOS-4076: acr-api's optional Investigator model runtime
                  (internal/contextfabric/modelprovider). Gated on its own
                  explicit `enabled` switch rather than a single field like
-                 falkor.addr/embed.baseURL above -- see values.yaml's
+                 falkor.addr above -- see values.yaml's
                  contextFabric.model comment for why an implicit-opt-in gate
                  is unsafe here (modelprovider.Configured() triggers on ANY
                  nonblank ACR_CONTEXT_FABRIC_MODEL* variable). */}}

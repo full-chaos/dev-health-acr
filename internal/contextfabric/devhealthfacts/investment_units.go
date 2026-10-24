@@ -23,7 +23,7 @@ import (
 //	sum(share_in_scope * unit_theme_X) / sum(share_in_scope) == theme_X
 //
 // of the fact the same read serves for the subject, over every page of the
-// listing. A unit that reaches several repositories has one row per
+// listing. An evidence-gated unit is in neither, so the tie holds. A unit that reaches several repositories has one row per
 // repository. Nothing here recomputes a category: every probability is the
 // unit's persisted theme_distribution_json value.
 
@@ -97,7 +97,7 @@ func investmentUnitsStatementFor(b factTimeBound, withCursor bool, scope members
 	if organization {
 		core = strings.Replace(core, repoRefsExpression+" AS refs",
 			"if(empty("+repoRefsExpression+"), "+orgNoRefUnit+", "+repoRefsExpression+") AS refs", 1)
-		rowFilter = "WHERE win >= 0"
+		rowFilter = "WHERE win >= 0 AND NOT gated"
 	}
 	keyset := ""
 	if withCursor {
@@ -111,7 +111,7 @@ WHERE share < toFloat64({` + unitCursorShareParam + `:String})
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
 			arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs,
-			effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs
+			effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs, gated
 		FROM (
 ` + core + `		)
 	)
