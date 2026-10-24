@@ -18,7 +18,7 @@ import (
 
 func TestLandscapeServesOneCopyOfTheStatsForTeamAndProject(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL("projects", "team_project_ownership", "ic_landscape_rolling_30d") {
 		if err := direct.Exec(ctx, statement); err != nil {

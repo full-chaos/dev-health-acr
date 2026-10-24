@@ -77,7 +77,7 @@ func (s prLinkSeed) link(repo, workItem string, number uint32, provenance string
 
 func TestTeamWithPullRequestsAndNoAdmittedLinkGetsItsOwnReasonAtTheReadFactsBoundary(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	const orgID = "org-pr-link-state"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	start, end := ts(2026, 9, 1, 0, 0, 0), ts(2026, 9, 25, 0, 0, 0)
@@ -231,7 +231,7 @@ func TestTeamPullRequestLinkStateCostIsFlatWithLinkedIssuesOnRealClickHouse(t *t
 
 func assertTeamPullRequestLinkStateCostIsFlat(t *testing.T, orgID string, linkIssues bool) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	inWindow := ts(2026, 9, 10, 0, 0, 0)
@@ -325,7 +325,7 @@ SELECT toUUID(concat('00000000-0000-4000-8000-', leftPad(toString(number %% 400)
 // latest complete membership run outrank pull requests with no admitted link.
 func TestTeamWithUnitsOutsideTheRunAndUnlinkedPullRequestsNamesTheRunCause(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	const orgID = "org-pr-link-precedence"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
@@ -373,7 +373,7 @@ func TestTeamWithUnitsOutsideTheRunAndUnlinkedPullRequestsNamesTheRunCause(t *te
 // linked work item is not read.
 func TestAWorkItemIDSharedByAPullRequestTypedItemInAnotherRepositoryNeverMakesTheTokenWrong(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	const orgID = "org-pr-link-same-id"
 	s := newPRLinkSeed(t, ctx, direct, orgID)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)

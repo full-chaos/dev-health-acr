@@ -53,7 +53,7 @@ var projectReachFillerPrefix = "filler-" + strings.Repeat("x", 96) + "-"
 // share granules.
 func TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})

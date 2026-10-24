@@ -319,7 +319,7 @@ GROUP BY normalized_query_hash`, mark)
 
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
@@ -673,7 +673,7 @@ func TestOrganizationWideAuthorizationIsDecidedFromTheLivePrincipal(t *testing.T
 // library does.
 func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	_, direct := newCHAOS3780IntegrationClient(t, ctx)
+	_, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",

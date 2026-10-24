@@ -40,7 +40,7 @@ func TestTeamLinkCandidatesFollowDistinctIssuesNotRowVersionsOnRealClickHouse(t 
 		t.Skip("memory bound rows run in the unit legs; the race detector does not change a server peak")
 	}
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})

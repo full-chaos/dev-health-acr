@@ -226,7 +226,7 @@ func scopeRows(t *testing.T, ctx context.Context, client contextpacket.ClickHous
 // (the guard's planted defect, measured on the same data).
 func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})

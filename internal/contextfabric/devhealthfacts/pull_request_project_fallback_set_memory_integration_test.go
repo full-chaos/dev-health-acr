@@ -35,7 +35,7 @@ const (
 // carries the links (a groupUniqArray of them) fails the result bound.
 func TestPullRequestProjectFallbackLinkSetIsBoundedPerGroupOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
@@ -133,7 +133,7 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND position(query, ?) > 0`
 // statement's native sets would read the link table three more times.
 func TestPullRequestProjectAllNativeGroupStaysUnderTheReadCapOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {

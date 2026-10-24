@@ -119,7 +119,7 @@ func projectRollupRef(t *testing.T, id string) contextfabric.SubjectRef {
 // authorized items.
 func TestProjectRollupsCountThroughTheEntityTreeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	s := newProjectRollupSeed(t, ctx, direct)
 	for _, item := range []struct{ id, repo, typ, status, project string }{
 		{"i-native", "repo-a", "issue", "open", "proj-p"},
@@ -203,7 +203,7 @@ func TestProjectRollupsCountThroughTheEntityTreeOnRealClickHouse(t *testing.T) {
 // are not open.
 func TestProjectOpenPullRequestsFollowTheStoredStateOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	s := newProjectRollupSeed(t, ctx, direct)
 	for i, state := range []any{"open", " OPEN ", "closed", nil} {
 		id := fmt.Sprintf("i-%d", i+1)
@@ -225,7 +225,7 @@ func TestProjectOpenPullRequestsFollowTheStoredStateOnRealClickHouse(t *testing.
 // per-pull-request expansion off: the engine serves both.
 func TestProjectPullRequestsAreServedAsRollupBesideTheExpandedPullRequestsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	s := newProjectRollupSeed(t, ctx, direct)
 	s.workItem("i-one", "repo-a", "issue", "open", "proj-p")
 	s.workItem("i-two", "repo-a", "issue", "open", "proj-p")
@@ -273,7 +273,7 @@ func TestProjectPullRequestsAreServedAsRollupBesideTheExpandedPullRequestsOnReal
 // leaves each statement's peak memory flat and under the statement cap.
 func TestProjectRollupsServeAProjectWithManyWorkItemsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
