@@ -391,19 +391,15 @@ ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
 // divergence in either dimension must error rather than silently keep or
 // overwrite the original row.
 //
-// M1 (Codex adversarial review, CHAOS-3755): the organization check runs
-// FIRST, independent of content equality. InvestigationResult carries no
-// organization discriminator of its own, so a byte-identical replay from a
-// DIFFERENT org would otherwise pass the content-equality check below and
-// be treated as a successful idempotent replay, while the row still
-// belongs to whichever org wrote it first.
+// The existing-row read is scoped to the caller's organization, so a row
+// another organization wrote under the same result_id is not found and a
+// byte-identical replay from a different org can never pass.
 func (s *Store) verifyIdempotentReplay(ctx context.Context, orgID, resultID string, payload []byte, semanticState *contextfabric.PersistedSemanticState) error {
 	row := s.db.QueryRowContext(ctx, `
-SELECT org_id, payload, semantic_state FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID)
-	var existingOrgID string
+SELECT payload, semantic_state FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
 	var existingPayload []byte
 	var existingSemanticState []byte
-	if err := row.Scan(&existingOrgID, &existingPayload, &existingSemanticState); err != nil {
+	if err := row.Scan(&existingPayload, &existingSemanticState); err != nil {
 		return fmt.Errorf("read existing investigation result: %w", sanitizeError(err))
 	}
 	// P2 (Codex delta review, CHAOS-3755): the EXISTING stored row may
@@ -413,9 +409,6 @@ SELECT org_id, payload, semantic_state FROM acr.context_fabric_investigation_res
 	// it as a valid idempotent-replay target.
 	if err := rejectExplicitNullDegradedReasons(existingPayload); err != nil {
 		return fmt.Errorf("pginvestigation: stored investigation result %q is invalid: %w", resultID, err)
-	}
-	if existingOrgID != orgID {
-		return fmt.Errorf("pginvestigation: investigation result %q already exists under a different organization", resultID)
 	}
 	same, err := equivalentPayloads(existingPayload, payload)
 	if err != nil {

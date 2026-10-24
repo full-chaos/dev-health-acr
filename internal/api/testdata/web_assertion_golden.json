@@ -1,0 +1,143 @@
+{
+  "header_keys": [
+    "alg",
+    "kid",
+    "typ"
+  ],
+  "claim_keys": [
+    "aud",
+    "body_sha256",
+    "exp",
+    "iat",
+    "iss",
+    "jti",
+    "method",
+    "nbf",
+    "org_id",
+    "path",
+    "permissions",
+    "repository_scopes",
+    "sub"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "pattern": "/api/v1/agent-context/capabilities",
+      "path": "/api/v1/agent-context/capabilities",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/agent-context/context-packets",
+      "path": "/api/v1/agent-context/context-packets",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/v1/agent-context/evidence/{evidence_ref_id}",
+      "path": "/api/v1/agent-context/evidence/evidence-ref-00000001",
+      "scope": "evidence:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/investigations",
+      "path": "/api/v1/context-fabric/investigations",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/v1/context-fabric/investigations/{result_id}",
+      "path": "/api/v1/context-fabric/investigations/result-00000001",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/oauth/device_approval",
+      "path": "/api/v1/oauth/device_approval",
+      "scope": "credential:issue",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/authorize/consent",
+      "path": "/authorize/consent",
+      "scope": "credential:issue",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/agent-context/episodes",
+      "path": "/api/v1/agent-context/episodes",
+      "scope": "episode:write",
+      "web_assertion": false
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/v1/context-fabric/data/catalog",
+      "path": "/api/v1/context-fabric/data/catalog",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/data/subjects",
+      "path": "/api/v1/context-fabric/data/subjects",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/data/facts",
+      "path": "/api/v1/context-fabric/data/facts",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/data/operations",
+      "path": "/api/v1/context-fabric/data/operations",
+      "scope": "data:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/data/graphql",
+      "path": "/api/v1/context-fabric/data/graphql",
+      "scope": "data:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/data/relationships",
+      "path": "/api/v1/context-fabric/data/relationships",
+      "scope": "context:read",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/auth/credentials/self/rotate",
+      "path": "/api/v1/auth/credentials/self/rotate",
+      "scope": "",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/auth/credentials/self/revoke",
+      "path": "/api/v1/auth/credentials/self/revoke",
+      "scope": "",
+      "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/auth/credentials/self/ack",
+      "path": "/api/v1/auth/credentials/self/ack",
+      "scope": "",
+      "web_assertion": false
+    }
+  ]
+}
