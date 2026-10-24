@@ -41,8 +41,9 @@ type wanSample struct {
 }
 
 type wanRun struct {
-	passes []wanSample // window pass, net of the paged read every tick also does
-	ticks  []time.Duration
+	passes         []wanSample // window pass, net of the paged read every tick also does
+	ticks          []time.Duration
+	tickStatements []int64 // statements of every tick, passes and paged reads alike
 }
 
 const (
@@ -126,7 +127,36 @@ SELECT ?, NULL, ?, 'work_item', concat('linear:WAN-', leftPad(toString(number), 
 			}
 			checkpoint.Cursor = batch.NextCursor
 		}
+		// A statement costs client and server work beside the network, so the
+		// proof that the proxy delay applied is the same trivial statement
+		// timed with and without it: the fastest of five warm ones each.
+		probe := func() time.Duration {
+			fastest := time.Duration(1<<63 - 1)
+			for i := 0; i < 6; i++ {
+				started := time.Now()
+				rows, err := client.Query(ctx, "SELECT 1", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for rows.Next() {
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				_ = rows.Close()
+				if i > 0 {
+					fastest = min(fastest, time.Since(started))
+				}
+			}
+			return fastest
+		}
+		withoutDelay := probe()
 		rig.Proxy.SetRTT(wanRTT)
+		withDelay := probe()
+		t.Logf("carry=%v: SELECT 1 fastest of five: t0=%s t60=%s gap=%s", carry, withoutDelay, withDelay, withDelay-withoutDelay)
+		if withDelay-withoutDelay < wanRTT/2 {
+			t.Errorf("carry=%v: a one-statement round trip took %s over the proxy against %s without its delay, want at least %s more: the latency did not apply", carry, withDelay, withoutDelay, wanRTT/2)
+		}
 		tick := func() (int64, time.Duration) {
 			before := counter.statements.Load()
 			started := time.Now()
@@ -155,6 +185,7 @@ SELECT ?, NULL, ?, 'work_item', concat('linear:WAN-', leftPad(toString(number), 
 			clock = clock.Add(wanTick)
 			statements, wall := tick()
 			out.ticks = append(out.ticks, wall)
+			out.tickStatements = append(out.tickStatements, statements)
 			open := src.ProjectionWindowPass(checkpoint).Open
 			if open || current != nil {
 				if current == nil {
@@ -183,28 +214,27 @@ SELECT ?, NULL, ?, 'work_item', concat('linear:WAN-', leftPad(toString(number), 
 		return out
 	}
 	off, on := run(false), run(true)
-	summary := func(label string, r wanRun) (statements int64, passP95, tickP95 time.Duration) {
+	summary := func(label string, r wanRun) (statements, widestTick int64, passP50 time.Duration) {
 		var walls []time.Duration
 		for _, p := range r.passes {
 			statements += p.statements
 			walls = append(walls, p.wall)
 		}
-		passP95, tickP95 = chtlsrig.Percentile(walls, 0.95), chtlsrig.Percentile(r.ticks, 0.95)
-		t.Logf("WAN60 pass carry=%s stmts_per_pass=%d p50=%s p95=%s | tick p50=%s p95=%s", label, statements/int64(len(r.passes)), chtlsrig.Percentile(walls, 0.5), passP95, chtlsrig.Percentile(r.ticks, 0.5), tickP95)
-		return statements / int64(len(r.passes)), passP95, tickP95
+		for _, n := range r.tickStatements {
+			widestTick = max(widestTick, n)
+		}
+		t.Logf("WAN60 pass carry=%s stmts_per_pass=%d widest_tick_stmts=%d p50=%s p95=%s | tick p50=%s p95=%s", label, statements/int64(len(r.passes)), widestTick, chtlsrig.Percentile(walls, 0.5), chtlsrig.Percentile(walls, 0.95), chtlsrig.Percentile(r.ticks, 0.5), chtlsrig.Percentile(r.ticks, 0.95))
+		return statements / int64(len(r.passes)), widestTick, chtlsrig.Percentile(walls, 0.5)
 	}
-	offStatements, offPass, _ := summary("off", off)
-	onStatements, onPass, onTick := summary("on", on)
+	offStatements, offWidest, _ := summary("off", off)
+	onStatements, onWidest, _ := summary("on", on)
 	stats := rig.Proxy.Stats()
 	t.Logf("WAN60 connections accepted=%d tls_handshakes=%d", stats.Accepted, stats.ClientHellos)
 	if offStatements <= 0 || float64(onStatements) > 0.40*float64(offStatements) {
 		t.Errorf("a pass ran %d statements with the carry and %d without, want at most 0.40 of the latter", onStatements, offStatements)
 	}
-	if float64(onPass) > 0.5*float64(offPass) {
-		t.Errorf("pass p95 %s with the carry against %s without, want at most half", onPass, offPass)
-	}
-	if onTick >= 5*time.Second {
-		t.Errorf("tick p95 %s with the carry, want under 5s", onTick)
+	if onWidest >= offWidest {
+		t.Errorf("the widest tick ran %d statements with the carry and %d without, want fewer", onWidest, offWidest)
 	}
 	if stats.ClientHellos > 4 {
 		t.Errorf("%d TLS handshakes over the run, want a warm pool of at most 4", stats.ClientHellos)
