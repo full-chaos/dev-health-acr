@@ -108,11 +108,7 @@ func TestConstFixpointBounded(t *testing.T) {
 		{"B3 two names reference each other", "const a = \"s\"\nconst b = a + \"x\"\nconst a = b + \"y\"\nfunc f(v string) { _ = attribute.String(b, v) }\n"},
 	}
 	for _, row := range rows {
-		start := time.Now()
-		got := rules(scanSource(t, header+row.body))
-		if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-			t.Errorf("%s: took %s, want < 100ms", row.id, elapsed)
-		}
+		got := timed(t, row.id, 100*time.Millisecond, func() string { return rules(scanSource(t, header+row.body)) })
 		if !strings.Contains(got, "R1") {
 			t.Errorf("%s: rules = %q, want R1", row.id, got)
 		}
