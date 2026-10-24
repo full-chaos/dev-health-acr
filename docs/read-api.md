@@ -100,7 +100,7 @@ known incompatible client releases, not a security principal mechanism.
 
 Errors use `error.v1` and never include dependency errors, bearer values, goals,
 excerpts, repository candidates, or evidence handles. Server deadlines return
-retryable `504 upstream_unavailable`; assembler-owned evidence timeouts may
+retryable `504 upstream_unavailable`; for a Context Fabric investigation `error.details.deadline` is `model` when one model attempt reached `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` and `request` when `ACR_REQUEST_TIMEOUT` passed (a model timeout during synthesis, with retries used, is served as `status=degraded` with coverage class `model_call_not_completed`, not as a 504); assembler-owned evidence timeouts may
 instead produce a valid `200` degraded packet. Quota denials return `429` with a
 bounded `Retry-After` hint.
 

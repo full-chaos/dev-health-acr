@@ -2778,7 +2778,11 @@ func (r *Runtime) withRetryFor(ctx context.Context, fallbackFollows bool, fn fun
 		}
 		callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 		err := fn(callCtx)
+		modelTimedOut := errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		cancel()
+		if modelTimedOut && err != nil && errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("%w: %w", contextfabric.ErrModelTimeout, err)
+		}
 		record(attempt, started, err)
 		if err == nil {
 			return outcomes, nil
