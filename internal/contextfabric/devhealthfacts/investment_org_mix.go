@@ -47,8 +47,11 @@ type orgMixRow struct {
 	ResolvedEffort     float64
 	UnattributedEffort float64
 	EarliestUnit       time.Time
-	// UncategorizedUnits counts the evidence-gated units that reach a repository.
+	// UncategorizedUnits and CategorizedUnits split every unit in the window by the evidence gate, whether or not it
+	// reaches a repository (WorkUnits counts only the categorized units that do), so they sum to the units in the
+	// window and the share of the gated ones never exceeds 1.
 	UncategorizedUnits int64
+	CategorizedUnits   int64
 }
 
 // investmentSplitMaxMemoryUsage is the named per-statement memory limit of the
@@ -82,7 +85,8 @@ func orgMixStatement(bound factTimeBound) string {
 	sumIf(effort, win >= 0 AND repo_uuid != '' AND NOT gated) AS resolved_effort,
 	sumIf(effort, win >= 0 AND repo_uuid = '' AND NOT gated) AS unattributed_effort,
 	min(span_from) AS span_from,
-	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND gated) AS uncategorized_units
+	uniqExactIf(work_unit_id, win >= 0 AND gated) AS uncategorized_units,
+	uniqExactIf(work_unit_id, win >= 0 AND NOT gated) AS categorized_units
 FROM (
 	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated
 	FROM (
@@ -103,12 +107,13 @@ func (p *InvestmentProvider) readOrgMixRow(ctx context.Context, orgID string, bo
 		extra = append(extra, readers.Binding{Name: tb.Name, Value: tb.Value})
 	}
 	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadOrganizationThemeMix", orgMixStatement(bound), orgID, []string{}, func(row contextpacket.ClickHouseRowScanner) error {
-		var workUnits, sizedUnits, repositories, uncategorized uint64
+		var workUnits, sizedUnits, repositories, uncategorized, categorized uint64
 		var spanFrom time.Time
-		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &sizedUnits, &repositories, &out.ResolvedEffort, &out.UnattributedEffort, &spanFrom, &uncategorized); err != nil {
+		if err := row.Scan(&out.Theme, &out.Bugfix, &workUnits, &sizedUnits, &repositories, &out.ResolvedEffort, &out.UnattributedEffort, &spanFrom, &uncategorized, &categorized); err != nil {
 			return err
 		}
 		out.UncategorizedUnits = int64(uncategorized)
+		out.CategorizedUnits = int64(categorized)
 		out.EarliestUnit = spanFrom
 		out.WorkUnits = int64(workUnits)
 		out.SizedUnits = int64(sizedUnits)
@@ -160,7 +165,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 		t.theme = map[string]float64{}
 	}
 	total := t.total()
-	recordInvestmentUncategorized(ctx, own[0], t.workUnits, t.gatedUnits, false)
+	recordInvestmentUncategorized(ctx, own[0], row.CategorizedUnits, t.gatedUnits, false)
 	if total <= 0 && row.UnattributedEffort <= 0 {
 		return rejected, false, false, nil
 	}
@@ -179,7 +184,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 			investmentSizingFields(fields, total, t.workUnits, t.sizedUnits)
 		}
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(t.workUnits)
-		investmentUncategorizedFields(fields, t.workUnits, t.gatedUnits)
+		investmentUncategorizedFields(fields, row.CategorizedUnits, t.gatedUnits)
 		fields["scope"] = contextfabric.StringFactValue(orgMixScope)
 		fields["repositories_in_scope"] = contextfabric.IntegerFactValue(t.repos)
 		fields["unattributed_effort_share"] = contextfabric.NumberFactValue(roundMixEffort(unattributedShare))

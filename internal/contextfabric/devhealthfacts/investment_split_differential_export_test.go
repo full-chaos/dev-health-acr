@@ -256,7 +256,8 @@ func legacyOrganizationMixStatement(bound factTimeBound) string {
 	sumIf(effort, win >= 0 AND repo_uuid != '' AND NOT gated) AS resolved_effort,
 	sumIf(effort, win >= 0 AND repo_uuid = '' AND NOT gated) AS unattributed_effort,
 	min(span_from) AS span_from,
-	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND gated) AS uncategorized_units
+	uniqExactIf(work_unit_id, win >= 0 AND gated) AS uncategorized_units,
+	uniqExactIf(work_unit_id, win >= 0 AND NOT gated) AS categorized_units
 FROM (
 	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated
 	FROM (

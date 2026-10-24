@@ -146,7 +146,7 @@ func TestInvestmentMixStatementsKeepEvidenceGatedUnitsOutOfTheMix(t *testing.T) 
 			"groupUniqArrayIf(cityHash64(work_unit_id), win >= 0 AND NOT gated)", "AS uncategorized_unit_hashes",
 		}},
 		"organization mix": {orgMixStatement(bound), []string{
-			"win >= 0 AND repo_uuid != '' AND NOT gated", "AS uncategorized_units",
+			"win >= 0 AND repo_uuid != '' AND NOT gated", "AS uncategorized_units", "AS categorized_units",
 		}},
 		"team linked mix": {linkedPullRequestMixStatement(bound, subqueryMembershipScope, 10), []string{
 			"if(m.gated, 0., v * m.effort)", "AS uncategorized_unit_hashes",
@@ -339,7 +339,7 @@ func TestInvestmentOrganizationMixLeavesGatedUnitsOutAndSaysHowMany(t *testing.T
 	t.Parallel()
 	org := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: organizationPrefix + "org-1"}
 	client := &routeClient{routes: []route{{marker: "AS unattributed_effort", rows: [][]any{
-		{map[string]float64{"feature_delivery": 1, "risk": 1}, 0.0, uint64(2), uint64(0), uint64(1), 2.0, 0.0, uncategorizedAt, uint64(2)},
+		{map[string]float64{"feature_delivery": 1, "risk": 1}, 0.0, uint64(2), uint64(0), uint64(1), 2.0, 0.0, uncategorizedAt, uint64(2), uint64(2)},
 	}}}}
 	result := readInvestmentWith(t, client, org)
 	assertUncategorizedCoverage(t, "organization", investmentFactOf(result, org), 2, 2)
@@ -348,7 +348,7 @@ func TestInvestmentOrganizationMixLeavesGatedUnitsOutAndSaysHowMany(t *testing.T
 	}
 
 	client = &routeClient{routes: []route{{marker: "AS unattributed_effort", rows: [][]any{
-		{map[string]float64{}, 0.0, uint64(0), uint64(0), uint64(0), 0.0, 0.0, uncategorizedAt, uint64(3)},
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), uint64(0), 0.0, 0.0, uncategorizedAt, uint64(3), uint64(0)},
 	}}}}
 	result = readInvestmentWith(t, client, org)
 	if f := investmentFactOf(result, org); f != nil {
@@ -436,5 +436,61 @@ func TestInvestmentDeclaresTheUncategorizedCoverageFields(t *testing.T) {
 		if got := strings.Join(kinds, ","); got != "organization,project,repository,team" {
 			t.Errorf("%s declared for %s, want every investment subject kind", name, got)
 		}
+	}
+}
+
+func TestOrganizationStatementCountsEveryUnitOfTheWindowByTheGate(t *testing.T) {
+	t.Parallel()
+	statement := orgMixStatement(factTimeBound{})
+	for _, want := range []string{
+		"uniqExactIf(work_unit_id, win >= 0 AND gated) AS uncategorized_units",
+		"uniqExactIf(work_unit_id, win >= 0 AND NOT gated) AS categorized_units",
+	} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("the organization statement must split every unit of the window by the gate, including one with no repository reference; want %q in:\n%s", want, statement)
+		}
+	}
+}
+
+// An organization whose only in-window unit is gated and carries no repository reference (repo_uuid ”): the unit is
+// left out of the mix and counted, so the answer is no fact and the share-1 reason, never silence.
+func TestInvestmentOrganizationWhoseOnlyUnitIsGatedAndHasNoReferenceSaysShareIsOne(t *testing.T) {
+	t.Parallel()
+	org := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: organizationPrefix + "org-1"}
+	client := &routeClient{routes: []route{{marker: "AS unattributed_effort", rows: [][]any{
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), uint64(0), 0.0, 0.0, uncategorizedAt, uint64(1), uint64(0)},
+	}}}}
+	result := readInvestmentWith(t, client, org)
+	if f := investmentFactOf(result, org); f != nil {
+		t.Fatalf("an organization of one gated no-reference unit serves a fact: %#v", f.Fields)
+	}
+	got := servedReasons(result, org)
+	if !strings.Contains(got, "1 of 1 work units") || !strings.Contains(got, "uncategorized_unit_share is 1 and no theme mix is served") {
+		t.Errorf("reasons = %q, want 1 of 1 and the share-1 reason", got)
+	}
+}
+
+// Categorized and gated units that reach no repository: the denominator counts both, so the share is gated / all units
+// of the window and cannot pass 1 (here 1 of 3).
+func TestInvestmentOrganizationWithUnreferencedCategorizedAndGatedUnitsKeepsTheShareUnderOne(t *testing.T) {
+	t.Parallel()
+	org := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: organizationPrefix + "org-1"}
+	client := &routeClient{routes: []route{{marker: "AS unattributed_effort", rows: [][]any{
+		{map[string]float64{}, 0.0, uint64(0), uint64(0), uint64(0), 0.0, 2.0, uncategorizedAt, uint64(1), uint64(2)},
+	}}}}
+	result := readInvestmentWith(t, client, org)
+	fact := investmentFactOf(result, org)
+	if fact == nil {
+		t.Fatal("the unattributed effort is disclosed as a fact")
+	}
+	if got := *fact.Fields["uncategorized_unit_count"].Integer; got != 1 {
+		t.Errorf("uncategorized_unit_count = %d, want 1", got)
+	}
+	share := *fact.Fields["uncategorized_unit_share"].Number
+	if share > 1 || math.Abs(share-1.0/3.0) > 1e-9 {
+		t.Errorf("uncategorized_unit_share = %v, want 1/3 and never above 1", share)
+	}
+	if got := servedReasons(result, org); !strings.Contains(got, "1 of 3 work units") {
+		t.Errorf("reasons = %q, want 1 of 3", got)
 	}
 }

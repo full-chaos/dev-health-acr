@@ -122,6 +122,46 @@ func TestInvestmentLeavesEvidenceGatedUnitsOutAgainstRealClickHouse(t *testing.T
 	org := organizationSubject(orgID)
 	wantMix("organization", factFor(read(ctx, org), org), 4, 4.0/6.0)
 
+	// Units with no repository reference (the organization statement keeps them as unattributed rows): a gated one is
+	// still left out and counted, so an organization holding only such a gated unit says share 1, and one holding a
+	// categorized and a gated one says 1 of 2 and stays at or under 1.
+	seedNoReference := func(orgID, id, status string) {
+		t.Helper()
+		exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, categorization_status, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			id, at, at, 1.0, prior, map[string]float64{}, `{"issues":[],"prs":[]}`, status, at, orgID)
+	}
+	readOrg := func(orgID string) contextfabric.FactProviderResult {
+		t.Helper()
+		subject := organizationSubject(orgID)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		return result
+	}
+	seedNoReference("org-gated-noref", "nr1", "insufficient_evidence")
+	only := readOrg("org-gated-noref")
+	if len(only.Facts) != 0 {
+		t.Errorf("an organization of one gated no-reference unit serves a fact: %v", only.Facts[0].Fields)
+	}
+	if got := reasons(only, organizationSubject("org-gated-noref")); !strings.Contains(got, "1 of 1 work units") || !strings.Contains(got, "uncategorized_unit_share is 1") {
+		t.Errorf("gated no-reference organization reasons = %q", got)
+	}
+	seedNoReference("org-mixed-noref", "nr2", "ok")
+	seedNoReference("org-mixed-noref", "nr3", "no_text_sources")
+	mixedNoRef := readOrg("org-mixed-noref")
+	for _, f := range mixedNoRef.Facts {
+		share := *f.Fields["uncategorized_unit_share"].Number
+		if *f.Fields["uncategorized_unit_count"].Integer != 1 || share > 1 || math.Abs(share-0.5) > 1e-9 {
+			t.Errorf("mixed no-reference organization count/share = %v/%v, want 1 and 0.5", *f.Fields["uncategorized_unit_count"].Integer, share)
+		}
+	}
+	if len(mixedNoRef.Facts) == 0 {
+		t.Error("the unattributed categorized effort is disclosed as a fact")
+	}
+
 	for _, subject := range []contextfabric.SubjectRef{repoA, org} {
 		listing := read(contextfabric.WithInvestmentUnits(ctx, contextfabric.InvestmentUnitsRequest{Max: 50}), subject)
 		var shareSum, featureSum float64
