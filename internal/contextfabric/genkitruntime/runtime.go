@@ -1073,9 +1073,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// deadline); a final rejection is returned unchanged.
 	var totalUsage contextfabric.ModelUsage
 	var schemaOnlyRejection bool
+	var slowestDraw time.Duration
 	for draw := 0; ; draw++ {
 		decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
 		var drawOutcomes []attemptOutcome
+		drawStarted := r.now()
 		drawOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 			var err error
 			output, usage, err = r.generator.Interpret(callCtx, generationRequest{
@@ -1084,6 +1086,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			})
 			return err
 		})
+		slowestDraw = max(slowestDraw, r.now().Sub(drawStarted))
 		// Every draw's cost counts on the receipt, redrawn or not.
 		// The decision line's attempt list covers EVERY draw, renumbered
 		// continuously, so attempts_total agrees with receipt.Attempts.
@@ -1120,16 +1123,13 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		if err == nil || draw+1 >= maxDraws || ctx.Err() != nil {
 			break
 		}
-		// A redraw must leave room for itself AND the fallback leg, exactly
-		// as synthesis re-draws reserve (r.config.Timeout per call, doubled
-		// when a fallback exists): a redraw that eats the shared deadline
-		// would turn a rejection the fallback could have served into a
-		// deadline error. No deadline on ctx means no shared budget.
+		// A redraw must leave room for itself, the fallback leg and the steps
+		// after interpretation (see interpretRedrawReserve): a redraw that
+		// eats the shared deadline would turn a rejection the fallback could
+		// have served into a deadline error. No deadline on ctx means no
+		// shared budget.
 		if deadline, ok := ctx.Deadline(); ok {
-			reserved := r.config.Timeout
-			if r.config.Fallback != nil {
-				reserved *= 2
-			}
+			reserved := interpretRedrawReserve(r.config.Timeout, r.config.Fallback != nil, slowestDraw)
 			if time.Until(deadline) < reserved {
 				break
 			}
@@ -2230,8 +2230,24 @@ const synthesisRedrawFloor = 20 * time.Second
 // slice is not added here. It never exceeds the old gate (Config.Timeout,
 // doubled with a fallback), so a redraw the old gate allowed is still allowed.
 func synthesisRedrawReserve(timeout time.Duration, hasFallback bool, slowestDraw time.Duration) time.Duration {
+	return redrawReserve(timeout, hasFallback, slowestDraw, 0)
+}
+
+// interpretRedrawDownstream is the time an interpretation redraw must leave
+// for the steps after it: one synthesis draw at its floor, and the composition
+// reserve the synthesis caller withholds.
+const interpretRedrawDownstream = synthesisRedrawFloor + contextfabric.SynthesisCompositionReserveSeconds*time.Second
+
+// interpretRedrawReserve is synthesisRedrawReserve plus interpretRedrawDownstream.
+// Interpretation runs on the full request deadline, so nothing has been
+// withheld yet. The cap is still the old gate.
+func interpretRedrawReserve(timeout time.Duration, hasFallback bool, slowestDraw time.Duration) time.Duration {
+	return redrawReserve(timeout, hasFallback, slowestDraw, interpretRedrawDownstream)
+}
+
+func redrawReserve(timeout time.Duration, hasFallback bool, slowestDraw, downstream time.Duration) time.Duration {
 	ceiling, attempt := timeout, max(synthesisRedrawFloor, 2*slowestDraw)
-	reserved := attempt
+	reserved := attempt + downstream
 	if hasFallback {
 		ceiling *= 2
 		reserved += attempt
