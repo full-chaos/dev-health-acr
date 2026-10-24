@@ -35,6 +35,8 @@ func TestTermlessScopeMemberKindOnlyDecidesFromTheModelsOwnFrame(t *testing.T) {
 		{"a blank anchor term is not an empty list", `{"goals":["assess_state"],"subject_expression":{"kind":"children_of_scope","scoped":{"anchor_terms":[" "],"member_kind":"team"}}}`, ""},
 		{"a second defect (no member kind) keeps the refusal", `{"goals":["assess_state"],"subject_expression":{"kind":"children_of_scope","scoped":{}}}`, ""},
 		{"a second defect (invalid member kind)", `{"goals":["assess_state"],"subject_expression":{"kind":"children_of_scope","scoped":{"member_kind":"galaxy"}}}`, ""},
+		{"a second defect (status qualifier on team members)", `{"goals":["assess_state"],"subject_expression":{"kind":"children_of_scope","scoped":{"member_kind":"team","member_qualifier":"status","member_qualifier_value":"open"}}}`, ""},
+		{"a second defect (unknown member qualifier)", `{"goals":["assess_state"],"subject_expression":{"kind":"children_of_scope","scoped":{"member_kind":"team","member_qualifier":"colour"}}}`, ""},
 		{"a second defect (no goals)", `{"goals":[],"subject_expression":{"kind":"children_of_scope","scoped":{"member_kind":"team"}}}`, ""},
 		{"another kind is untouched", haikuTermlessFrame, ""},
 	} {
