@@ -56,6 +56,26 @@ func TestCarryCoverageFailsWhenATieOrAnArmIsNeverExercised(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the minimums are exact", func(t *testing.T) {
+		at := func(complete, nonEmpty int) carryCoverage {
+			var cov carryCoverage
+			for i := 0; i < complete; i++ {
+				result := full
+				result.NonEmpty = i < nonEmpty
+				cov.add(result)
+			}
+			return cov
+		}
+		if gaps := at(8, 5).gaps(arms); len(gaps) != 0 {
+			t.Fatalf("8 complete and 5 non-empty trials = %v, want no gap", gaps)
+		}
+		if gaps := at(7, 5).gaps(arms); !strings.Contains(strings.Join(gaps, "; "), "complete table") {
+			t.Fatalf("7 complete trials = %v, want the complete-table gap", gaps)
+		}
+		if gaps := at(8, 4).gaps(arms); !strings.Contains(strings.Join(gaps, "; "), "non-empty page") {
+			t.Fatalf("4 non-empty trials = %v, want the non-empty gap", gaps)
+		}
+	})
 	t.Run("skipped trials count for nothing", func(t *testing.T) {
 		var cov carryCoverage
 		for i := 0; i < 20; i++ {

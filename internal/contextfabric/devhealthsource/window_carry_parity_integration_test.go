@@ -111,7 +111,10 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 					t.Errorf("%s/%s %s: from %v to %v the carry holds %d rows, the statement returns %d:\n  carried %v\n  fetched %v", mode, producer.Name, label, c0, c1, len(result.Carried), len(result.Fetched), headKeys(result.Carried), headKeys(result.Fetched))
 				}
 			}
-			for n := 0; n < 40; n++ {
+			// 20 random trials per (mode, producer): two statement sets at 20
+			// match the 40 trials one set ran before, so the oracle's share of
+			// the heavy race half stays about where it was.
+			for n := 0; n < 20; n++ {
 				i, j := rng.Intn(len(positions)+1)-1, rng.Intn(len(positions))
 				if i > j {
 					i, j = j, i
