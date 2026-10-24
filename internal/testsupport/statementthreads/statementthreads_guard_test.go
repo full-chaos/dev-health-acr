@@ -23,6 +23,7 @@ var peakColumn = regexp.MustCompile(`(^|[^_A-Za-z])memory_usage\b`)
 var diagnosticPeakReads = map[string]string{
 	"internal/contextfabric/devhealthfacts/statement_memory_guard_integration_test.go:recentServerStatements":             "lists the last statements for a failure message",
 	"internal/contextfabric/devhealthfacts/team_project_reach_org_links_memory_integration_test.go:failedStatementsSince": "lists failed statements for a failure message",
+	"internal/contextfabric/devhealthsource/work_graph_label_integration_test.go:logRunTable":                             "logs every measured run with its threads and layout; it asserts nothing and a failing query only logs",
 }
 
 // peakReader is one function (declaration or literal) whose own string
