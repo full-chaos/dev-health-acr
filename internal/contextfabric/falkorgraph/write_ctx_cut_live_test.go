@@ -44,7 +44,11 @@ const (
 
 // classifyCut orders the three instants that make a cut: send < deadline < commit. The caller's return time is
 // not one of them: under load a caller returns late, which says nothing about the server.
-func classifyCut(sentMs, deadlineMs int64, landing probeLanding) cutVerdict {
+func classifyCut(sent, deadline time.Time, landing probeLanding) cutVerdict {
+	sentMs, deadlineMs := int64(0), deadline.UnixMilli()
+	if !sent.IsZero() {
+		sentMs = sent.UnixMilli()
+	}
 	switch {
 	case sentMs == 0 || sentMs >= deadlineMs:
 		return cutNeverSent
@@ -229,7 +233,7 @@ func (c *gatedConn) SetDeadline(t time.Time) error {
 func (c *gatedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if err == nil && c.gate.recording() {
-		c.gate.sentAt.CompareAndSwap(0, time.Now().UnixMilli())
+		c.gate.sentAt.CompareAndSwap(0, time.Now().UnixNano())
 		c.gate.writes.Add(1)
 		select {
 		case c.gate.sent <- struct{}{}:
@@ -301,7 +305,7 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 		if err := client.Conn.Ping(context.Background()).Err(); err != nil {
 			t.Fatalf("warm the recording client: %v", err)
 		}
-		errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedLate := 0, 0, 0, 0, 0, 0
+		errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit := 0, 0, 0, 0, 0, 0
 		for i := 0; i < runs; i++ {
 			run := fmt.Sprintf("deadline-%d", i)
 			gate.record()
@@ -310,7 +314,10 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			err := sendSlowProbe(ctx, client, key, run, n)
 			returnedMs := time.Now().UnixMilli()
 			cancel()
-			sentMs := gate.sentAt.Load()
+			sent := time.Time{}
+			if ns := gate.sentAt.Load(); ns != 0 {
+				sent = time.Unix(0, ns)
+			}
 			gate.open()
 			if err != nil {
 				errorsSeen++
@@ -325,14 +332,14 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			if landing.count == 1 {
 				single++
 			}
-			switch classifyCut(sentMs, deadline.UnixMilli(), landing) {
+			switch classifyCut(sent, deadline, landing) {
 			case cutMidCommand:
 				committedAfterCut++
 			case cutNeverSent:
-				t.Fatalf("run %d: the %v deadline expired before the write was sent (send stamp %d ms, deadline %d ms): the host was too loaded to measure a cut, which is not a failure of the cut", i, cut, sentMs, deadline.UnixMilli())
+				t.Fatalf("run %d: the %v deadline expired before the write was sent (send stamp %s, deadline %s): the host was too loaded to measure a cut, which is not a failure of the cut", i, cut, sent.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
 			}
 			if landing.atMs > returnedMs {
-				returnedLate++
+				returnedBeforeCommit++
 			}
 		}
 		time.Sleep(probe + 200*time.Millisecond)
@@ -341,8 +348,8 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 				t.Errorf("run %d landed %d times after settling, want exactly 1 (a deadline cut must not resend)", i, got)
 			}
 		}
-		t.Logf("write ctx deadline cut: runs=%d cut=%v probe=%v errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_after_commit=%d",
-			runs, cut, probe, errorsSeen, deadlineErrors, landed, single, committedAfterCut, runs-returnedLate)
+		t.Logf("write ctx deadline cut: runs=%d cut=%v probe=%v errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_before_commit=%d",
+			runs, cut, probe, errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit)
 		if errorsSeen != runs || deadlineErrors != runs || landed != runs || single != runs || committedAfterCut != runs {
 			t.Fatalf("want every cut run to return a deadline error AND land exactly once, sent before the deadline and committed after it: errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d of %d",
 				errorsSeen, deadlineErrors, landed, single, committedAfterCut, runs)
