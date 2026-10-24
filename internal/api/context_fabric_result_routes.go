@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"net/http"
 	"strconv"
 	"strings"
@@ -282,7 +283,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			a.logger.ErrorContext(r.Context(), "context fabric stored result states an unsupported satisfied requirement",
 				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 				"result_id", contextfabric.SanitizeLogAttr(result.ResultID),
-				"detail", contextfabric.SanitizeLogAttr(err.Error()))
+				"detail", telemetryscrub.ErrorClass(err))
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be served", false, nil)
 			return
 		}

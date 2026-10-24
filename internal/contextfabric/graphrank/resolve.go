@@ -339,6 +339,16 @@ type ResolveDeps struct {
 	// count-closure mismatch, malformed row) is captured AS a returned
 	// State value instead.
 	ConfirmedKindVectorCensus func(ctx context.Context, kind contextfabric.SubjectKind, terms []string) ConfirmedKindVectorCensusOutcome
+	// KindScopedSemantic (CHAOS-10941) is an optional kind-scoped semantic
+	// retrieval for a frame/receipt/caller-hinted repository/project/team
+	// kind: a paraphrase that shares no token with the node ("self-hosted CI
+	// executor setup repository") cannot reach it through any lexical arm,
+	// and the unscoped vector arm is crowded by high-population kinds and
+	// withheld on a historical axis. Its finds are OFFER-ONLY: they never
+	// enter candidatesBySubject, never commit, never register an identity
+	// claim (applyKindScopedSemanticOffers). nil = no-op, same convention as
+	// every optional hook here.
+	KindScopedSemantic func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
 	// VectorMarginCommitThreshold is CHAOS-3829's per-embedder-identity
 	// calibrated M (falkorgraph's retrieval_policy.go RetrievalPolicy.
 	// VectorMarginCommitThreshold): the vector-arm top-1/top-2 similarity
@@ -949,6 +959,16 @@ type ResolutionTraceEvent struct {
 	ConfirmedKindRescueFired       bool
 	ConfirmedKindRescueResultCount int
 	ConfirmedKindRescueTruncated   bool
+	// KindScopedSemanticResultCount/KindScopedSemanticTruncated/
+	// KindScopedSemanticAuthzDropped (stage=="kind_scoped_semantic" ONLY,
+	// CHAOS-10941) describe applyKindScopedSemanticOffers' own outcome:
+	// how many offer-only finds it returned (0 is a measured miss, not
+	// absence), whether the hook cut its own result at the limit, and how
+	// many finds authorization dropped. The event exists only when the arm
+	// actually ran.
+	KindScopedSemanticResultCount  int
+	KindScopedSemanticTruncated    bool
+	KindScopedSemanticAuthzDropped int
 	// KindOfferExplicitHintCount/KindOfferDistinctKindCount/
 	// KindOfferSuppressedByCardinality (stage=="kind_offer" ONLY,
 	// CHAOS-4012 v20) describe kindOfferMaterial's own suppression check
@@ -3921,6 +3941,33 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// which is exactly the artifact this rescue produces. Skipping it
 	// under offersOnly would silently withhold the low-population-kind
 	// offer from the one call whose entire purpose is building offers.
+	var kindScopedSemanticCandidates []contextfabric.SubjectCandidate
+	if confirmedKind == nil && len(resolution.Committed) == 0 {
+		if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
+			semantic, semanticErr := applyKindScopedSemanticOffers(ctx, principal, request, deps, terms, hinted, admission)
+			if semanticErr != nil {
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, semanticErr
+			}
+			if semantic.ran {
+				kindScopedSemanticCandidates = semantic.candidates
+				resolution.RetrievalDegraded = resolution.RetrievalDegraded || semantic.degraded
+				if semantic.traversalDegraded > 0 && deps.TraversalDegraded != nil {
+					deps.TraversalDegraded(ctx, principal.OrgID, semantic.traversalDegraded)
+				}
+				if semantic.authzDropped > 0 && deps.SubjectCandidatesAuthzDropped != nil {
+					deps.SubjectCandidatesAuthzDropped(ctx, principal.OrgID, semantic.authzDropped)
+				}
+				if deps.ResolutionTracer != nil {
+					deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+						RequestID: request.RequestID, Stage: "kind_scoped_semantic",
+						KindScopedSemanticResultCount:  len(semantic.candidates),
+						KindScopedSemanticTruncated:    semantic.truncated,
+						KindScopedSemanticAuthzDropped: semantic.authzDropped,
+					})
+				}
+			}
+		}
+	}
 	var lowPopulationOfferCandidates []contextfabric.SubjectCandidate
 	if confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
 		offered, offerErr := applyLowPopulationKindOffers(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, effectiveSearchLimit)
@@ -4081,6 +4128,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// trace loop immediately below is the one place that DID need its own
 	// dedup guard for this (fixed there, not here).
 	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
+	semanticStart := len(coverageCandidates)
+	coverageCandidates = append(coverageCandidates, kindScopedSemanticCandidates...)
 	// The coverage-floor and low-population finds reach the offer
 	// builders outside resolution.Candidates, so the offer floor applies to
 	// them here through the SAME classifier the resolution seam uses. The
@@ -4091,15 +4140,43 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	var offerFloorRows []OfferFloorRow
 	coverageAdmitted := make([]contextfabric.SubjectCandidate, 0, len(coverageCandidates))
-	for _, candidate := range coverageCandidates {
+	var semanticAdmitted []contextfabric.SubjectCandidate
+	for index, candidate := range coverageCandidates {
 		admission := offerAdmissionOf(candidate, offerFloorCommitted)
+		isSemantic := index >= semanticStart
+		if isSemantic && admission == OfferRefusedVectorOnly {
+			admission = OfferAdmittedKindScopedSemantic
+		}
 		offerFloorRows = append(offerFloorRows, offerFloorRow(candidate, admission))
-		if admission.Admitted() {
-			coverageAdmitted = append(coverageAdmitted, candidate)
+		if !admission.Admitted() {
 			continue
 		}
+		if isSemantic {
+			semanticAdmitted = append(semanticAdmitted, candidate)
+			continue
+		}
+		coverageAdmitted = append(coverageAdmitted, candidate)
 	}
+	// The semantic arm's admitted finds reach ONLY the candidate offer: they
+	// are held out of kindOfferCandidates, which also feeds the expected_kind
+	// offer, the handle offer, the pool-held kinds and the boundary telemetry,
+	// so the override cannot widen any of them.
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
+	candidateOfferInput := kindOfferCandidates
+	if len(semanticAdmitted) > 0 {
+		// Never outrank a non-vector candidate: non-vector candidates, then
+		// this arm's finds (strongest first), then any other vector-only
+		// candidate. The finds lead only when nothing else is offerable.
+		var nonVector, vectorOnly []contextfabric.SubjectCandidate
+		for _, candidate := range kindOfferCandidates {
+			if isVectorOnlyCandidate(candidate.MatchMechanisms) {
+				vectorOnly = append(vectorOnly, candidate)
+			} else {
+				nonVector = append(nonVector, candidate)
+			}
+		}
+		candidateOfferInput = unionCandidatesForOffer(unionCandidatesForOffer(nonVector, semanticAdmitted), vectorOnly)
+	}
 	// offerFullPool is the untruncated merged pool the kind offers read for
 	// "which kinds does the pool hold", held to the same floor.
 	offerFullPool := make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
@@ -4191,7 +4268,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// projection for the expected_kind axis alone -- the candidate-list
 	// axis's own top-five ranking is completely untouched by this phase
 	// (sol design consult's own explicit scope boundary).
-	candidateOffer, candidateOfferDiag := candidateOfferMaterial(kindOfferCandidates, len(resolution.Committed))
+	candidateOffer, candidateOfferDiag := candidateOfferMaterial(candidateOfferInput, len(resolution.Committed))
 	// CHAOS-4119: handleOfferMaterial now ALSO reads kindOfferCandidates --
 	// the SAME final pool kindOfferMaterial/candidateOfferMaterial already
 	// read (design brief precedent: "derived from the SAME final candidate

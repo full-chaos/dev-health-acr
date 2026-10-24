@@ -120,6 +120,8 @@ func goVarName(e Event) string {
 		return "KindCoverageFloor"
 	case ConfirmedKindRescue.ID:
 		return "ConfirmedKindRescue"
+	case KindScopedSemantic.ID:
+		return "KindScopedSemantic"
 	case IdentityUniverse.ID:
 		return "IdentityUniverse"
 	case KindHintSearch.ID:
