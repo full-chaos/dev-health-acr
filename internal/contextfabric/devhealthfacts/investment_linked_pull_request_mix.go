@@ -36,13 +36,14 @@ func linkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, l
 	linked := linkedPullRequestsSent
 	scope = scope.sentAsTable()
 	return withRowLimitOf(`SELECT lr.team_id AS team_id,
-	uniqExact(m.repo_uuid) AS repos,
-	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
-	sum(m.bugfix_share * m.effort) AS bugfix_effort,
-	arraySort(groupUniqArray(cityHash64(m.work_unit_id))) AS unit_hashes,
-	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), m.unit_issue_size > 0)) AS sized_unit_hashes
+	uniqExactIf(m.repo_uuid, NOT m.gated) AS repos,
+	sumMap(mapApply((k, v) -> (k, if(m.gated, 0., v * m.effort)), m.theme_distribution_json)) AS theme_effort,
+	sumIf(m.bugfix_share * m.effort, NOT m.gated) AS bugfix_effort,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), NOT m.gated)) AS unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), NOT m.gated AND m.unit_issue_size > 0)) AS sized_unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), m.gated)) AS uncategorized_unit_hashes
 FROM (
-	SELECT work_unit_id, repo_uuid, pr_number, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share
+	SELECT work_unit_id, repo_uuid, pr_number, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, gated
 	FROM (
 `+linkedPullRequestSplitRows(memberships, scope, linked)+`	)
 ) AS m
@@ -138,6 +139,7 @@ type linkedMixRow struct {
 	bugfix      float64
 	unitHashes  []uint64
 	sizedHashes []uint64
+	gatedHashes []uint64
 }
 
 // readLinkedPullRequestMix returns, per team with positive linked effort, the
@@ -150,17 +152,20 @@ func (p *InvestmentProvider) readLinkedPullRequestMix(ctx context.Context, orgID
 	}
 	out := map[string]*repoThemeTotals{}
 	for teamID, row := range rows {
-		t := &repoThemeTotals{theme: map[string]float64{}, bugfix: row.bugfix, repos: int64(row.repos), unitSet: map[uint64]struct{}{}, sizedUnitSet: map[uint64]struct{}{}}
+		t := &repoThemeTotals{theme: map[string]float64{}, bugfix: row.bugfix, repos: int64(row.repos), unitSet: map[uint64]struct{}{}, sizedUnitSet: map[uint64]struct{}{}, gatedUnitSet: map[uint64]struct{}{}}
 		for _, h := range row.unitHashes {
 			t.unitSet[h] = struct{}{}
 		}
 		for _, h := range row.sizedHashes {
 			t.sizedUnitSet[h] = struct{}{}
 		}
+		for _, h := range row.gatedHashes {
+			t.gatedUnitSet[h] = struct{}{}
+		}
 		for _, name := range canonicalInvestmentThemes {
 			t.theme[name] = row.theme[name]
 		}
-		if t.total() > 0 {
+		if t.total() > 0 || len(t.gatedUnitSet) > 0 {
 			out[teamID] = t
 		}
 	}
@@ -211,7 +216,7 @@ func (p *InvestmentProvider) readLinkedPullRequestMixRows(ctx context.Context, o
 		err = readers.QueryOrgScopedNamed(mixCtx, p.facts.client, "ReadTeamLinkedPullRequestMix", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 			var teamID string
 			var r linkedMixRow
-			if err := row.Scan(&teamID, &r.repos, &r.theme, &r.bugfix, &r.unitHashes, &r.sizedHashes); err != nil {
+			if err := row.Scan(&teamID, &r.repos, &r.theme, &r.bugfix, &r.unitHashes, &r.sizedHashes, &r.gatedHashes); err != nil {
 				return err
 			}
 			got++

@@ -14,7 +14,8 @@ import (
 )
 
 // legacySplitCore is the split as it stood before the latest-row tuple and
-// the requested-repository unit filter: the differential oracle's old side.
+// the requested-repository unit filter: the differential oracle's old side. It
+// carries the evidence gate like the new side, so the two still compare.
 func legacySplitCore(memberships []string, unitCols, unitAgg string, spanSentinel bool, scope membershipScope, perRef bool) string {
 	refCol, refGroup := "", ""
 	if perRef {
@@ -31,12 +32,13 @@ func legacySplitCore(memberships []string, unitCols, unitAgg string, spanSentine
 				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
 				any(parsed.theme_distribution_json) AS theme_distribution_json,
 				any(parsed.bugfix_share) AS bugfix_share,
-				any(parsed.span_from) AS span_from`+unitAgg+`
+				any(parsed.span_from) AS span_from,
+				any(parsed.gated) AS gated`+unitAgg+`
 			FROM (
-				SELECT work_unit_id, theme_distribution_json, bugfix_share, span_from, win,`+unitCols+`
+				SELECT work_unit_id, theme_distribution_json, bugfix_share, span_from, win, gated,`+unitCols+`
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
-					SELECT work_unit_id, repo_id, theme_distribution_json, from_ts AS span_from,`+unitCols+`
+					SELECT work_unit_id, repo_id, theme_distribution_json, from_ts AS span_from, gated,`+unitCols+`
 						ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0) AS bugfix_share,
 						`+wins+` AS wins,
 						arrayConcat(
@@ -55,7 +57,8 @@ func legacySplitCore(memberships []string, unitCols, unitAgg string, spanSentine
 							argMax(to_ts, computed_at) AS to_ts,
 							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
-							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
+							argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+							`+latestUnitGatedSQL+` AS gated
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}`+supersededWorkUnitIDsFilter()+scope.filter()+`
 						GROUP BY work_unit_id
@@ -83,18 +86,19 @@ func legacyRepoMixStatement(bounds []factTimeBound, scope membershipScope, limit
 		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
 	}
 	return withRowLimitOf(`SELECT toUInt8(if(win < 0, 255, win)) AS window, repo_uuid AS repo_id,
-	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
-	sum(bugfix_share * effort) AS bugfix_effort,
-	uniqExact(work_unit_id) AS work_units,
-	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0)) AS unit_hashes,
-	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0 AND unit_issue_size > 0)) AS sized_unit_hashes,
-	min(span_from) AS span_from
+	sumMap(mapApply((k, v) -> (k, if(gated, 0., v * effort)), theme_distribution_json)) AS theme_effort,
+	sumIf(bugfix_share * effort, NOT gated) AS bugfix_effort,
+	uniqExactIf(work_unit_id, NOT gated) AS work_units,
+	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0 AND NOT gated)) AS unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0 AND NOT gated AND unit_issue_size > 0)) AS sized_unit_hashes,
+	min(span_from) AS span_from,
+	arraySort(groupUniqArrayIf(cityHash64(work_unit_id), win >= 0 AND gated)) AS uncategorized_unit_hashes
 FROM (
-	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from
+			effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated
 		FROM (
 `+legacySplitCore(memberships, "", "", true, scope, false)+`		)
 	)
@@ -124,7 +128,7 @@ FROM (
 		FROM (
 ` + core + `		)
 	)
-	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
+	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)} AND NOT gated
 )
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
@@ -135,17 +139,18 @@ LIMIT {` + unitLimitParam + `:UInt32}`
 func legacyLinkedPullRequestMixStatement(bound factTimeBound, scope membershipScope, limit int) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
 	return withRowLimitOf(`SELECT lr.team_id AS team_id,
-	uniqExact(m.repo_uuid) AS repos,
-	sumMap(mapApply((k, v) -> (k, v * m.effort), m.theme_distribution_json)) AS theme_effort,
-	sum(m.bugfix_share * m.effort) AS bugfix_effort,
-	arraySort(groupUniqArray(cityHash64(m.work_unit_id))) AS unit_hashes,
-	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), m.unit_issue_size > 0)) AS sized_unit_hashes
+	uniqExactIf(m.repo_uuid, NOT m.gated) AS repos,
+	sumMap(mapApply((k, v) -> (k, if(m.gated, 0., v * m.effort)), m.theme_distribution_json)) AS theme_effort,
+	sumIf(m.bugfix_share * m.effort, NOT m.gated) AS bugfix_effort,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), NOT m.gated)) AS unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), NOT m.gated AND m.unit_issue_size > 0)) AS sized_unit_hashes,
+	arraySort(groupUniqArrayIf(cityHash64(m.work_unit_id), m.gated)) AS uncategorized_unit_hashes
 FROM (
-	SELECT work_unit_id, repo_uuid, pr_number, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share
+	SELECT work_unit_id, repo_uuid, pr_number, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, gated
 	FROM (
 		SELECT win, repo_uuid, pr_number, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, unit_issue_size, theme_distribution_json, bugfix_share
+			effort_value, unit_issue_size, theme_distribution_json, bugfix_share, gated
 		FROM (
 `+legacySplitCore(memberships, "", "", false, scope, true)+`		)
 	)
@@ -243,20 +248,21 @@ const unitsCore = ",\n\t\t\t\tany(parsed.from_ts) AS from_ts, any(parsed.to_ts) 
 func legacyOrganizationMixStatement(bound factTimeBound) string {
 	memberships := []string{fmt.Sprintf("if(%s, 0, -1)", mixWindowPredicate(0, bound))}
 	statement := `SELECT
-	sumMap(mapApply((k, v) -> (k, if(win >= 0 AND repo_uuid != '', v * effort, 0.)), theme_distribution_json)) AS theme_effort,
-	sumIf(bugfix_share * effort, win >= 0 AND repo_uuid != '') AS bugfix_effort,
-	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '') AS work_units,
-	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND unit_issue_size > 0) AS sized_units,
-	uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories,
-	sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort,
-	sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort,
-	min(span_from) AS span_from
+	sumMap(mapApply((k, v) -> (k, if(win >= 0 AND repo_uuid != '' AND NOT gated, v * effort, 0.)), theme_distribution_json)) AS theme_effort,
+	sumIf(bugfix_share * effort, win >= 0 AND repo_uuid != '' AND NOT gated) AS bugfix_effort,
+	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND NOT gated) AS work_units,
+	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND NOT gated AND unit_issue_size > 0) AS sized_units,
+	uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '' AND NOT gated) AS repositories,
+	sumIf(effort, win >= 0 AND repo_uuid != '' AND NOT gated) AS resolved_effort,
+	sumIf(effort, win >= 0 AND repo_uuid = '' AND NOT gated) AS unattributed_effort,
+	min(span_from) AS span_from,
+	uniqExactIf(work_unit_id, win >= 0 AND repo_uuid != '' AND gated) AS uncategorized_units
 FROM (
-	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated
 	FROM (
 		SELECT win, repo_uuid, work_unit_id, c,
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
-			effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from
+			effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated
 		FROM (
 ` + orgRefs(legacySplitCore(memberships, "", "", true, subqueryMembershipScope, false)) + `		)
 	)
@@ -292,7 +298,7 @@ FROM (
 		FROM (
 ` + core + `		)
 	)
-	WHERE win >= 0
+	WHERE win >= 0 AND NOT gated
 )` + keyset + `
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`

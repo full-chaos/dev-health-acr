@@ -171,10 +171,10 @@ func TestOrganizationStatementKeepsAUnitWithNoReferenceAsUnattributedEffort(t *t
 	// sum must leave them out, so each clause names the window test.
 	for _, clause := range []string{
 		"concat('unit:', work_unit_id)",
-		"sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort",
-		"sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort",
-		"uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories",
-		"if(win >= 0 AND repo_uuid != '', v * effort, 0.)",
+		"sumIf(effort, win >= 0 AND repo_uuid = '' AND NOT gated) AS unattributed_effort",
+		"sumIf(effort, win >= 0 AND repo_uuid != '' AND NOT gated) AS resolved_effort",
+		"uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '' AND NOT gated) AS repositories",
+		"if(win >= 0 AND repo_uuid != '' AND NOT gated, v * effort, 0.)",
 	} {
 		if !strings.Contains(statement, clause) {
 			t.Fatalf("the organization statement lost the clause %q", clause)

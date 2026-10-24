@@ -25,12 +25,14 @@ type investmentSpan struct {
 	byProject map[string]time.Time
 	org       time.Time
 	orgFound  bool
+	// uncategorized is each subject's gated-unit coverage, by fact subject key.
+	uncategorized map[string]uncategorizedCoverage
 }
 
 type investmentSpanKey struct{}
 
 func withInvestmentSpan(ctx context.Context) (context.Context, *investmentSpan) {
-	span := &investmentSpan{bySubject: map[string]time.Time{}, byProject: map[string]time.Time{}}
+	span := &investmentSpan{bySubject: map[string]time.Time{}, byProject: map[string]time.Time{}, uncategorized: map[string]uncategorizedCoverage{}}
 	return context.WithValue(ctx, investmentSpanKey{}, span), span
 }
 

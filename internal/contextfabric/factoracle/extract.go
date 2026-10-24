@@ -102,7 +102,7 @@ var extractTables = []tableSpec{
 	{Table: tableWorkUnitInvestments, Where: unitsInWindow, Rules: map[string]columnRule{
 		"work_unit_id": ruleWorkUnit, "from_ts": ruleKeep, "to_ts": ruleKeep, "repo_id": ruleUUID, "effort_value": ruleKeep,
 		"theme_distribution_json": ruleTaxonomyMap, "subcategory_distribution_json": ruleTaxonomyMap, "structural_evidence_json": ruleEvidence,
-		"computed_at": ruleKeep, "org_id": ruleOrg,
+		"categorization_status": ruleKeep, "computed_at": ruleKeep, "org_id": ruleOrg,
 	}},
 	{Table: tableWorkUnitSupersessions, Where: strings.Replace(unitsInWindow, "work_unit_id IN", "superseded_work_unit_id IN", 1), Rules: map[string]columnRule{
 		"org_id": ruleOrg, "superseded_work_unit_id": ruleWorkUnit, "superseded_at": ruleKeep,

@@ -23,7 +23,7 @@ import (
 //	sum(share_in_scope * unit_theme_X) / sum(share_in_scope) == theme_X
 //
 // of the fact the same read serves for the subject, over every page of the
-// listing. A unit that reaches several repositories has one row per
+// listing. An evidence-gated unit is in neither, so the tie holds. A unit that reaches several repositories has one row per
 // repository. Nothing here recomputes a category: every probability is the
 // unit's persisted theme_distribution_json value.
 
@@ -97,7 +97,7 @@ func investmentUnitsStatementFor(b factTimeBound, withCursor bool, scope members
 	if organization {
 		core = strings.Replace(core, repoRefsExpression+" AS refs",
 			"if(empty("+repoRefsExpression+"), "+orgNoRefUnit+", "+repoRefsExpression+") AS refs", 1)
-		rowFilter = "WHERE win >= 0"
+		rowFilter = "WHERE win >= 0 AND NOT gated"
 	}
 	keyset := ""
 	if withCursor {
