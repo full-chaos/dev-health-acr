@@ -494,3 +494,16 @@ func TestInvestmentOrganizationWithUnreferencedCategorizedAndGatedUnitsKeepsTheS
 		t.Errorf("reasons = %q, want 1 of 3", got)
 	}
 }
+
+// The organization listing filters on gated in a WHERE above the select that names its columns: a column the select
+// does not carry is an unknown identifier on a real ClickHouse (code 47), which no fake row can show.
+func TestOrganizationUnitListingSelectsTheGateColumnItFiltersOn(t *testing.T) {
+	t.Parallel()
+	statement := investmentOrgUnitsStatement(factTimeBound{}, false, subqueryMembershipScope)
+	if !strings.Contains(statement, "from_ts, to_ts, prs, gated\n") {
+		t.Errorf("the organization unit listing must select gated beside the columns it filters on:\n%s", statement)
+	}
+	if !strings.Contains(statement, "WHERE win >= 0 AND NOT gated") {
+		t.Errorf("the organization unit listing must leave gated units out:\n%s", statement)
+	}
+}
