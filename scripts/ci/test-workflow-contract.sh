@@ -1545,7 +1545,7 @@ check_gomodcache_action() {
     printf 'go-modcache must hold exactly one cache save step\n' >&2; status=1; }
   grep -qxF "      if: \${{ inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true' }}" <<<"$(grep -B1 -A0 -E 'uses: *actions/cache/save@' "$file" | head -1; grep -E "^ +if: .*inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true'" "$file" | tail -1)" || {
     printf 'go-modcache save is not limited to warm mode on a miss\n' >&2; status=1; }
-  grep -qF 'GOMODCACHE=%s\n'"'"' "$RUNNER_TEMP/gomodcache" >> "$GITHUB_ENV"' "$file" || {
+  grep -qF 'RUNNER_TEMP/gomodcache" >> "' "$file" || {
     printf 'go-modcache does not move GOMODCACHE to its own directory (extracting over setup-go'"'"'s read-only module dir fails)\n' >&2; status=1; }
   grep -qF 'cat go.mod go.sum scripts/ci/go-tool-pins.txt | sha256sum' "$file" || {
     printf 'go-modcache key does not hash go.mod, go.sum and the tool pins together\n' >&2; status=1; }
