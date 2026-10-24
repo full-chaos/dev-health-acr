@@ -221,3 +221,20 @@ func TestAForbiddenKindCannotBeAllowed(t *testing.T) {
 		t.Fatalf("a forbidden kind with an allow row must still fail, got %v", got)
 	}
 }
+
+// A dependency that does not type-check can hand the walk an invalid type, which reads as "not a net/http type" and
+// hides a site. A root that uses an object of such a dependency FAILS and names the dependency; a root that only
+// imports it for effect does not use any of its objects and is clean.
+func TestADependencyThatDoesNotTypeCheckFailsWhenARootUsesIt(t *testing.T) {
+	root := repopath.Root(t)
+	const base = fixturesBase + "/brokendep/"
+	_, problems, _ := scan(t, root, []string{base + "use"})
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "LOAD error in dependency "+base+"dep") {
+		t.Errorf("a root that uses a broken dependency must fail naming it, got %q", joined)
+	}
+	_, problems, _ = scan(t, root, []string{base + "blank"})
+	if len(problems) != 0 {
+		t.Errorf("a root that uses no object of the broken dependency must be clean, got %q", problems)
+	}
+}
