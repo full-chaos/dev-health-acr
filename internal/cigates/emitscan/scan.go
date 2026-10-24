@@ -40,7 +40,7 @@ const (
 	RuleIdentityHash  = "R7"  // bare digest of a value used as an emit attribute
 	RuleDotImport     = "R8"  // dot-import of a watched package: its calls cannot be matched
 	RuleLogKey        = "R9"  // slog key the scan cannot resolve to a constant: the key text is computed at run time
-	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, an unprovable kind is <key> (pinned with kind=<kind>)
+	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, a kind the static type does not fix is <key> (pinned with kind=<kind>), a package that does not type-check is refusal:typecheck (never pinnable); kinds come from go/types, read lazily on the first benign key of a package
 	RuleUnparsable    = "R0"  // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
 	maxConstValues    = 8    // folded values kept per constant name
@@ -149,6 +149,7 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 	var out []Finding
 	var sites []Site
 	byDir := map[string][]parsedFile{}
+	fset := token.NewFileSet()
 	files := 0
 	for _, dir := range dirs {
 		base := filepath.Join(root, dir)
@@ -178,7 +179,6 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 				out = append(out, Finding{Rule: RuleUnparsable, File: rel, Line: 1, Func: "-"})
 				return nil
 			}
-			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, rel, source, 0)
 			if err != nil {
 				out = append(out, Finding{Rule: RuleUnparsable, File: rel, Line: 1, Func: "-"})
@@ -199,7 +199,7 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		info := packageInfo(ctx, group)
+		info := packageInfo(ctx, root, group)
 		var found []Finding
 		for _, parsed := range group {
 			if err := ctx.Err(); err != nil {
@@ -300,9 +300,9 @@ type pkgInfo struct {
 	aliases     map[string][][2]string        // every watched constructor a name is ever bound to anywhere in the package, deduped
 	saturated   map[string]bool               // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
-	fieldKinds  map[string]string             // struct field name -> value kind every declaration of that name in the package agrees on ("mixed" when they differ)
-	declared    map[string]bool               // every name the package binds itself (types, functions, variables, parameters): a builtin spelling is the builtin only when absent
-	typeDecls   map[string]ast.Expr           // package type name -> the aliased type for an alias, nil for a defined type
+	root        string                        // the scan root: the module of the type-checked load is the nearest go.mod at or above it
+	group       []parsedFile                  // the files of the package directory, type-checked together on the first R10 need
+	typed       *typedPackage                 // the type-check of the package, made once and only when a benign key is read
 	budget      *budget
 }
 
@@ -333,7 +333,7 @@ func (p *pkgInfo) censusSites() []Site {
 	return out
 }
 
-func packageInfo(ctx context.Context, group []parsedFile) *pkgInfo {
+func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo {
 	nodes := 0
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
@@ -344,62 +344,12 @@ func packageInfo(ctx context.Context, group []parsedFile) *pkgInfo {
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, fieldKinds: map[string]string{}, declared: map[string]bool{}, typeDecls: map[string]ast.Expr{}, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
-			switch n := node.(type) {
-			case *ast.TypeSpec:
-				info.declared[n.Name.Name] = true
-				if n.Assign.IsValid() {
-					info.typeDecls[n.Name.Name] = n.Type
-				} else {
-					info.typeDecls[n.Name.Name] = nil
-				}
-				if ident, isIdent := n.Type.(*ast.Ident); isIdent && ident.Name == "string" {
-					info.stringTypes[n.Name.Name] = true
-				}
-			case *ast.FuncDecl:
-				if n.Recv == nil {
-					info.declared[n.Name.Name] = true
-				}
-			case *ast.ValueSpec:
-				for _, name := range n.Names {
-					info.declared[name.Name] = true
-				}
-			case *ast.AssignStmt:
-				if n.Tok == token.DEFINE {
-					for _, lhs := range n.Lhs {
-						if ident, isIdent := lhs.(*ast.Ident); isIdent {
-							info.declared[ident.Name] = true
-						}
-					}
-				}
-			case *ast.FuncType:
-				for _, list := range []*ast.FieldList{n.Params, n.Results} {
-					if list == nil {
-						continue
-					}
-					for _, field := range list.List {
-						for _, name := range field.Names {
-							info.declared[name.Name] = true
-						}
-					}
-				}
-			}
-			return true
-		})
-	}
-	for _, parsed := range group {
-		ast.Inspect(parsed.file, func(node ast.Node) bool {
-			if st, ok := node.(*ast.StructType); ok && info.budget.charge(1) {
-				for _, field := range st.Fields.List {
-					kind := info.typeKind(field.Type, 0)
-					for _, name := range field.Names {
-						if prev, seen := info.fieldKinds[name.Name]; seen && prev != kind {
-							kind = "mixed"
-						}
-						info.fieldKinds[name.Name] = kind
-					}
+			if spec, ok := node.(*ast.TypeSpec); ok {
+				if ident, isIdent := spec.Type.(*ast.Ident); isIdent && ident.Name == "string" {
+					info.stringTypes[spec.Name.Name] = true
 				}
 			}
 			return true
@@ -942,7 +892,7 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	case *ast.CompositeLit:
 		s.attrLiteral(fn)
 		if isAnySlice(fn.Type) {
-			s.benignPairs(fn.Elts, 0)
+			s.benignPairs(fn.Elts, 0, fn)
 		}
 	}
 	return s
@@ -1007,34 +957,10 @@ func (s *fileScan) attrFields(lit *ast.CompositeLit) {
 		return
 	}
 	s.logKey(key, value, lit.Pos())
-	s.benignPair(key, s.attrValueKind(value), lit.Pos())
+	s.benignPair(key, func() (string, bool) { return s.attrValueKind(value) }, lit.Pos())
 	if value != nil {
 		s.emitValue(value, lit.Pos())
 	}
-}
-
-// attrValueKind is the kind of the slog.Value an Attr literal holds when it is built by a typed slog constructor;
-// anything else (a variable, slog.AnyValue, a missing value) is "" (unprovable).
-func (s *fileScan) attrValueKind(value ast.Expr) string {
-	call, ok := value.(*ast.CallExpr)
-	if !ok {
-		return ""
-	}
-	if pkg, name, found := s.qualified(call.Fun); found && pkg == "slog" {
-		switch name {
-		case "StringValue":
-			return "string"
-		case "IntValue", "Int64Value":
-			return "int"
-		case "BoolValue":
-			return "bool"
-		case "Uint64Value":
-			return "uint"
-		case "Float64Value":
-			return "float"
-		}
-	}
-	return ""
 }
 
 func (s *fileScan) tainted(name string) bool {
@@ -1420,7 +1346,7 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 
 func (s *fileScan) call(call *ast.CallExpr) {
 	if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "append" && len(call.Args) >= 2 {
-		s.benignPairs(call.Args, 1)
+		s.benignPairs(call.Args, 1, ident)
 	}
 	if key, value, ok := s.attrParts(call); ok {
 		s.attribute(call, key, value)
@@ -1437,7 +1363,7 @@ func (s *fileScan) callTarget(call *ast.CallExpr, pkg, name string) {
 	switch {
 	case pkg == "slog" && slogAttrConstructors[name] && len(call.Args) >= 2:
 		s.logKey(call.Args[0], call.Args[1], call.Pos())
-		s.benignPair(call.Args[0], slogConstructorKind(name), call.Pos())
+		s.benignPair(call.Args[0], func() (string, bool) { return slogConstructorKind(name), true }, call.Pos())
 		s.emitValue(call.Args[1], call.Pos())
 	case pkg == "metric" && name == "WithAttributes":
 		s.metricAttributes(call)
@@ -1524,7 +1450,8 @@ func (s *fileScan) logKeys(args []ast.Expr, from int) {
 		}
 		if i+1 < len(args) {
 			s.logKey(args[i], args[i+1], args[i].Pos())
-			s.benignPair(args[i], s.valueKind(args[i+1]), args[i].Pos())
+			value := args[i+1]
+			s.benignPair(args[i], func() (string, bool) { return s.kindOf(value) }, args[i].Pos())
 		} else {
 			s.logKey(args[i], nil, args[i].Pos())
 		}
@@ -1918,45 +1845,6 @@ func (s *fileScan) discardsOutput(call *ast.CallExpr) bool {
 	return ok && s.imports[ident.Name] == "io"
 }
 
-// typeKind is the slog value kind a Go type expression boxes to: "int" (int..int64), "bool", "string", "uint",
-// "float", or "other" for a defined type, pointer or anything else (slog.Any keeps those as KindAny). A package alias
-// takes the kind of its target; a name the package does not declare and Go does not predeclare is "" (unprovable).
-func (p *pkgInfo) typeKind(expr ast.Expr, depth int) string {
-	ident, ok := expr.(*ast.Ident)
-	if !ok {
-		return "other"
-	}
-	if target, isType := p.typeDecls[ident.Name]; isType {
-		if target == nil {
-			return "other"
-		}
-		if depth > 8 {
-			return ""
-		}
-		return p.typeKind(target, depth+1)
-	}
-	if p.declared[ident.Name] {
-		return ""
-	}
-	return builtinKind(ident.Name)
-}
-
-func builtinKind(name string) string {
-	switch name {
-	case "int", "int8", "int16", "int32", "int64":
-		return "int"
-	case "bool":
-		return "bool"
-	case "string":
-		return "string"
-	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
-		return "uint"
-	case "float32", "float64":
-		return "float"
-	}
-	return ""
-}
-
 func slogConstructorKind(name string) string {
 	switch name {
 	case "Int", "Int64":
@@ -1985,96 +1873,82 @@ func isAnySlice(expr ast.Expr) bool {
 	return false
 }
 
-// valueKind is the kind an expression boxes to when it is passed as a loose slog argument, read from the syntax
-// alone: literals, conversions, comparisons and struct fields of the package. "" means the scan cannot tell.
-func (s *fileScan) valueKind(expr ast.Expr) string {
-	if !s.pkg.budget.charge(1) {
-		return ""
-	}
-	switch e := expr.(type) {
-	case *ast.ParenExpr:
-		return s.valueKind(e.X)
-	case *ast.BasicLit:
-		switch e.Kind {
-		case token.INT, token.CHAR:
-			return "int"
-		case token.STRING:
-			return "string"
-		case token.FLOAT:
-			return "float"
-		}
-	case *ast.Ident:
-		if (e.Name == "true" || e.Name == "false") && !s.pkg.declared[e.Name] {
-			return "bool"
-		}
-	case *ast.UnaryExpr:
-		if e.Op == token.NOT {
-			return "bool"
-		}
-		if e.Op == token.SUB || e.Op == token.ADD {
-			return s.valueKind(e.X)
-		}
-	case *ast.BinaryExpr:
-		switch e.Op {
-		case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ, token.LAND, token.LOR:
-			return "bool"
-		case token.ADD, token.SUB, token.MUL, token.QUO, token.REM:
-			left, right := s.valueKind(e.X), s.valueKind(e.Y)
-			if left != "" && left == right {
-				return left
-			}
-		}
-	case *ast.CallExpr:
-		if ident, ok := e.Fun.(*ast.Ident); ok && !s.pkg.declared[ident.Name] {
-			switch ident.Name {
-			case "len", "cap":
-				return "int"
-			default:
-				if kind := builtinKind(ident.Name); kind != "" && len(e.Args) == 1 {
-					return kind
-				}
-			}
-		}
-	case *ast.SelectorExpr:
-		if recv, isIdent := e.X.(*ast.Ident); isIdent {
-			if _, imported := s.imports[recv.Name]; imported {
-				return ""
-			}
-		}
-		if kind, ok := s.pkg.fieldKinds[e.Sel.Name]; ok && kind != "mixed" {
-			return kind
-		}
-	}
-	return ""
-}
-
 // benignPairs reads loose key/value arguments the way slog does (an slog.Attr item is one argument) in a []any
-// literal or an append call.
-func (s *fileScan) benignPairs(args []ast.Expr, from int) {
+// literal or an append call. shape is the literal or the callee, checked against the type information only when a
+// benign key is present: the literal must be a []any and the callee the builtin append.
+func (s *fileScan) benignPairs(args []ast.Expr, from int, shape ast.Expr) {
+	verified := 0
 	for i := from; i+1 < len(args); i++ {
 		if s.isAttrItem(args[i]) {
 			continue
 		}
-		s.benignPair(args[i], s.valueKind(args[i+1]), args[i].Pos())
+		key, value := args[i], args[i+1]
 		i++
+		if len(s.benignKeys(key)) == 0 {
+			continue
+		}
+		if verified == 0 {
+			verified = 1
+			if ok, valid := s.pairSource(shape); !valid {
+				s.add(RuleBenignKind, key.Pos(), refusalDetail)
+				return
+			} else if !ok {
+				verified = -1
+			}
+		}
+		if verified < 0 {
+			return
+		}
+		s.benignPair(key, func() (string, bool) { return s.kindOf(value) }, key.Pos())
 	}
+}
+
+// benignKeys lists the literal keys among a key expression that the scrubber exempts for one value kind.
+func (s *fileScan) benignKeys(keyExpr ast.Expr) []string {
+	keys, literal, over := s.keysOf(keyExpr)
+	if !literal || over {
+		return nil
+	}
+	var out []string
+	for _, key := range keys {
+		if telemetryscrub.BenignKind(key) != "" {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // benignPair checks a key the scrubber exempts for one value kind against the kind of its value: a provably other
 // kind is mismatch:<key> (never pinnable), a kind the scan cannot prove is <key> (pinned, with kind=<kind> in the reason).
-func (s *fileScan) benignPair(keyExpr ast.Expr, got string, pos token.Pos) {
-	keys, literal, over := s.keysOf(keyExpr)
-	if !literal || over {
+// A package that does not type-check, or an expression without a valid type, is refusal:typecheck: never pinnable.
+func (s *fileScan) benignPair(keyExpr ast.Expr, kind func() (string, bool), pos token.Pos) {
+	keys := s.benignKeys(keyExpr)
+	if len(keys) == 0 {
 		return
 	}
+	got, ok := kind()
+	if !ok {
+		s.add(RuleBenignKind, pos, refusalDetail)
+		return
+	}
+	possible := strings.Split(got, ",")
 	for _, key := range keys {
 		want := telemetryscrub.BenignKind(key)
 		switch {
-		case want == "" || got == want:
-		case got == "":
+		case got == want:
+		case got == "" || containsKind(possible, want):
 			s.add(RuleBenignKind, pos, key)
 		default:
 			s.add(RuleBenignKind, pos, "mismatch:"+key)
 		}
 	}
+}
+
+func containsKind(kinds []string, want string) bool {
+	for _, kind := range kinds {
+		if kind == want {
+			return true
+		}
+	}
+	return false
 }

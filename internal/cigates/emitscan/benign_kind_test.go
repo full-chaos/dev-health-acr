@@ -61,14 +61,20 @@ func f(l *slog.Logger, e ev) { l.Info("m", "pass", e.Pass) }`, "mismatch:pass"},
 		{"uint field in an any slice", `type ev struct{ Batches uint }
 func f(e ev) []any { return []any{"authorization_batches", e.Batches} }`, "mismatch:authorization_batches"},
 		{"uint in an append", `func f(args []any) []any { return append(args, "pass", uint8(1)) }`, "mismatch:pass"},
-		{"unknown call result", `func g() int { return 1 }
+		{"int call result is typed", `func g() int { return 1 }
+func f(l *slog.Logger) { l.Info("m", "pass", g()) }`, ""},
+		{"any call result is unprovable", `func g() any { return 1 }
 func f(l *slog.Logger) { l.Info("m", "pass", g()) }`, "pass"},
-		{"unknown variable", `func f(l *slog.Logger, n int) { x := n; l.Info("m", "pass", x) }`, "pass"},
-		{"field name declared with two kinds", `type a struct{ N int }
+		{"typed local variable", `func f(l *slog.Logger, n int) { x := n; l.Info("m", "pass", x) }`, ""},
+		{"interface variable is unprovable", `func f(l *slog.Logger, v any) { l.Info("m", "pass", v) }`, "pass"},
+		{"error value is unprovable", `func f(l *slog.Logger, err error) { l.Info("m", "pass", err) }`, "pass"},
+		{"field name declared with two kinds resolves by receiver", `type a struct{ N int }
 type b struct{ N uint }
-func f(l *slog.Logger, e a) { l.Info("m", "pass", e.N) }`, "pass"},
-		{"field of a struct the package does not declare", `func f(l *slog.Logger, r struct{ Count int }) { l.Info("m", "pass", r.Other) }`, "pass"},
-		{"arithmetic of unknowns", `func f(l *slog.Logger, a, b int) { l.Info("m", "pass", a+b) }`, "pass"},
+func f(l *slog.Logger, e a, g b) { l.Info("m", "pass", e.N); l.Info("m", "pass", g.N) }`, "mismatch:pass"},
+		{"field of an anonymous struct", `func f(l *slog.Logger, r struct{ Count int }) { l.Info("m", "pass", r.Count) }`, ""},
+		{"arithmetic of ints", `func f(l *slog.Logger, a, b int) { l.Info("m", "pass", a+b) }`, ""},
+		{"untyped constant expression", `func f(l *slog.Logger) { l.Info("m", "pass", 1<<3) }`, ""},
+		{"rune literal boxes as an int", `func f(l *slog.Logger) { l.Info("m", "pass", 'a') }`, ""},
 		{"non-benign key with an unsigned value", `func f(l *slog.Logger) { l.Info("m", "count", uint(1)) }`, ""},
 		{"benign word as a value, not a key", `func f() []any { return []any{"note", "pass"} }`, ""},
 		{"lone key without a value", `func f() []any { return []any{"pass"} }`, ""},
@@ -77,9 +83,9 @@ func f(l *slog.Logger, e a) { l.Info("m", "pass", e.N) }`, "pass"},
 		{"Attr literal with the right value kind", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "authorization_batches", Value: slog.IntValue(1)}) }`, ""},
 		{"Attr literal with an unknown value constructor", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "pass", Value: slog.AnyValue(1)}) }`, "pass"},
 		{"shadowed int function is not the builtin", `func int(x int8) bool { return true }
-func f(l *slog.Logger) { l.Info("m", "authorization_batches", int(1)) }`, "authorization_batches"},
+func f(l *slog.Logger) { l.Info("m", "authorization_batches", int(1)) }`, "mismatch:authorization_batches"},
 		{"shadowed len function is not the builtin", `func len(x []int) bool { return true }
-func f(l *slog.Logger, x []int) { l.Info("m", "authorization_batches", len(x)) }`, "authorization_batches"},
+func f(l *slog.Logger, x []int) { l.Info("m", "authorization_batches", len(x)) }`, "mismatch:authorization_batches"},
 		{"package-qualified selector is not a package field", `type ev struct{ DeadlineExceeded int }
 var _ ev
 func f(l *slog.Logger) { l.Info("m", "pass", context.DeadlineExceeded) }`, "pass"},
@@ -95,8 +101,40 @@ func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }
 		{"uint alias field is a mismatch", `type counter = uint
 type ev struct{ Batches counter }
 func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, "mismatch:authorization_batches"},
-		{"field of an undeclared named type is unprovable", `type ev struct{ Batches elsewhere }
-func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, "authorization_batches"},
+		{"field of an undeclared named type is a refusal", `type ev struct{ Batches elsewhere }
+func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, "refusal:typecheck"},
+		{"method value collides with a field name", `type a struct{ Pass int }
+type b struct{}
+func (b) Pass() {}
+var _ a
+func f(l *slog.Logger, x b) { l.Info("m", "pass", x.Pass) }`, "mismatch:pass"},
+		{"package-qualified error variable is unprovable", `type ev struct{ DeadlineExceeded int }
+var _ ev
+func f(l *slog.Logger) { l.Info("m", "pass", context.DeadlineExceeded) }`, "pass"},
+		{"receiver named int shadows the builtin", `type conv func(int8) uint
+func (int conv) use(l *slog.Logger) { l.Info("m", "pass", int(1)) }`, "mismatch:pass"},
+		{"type parameter named int shadows the builtin", `func g[int ~uint8](l *slog.Logger, v int) { l.Info("m", "pass", v) }`, "mismatch:pass"},
+		{"type parameter that may be an int is unprovable", `func g[T ~int | ~uint8](l *slog.Logger, v T) { l.Info("m", "pass", v) }`, "pass"},
+		{"type parameter that is exactly int", `func g[T int](l *slog.Logger, v T) { l.Info("m", "pass", v) }`, ""},
+		{"conversion to a defined type", `type count int
+func f(l *slog.Logger) { l.Info("m", "pass", count(1)) }`, "mismatch:pass"},
+		{"conversion to a uint alias", `type counter = uint
+func f(l *slog.Logger) { l.Info("m", "pass", counter(1)) }`, "mismatch:pass"},
+		{"conversion to an int alias", `type counter = int
+func f(l *slog.Logger) { l.Info("m", "pass", counter(1)) }`, ""},
+		{"builtin name redeclared as a uint alias", `type int = uint
+func f(l *slog.Logger) { l.Info("m", "pass", int(1)) }`, "mismatch:pass"},
+		{"alias declared in another place of the package", `func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }
+type ev struct{ Batches counter }
+type counter = int`, ""},
+		{"parenthesized wrong slog.Value constructor", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "pass", Value: (slog.StringValue("x"))}) }`, "mismatch:pass"},
+		{"Attr literal with a group value", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "pass", Value: slog.GroupValue()}) }`, "mismatch:pass"},
+		{"Attr literal with a Value variable is unprovable", `func f(l *slog.Logger, v slog.Value) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "pass", Value: v}) }`, "pass"},
+		{"user-defined append is not the builtin", `func append(a []any, b ...any) []any { return a }
+func f(args []any) []any { return append(args, "pass", uint8(1)) }`, ""},
+		{"slice that is not []any is not a pair list", `func f() []string { return []string{"pass", "x"} }`, ""},
+		{"any redeclared as string makes the slice a []string", `type any = string
+func f() []any { return []any{"pass", "x"} }`, ""},
 		{"key in a map is not a log pair", `func f() map[string]int { return map[string]int{"pass": 1} }`, ""},
 	}
 	for _, c := range cases {
@@ -176,11 +214,11 @@ func hasKindToken(reason, token string) bool {
 		if at < 0 {
 			return false
 		}
-		end := from + at + len(token)
-		if end == len(reason) || !isTokenChar(reason[end]) {
+		start, end := from+at, from+at+len(token)
+		if (start == 0 || !isTokenChar(reason[start-1])) && (end == len(reason) || !isTokenChar(reason[end])) {
 			return true
 		}
-		from = end
+		from = start + 1
 	}
 }
 
@@ -190,10 +228,68 @@ func isTokenChar(b byte) bool {
 
 func TestKindTokenIsExact(t *testing.T) {
 	for reason, want := range map[string]bool{
-		"x kind=string": true, "kind=string: y": true, "kind=string y": true, "(kind=string)": true, "kind=stringbogus": false, "kind=strings": false, "no token": false,
+		"x kind=string": true, "kind=string: y": true, "kind=string y": true, "(kind=string)": true, "notkind=string": false, "x_kind=string": false, "kind=stringbogus": false, "kind=strings": false, "no token": false,
 	} {
 		if got := hasKindToken(reason, "kind=string"); got != want {
 			t.Errorf("hasKindToken(%q) = %v want %v", reason, got, want)
+		}
+	}
+}
+
+func scanBenignFiles(t *testing.T, files map[string]string) []emitscan.Finding {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "sample")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	findings, err := emitscan.Scan(root, []string{"internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return findings
+}
+
+func TestBenignKindRefusesWhatItCannotType(t *testing.T) {
+	pair := `func f(l *slog.Logger) { l.Info("m", "pass", 3) }` + "\n"
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"unresolvable import", map[string]string{"a.go": "package sample\n\nimport (\n\t\"log/slog\"\n\t\"example.invalid/nothing\"\n)\n\nvar _ = nothing.X\n" + pair}, "refusal:typecheck"},
+		{"undefined name", map[string]string{"a.go": header + pair + "var _ = undefinedName\n"}, "refusal:typecheck"},
+		{"unused variable", map[string]string{"a.go": header + pair + "func g() { x := 1 }\n"}, "refusal:typecheck"},
+		{"sibling file does not type-check", map[string]string{"a.go": header + pair, "b.go": "package sample\n\nvar _ = missing\n"}, "refusal:typecheck"},
+		{"mixed package names", map[string]string{"a.go": header + pair, "b.go": "package other\n"}, "refusal:typecheck"},
+		{"file the build context drops holds the pair", map[string]string{"a.go": header, "b.go": "//go:build ignore\n\npackage sample\n\nimport \"log/slog\"\n\n" + pair}, "refusal:typecheck"},
+		{"control: the same package type-checks", map[string]string{"a.go": header + pair, "b.go": "package sample\n\nvar _ = 1\n"}, ""},
+		{"control: a broken package with no benign key is not loaded", map[string]string{"a.go": header + `func f(l *slog.Logger) { l.Info("m", "count", 3) }` + "\nvar _ = undefinedName\n"}, ""},
+	}
+	for _, c := range cases {
+		if got := benignDetails(scanBenignFiles(t, c.files)); got != c.want {
+			t.Errorf("%s: R10 details %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestWrongKindIsNeverPinnable(t *testing.T) {
+	findings := scanSource(t, header+`func f(l *slog.Logger, v uint) { l.Info("m", "pass", v) }`+"\n")
+	if got := benignDetails(findings); got != "mismatch:pass" {
+		t.Fatalf("a uint value of an int key: R10 details %q want mismatch:pass", got)
+	}
+	pinnable := map[string]bool{}
+	for _, key := range []string{"pass", "coverage_bypass", "authorization_batches"} {
+		pinnable[key] = telemetryscrub.BenignKind(key) != ""
+	}
+	for _, finding := range findings {
+		if finding.Rule == emitscan.RuleBenignKind && pinnable[finding.Detail] {
+			t.Errorf("finding %q could be silenced by a kind=int pin of the key", finding.Detail)
 		}
 	}
 }
