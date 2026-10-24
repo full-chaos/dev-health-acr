@@ -1,6 +1,9 @@
 package eventspec
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -21,11 +24,28 @@ func TestProtectedLookingEventKeysAreTypedBenign(t *testing.T) {
 	}
 }
 
-func TestAuthorizationReasonVocabularyScrubsClean(t *testing.T) {
+func TestAuthorizationReasonVocabularyIsTheClosedValueSetOfTheLogKey(t *testing.T) {
 	t.Parallel()
 	for _, v := range contextfabric.StoredResultAuthorizationReasonVocabulary() {
-		if got := telemetryscrub.ScrubText(string(v)); got != string(v) {
-			t.Errorf("%q scrubs to %q", v, got)
+		var buf bytes.Buffer
+		slog.New(telemetryscrub.Handler(slog.NewJSONHandler(&buf, nil))).Info("m", "authorization_reason", string(v))
+		var out map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["authorization_reason"] != string(v) {
+			t.Errorf("%q logs as %v", v, out["authorization_reason"])
+		}
+	}
+	for _, v := range []string{"", "not_a_reason", "Bearer abcdefgh1", "pq: password authentication failed"} {
+		var buf bytes.Buffer
+		slog.New(telemetryscrub.Handler(slog.NewJSONHandler(&buf, nil))).Info("m", "authorization_reason", v)
+		var out map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["authorization_reason"] != telemetryscrub.Redacted {
+			t.Errorf("%q logs as %v", v, out["authorization_reason"])
 		}
 	}
 }

@@ -85,6 +85,34 @@ var typedBenignKeys = map[string]string{
 	"authorizationreason":                     "string",
 }
 
+var (
+	closedValuesMu sync.RWMutex
+	closedValues   = map[string]map[string]bool{}
+)
+
+// RegisterClosedValues sets the exact values a string-kind typed benign key may carry; any other value of
+// that key stays redacted, and a string-kind key with no registered set is always redacted. The owner of
+// the vocabulary calls it from init, so the set has one source.
+func RegisterClosedValues(key string, values []string) {
+	c := compact(key)
+	if typedBenignKeys[c] != "string" {
+		panic("telemetryscrub: " + key + " is not a string-kind typed benign key")
+	}
+	set := make(map[string]bool, len(values))
+	for _, v := range values {
+		set[v] = true
+	}
+	closedValuesMu.Lock()
+	closedValues[c] = set
+	closedValuesMu.Unlock()
+}
+
+func closedValue(c, v string) bool {
+	closedValuesMu.RLock()
+	defer closedValuesMu.RUnlock()
+	return closedValues[c][v]
+}
+
 // BenignKind returns the one value kind ("int", "bool" or "string") for which key is exempt from the key rule, or "".
 func BenignKind(key string) string { return typedBenignKeys[compact(key)] }
 
@@ -104,7 +132,8 @@ func attrKind(v slog.Value) string {
 func classAttr(groups []string, key string, v slog.Value) keyClass {
 	out := classPath(groups, key)
 	if out == classProtected && len(groups) == 0 {
-		if kind := attrKind(v); kind != "" && typedBenignKeys[compact(key)] == kind {
+		c := compact(key)
+		if kind := attrKind(v); kind != "" && typedBenignKeys[c] == kind && (kind != "string" || closedValue(c, v.String())) {
 			return classClean
 		}
 	}
