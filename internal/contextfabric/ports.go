@@ -1451,6 +1451,15 @@ const (
 	EdgeArmWorkItemColumn = "work_item_column"
 )
 
+// The arms of LINKS_PULL_REQUEST are the provenance tiers of the issue <>
+// pull request link. The arms of BELONGS_TO_REPOSITORY are the subject kinds
+// of the edge's source node.
+const (
+	EdgeArmLinkNative       = "native"
+	EdgeArmLinkExplicitText = "explicit_text"
+	EdgeArmLinkHeuristic    = "heuristic"
+)
+
 // ProjectionSourceEdgeCounts is an OPTIONAL capability a ProjectionSource
 // implements to report, per measured edge population, how many DISTINCT edges
 // (relationship identities, never scanned rows) its producers currently assert

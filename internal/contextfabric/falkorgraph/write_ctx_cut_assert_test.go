@@ -1,22 +1,28 @@
 package falkorgraph
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestCutLandedMeasuresTheDeadlineNotTheReturnTime(t *testing.T) {
-	const deadline = int64(1_000_050)
+	deadline := time.UnixMilli(1_000_050).Add(500 * time.Microsecond)
+	deadlineMs := deadline.UnixMilli()
+	at := func(ms int64) time.Time { return time.UnixMilli(ms) }
 	for name, tc := range map[string]struct {
-		sent    int64
+		sent    time.Time
 		landing probeLanding
 		want    cutVerdict
 	}{
-		"sent before, committed after: a cut, however late the caller returned": {1_000_001, probeLanding{1, 1_000_400}, cutMidCommand},
-		"committed one ms after the deadline":                                   {1_000_001, probeLanding{1, deadline + 1}, cutMidCommand},
-		"committed at the deadline is not a cut":                                {1_000_001, probeLanding{1, deadline}, cutCommittedBeforeDeadline},
-		"committed before the deadline is not a cut":                            {1_000_001, probeLanding{1, deadline - 1}, cutCommittedBeforeDeadline},
-		"sent and never landed":                                                 {1_000_001, probeLanding{0, 0}, cutNotLanded},
-		"sent after the deadline: no cut was measured":                          {deadline + 5, probeLanding{1, deadline + 400}, cutNeverSent},
-		"sent at the deadline: no cut was measured":                             {deadline, probeLanding{1, deadline + 400}, cutNeverSent},
-		"never sent": {0, probeLanding{0, 0}, cutNeverSent},
+		"sent before, committed after: a cut, however late the caller returned": {at(1_000_001), probeLanding{1, 1_000_400}, cutMidCommand},
+		"committed one ms after the deadline":                                   {at(1_000_001), probeLanding{1, deadlineMs + 1}, cutMidCommand},
+		"committed at the deadline is not a cut":                                {at(1_000_001), probeLanding{1, deadlineMs}, cutCommittedBeforeDeadline},
+		"committed before the deadline is not a cut":                            {at(1_000_001), probeLanding{1, deadlineMs - 1}, cutCommittedBeforeDeadline},
+		"sent and never landed":                                                 {at(1_000_001), probeLanding{0, 0}, cutNotLanded},
+		"sent after the deadline: no cut was measured":                          {deadline.Add(5 * time.Millisecond), probeLanding{1, deadlineMs + 400}, cutNeverSent},
+		"sent at the deadline: no cut was measured":                             {deadline, probeLanding{1, deadlineMs + 400}, cutNeverSent},
+		"never sent": {time.Time{}, probeLanding{0, 0}, cutNeverSent},
+		"sent in the deadline's millisecond but before it: a cut, committed after": {deadline.Add(-200 * time.Microsecond), probeLanding{1, deadlineMs + 300}, cutMidCommand},
 	} {
 		if got := classifyCut(tc.sent, deadline, tc.landing); got != tc.want {
 			t.Errorf("%s: verdict %d, want %d", name, got, tc.want)

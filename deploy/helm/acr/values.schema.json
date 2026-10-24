@@ -61,7 +61,8 @@
             "timeout": { "type": "string" },
             "maxTransportRetries": { "type": "string" },
             "existingSecret": { "type": "string" },
-            "apiKeyKey": { "type": "string" }
+            "apiKeyKey": { "type": "string" },
+            "apiEnabled": { "type": "boolean", "description": "Render the same embed settings and the embed egress rule into acr-api so it can embed the question at answer time. Off by default (a billed call per question with a hinted kind); requires baseURL." }
           }
         },
         "model": {
@@ -509,6 +510,7 @@
             "queryMcpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
             "queryMcpPodSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "falkorPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "embedPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
             "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
           }
         }

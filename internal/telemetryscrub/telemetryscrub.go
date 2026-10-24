@@ -64,15 +64,167 @@ var benignKeys = map[string]bool{
 	"secretaries":                        true,
 }
 
+// typedBenignKeys are exact slog attribute keys (compared after compact()) that look protected and are not,
+// each only for its one value kind: counters, flags and one closed-vocabulary code. Any other kind, any
+// enclosing group, and any key inside an opaque value stays protected.
+var typedBenignKeys = map[string]string{
+	"authorizationdroppedcount":               "int",
+	"repolessauthorizationdroppedcount":       "int",
+	"authorizationgrantexactselectors":        "int",
+	"authorizationgrantownerselectors":        "int",
+	"authorizationbatches":                    "int",
+	"authorizationbatchsize":                  "int",
+	"deviceauthorizations":                    "int",
+	"deviceauthorizationsremaining":           "int",
+	"pass":                                    "int",
+	"evaluatedpass":                           "int",
+	"authorizationgrantmeasured":              "bool",
+	"authorizationgrantorganizationwide":      "bool",
+	"devhealthentitlementtokenfileconfigured": "bool",
+	"coveragebypass":                          "bool",
+	"authorizationreason":                     "string",
+}
+
+var closedValueShape = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+var (
+	closedValuesMu sync.RWMutex
+	closedValues   = map[string]map[string]bool{}
+)
+
+// RegisterClosedValues sets the exact values a string-kind typed benign key may carry; any other value of
+// that key stays redacted, and a string-kind key with no registered set is always redacted. The owner of the
+// vocabulary calls it once, from init, so the set has one source; a second call for the same key, an empty
+// set, or a value that is not a code ([a-z0-9_], 1 to 64 characters) panics, so the exemption cannot widen.
+func RegisterClosedValues(key string, values []string) {
+	c := compact(key)
+	if typedBenignKeys[c] != "string" {
+		panic("telemetryscrub: " + key + " is not a string-kind typed benign key")
+	}
+	if len(values) == 0 {
+		panic("telemetryscrub: no closed values for " + key)
+	}
+	set := make(map[string]bool, len(values))
+	for _, v := range values {
+		if !closedValueShape.MatchString(v) {
+			panic("telemetryscrub: closed value for " + key + " is not a code shape")
+		}
+		set[v] = true
+	}
+	closedValuesMu.Lock()
+	defer closedValuesMu.Unlock()
+	if _, ok := closedValues[c]; ok {
+		panic("telemetryscrub: closed values for " + key + " already registered")
+	}
+	closedValues[c] = set
+}
+
+func closedValue(c, v string) bool {
+	closedValuesMu.RLock()
+	defer closedValuesMu.RUnlock()
+	return closedValues[c][v]
+}
+
+// BenignKind returns the one value kind ("int", "bool" or "string") for which key is exempt from the key rule, or "".
+func BenignKind(key string) string { return typedBenignKeys[compact(key)] }
+
+func attrKind(v slog.Value) string {
+	switch v.Kind() {
+	case slog.KindInt64:
+		return "int"
+	case slog.KindBool:
+		return "bool"
+	case slog.KindString:
+		return "string"
+	}
+	return ""
+}
+
+// classAttr is classPath for a slog attribute whose value kind is known.
+func classAttr(groups []string, key string, v slog.Value) keyClass {
+	out := classPath(groups, key)
+	if out == classProtected && len(groups) == 0 {
+		c := compact(key)
+		if kind := attrKind(v); kind != "" && typedBenignKeys[c] == kind && (kind != "string" || closedValue(c, v.String())) {
+			return classClean
+		}
+	}
+	return out
+}
+
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
 
 var valueShapes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/=]{8,}`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`),
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`),
 	regexp.MustCompile(`\b(?:sk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+}
+
+// schemeSpace is every separator accepted between a scheme word and its token: Go's \s misses \v and the Unicode spaces.
+const schemeSpace = `[ \t\r\n\v\f\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]`
+
+// schemeEncoded is the percent-encoded UTF-8 form, at any depth of %25 re-encoding, of every separator in schemeSpace
+// (and U+0020, \t..\r).
+const (
+	schemePct     = `%(?:25)*`
+	schemeEncoded = schemePct + `(?:20|09|0[A-D])` +
+		`|` + schemePct + `C2` + schemePct + `(?:85|A0)` +
+		`|` + schemePct + `E1` + schemePct + `9A` + schemePct + `80` +
+		`|` + schemePct + `E2` + schemePct + `80` + schemePct + `(?:8[0-9A]|A[89F])` +
+		`|` + schemePct + `E2` + schemePct + `81` + schemePct + `9F` +
+		`|` + schemePct + `E3` + schemePct + `80` + schemePct + `80`
+)
+
+// schemeSep is a separator between a scheme word and its token: a raw space, "+" (form encoding), or an encoded space.
+const schemeSep = `(?:` + schemeSpace + `|\+|` + schemeEncoded + `)`
+
+// schemeBefore stands in for \b: the scheme word may follow a non-word rune, the start, or a percent-encoded byte.
+const schemeBefore = `(^|[^A-Za-z0-9_]|` + schemePct + `[0-9A-F]{2})`
+
+// schemeToken is a run of token characters and %XX escapes.
+const schemeToken = `(?:[A-Za-z0-9._~+/=-]|%[0-9A-Fa-f]{2}){4,}`
+
+// A scheme word followed by a short token is a credential only with a digit or symbol in it, or at 8+ characters;
+// under a protected key (kvPair) any length is redacted, so prose like "Bearer of news" stays clean.
+var (
+	bearerShape = regexp.MustCompile(`(?i)` + schemeBefore + `bearer` + schemeSep + `+(` + schemeToken + `)`)
+	basicShape  = regexp.MustCompile(`(?i)` + schemeBefore + `basic` + schemeSep + `+(` + strings.ReplaceAll(schemeToken, "._~+/=-", "+/=") + `)`)
+)
+
+func schemeCredential(tok string) bool {
+	if dec, err := url.PathUnescape(tok); err == nil {
+		tok = dec
+	}
+	return len(tok) >= 8 || strings.ContainsAny(tok, "0123456789._~+/=-")
+}
+
+// redactScheme redacts credential tokens after a scheme word. A token that is not a credential is
+// rescanned, so "Bearer Bearer ab12" still reaches the second scheme word.
+func redactScheme(s string, re *regexp.Regexp) string {
+	var out strings.Builder
+	pos := 0
+	for pos < len(s) {
+		loc := re.FindStringSubmatchIndex(s[pos:])
+		if loc == nil {
+			break
+		}
+		before, ts, te := pos+loc[3], pos+loc[4], pos+loc[5]
+		if schemeCredential(s[ts:te]) {
+			out.WriteString(s[pos:before])
+			out.WriteString(Redacted)
+			pos = te
+			continue
+		}
+		out.WriteString(s[pos:ts])
+		pos = ts
+	}
+	out.WriteString(s[pos:])
+	return out.String()
+}
+
+func redactSchemeCredentials(s string) string {
+	return redactScheme(redactScheme(s, bearerShape), basicShape)
 }
 
 // shapeMarkers are lowercase; a value is checked against them case-insensitively before any regex runs.
@@ -299,7 +451,7 @@ func redactUserinfo(s string) string {
 	return out.String()
 }
 
-var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
+var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?` + schemeSpace + `*[=:]` + schemeSpace + `*)("[^"]*"|'[^']*'|(?:(?i:bearer|basic)` + schemeSep + `+)+(?:"[^"]*"|'[^']*'|\[REDACTED\]|[^\s,;&"'}\]])+|(?:\[REDACTED\]|[^\s,;&"'}\]])+)`)
 
 // kvWords: a key=value or "key":"value" pair can only name a protected key if one of these fragments appears.
 var kvWords = []string{"token", "secret", "pass", "pwd", "key", "auth", "code", "otp", "pin", "mfa", "session", "credential", "cookie", "signature", "jwt", "dsn", "bearer"}
@@ -353,6 +505,7 @@ func scrubString(s string) string {
 		for _, re := range valueShapes {
 			s = re.ReplaceAllString(s, Redacted)
 		}
+		s = redactSchemeCredentials(s)
 	}
 	if pair {
 		s = redactPairs(s)
@@ -539,9 +692,9 @@ func tree(v reflect.Value, depth int, b *budget, path []string) any {
 func clean(groups []string, a slog.Attr) bool {
 	switch a.Value.Kind() {
 	case slog.KindString:
-		return classPath(groups, a.Key) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
+		return classAttr(groups, a.Key, a.Value) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
 	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
-		return classPath(groups, a.Key) == classClean
+		return classAttr(groups, a.Key, a.Value) == classClean
 	}
 	return false
 }
@@ -559,10 +712,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 			a.Value = slog.StringValue(Redacted)
 			return a
 		}
-		inner := groups
-		if a.Key != "" {
-			inner = append(append([]string{}, groups...), a.Key)
-		}
+		inner := append(append([]string{}, groups...), a.Key)
 		group := a.Value.Group()
 		out := make([]slog.Attr, 0, len(group))
 		for _, g := range group {
@@ -571,7 +721,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 		a.Value = slog.GroupValue(out...)
 		return a
 	}
-	switch classPath(groups, a.Key) {
+	switch classAttr(groups, a.Key, a.Value) {
 	case classProtected:
 		a.Value = slog.StringValue(Redacted)
 		return a

@@ -912,3 +912,20 @@ func TestChaos4525CohortScoredMemberCountSurvivesDecode(t *testing.T) {
 		t.Errorf("recomputed AnswerRate = %v, want %v (the #329 live shape: degraded, 11 claims, 3 ranked teams)", got, want)
 	}
 }
+
+func TestNotApplicableReasonSurvivesDecodeAndSummaryNamesDenominator(t *testing.T) {
+	const raw = `[{"index": 22, "member": "expected_kind", "arm": "positive", "not_applicable_reason": "turn1_committed_expected_by_identity"}]`
+	var results []twoTurnCaseResult
+	if err := json.Unmarshal([]byte(raw), &results); err != nil {
+		t.Fatal(err)
+	}
+	if results[0].NotApplicableReason != "turn1_committed_expected_by_identity" {
+		t.Errorf("not_applicable_reason dropped on decode: %q", results[0].NotApplicableReason)
+	}
+	got := notApplicableSummary(map[string]int{"expected_kind/turn1_committed_expected_by_identity": 2}, 10)
+	for _, want := range []string{"n_not_applicable=2 of cases_run=10 (offer-arm denominator 8)", "expected_kind/turn1_committed_expected_by_identity n_not_applicable=2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary %q lacks %q", got, want)
+		}
+	}
+}

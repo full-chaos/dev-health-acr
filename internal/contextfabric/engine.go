@@ -3040,12 +3040,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// "resolved to zero" must stay distinguishable from "never
 		// populated".
 		gateResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-		// A term-less named_subject under the request's explicit continuation
-		// offers the remembered subject here, before any search: admission
-		// (live re-read included) already decided whether it may be offered,
-		// and nothing is committed or retrieved.
-		if termlessContinuation(familyOutcome, request) {
-			gateResolution = anchorShadow.offerFollowUpAnchor(gateResolution, nil, confirmedNeedLedger.Parent, carryParentSeed(request), true)
+		// A frame refused only for naming no subject (term-less named_subject,
+		// or children_of_scope without anchor terms) under the request's
+		// explicit continuation offers the remembered subject here, before
+		// any search: admission (live re-read included) already decided
+		// whether it may be offered, and nothing is committed or retrieved.
+		if termless := termlessContinuation(familyOutcome, request); termless.Active {
+			gateResolution = anchorShadow.offerFollowUpAnchor(gateResolution, nil, confirmedNeedLedger.Parent, carryParentSeed(request), termless)
 		}
 		// Mirrors the graph-not-projected terminal exactly. A no-op here
 		// in practice (nothing has computed a Missing set yet), kept for
@@ -3240,7 +3241,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// never a serve on memory (anchor_binding_follow_up.go). It changes
 	// nothing a commit decides, so the guard below reads the same commits;
 	// it runs first so its decision is recorded on the guard's exit too.
-	resolution = anchorShadow.offerFollowUpAnchor(resolution, familyOutcome.Frame, confirmedNeedLedger.Parent, carryParentSeed(request), false)
+	resolution = anchorShadow.offerFollowUpAnchor(resolution, familyOutcome.Frame, confirmedNeedLedger.Parent, carryParentSeed(request), termlessOffer{})
 	structureMaterial = anchorShadow.reconcileFollowUpStructure(structureMaterial)
 	substitutionCommitted := append([]SubjectRef(nil), resolution.Committed...)
 	substitutionInput := subjectSubstitutionInput{

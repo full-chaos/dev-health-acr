@@ -111,6 +111,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated,
 	}
 	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, timeBound)
 	applyProjectReachedWithoutRows(&result, query.Subjects, teamOutcome.projectReachedTeams)
 	// Retention wins over the severity note: with no rows at all there is
 	// no fact whose severity could have been omitted, and reporting the
