@@ -8,7 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +21,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -31,6 +35,7 @@ const (
 
 type goldenRoute struct {
 	Method       string `json:"method"`
+	Pattern      string `json:"pattern"`
 	Path         string `json:"path"`
 	Scope        string `json:"scope"`
 	WebAssertion bool   `json:"web_assertion"`
@@ -309,71 +314,93 @@ func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
 	}
 }
 
+type goldenInvestigator struct{}
+
+func (goldenInvestigator) Investigate(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+	return contextfabric.InvestigationResult{}, errors.New("golden investigator: auth must refuse before this runs")
+}
+
+func newGoldenOAuthHarness(t *testing.T) *goldenHarness {
+	t.Helper()
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, foreign, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &goldenHarness{t: t, now: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC), valid: oauthTestWebKey, foreign: foreign, app: app}
+}
+
 func TestWebAssertionGolden_routeToPermissionPin(t *testing.T) {
-	h := newGoldenHarness(t)
+	hosted := newGoldenHarness(t)
+	hosted.app.runtime.Investigator = goldenInvestigator{}
+	oauth := newGoldenOAuthHarness(t)
 	fixture := loadGolden(t)
-	constants := map[string]string{
-		"/api/v1/context-fabric/data/catalog": ContextFabricDataCatalogPath, "/api/v1/context-fabric/data/subjects": ContextFabricDataSubjectsPath,
-		"/api/v1/context-fabric/data/facts": ContextFabricDataFactsPath, "/api/v1/context-fabric/data/operations": ContextFabricDataOperationsPath,
-		"/api/v1/context-fabric/data/graphql": ContextFabricDataGraphQLPath, "/api/v1/context-fabric/data/relationships": ContextFabricDataRelationshipsPath,
-	}
-	for path, constant := range constants {
-		if path != constant {
-			t.Fatalf("route constant %q drifted from the golden %q", constant, path)
-		}
-	}
 	profiles, err := os.ReadFile(repopath.Path(t, "contracts", "auth", "v1", "endpoint-profiles.acr.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var profile struct {
 		Rows []struct {
-			Method string `json:"method"`
-			Route  string `json:"route"`
+			Method         string   `json:"method"`
+			Route          string   `json:"route"`
+			Classification string   `json:"classification"`
+			Classes        []string `json:"accepted_credential_classes"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(profiles, &profile); err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range fixture.Routes {
-		pattern := route.Path
-		if route.Path == "/api/v1/agent-context/evidence/evidence-ref-00000001" {
-			pattern = "/api/v1/agent-context/evidence/{evidence_ref_id}"
-		}
-		if !slices.ContainsFunc(profile.Rows, func(row struct {
-			Method string `json:"method"`
-			Route  string `json:"route"`
-		}) bool {
-			return row.Method == route.Method && row.Route == pattern
-		}) {
-			t.Fatalf("%s %s is not an endpoint-profile row", route.Method, pattern)
+	// Every protected acr route is in the golden, and its web-assertion flag is the profile's.
+	want := map[string]bool{}
+	for _, row := range profile.Rows {
+		if row.Classification == "protected" {
+			want[row.Method+" "+row.Route] = slices.Contains(row.Classes, "acr_web_assertion")
 		}
 	}
+	got := map[string]bool{}
 	for _, route := range fixture.Routes {
-		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+		got[route.Method+" "+route.Pattern] = route.WebAssertion
+	}
+	if !maps.Equal(want, got) {
+		t.Fatalf("golden routes differ from the endpoint profile\nprofile: %v\ngolden:  %v", want, got)
+	}
+	for _, route := range fixture.Routes {
+		t.Run(route.Method+" "+route.Pattern, func(t *testing.T) {
+			h := hosted
+			if route.Scope == auth.WebAssertionPermissionCredentialIssue || route.Scope == "" {
+				h = oauth
+			}
 			var body []byte
 			if route.Method == http.MethodPost {
 				body = goldenPacketBody(t, hostedTestRepository)
 			}
 			grant := func(permission string) *http.Request {
-				return h.signed(route.Method, route.Path, body, func(c map[string]any) { c["permissions"] = []string{permission} })
+				return h.signed(route.Method, route.Path, body, func(c map[string]any) {
+					c["permissions"] = []string{permission}
+					if permission == auth.WebAssertionPermissionCredentialIssue {
+						c["repository_scopes"] = []string{"*"}
+					}
+				})
 			}
 			if !route.WebAssertion {
 				assertErrorResponse(t, h.do(grant(auth.ScopeContextRead)), http.StatusUnauthorized, "invalid_token")
 				return
 			}
-			other := auth.ScopeEvidenceRead
-			if route.Scope == auth.ScopeEvidenceRead {
-				other = auth.ScopeContextRead
+			other := auth.ScopeContextRead
+			if route.Scope == auth.ScopeContextRead {
+				other = auth.ScopeEvidenceRead
 			}
 			assertErrorResponse(t, h.do(grant(other)), http.StatusForbidden, "insufficient_scope")
-			if response := h.do(grant(route.Scope)); response.Code == http.StatusUnauthorized || response.Code == http.StatusForbidden {
+			response := h.do(grant(route.Scope))
+			if response.Code == http.StatusUnauthorized || response.Code == http.StatusForbidden {
 				t.Fatalf("scope %s refused on %s: %d %s", route.Scope, route.Path, response.Code, response.Body.String())
 			}
 		})
 	}
 }
-
 func goldenIdentifyingLeaves(value any, key string, out *[]string) {
 	switch v := value.(type) {
 	case string:
