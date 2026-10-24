@@ -114,12 +114,76 @@ func classAttr(groups []string, key string, v slog.Value) keyClass {
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
 
 var valueShapes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/=]{8,}`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`),
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`),
 	regexp.MustCompile(`\b(?:sk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+}
+
+// schemeSpace is every separator accepted between a scheme word and its token: Go's \s misses \v and the Unicode spaces.
+const schemeSpace = `[ \t\r\n\v\f\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]`
+
+// schemeEncoded is the percent-encoded UTF-8 form, at any depth of %25 re-encoding, of every separator in schemeSpace
+// (and U+0020, \t..\r).
+const (
+	schemePct     = `%(?:25)*`
+	schemeEncoded = schemePct + `(?:20|09|0[A-D])` +
+		`|` + schemePct + `C2` + schemePct + `(?:85|A0)` +
+		`|` + schemePct + `E1` + schemePct + `9A` + schemePct + `80` +
+		`|` + schemePct + `E2` + schemePct + `80` + schemePct + `(?:8[0-9A]|A[89F])` +
+		`|` + schemePct + `E2` + schemePct + `81` + schemePct + `9F` +
+		`|` + schemePct + `E3` + schemePct + `80` + schemePct + `80`
+)
+
+// schemeSep is a separator between a scheme word and its token: a raw space, "+" (form encoding), or an encoded space.
+const schemeSep = `(?:` + schemeSpace + `|\+|` + schemeEncoded + `)`
+
+// schemeBefore stands in for \b: the scheme word may follow a non-word rune, the start, or a percent-encoded byte.
+const schemeBefore = `(^|[^A-Za-z0-9_]|` + schemePct + `[0-9A-F]{2})`
+
+// schemeToken is a run of token characters and %XX escapes.
+const schemeToken = `(?:[A-Za-z0-9._~+/=-]|%[0-9A-Fa-f]{2}){4,}`
+
+// A scheme word followed by a short token is a credential only with a digit or symbol in it, or at 8+ characters;
+// under a protected key (kvPair) any length is redacted, so prose like "Bearer of news" stays clean.
+var (
+	bearerShape = regexp.MustCompile(`(?i)` + schemeBefore + `bearer` + schemeSep + `+(` + schemeToken + `)`)
+	basicShape  = regexp.MustCompile(`(?i)` + schemeBefore + `basic` + schemeSep + `+(` + strings.ReplaceAll(schemeToken, "._~+/=-", "+/=") + `)`)
+)
+
+func schemeCredential(tok string) bool {
+	if dec, err := url.PathUnescape(tok); err == nil {
+		tok = dec
+	}
+	return len(tok) >= 8 || strings.ContainsAny(tok, "0123456789._~+/=-")
+}
+
+// redactScheme redacts credential tokens after a scheme word. A token that is not a credential is
+// rescanned, so "Bearer Bearer ab12" still reaches the second scheme word.
+func redactScheme(s string, re *regexp.Regexp) string {
+	var out strings.Builder
+	pos := 0
+	for pos < len(s) {
+		loc := re.FindStringSubmatchIndex(s[pos:])
+		if loc == nil {
+			break
+		}
+		before, ts, te := pos+loc[3], pos+loc[4], pos+loc[5]
+		if schemeCredential(s[ts:te]) {
+			out.WriteString(s[pos:before])
+			out.WriteString(Redacted)
+			pos = te
+			continue
+		}
+		out.WriteString(s[pos:ts])
+		pos = ts
+	}
+	out.WriteString(s[pos:])
+	return out.String()
+}
+
+func redactSchemeCredentials(s string) string {
+	return redactScheme(redactScheme(s, bearerShape), basicShape)
 }
 
 // shapeMarkers are lowercase; a value is checked against them case-insensitively before any regex runs.
@@ -346,7 +410,7 @@ func redactUserinfo(s string) string {
 	return out.String()
 }
 
-var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
+var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?` + schemeSpace + `*[=:]` + schemeSpace + `*)("[^"]*"|'[^']*'|(?:(?i:bearer|basic)` + schemeSep + `+)+(?:"[^"]*"|'[^']*'|\[REDACTED\]|[^\s,;&"'}\]])+|(?:\[REDACTED\]|[^\s,;&"'}\]])+)`)
 
 // kvWords: a key=value or "key":"value" pair can only name a protected key if one of these fragments appears.
 var kvWords = []string{"token", "secret", "pass", "pwd", "key", "auth", "code", "otp", "pin", "mfa", "session", "credential", "cookie", "signature", "jwt", "dsn", "bearer"}
@@ -400,6 +464,7 @@ func scrubString(s string) string {
 		for _, re := range valueShapes {
 			s = re.ReplaceAllString(s, Redacted)
 		}
+		s = redactSchemeCredentials(s)
 	}
 	if pair {
 		s = redactPairs(s)

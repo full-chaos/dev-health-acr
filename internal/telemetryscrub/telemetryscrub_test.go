@@ -566,6 +566,139 @@ func TestR2ExactBenignKeysOnly(t *testing.T) {
 	}
 }
 
+func TestShortSchemeCredentialsRedacted(t *testing.T) {
+	cases := []struct{ in, leak string }{
+		{"Authorization: Bearer abc", "abc"},
+		{"authorization=Bearer a1", "a1"},
+		{"proxy-authorization: Bearer x9", "x9"},
+		{"msg token=Bearer ab12", "ab12"},
+		{"Authorization: Basic abc", "abc"},
+		{"Authorization:\tBasic\tUjU=", "UjU="},
+		{"sent Bearer ab12 now", "ab12"},
+		{"sent Bearer a.b-c now", "a.b-c"},
+		{"sent Bearer abcdefgh now", "abcdefgh"},
+		{"Basic\tUjU=", "UjU="},
+		{"sent Basic ab+1 now", "ab+1"},
+		{"sent Basic abcdefgh now", "abcdefgh"},
+		{"Bearer Bearer ab12", "ab12"},
+		{"Basic Basic YWJjMTIz", "YWJjMTIz"},
+		{"Bearer Basic ab12", "ab12"},
+		{"Authorization: Bearer Bearer ab12", "ab12"},
+		{"Authorization: Basic Basic YWJjMTIz", "YWJjMTIz"},
+		{"Authorization: Bearer \"ab12\"", "ab12"},
+		{"authorization=Bearer 'ab12'", "ab12"},
+		{"Authorization: Basic \"UjU=\"", "UjU="},
+		{"Bearer\vab12", "ab12"},
+		{"Basic\vUjU=", "UjU="},
+		{"Bearer\u00a0ab12", "ab12"},
+		{"Bearer\u2003ab12", "ab12"},
+		{"Basic\u3000UjU=", "UjU="},
+		{"Authorization:\vBearer\vab12", "ab12"},
+		{"Authorization: Bearer\u00a0ab12", "ab12"},
+		{"Authorization: Bearer Bearer abcd", "abcd"},
+		{"Authorization: Basic Basic abcdefg", "abcdefg"},
+		{"Authorization: Bearer Bearer Bearer abcd", "abcd"},
+		{"Authorization: Bearer Bearer \"abcd\"", "abcd"},
+		{"Authorization: Bearer 'ab'abc12", "abc12"},
+		{"Authorization: [REDACTED]abc12", "abc12"},
+		{"https://host/path?q=Bearer%20ab12", "ab12"},
+		{"https://host/path?q=Basic%20UjU%3D", "UjU"},
+		{"Bearer%09ab12", "ab12"},
+		{"Bearer%2520ab12", "ab12"},
+		{"x=Bearer%0Aab12", "ab12"},
+		{"q=Bearer+ab12", "ab12"},
+		{"https://h/p?q=foo%20Bearer%20abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"Authorization%3A%20Bearer%20abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"line%0ABearer%20ab12", "ab12"},
+		{"x%09Basic%20UjU%3D", "UjU"},
+		{"Bearer%C2%A0abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"Bearer%E2%80%A8abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"Bearer%25C2%25A0abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"foo%2520Bearer%2520ab12", "ab12"},
+	}
+	for _, c := range cases {
+		if got := ScrubText(c.in); strings.Contains(got, c.leak) || !strings.Contains(got, Redacted) {
+			t.Errorf("ScrubText(%q) = %q", c.in, got)
+		}
+		rec := record(t, func(l *slog.Logger) { l.Info(c.in, "note", c.in) })
+		note, ok := rec["note"].(string)
+		if !ok || strings.Contains(note, c.leak) {
+			t.Errorf("attr for %q = %v", c.in, rec["note"])
+		}
+		msg, ok := rec["msg"].(string)
+		if !ok || strings.Contains(msg, c.leak) {
+			t.Errorf("message for %q = %v", c.in, rec["msg"])
+		}
+	}
+}
+
+func TestShortSchemeFloorAndControls(t *testing.T) {
+	for _, v := range []string{
+		"Bearer of news", "the bearer token", "bearer bonds", "Bearer Smith", "Bearer of the ring",
+		"Bearer abcdefg", "Bearer%20of%20news", "Basic%20abcd", "Basic\tabcd", "Basic abcdefg", "Bearer a1b", "basic train", "author: Bearer",
+	} {
+		if got := ScrubText(v); got != v {
+			t.Errorf("clean text changed: %q -> %q", v, got)
+		}
+	}
+	for _, v := range []string{"Bearer a1b2", "Bearer abcdefgh", "Basic ab=c", "Basic abcdefgh"} {
+		if got := ScrubText(v); got != Redacted {
+			t.Errorf("ScrubText(%q) = %q", v, got)
+		}
+	}
+}
+
+func TestSchemeRedactionIsIdempotent(t *testing.T) {
+	for _, in := range []string{"Authorization: Bearer ab12", "Authorization: Bearer Bearer ab12", "sent Bearer ab12 now", "Authorization: Basic UjU="} {
+		once := ScrubText(in)
+		if twice := ScrubText(once); twice != once {
+			t.Errorf("%q: once %q twice %q", in, once, twice)
+		}
+	}
+	if got := ScrubText("Authorization: Bearer ab12"); got != "Authorization: "+Redacted {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestSchemeSeparatorsAcceptEveryRawSpaceAndItsEncodings(t *testing.T) {
+	raw := []rune{' ', '\t', '\n', '\v', '\f', '\r', 0x85, 0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000}
+	for r := rune(0x2000); r <= 0x200A; r++ {
+		raw = append(raw, r)
+	}
+	for _, r := range raw {
+		var enc strings.Builder
+		for _, b := range []byte(string(r)) {
+			fmt.Fprintf(&enc, "%%%02X", b)
+		}
+		forms := []string{string(r), enc.String(), strings.ToLower(enc.String()), strings.ReplaceAll(enc.String(), "%", "%25")}
+		for _, sep := range forms {
+			for _, in := range []string{"Bearer" + sep + "ab12", "q=x" + sep + "Bearer" + sep + "ab12", "Basic" + sep + "UjU=", "k=x" + sep + "Basic" + sep + "UjU="} {
+				if got := ScrubText(in); strings.Contains(got, "ab12") || strings.Contains(got, "UjU") {
+					t.Errorf("U+%04X %q: ScrubText(%q) = %q", r, sep, in, got)
+				}
+			}
+		}
+	}
+}
+
+func TestEncodedBoundaryKeepsThePrefixAndRedactsOnlyTheCredential(t *testing.T) {
+	cases := map[string]string{
+		"https://h/p?q=foo%20Bearer%20abcdefghijklmnop1234567890": "https://h/p?q=foo%20" + Redacted,
+		"line%0ABearer%20ab12": "line%0A" + Redacted,
+		"x%09Basic%20UjU%3D":   "x%09" + Redacted,
+	}
+	for in, want := range cases {
+		if got := ScrubText(in); got != want {
+			t.Errorf("ScrubText(%q) = %q want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"foo%20Bearer%20of%20news", "xBearer%20ab12", "unBearer ab12"} {
+		if got := ScrubText(in); got != in {
+			t.Errorf("clean text changed: %q -> %q", in, got)
+		}
+	}
+}
+
 var typedBenignCases = []struct {
 	key  string
 	kind string
