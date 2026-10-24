@@ -426,7 +426,7 @@ func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabr
 			t.Fatalf("ReadFacts: %v: %s", err, readFailureCause(err))
 		}
 		factFor(t, result, teamSubject(linkedShapeTeam))
-		peaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExact(m.repo_uuid)"}, mark)
+		peaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExactIf(m.repo_uuid, NOT m.gated)"}, mark)
 		if len(peaks) != 1 {
 			t.Fatalf("measurement did not happen: %d linked mix statements logged on a served read, want 1", len(peaks))
 		}
