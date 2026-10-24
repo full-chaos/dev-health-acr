@@ -741,13 +741,13 @@ func TestEvidenceRouteRefusesARowOfAnotherSubject(t *testing.T) {
 // A pull request ref without a result_id is expanded from its source row only:
 // when the row is absent a stored result citing the ref is not served in its
 // place. With the result_id of that result the persisted record still answers,
-// and a ref of a subject kind keeps the legacy unscoped record path.
+// and a record-only kind keeps the legacy unscoped record path.
 func TestEvidenceRouteRowKeyedRefWithoutResultIDNeverFallsBackToAStoredResult(t *testing.T) {
 	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532")
 	workItemRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, sourceRowGrantedRepoID+":WI-9")
-	teamRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "CHAOS")
+	recordRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "CHAOS")
 	store := memoryinvestigation.NewStore()
-	seedResult3355(t, store, "org_1", citingStoredResult("result_row_keyed_stored", ref, workItemRef, teamRef))
+	seedResult3355(t, store, "org_1", citingStoredResult("result_row_keyed_stored", ref, workItemRef, recordRef))
 	logs := &bytes.Buffer{}
 	app, token := sourceRowApp(t, newSourceRowTables(), store, logs)
 	get := func(ref, resultID string) *httptest.ResponseRecorder {
@@ -767,8 +767,8 @@ func TestEvidenceRouteRowKeyedRefWithoutResultIDNeverFallsBackToAStoredResult(t 
 	if rec := get(ref, "result_row_keyed_stored"); rec.Code != http.StatusOK {
 		t.Fatalf("scoped pull request ref: status = %d, want 200 from the stored result: %s", rec.Code, rec.Body.String())
 	}
-	if rec := get(teamRef, ""); rec.Code != http.StatusOK {
-		t.Fatalf("unscoped team ref keeps the legacy record path: status = %d: %s", rec.Code, rec.Body.String())
+	if rec := get(recordRef, ""); rec.Code != http.StatusOK {
+		t.Fatalf("unscoped record-only ref keeps the legacy record path: status = %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

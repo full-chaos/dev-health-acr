@@ -11,6 +11,8 @@ func TestRowKeyedEvidenceRefIsExactlyTheSingleRowKinds(t *testing.T) {
 		ContextFabricEvidenceEntityDeployment:           true,
 		ContextFabricEvidenceEntityReviewV2:             true,
 		ContextFabricEvidenceEntityIncident:             true,
+		ContextFabricEvidenceEntityTeam:                 true,
+		ContextFabricEvidenceEntityProject:              true,
 		ContextFabricEvidenceEntityWorkItemDependencyV2: true,
 		ContextFabricEvidenceEntityWorkItemHierarchyV2:  true,
 		ContextFabricEvidenceEntityWorkItemTeamV2:       true,

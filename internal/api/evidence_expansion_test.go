@@ -83,7 +83,7 @@ func (f failingLookupResults) Get(ctx context.Context, principal storage.Princip
 // real stored-result gate and the real in-memory store, and certified
 // against its eventspec declaration from the emitted line.
 func TestEvidenceRouteExpandsContextFabricRefsWithAClassifiedDecision(t *testing.T) {
-	cited := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-cited-0001")
+	cited := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-cited-0001")
 	// A type segment longer than an evidence source's entity_type bound: a
 	// ref a stored result may carry, whose expansion cannot validate.
 	oversized := "acr:v1:" + strings.Repeat("t", 120) + ":x-0001"
@@ -102,34 +102,34 @@ func TestEvidenceRouteExpandsContextFabricRefsWithAClassifiedDecision(t *testing
 	otherRepo := subjectNodeGraph{grant: []string{"other-org/secret-service"}}
 	sourceRowRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532")
 	cells := []cell{
-		{name: "served", ref: cited, status: http.StatusOK, reason: contextfabric.EvidenceExpansionServed, entity: "team",
+		{name: "served", ref: cited, status: http.StatusOK, reason: contextfabric.EvidenceExpansionServed, entity: "organization",
 			want: merge(counts(1, 1, 0, 1, 0, 0), map[string]any{"authorization_reason": "subjects_admitted"})},
 		{name: "malformed", ref: "acr:v1:repository", status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionMalformedRef, entity: contextfabric.EvidenceExpansionUnregisteredType,
 			want: counts(0, 0, 0, 0, 0, 0)},
-		{name: "no lookup", ref: cited, status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionLookupUnavailable, entity: "team",
+		{name: "no lookup", ref: cited, status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionLookupUnavailable, entity: "organization",
 			setup: func(app *App, store *memoryinvestigation.Store) {
 				app.runtime.InvestigationResults = resultsWithoutLookup{store}
 			}, want: counts(0, 0, 0, 0, 0, 0)},
-		{name: "lookup failed", ref: cited, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionLookupFailed, entity: "team",
+		{name: "lookup failed", ref: cited, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionLookupFailed, entity: "organization",
 			setup: func(app *App, store *memoryinvestigation.Store) {
 				app.runtime.InvestigationResults = failingLookupResults{Store: store, lookupErr: errors.New("search down")}
 			}, want: merge(counts(0, 0, 0, 0, 0, 0), map[string]any{"error_class": "internal"})},
-		{name: "not cited", ref: contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-uncited-0001"), status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionNotCited, entity: "team",
+		{name: "not cited", ref: contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-uncited-0001"), status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionNotCited, entity: "organization",
 			want: counts(0, 0, 0, 0, 0, 0)},
-		{name: "over-reported", ref: cited, status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionNotCited, entity: "team",
+		{name: "over-reported", ref: cited, status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionNotCited, entity: "organization",
 			setup: func(app *App, store *memoryinvestigation.Store) {
-				seedResult3355(t, store, "org_1", citingStoredResult("result_expand_cites_other", contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-other-0001")))
+				seedResult3355(t, store, "org_1", citingStoredResult("result_expand_cites_other", contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-other-0001")))
 				app.runtime.InvestigationResults = failingLookupResults{Store: store, ids: []string{"result_expand_cites_other"}}
 			}, want: counts(1, 0, 0, 0, 0, 0)},
-		{name: "unreadable", ref: cited, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionResultUnreadable, entity: "team",
+		{name: "unreadable", ref: cited, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionResultUnreadable, entity: "organization",
 			setup: func(app *App, store *memoryinvestigation.Store) {
 				app.runtime.InvestigationResults = failingLookupResults{Store: store, getErr: contextfabric.ErrUnavailable}
 			}, want: merge(counts(1, 0, 1, 0, 0, 0), map[string]any{"error_class": "dependency_unavailable"})},
-		{name: "denied", ref: cited, status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionAuthorizationDenied, entity: "team",
+		{name: "denied", ref: cited, status: http.StatusNotFound, reason: contextfabric.EvidenceExpansionAuthorizationDenied, entity: "organization",
 			setup: func(app *App, _ *memoryinvestigation.Store) {
 				app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(otherRepo)
 			}, want: merge(counts(1, 1, 0, 0, 1, 0), map[string]any{"authorization_reason": "subject_denied"})},
-		{name: "authorization unavailable", ref: cited, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionAuthorizationUnavailable, entity: "team",
+		{name: "authorization unavailable", ref: cited, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionAuthorizationUnavailable, entity: "organization",
 			setup: func(app *App, _ *memoryinvestigation.Store) {
 				app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{readErr: errors.New("graph down")})
 			}, want: merge(counts(1, 1, 0, 0, 0, 1), map[string]any{"authorization_reason": "graph_read_failed", "error_class": "internal"})},
@@ -277,7 +277,7 @@ func subjectCitingResult(resultID, subjectID string, generated time.Time, refs .
 // A readable citing result is found however many newer citing results the
 // caller may not read: the search pages instead of stopping at a cap.
 func TestEvidenceRouteFindsAReadableResultBehindMoreThanOnePageOfDeniedOnes(t *testing.T) {
-	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-paged-0001")
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-paged-0001")
 	store := memoryinvestigation.NewStore()
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	denied := contextfabric.CitedEvidenceCandidateLimit + 1
@@ -309,7 +309,7 @@ func TestEvidenceRouteFindsAReadableResultBehindMoreThanOnePageOfDeniedOnes(t *t
 // An unreadable candidate may be the readable one: the outcome is a 503, not
 // the denial the other candidate earned.
 func TestEvidenceRouteReportsAnUnreadableCandidateOverADeniedOne(t *testing.T) {
-	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-mixed-0001")
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-mixed-0001")
 	store := memoryinvestigation.NewStore()
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	seedResult3355(t, store, "org_1", subjectCitingResult("result_mixed_unreadable", "project_unknown", base.Add(time.Hour), ref))
@@ -409,7 +409,7 @@ func TestEvidenceRouteFollowsTheResultByIDServingDecision(t *testing.T) {
 // expansion answers 503 as an unreadable candidate, never a 200 carrying
 // that row's content.
 func TestEvidenceRouteRefusesARowTheResultByIDRouteRefuses(t *testing.T) {
-	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-refused-0001")
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-refused-0001")
 	stored := storedResultWithCountOutcome(t, contractsv1.ContextFabricPlanRequirementOutcomeRow{
 		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: "count/member/team",
 		Obligation: contractsv1.ContextFabricAnswerObligationCount, Outcome: contractsv1.ContextFabricRequirementSatisfied,
@@ -449,7 +449,7 @@ func TestEvidenceRouteRefusesARowTheResultByIDRouteRefuses(t *testing.T) {
 // result answers and no other, and a result that does not cite the ref (or
 // is unknown) is the same not-found as an uncited ref.
 func TestEvidenceRouteScopesExpansionToTheNamedResult(t *testing.T) {
-	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "CHAOS")
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "CHAOS")
 	store := memoryinvestigation.NewStore()
 	older := citingStoredResult("result_6563_older", ref)
 	older.GeneratedAt = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)

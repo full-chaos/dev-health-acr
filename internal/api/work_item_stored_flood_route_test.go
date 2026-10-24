@@ -187,7 +187,7 @@ func (s *orderedTupleEvidenceStore) Get(_ context.Context, reader storage.Princi
 // be served, whatever order the citing results are read in.
 func TestStoredTupleFloodedEvidenceExpansionNamesTheDecisiveTuple(t *testing.T) {
 	principal := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{hostedTestRepository}}
-	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-flood-0001")
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, "team-flood-0001")
 	row := func(id string, mutate func(*contextfabric.StoredInvestigationResult)) contextfabric.StoredInvestigationResult {
 		stored := storedWorkItemTupleRouteFixture(t, principal)
 		stored.Result.ResultID = id
