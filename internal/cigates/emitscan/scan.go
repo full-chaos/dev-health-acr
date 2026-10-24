@@ -40,7 +40,7 @@ const (
 	RuleIdentityHash  = "R7"  // bare digest of a value used as an emit attribute
 	RuleDotImport     = "R8"  // dot-import of a watched package: its calls cannot be matched
 	RuleLogKey        = "R9"  // slog key the scan cannot resolve to a constant: the key text is computed at run time
-	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, a kind the static type does not fix is <key> (pinned with kind=<kind>), a package that does not type-check is refusal:typecheck (never pinnable); kinds come from go/types, read lazily on the first benign key of a package
+	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, a kind the static type does not fix is <key> (pinned with kind=<kind>), a package that does not type-check, or a parameter or local that hides a constant holding a known key, is a refusal (refusal:typecheck, refusal:shadowed-key; never pinnable); kinds and key names come from go/types, read lazily on the first key that is not a literal
 	RuleUnparsable    = "R0"  // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
 	maxConstValues    = 8    // folded values kept per constant name
@@ -563,9 +563,12 @@ type foldCtx struct {
 	consts      map[string][]string
 	imports     map[string]string
 	stringTypes map[string]bool
-	work        int     // nodes still allowed
-	over        bool    // a bound was hit: the result is not trustworthy
-	budget      *budget // the package counter
+	work        int        // nodes still allowed
+	over        bool       // a bound was hit: the result is not trustworthy
+	budget      *budget    // the package counter
+	typed       *typedFold // when set, names resolve through go/types objects (key expressions); nil folds by spelling (the package constant table)
+	refusal     string     // an R10 detail: the key cannot be read (no types, or a shadowed known key); never pinnable
+	depth       int        // nesting of local-variable initialisers being folded
 }
 
 func newFoldCtx(b *budget, consts map[string][]string, imports map[string]string, stringTypes map[string]bool) *foldCtx {
@@ -608,12 +611,27 @@ func foldNode(expr ast.Expr, ctx *foldCtx, iota int) []string {
 	case *ast.ParenExpr:
 		return foldString(e.X, ctx, iota)
 	case *ast.Ident:
+		if ctx.typed != nil {
+			return ctx.typed.ident(e, ctx)
+		}
 		if e.Name == "iota" {
 			return []string{strconv.Itoa(iota)}
 		}
 		return ctx.consts[e.Name]
 	case *ast.CallExpr:
 		if len(e.Args) != 1 {
+			return nil
+		}
+		if ctx.typed != nil {
+			switch ctx.typed.callKind(e, ctx) {
+			case "conv":
+				return foldString(e.Args[0], ctx, iota)
+			case "text":
+				if lit, ok := e.Args[0].(*ast.BasicLit); ok && lit.Kind == token.INT {
+					return []string{lit.Value}
+				}
+				return foldString(e.Args[0], ctx, iota)
+			}
 			return nil
 		}
 		switch fun := e.Fun.(type) {
@@ -761,7 +779,7 @@ func readNames(expr ast.Expr, imports map[string]string) []string {
 				return nil
 			}
 		}
-		if isAttachMethod(e.Sel.Name) {
+		if isAttachMethod(e.Sel.Name) || isLogMethod(e.Sel.Name) {
 			return nil
 		}
 		return []string{e.Sel.Name}
@@ -776,6 +794,11 @@ func readNames(expr ast.Expr, imports map[string]string) []string {
 		return out
 	}
 	return nil
+}
+
+// isLogMethod names the logger methods that emit a record: a method value of one of them is called like the method.
+func isLogMethod(name string) bool {
+	return logMethods[name] || name == "Log" || name == "LogAttrs"
 }
 
 // isAttachMethod names the logger methods that attach keys or attributes: a method value of one of them holds that method.
@@ -803,7 +826,7 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 				return [][2]string{{pkg, e.Sel.Name}}
 			}
 		}
-		if isAttachMethod(e.Sel.Name) {
+		if isAttachMethod(e.Sel.Name) || isLogMethod(e.Sel.Name) {
 			return [][2]string{{"", e.Sel.Name}} // a method value
 		}
 		return info.aliases[e.Sel.Name] // a field holding a constructor
@@ -1265,7 +1288,12 @@ func unquote(literal string) string {
 // package, concatenations included). ok is false for any other expression.
 func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
 	ctx := newFoldCtx(s.pkg.budget, s.pkg.consts, s.imports, s.pkg.stringTypes)
+	ctx.typed = &typedFold{s: s}
 	values := foldString(expr, ctx, 0)
+	if ctx.refusal != "" {
+		s.add(RuleBenignKind, expr.Pos(), ctx.refusal)
+		return nil, false, false
+	}
 	if ctx.over {
 		return nil, false, true
 	}
@@ -1334,6 +1362,13 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 	if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && attrConstructors[sel.Sel.Name] && len(call.Args) >= 1 {
 		if ident, isIdent := sel.X.(*ast.Ident); isIdent && s.pkg.constNames[ident.Name] {
 			return ident, call.Args[0], true // const k = attribute.Key("..."); k.String(v)
+		} else if isIdent && s.imports[ident.Name] == "" {
+			isKey, known := s.isAttributeKey(ident)
+			if !known {
+				s.add(RuleBenignKind, call.Pos(), refusalDetail)
+			} else if isKey {
+				return ident, call.Args[0], true // k := attribute.Key("..."); k.String(v)
+			}
 		}
 		if inner, isCall := sel.X.(*ast.CallExpr); isCall && len(inner.Args) == 1 {
 			if pkg, name, found := s.qualified(inner.Fun); found && pkg == "attribute" && name == "Key" {

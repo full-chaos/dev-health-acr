@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/constant"
 	"go/importer"
+	"go/token"
 	"go/types"
 	"io"
 	"os"
@@ -15,23 +17,34 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
 
 // refusalDetail is the R10 detail of a package whose types the scan cannot read. It is never pinnable.
 const refusalDetail = "refusal:typecheck"
 
+// shadowDetail is the R10 detail of a parameter or local variable that hides a constant holding a key the redactor
+// knows (protected, network or benign): the name reads as the constant to a reader and as something else to the compiler.
+// It is never pinnable.
+const shadowDetail = "refusal:shadowed-key"
+
+const attributePkg = "go.opentelemetry.io/otel/attribute"
+
 // typedPackage is the type-check of one package directory. err is set when the package does not type-check.
 type typedPackage struct {
-	info *types.Info
-	err  error
+	info  *types.Info
+	files []*ast.File
+	err   error
+	flow  *flowInfo
 }
 
 // typedInfo type-checks the package once, on the first benign key it meets: the files that match the default build
 // context are checked together against the export data of the module's dependencies.
 func (p *pkgInfo) typedInfo() *typedPackage {
 	if p.typed == nil {
-		info, err := typeCheck(p.budget.ctx, p.root, p.group)
-		p.typed = &typedPackage{info: info, err: err}
+		info, files, err := typeCheck(p.budget.ctx, p.root, p.group)
+		p.typed = &typedPackage{info: info, files: files, err: err}
 	}
 	return p.typed
 }
@@ -97,34 +110,34 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 	return files, nil
 }
 
-func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Info, error) {
+func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Info, []*ast.File, error) {
 	if len(group) == 0 {
-		return nil, errors.New("no files")
+		return nil, nil, errors.New("no files")
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var files []*ast.File
 	for _, parsed := range group {
 		match, err := build.Default.MatchFile(filepath.Join(absRoot, filepath.Dir(filepath.FromSlash(parsed.rel))), filepath.Base(parsed.rel))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if match {
 			files = append(files, parsed.file)
 		}
 	}
 	if len(files) == 0 {
-		return nil, errors.New("no file matches the build context")
+		return nil, nil, errors.New("no file matches the build context")
 	}
 	moduleDir, err := moduleDirOf(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	exports, err := exportFiles(ctx, moduleDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fset := group[0].fset
 	lookup := func(path string) (io.ReadCloser, error) {
@@ -147,12 +160,12 @@ func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Inf
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
 	_, checkErr := cfg.Check(files[0].Name.Name, fset, files, info)
 	if first != nil {
-		return nil, first
+		return nil, nil, first
 	}
 	if checkErr != nil {
-		return nil, checkErr
+		return nil, nil, checkErr
 	}
-	return info, nil
+	return info, files, nil
 }
 
 // typeOf is the type the checker recorded for an expression of a file that was checked.
@@ -343,4 +356,228 @@ func (s *fileScan) pairSource(shape ast.Expr) (ok, valid bool) {
 		return isIface && iface.Empty(), true
 	}
 	return false, false
+}
+
+// typedFold resolves the names of a key expression through the objects the checker bound them to, not through their
+// spelling: a constant is its exact value, a parameter or local variable is never a package constant of the same name, and
+// a local variable that is initialised once and never written again is the value of its initialiser.
+type typedFold struct{ s *fileScan }
+
+const maxLocalDepth = 8
+
+func (f *typedFold) ready(ctx *foldCtx) (*typedPackage, bool) {
+	typed := f.s.pkg.typedInfo()
+	if typed.err != nil {
+		if ctx.refusal == "" {
+			ctx.refusal = refusalDetail
+		}
+		return nil, false
+	}
+	return typed, true
+}
+
+func objectOf(info *types.Info, ident *ast.Ident) types.Object {
+	if obj := info.Uses[ident]; obj != nil {
+		return obj
+	}
+	return info.Defs[ident]
+}
+
+func (f *typedFold) ident(ident *ast.Ident, ctx *foldCtx) []string {
+	typed, ok := f.ready(ctx)
+	if !ok {
+		return nil
+	}
+	obj := objectOf(typed.info, ident)
+	if obj == nil {
+		if ctx.refusal == "" {
+			ctx.refusal = refusalDetail
+		}
+		return nil
+	}
+	switch o := obj.(type) {
+	case *types.Const:
+		if o.Val().Kind() == constant.String {
+			return []string{constant.StringVal(o.Val())}
+		}
+	case *types.Var:
+		if o.IsField() {
+			return nil
+		}
+		if shadowsKnownKey(o) {
+			if ctx.refusal == "" {
+				ctx.refusal = shadowDetail
+			}
+			return nil
+		}
+		return f.local(typed, o, ctx)
+	}
+	return nil
+}
+
+// shadowsKnownKey reports a variable that hides a string constant, visible at the variable's declaration, whose text is a
+// key the redactor treats specially.
+func shadowsKnownKey(v *types.Var) bool {
+	scope := v.Parent()
+	if scope == nil || scope.Parent() == nil {
+		return false
+	}
+	_, hidden := scope.Parent().LookupParent(v.Name(), v.Pos())
+	c, isConst := hidden.(*types.Const)
+	if !isConst || c.Val().Kind() != constant.String {
+		return false
+	}
+	text := constant.StringVal(c.Val())
+	protected, network := telemetryscrub.KeyClass(text)
+	return protected || network || telemetryscrub.BenignKind(text) != ""
+}
+
+// local folds a function-local variable that is initialised exactly once and never written again, never has its address
+// taken and is never a range target. Any other variable (parameter, result, package variable, reassigned local) is unprovable.
+func (f *typedFold) local(typed *typedPackage, v *types.Var, ctx *foldCtx) []string {
+	if v.Pkg() == nil || v.Parent() == v.Pkg().Scope() {
+		return nil
+	}
+	flow := typed.flowInfo()
+	init, ok := flow.inits[v]
+	if !ok || flow.written[v] {
+		return nil
+	}
+	if ctx.depth++; ctx.depth > maxLocalDepth {
+		ctx.over = true
+		return nil
+	}
+	defer func() { ctx.depth-- }()
+	return foldString(init, ctx, 0)
+}
+
+// callKind says what a one-argument call in a key expression is, from the object its callee resolves to: "conv" for a
+// conversion to a string type or attribute.Key, "text" for strconv.Itoa and fmt.Sprint, "" for anything else (a function
+// that shadows a builtin or a type name is a call, not a conversion).
+func (f *typedFold) callKind(call *ast.CallExpr, ctx *foldCtx) string {
+	typed, ok := f.ready(ctx)
+	if !ok {
+		return ""
+	}
+	switch fun := ast.Unparen(call.Fun).(type) {
+	case *ast.Ident:
+		if name, isType := typed.info.Uses[fun].(*types.TypeName); isType {
+			if basic, isBasic := name.Type().Underlying().(*types.Basic); isBasic && basic.Info()&types.IsString != 0 {
+				return "conv"
+			}
+		}
+	case *ast.SelectorExpr:
+		switch o := typed.info.Uses[fun.Sel].(type) {
+		case *types.TypeName:
+			if o.Pkg() != nil && o.Pkg().Path() == attributePkg && o.Name() == "Key" {
+				return "conv"
+			}
+		case *types.Func:
+			if o.Pkg() != nil && (o.Pkg().Path() == "strconv" && o.Name() == "Itoa" || o.Pkg().Path() == "fmt" && o.Name() == "Sprint") {
+				return "text"
+			}
+		}
+	}
+	return ""
+}
+
+// flowInfo records, for the variables of one package, the single initialiser of each and every variable that is written
+// anywhere else (assignment, op-assignment, inc/dec, range target, address taken, redeclared by :=).
+type flowInfo struct {
+	inits   map[*types.Var]ast.Expr
+	written map[types.Object]bool
+}
+
+func (t *typedPackage) flowInfo() *flowInfo {
+	if t.flow != nil {
+		return t.flow
+	}
+	flow := &flowInfo{inits: map[*types.Var]ast.Expr{}, written: map[types.Object]bool{}}
+	mark := func(expr ast.Expr) {
+		if expr == nil {
+			return
+		}
+		if ident, ok := ast.Unparen(expr).(*ast.Ident); ok {
+			if obj := objectOf(t.info, ident); obj != nil {
+				flow.written[obj] = true
+			}
+		}
+	}
+	for _, file := range t.files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.AssignStmt:
+				if n.Tok != token.DEFINE {
+					for _, lhs := range n.Lhs {
+						mark(lhs)
+					}
+					return true
+				}
+				for i, lhs := range n.Lhs {
+					ident, ok := lhs.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					def, isDef := t.info.Defs[ident].(*types.Var)
+					if !isDef {
+						mark(lhs)
+						continue
+					}
+					if len(n.Lhs) == len(n.Rhs) {
+						flow.inits[def] = n.Rhs[i]
+					} else {
+						flow.written[def] = true
+					}
+				}
+			case *ast.IncDecStmt:
+				mark(n.X)
+			case *ast.RangeStmt:
+				if n.Tok == token.DEFINE {
+					for _, expr := range []ast.Expr{n.Key, n.Value} {
+						if ident, ok := expr.(*ast.Ident); ok {
+							if def := t.info.Defs[ident]; def != nil {
+								flow.written[def] = true
+							}
+						}
+					}
+				} else {
+					mark(n.Key)
+					mark(n.Value)
+				}
+			case *ast.ValueSpec:
+				for i, name := range n.Names {
+					def, isVar := t.info.Defs[name].(*types.Var)
+					if !isVar {
+						continue
+					}
+					if len(n.Values) == len(n.Names) {
+						flow.inits[def] = n.Values[i]
+					} else {
+						flow.written[def] = true
+					}
+				}
+			case *ast.UnaryExpr:
+				if n.Op == token.AND {
+					mark(n.X)
+				}
+			}
+			return true
+		})
+	}
+	t.flow = flow
+	return flow
+}
+
+// isAttributeKey reports an identifier whose static type is attribute.Key. known is false when the package has no types.
+func (s *fileScan) isAttributeKey(ident *ast.Ident) (isKey, known bool) {
+	typed := s.pkg.typedInfo()
+	if typed.err != nil {
+		return false, false
+	}
+	obj := objectOf(typed.info, ident)
+	if obj == nil {
+		return false, false
+	}
+	named, ok := types.Unalias(obj.Type()).(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == attributePkg && named.Obj().Name() == "Key", true
 }
