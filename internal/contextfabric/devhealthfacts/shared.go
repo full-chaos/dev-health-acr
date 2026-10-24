@@ -1321,7 +1321,12 @@ import (
 // work scope), the legacy rows counting in both. Before the ops writer stores
 // the views every row is a legacy row and every value is unchanged; an answer
 // saved under v254 would hold the sum of two views once the writer runs.
-const QueryVersion = "devhealthfacts.clickhouse.v255"
+//
+// v255 -> v256: a team that owns a project but reaches no repository (its
+// issues link no pull request) is told "the team owns project X; no linked pull
+// request reaches a repository" in place of "owns no repository in synced
+// ownership". A stored answer holds the old cause text.
+const QueryVersion = "devhealthfacts.clickhouse.v256"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

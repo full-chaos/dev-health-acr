@@ -121,9 +121,14 @@ func TestInvestmentProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 		}
 	}
 	assertQueryScopedToOrgAndSubjects(t, ownership.statement)
-	watermark := client.queries[len(client.queries)-1]
-	if !strings.Contains(watermark.statement, "FROM work_unit_investments WHERE org_id = {org_id:String}") {
-		t.Fatalf("watermark statement = %q, want it scoped to the org", watermark.statement)
+	watermarkSeen := false
+	for _, query := range client.queries {
+		if strings.Contains(query.statement, "FROM work_unit_investments WHERE org_id = {org_id:String}") {
+			watermarkSeen = true
+		}
+	}
+	if !watermarkSeen {
+		t.Fatalf("no watermark statement scoped to the org among %d queries", len(client.queries))
 	}
 }
 

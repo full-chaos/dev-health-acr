@@ -110,28 +110,30 @@ func (s *TeamsProjectsSource) DeferredEdgeRelations() []contextfabric.Relationsh
 }
 
 // ProjectionSourceEdgeCounts implements contextfabric.ProjectionSourceEdgeCounts.
-// Each review is one BELONGS_TO_PULL_REQUEST edge (queryPullRequestReviews), so
-// the edge count is the review count over the producer's own joins.
+// Each population is counted over the producer's own joins (edge_counts_relations.go).
 func (s *ClickHouseProjectionSource) ProjectionSourceEdgeCounts(ctx context.Context, orgID string) (map[contextfabric.EdgeCountKey]int64, error) {
-	counts, err := countKinds(ctx, s.client, orgID, []kindCountStatement{{kind: contractsv1.ContextFabricSubjectPullRequestReview, sql: pullRequestReviewCountSQL}})
-	if err != nil {
-		return nil, err
-	}
-	return map[contextfabric.EdgeCountKey]int64{
-		{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}: counts[contractsv1.ContextFabricSubjectPullRequestReview],
-	}, nil
+	return runEdgePopulations(ctx, s.client, orgID, clickHouseEdgePopulations)
 }
 
 // EdgeCountKeys implements contextfabric.ProjectionSourceEdgeCounts.
 func (s *ClickHouseProjectionSource) EdgeCountKeys() []contextfabric.EdgeCountKey {
-	return []contextfabric.EdgeCountKey{{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}}
+	var keys []contextfabric.EdgeCountKey
+	for _, population := range clickHouseEdgePopulations {
+		keys = append(keys, population.keys()...)
+	}
+	return keys
 }
 
-// DeferredEdgeRelations implements contextfabric.ProjectionSourceEdgeCounts.
+// DeferredEdgeRelations implements contextfabric.ProjectionSourceEdgeCounts: the
+// produced relation types no population measures.
 func (s *ClickHouseProjectionSource) DeferredEdgeRelations() []contextfabric.RelationshipType {
+	measured := map[contextfabric.RelationshipType]bool{}
+	for _, population := range clickHouseEdgePopulations {
+		measured[population.relation] = true
+	}
 	var deferred []contextfabric.RelationshipType
 	for _, relation := range ProducedRelationshipTypes() {
-		if relation != contractsv1.ContextFabricRelationshipBelongsToPullRequest {
+		if !measured[relation] {
 			deferred = append(deferred, relation)
 		}
 	}

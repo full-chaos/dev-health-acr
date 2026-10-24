@@ -289,3 +289,17 @@ func qualifierFromCapture(t *testing.T, capture InterpretationOutputCapture, for
 }
 
 func stringPtr(value string) *string { return &value }
+
+func TestMergeFallbackReceiptCarriesTheTermlessFlagsOfTheFallbackFrame(t *testing.T) {
+	t.Parallel()
+	primary := validReceipt(contextfabric.ModelOperationInterpret)
+	primary.TermlessNamedSubject = true
+	primary.TermlessScopeMemberKind = contextfabric.SubjectRepository
+	fallback := validReceipt(contextfabric.ModelOperationInterpret)
+	fallback.TermlessScopeMemberKind = contextfabric.SubjectTeam
+
+	got := mergeFallbackReceipt(primary, fallback)
+	if got.TermlessNamedSubject || got.TermlessScopeMemberKind != contextfabric.SubjectTeam {
+		t.Fatalf("termless named/scope kind = %v/%q, want false/team: the flags describe the frame the receipt now carries (the fallback's), never the primary's", got.TermlessNamedSubject, got.TermlessScopeMemberKind)
+	}
+}
