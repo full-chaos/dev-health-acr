@@ -1057,7 +1057,7 @@ var KindScopedSemantic = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "at most one line per resolveSubjects call -- gated on a confirmed-kind-free, uncommitted resolution with a hinted repository/project/team kind and a non-nil KindScopedSemantic hook; CertifyAbsent asserts the case where the arm never ran.",
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on an uncommitted resolution with a hinted repository/project/team kind (on a confirmed turn: only the confirmed kind, and only when the confirmed-kind-filtered pool is empty) and a non-nil KindScopedSemantic hook; CertifyAbsent asserts the case where the arm never ran.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_scoped_semantic"}},

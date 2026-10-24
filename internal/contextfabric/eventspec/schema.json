@@ -16683,7 +16683,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on a confirmed-kind-free, uncommitted resolution with a hinted repository/project/team kind and a non-nil KindScopedSemantic hook; CertifyAbsent asserts the case where the arm never ran.",
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on an uncommitted resolution with a hinted repository/project/team kind (on a confirmed turn: only the confirmed kind, and only when the confirmed-kind-filtered pool is empty) and a non-nil KindScopedSemantic hook; CertifyAbsent asserts the case where the arm never ran.",
     "fields": [
       {
         "key": "request_id",

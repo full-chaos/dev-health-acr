@@ -3928,7 +3928,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// ticket's scope; see the CHAOS-4417 follow-up ticket. Reached when NO
 	// receipt has confirmed a kind (confirmedKind == nil) and the
 	// resolution-wide search truncated with nothing committed -- exactly
-	// turn 1's shape for a repository/project/team question.
+	// turn 1's shape for a repository/project/team question. The kind-scoped
+	// semantic arm below also runs on a confirmed turn, but only for the
+	// confirmed kind and only when the confirmed-kind-filtered pool is empty.
 	//
 	// Deliberately NOT guarded by `!offersOnly` (codex R4, confirmed):
 	// unlike the confirmedKind commit block above -- which the offers-only
