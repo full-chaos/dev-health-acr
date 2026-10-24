@@ -1453,6 +1453,9 @@ var ModelInterpretDecision = Event{
 		modelDecisionAttemptFields(),
 		modelDecisionPrimaryFields(),
 		[]Field{
+			{Key: "resynthesis_deadline_remaining_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when an interpretation redraw decision consulted the caller's remaining request deadline"},
+			{Key: "resynthesis_deadline_reserved_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written with resynthesis_deadline_remaining_ms"},
+			{Key: "resynthesis_stopped_for_deadline", Type: FieldBool, Presence: PresenceConditional, Applicability: "written with resynthesis_deadline_remaining_ms"},
 			{Key: "rejection_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ended in a rejection of the model's interpretation"},
 			{Key: "rejected_fact_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written alongside rejection_reason when the rejecting rule was fact_requirement_kind_invalid; the one model-authored value on the line, sanitised and bounded"},
 		},
