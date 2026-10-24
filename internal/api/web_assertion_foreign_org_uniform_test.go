@@ -157,13 +157,13 @@ func serve(app *App, request *http.Request) *httptest.ResponseRecorder {
 }
 
 var (
-	requestIDPattern = regexp.MustCompile(`req_[0-9a-f]{32}`)
+	uniformRequestIDPattern = regexp.MustCompile(`req_[0-9a-f]{32}`)
 	packetIDPattern  = regexp.MustCompile(`pkt_[0-9a-f]{24}`)
 )
 
 // answerOf masks the per-request ids; everything else must match byte for byte.
 func answerOf(response *httptest.ResponseRecorder) string {
-	body := packetIDPattern.ReplaceAllString(requestIDPattern.ReplaceAllString(response.Body.String(), "req_X"), "pkt_X")
+	body := packetIDPattern.ReplaceAllString(uniformRequestIDPattern.ReplaceAllString(response.Body.String(), "req_X"), "pkt_X")
 	return response.Result().Status + "\n" + body
 }
 
