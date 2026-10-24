@@ -67,55 +67,89 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 			f.h.orgID, "github", teams[rng.Intn(len(teams))], repos[rng.Intn(len(repos))], "acme/carry-0", "exact", []string{"native", "manual"}[rng.Intn(2)], uint8(rng.Intn(2)), uint16(100), int32(0), at, nil, at)
 	}
 
+	// A deterministic tie block: several rows per producer at ONE identical
+	// stamp with distinct keys, so the (position, key) tie rule is crossed on
+	// purpose and not by the luck of 250 ms random stamps.
+	tie := base.Add(20 * time.Minute)
+	for i := 0; i < 4; i++ {
+		f.team(fmt.Sprintf("T-tie-%d", i), tie, tie)
+		f.project(fmt.Sprintf("10715000-0000-4000-8000-0000000002%02d", i), fmt.Sprintf("TIE%d", i), tie, tie)
+		f.ownership(teams[i], projects[i], fmt.Sprintf("K%d", i), tie, tie)
+		item := fmt.Sprintf("linear:CARRY-TIE-%d", i)
+		f.workItem(item, projects[i], tie, tie)
+		f.attribution(item, teams[i], "native_team", 0, tie)
+		f.transition(fmt.Sprintf("linear:CARRY-TIE-T-%d", i), projects[(i+1)%len(projects)], "K1", fmt.Sprintf("linear:ev-tie-%d", i), tie, tie)
+		mustExec(t, ctx, f.h.direct,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			f.h.orgID, "github", teams[i], repos[i%len(repos)], "acme/carry-0", "exact", "native", uint8(0), uint16(100), int32(0), tie, nil, tie)
+	}
+	// A work item that keeps a project in its column AND has transition
+	// history, at the tie stamp: the column_superseded arm.
+	f.workItem("linear:CARRY-TIE-SUP", projects[0], tie, tie)
+	f.transition("linear:CARRY-TIE-SUP", projects[1], "K1", "linear:ev-tie-sup", tie, tie)
+
 	query, _ := orgIsolationClickHouseFixture(t)
 	limits := []int{7, 50, 200, 200}
-	for _, producer := range devhealthsource.CarryProducersForTest() {
-		positions, err := devhealthsource.CarryPositionsForTest(ctx, query, f.h.orgID, producer.Name, 200)
-		if err != nil {
-			t.Fatalf("%s: %v", producer.Name, err)
-		}
-		if len(positions) < 8 {
-			t.Fatalf("%s: the seed produced %d positions, want at least 8", producer.Name, len(positions))
-		}
-		trials, skipped, mismatches, nonEmpty := 0, 0, 0, 0
-		for trial := 0; trial < 40; trial++ {
-			i, j := rng.Intn(len(positions)+1)-1, rng.Intn(len(positions))
-			if i > j {
-				i, j = j, i
-			}
-			c0 := devhealthsource.CarryCursorForTest{}
-			if i >= 0 {
-				c0 = positions[i]
-			}
-			c1 := positions[j]
-			result, err := devhealthsource.CarryTrialRunForTest(ctx, query, f.h.orgID, producer.Name, c0, c1, limits[rng.Intn(len(limits))])
+	for _, ingest := range []bool{true, false} {
+		mode := map[bool]string{true: "ingest_columns", false: "legacy"}[ingest]
+		for _, producer := range devhealthsource.CarryProducersForTest(ingest) {
+			positions, err := devhealthsource.CarryPositionsForTest(ctx, query, f.h.orgID, producer.Name, ingest, 200)
 			if err != nil {
-				t.Fatalf("%s trial %d: %v", producer.Name, trial, err)
+				t.Fatalf("%s/%s: %v", mode, producer.Name, err)
 			}
-			if result.Skipped {
-				skipped++
-				continue
+			if len(positions) < 8 {
+				t.Fatalf("%s/%s: the seed produced %d positions, want at least 8", mode, producer.Name, len(positions))
 			}
-			trials++
-			if result.NonEmpty && result.Equal {
-				nonEmpty++
-			}
-			if !result.Equal {
-				mismatches++
-				if producer.Carry {
-					t.Errorf("%s: from %v to %v the carry holds %d rows, the statement returns %d:\n  carried %v\n  fetched %v", producer.Name, c0, c1, len(result.Carried), len(result.Fetched), headKeys(result.Carried), headKeys(result.Fetched))
+			var cov carryCoverage
+			trial := func(label string, c0, c1 devhealthsource.CarryCursorForTest, limit int) {
+				result, err := devhealthsource.CarryTrialRunForTest(ctx, query, f.h.orgID, producer.Name, ingest, c0, c1, limit)
+				if err != nil {
+					t.Fatalf("%s/%s %s: %v", mode, producer.Name, label, err)
+				}
+				cov.add(result)
+				if !result.Equal && !result.Skipped && producer.Carry {
+					t.Errorf("%s/%s %s: from %v to %v the carry holds %d rows, the statement returns %d:\n  carried %v\n  fetched %v", mode, producer.Name, label, c0, c1, len(result.Carried), len(result.Fetched), headKeys(result.Carried), headKeys(result.Fetched))
 				}
 			}
-		}
-		t.Logf("carry-parity table=%s carry=%v trials=%d skipped=%d mismatches=%d non_empty_equal=%d", producer.Name, producer.Carry, trials, skipped, mismatches, nonEmpty)
-		if trials < 8 {
-			t.Errorf("%s: only %d of 40 trials read a complete table; the seed or the limits are too small to decide", producer.Name, trials)
-		}
-		if nonEmpty < 5 {
-			t.Errorf("%s: only %d trials compared a non-empty page; the parity of empty pages decides nothing", producer.Name, nonEmpty)
-		}
-		if !producer.Carry && mismatches == 0 {
-			t.Logf("table %s is excluded from the carry and passed every trial", producer.Name)
+			for n := 0; n < 40; n++ {
+				i, j := rng.Intn(len(positions)+1)-1, rng.Intn(len(positions))
+				if i > j {
+					i, j = j, i
+				}
+				c0 := devhealthsource.CarryCursorForTest{}
+				if i >= 0 {
+					c0 = positions[i]
+				}
+				trial(fmt.Sprintf("random %d", n), c0, positions[j], limits[rng.Intn(len(limits))])
+			}
+			// Everything past the first position, from the very start: every
+			// membership arm the seed holds is read and compared.
+			trial("whole table", devhealthsource.CarryCursorForTest{}, positions[0], 200)
+			// Each tie group: c1 is the first position of a run of positions
+			// sharing one timestamp, c0 the position just before the run, so
+			// the read at c0 holds rows at c1's stamp on both sides of c1's key.
+			for start := 0; start < len(positions); {
+				end := start + 1
+				for end < len(positions) && positions[end].Since.Equal(positions[start].Since) {
+					end++
+				}
+				if end-start >= 2 {
+					c0 := devhealthsource.CarryCursorForTest{}
+					if start > 0 {
+						c0 = positions[start-1]
+					}
+					trial(fmt.Sprintf("tie group at %s", positions[start].Since.UTC().Format(time.RFC3339Nano)), c0, positions[start], 200)
+				}
+				start = end
+			}
+			var arms []string
+			if producer.Name == "project_membership_presence" {
+				arms = devhealthsource.MembershipArmsForTest()
+			}
+			t.Logf("carry-parity mode=%s table=%s carry=%v %s", mode, producer.Name, producer.Carry, cov.String())
+			for _, gap := range cov.gaps(arms) {
+				t.Errorf("%s/%s: %s", mode, producer.Name, gap)
+			}
 		}
 	}
 }
