@@ -27,7 +27,7 @@ const (
 
 func TestTeamBlockerFactsServeAnOrganizationWithManyWorkItemsOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
@@ -137,7 +137,7 @@ const blockerSiblingOrg = "8d2f6a19-3c4e-4b71-9e05-7a1c5b3d9f28"
 // so is its edge, however the read narrows the rows it looks at.
 func TestTeamBlockerFactsRefuseAnEndpointWithAnUnauthorizedSiblingRowOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "work_items", "work_item_dependencies", "work_item_relations_read", "work_item_dependency_first_seen", "work_graph_issue_pr",
 		"git_pull_requests", "projects", "project_membership_transitions", "team_project_ownership", "work_item_team_attributions",

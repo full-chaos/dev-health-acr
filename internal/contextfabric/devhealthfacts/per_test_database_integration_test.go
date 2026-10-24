@@ -33,7 +33,7 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context, tune func(*runtimeclickhouse.Options)) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
 	_, admin := sharedClickHouseFixture(t)
-	addr := sharedClickHouseAddrFor(t)
+	addr := sharedClickHouseAddr
 	database := fmt.Sprintf("p%d", perTestDatabaseSeq.Add(1))
 	if err := admin.Exec(ctx, "CREATE DATABASE "+database); err != nil {
 		t.Fatalf("create per-test database %s: %v", database, err)

@@ -18,7 +18,7 @@ var (
 	// case-sensitively so ordinary prose does not trip them
 	serverStatement = regexp.MustCompile(`\bKILL (?:QUERY|MUTATION)\b|\bSYSTEM (?:FLUSH|DROP|STOP|START|RELOAD|SYNC|RESTART)|"\s*SET (?:GLOBAL|[a-z_]+ *=)|\bALTER USER\b|\bCREATE (?:USER|ROLE|QUOTA|SETTINGS PROFILE)\b|\bGRANT [A-Z, ]+ ON\b`)
 	// server accounting: system tables and the memory and rows-read figures read from them
-	serverAccounting = regexp.MustCompile(`(?i)system\.[a-z_]+|memory_usage|peak_memory|read_rows|read_bytes|query_log|MaxMemory|log_comment`)
+	serverAccounting = regexp.MustCompile(`(?i)system\.[a-z_]+|memory_usage|peak_memory|read_rows|read_bytes|query_log|MaxMemory|log_comment|statementMemorySince\(`)
 )
 
 // callsSharedHelper reports whether source calls the shared helper: a
@@ -90,6 +90,7 @@ func TestSharedClickHouseGuardCatchesPlantedServerUses(t *testing.T) {
 		"set global":        shared + `direct.Exec(ctx, "SET GLOBAL x = 1")`,
 		"memory accounting": shared + "peak := memory_usage",
 		"rows read":         shared + "n := read_rows",
+		"memory helper":     shared + "got := statementMemorySince(t, ctx, direct, filter, mark)",
 		"with options":      "\tq, d := newCHAOS3780IntegrationClientWithOptions(t, ctx, tune)\n\tx := \"system.parts\"",
 	}
 	for name, source := range cases {
@@ -116,8 +117,8 @@ func TestPerTestDatabasesAreIsolatedAndDropped(t *testing.T) {
 	madeBefore, droppedBefore := perTestDatabasesMade.Load(), perTestDatabasesDropped.Load()
 	var databases [2]string
 	t.Run("two databases", func(t *testing.T) {
-		_, first := newCHAOS3780IntegrationClient(t, ctx)
-		_, second := newCHAOS3780IntegrationClient(t, ctx)
+		firstQuery, first := newCHAOS3780IntegrationClient(t, ctx)
+		secondQuery, second := newCHAOS3780IntegrationClient(t, ctx)
 		if err := first.Exec(ctx, "CREATE TABLE rows_a (x UInt8) ENGINE = MergeTree ORDER BY x"); err != nil {
 			t.Fatalf("create in the first database: %v", err)
 		}
@@ -130,6 +131,23 @@ func TestPerTestDatabasesAreIsolatedAndDropped(t *testing.T) {
 		for i, conn := range []clickhousedriver.Conn{first, second} {
 			if err := conn.QueryRow(ctx, "SELECT currentDatabase()").Scan(&databases[i]); err != nil {
 				t.Fatalf("currentDatabase of connection %d: %v", i, err)
+			}
+		}
+		// The production query clients are pointed at the same databases.
+		for i, client := range []*runtimeclickhouse.Client{firstQuery, secondQuery} {
+			rows, err := client.Query(ctx, "SELECT currentDatabase()", nil)
+			if err != nil {
+				t.Fatalf("query client %d: %v", i, err)
+			}
+			var viaQuery string
+			for rows.Next() {
+				if err := rows.Scan(&viaQuery); err != nil {
+					t.Fatalf("scan query client %d: %v", i, err)
+				}
+			}
+			_ = rows.Close()
+			if viaQuery != databases[i] {
+				t.Fatalf("query client %d reads database %q, want %q", i, viaQuery, databases[i])
 			}
 		}
 		if databases[0] == databases[1] || databases[0] == "default" {
