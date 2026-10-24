@@ -106,3 +106,80 @@ func TestInterpretRedrawStopsWhenItWouldStarveWhatFollows(t *testing.T) {
 		t.Fatalf("draws = %d fallback.calls = %d, want 1 and 1", len(gen.seeds), fallback.calls)
 	}
 }
+
+// An admitted redraw whose draw and fallback leg each cost their estimate
+// leaves at least the downstream slice: the reserve's own contract.
+func TestInterpretRedrawReserveLeavesTheDownstreamSliceWhenEveryLegRunsAtItsEstimate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		timeout  time.Duration
+		fallback bool
+		slowest  time.Duration
+	}{
+		{"fallback, 1s measured draw (the review's case)", 45 * time.Second, true, time.Second},
+		{"fallback, 11s measured draw", 45 * time.Second, true, 11 * time.Second},
+		{"fallback, nothing measured", 45 * time.Second, true, 0},
+		{"no fallback, long timeout", 2 * time.Minute, false, 11 * time.Second},
+	} {
+		estimate := max(synthesisRedrawFloor, 2*tc.slowest)
+		legs := estimate
+		if tc.fallback {
+			legs += estimate
+		}
+		reserved := interpretRedrawReserve(tc.timeout, tc.fallback, tc.slowest)
+		if reserved >= map[bool]time.Duration{false: tc.timeout, true: 2 * tc.timeout}[tc.fallback] {
+			t.Fatalf("%s: reserve %s hit the old-gate cap, the row does not test the uncapped contract", tc.name, reserved)
+		}
+		if left := reserved - legs; left < interpretRedrawDownstream {
+			t.Errorf("%s: an admitted redraw leaves %s after its legs, want >= %s", tc.name, left, interpretRedrawDownstream)
+		}
+	}
+}
+
+func TestInterpretRedrawDecisionLogsTheDeadlineBasis(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		budget      time.Duration
+		wantStopped bool
+	}{
+		{"stopped for the deadline", 60 * time.Second, true},
+		{"redraw admitted", 75 * time.Second, false},
+	} {
+		handler, logger := newCaptureLogger()
+		gen := &redrawGenerator{outputs: []interpretationOutput{invalidInterpretationOutput(), validInterpretationOutput()}}
+		fallback := &trackedErroringFallback{err: errors.New("fallback unavailable"), receipt: validReceipt(contextfabric.ModelOperationInterpret)}
+		clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+		rt := mustRuntime(t, slowRedrawGenerator{gen, clock, 11 * time.Second}, Config{Logger: logger, Timeout: 45 * time.Second, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: 3, Fallback: fallback})
+		rt.now = clock.read
+		ctx, cancel := context.WithTimeout(context.Background(), tc.budget)
+		_, _, _ = rt.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+		cancel()
+
+		attrs := onlyDecisionEvent(t, handler).Attrs
+		if got := attrs["resynthesis_deadline_reserved_ms"]; got != int64(69000) {
+			t.Errorf("%s: reserved_ms = %#v, want 69000", tc.name, got)
+		}
+		remaining, ok := attrs["resynthesis_deadline_remaining_ms"].(int64)
+		if !ok || remaining <= 0 || remaining > tc.budget.Milliseconds() {
+			t.Errorf("%s: remaining_ms = %#v, want in (0, %d]", tc.name, attrs["resynthesis_deadline_remaining_ms"], tc.budget.Milliseconds())
+		}
+		if got := attrs["resynthesis_stopped_for_deadline"]; got != tc.wantStopped {
+			t.Errorf("%s: stopped = %#v, want %v", tc.name, got, tc.wantStopped)
+		}
+	}
+}
+
+func TestInterpretRedrawDecisionCarriesNoDeadlineFieldsWithoutADeadline(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &redrawGenerator{outputs: []interpretationOutput{invalidInterpretationOutput(), validInterpretationOutput()}}
+	rt := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
+	if _, _, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_remaining_ms"]; present {
+		t.Fatal("a call with no deadline must not write the deadline fields")
+	}
+}

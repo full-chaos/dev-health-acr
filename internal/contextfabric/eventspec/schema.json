@@ -14585,6 +14585,24 @@
         "presence": "required"
       },
       {
+        "key": "resynthesis_deadline_remaining_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when an interpretation redraw decision consulted the caller's remaining request deadline"
+      },
+      {
+        "key": "resynthesis_deadline_reserved_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written with resynthesis_deadline_remaining_ms"
+      },
+      {
+        "key": "resynthesis_stopped_for_deadline",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written with resynthesis_deadline_remaining_ms"
+      },
+      {
         "key": "rejection_reason",
         "type": "string",
         "presence": "conditional",

@@ -1035,9 +1035,12 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		// fallback success. Equal to the answer identity whenever no
 		// fallback ran.
 		primaryProvider, primaryModel, primaryModelVersion string
+
+		budgetChecked, budgetStopped        bool
+		budgetRemainingMS, budgetReservedMS int64
 	)
 	defer func() {
-		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, initialSample, redraws, rejectionReason, rejectedFactKind, rejectedFactKindSet, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, initialSample, redraws, rejectionReason, rejectedFactKind, rejectedFactKindSet, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, budgetChecked, budgetRemainingMS, budgetReservedMS, budgetStopped)
 	}()
 
 	if err := request.Validate(); err != nil {
@@ -1130,7 +1133,12 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		// shared budget.
 		if deadline, ok := ctx.Deadline(); ok {
 			reserved := interpretRedrawReserve(r.config.Timeout, r.config.Fallback != nil, slowestDraw)
-			if time.Until(deadline) < reserved {
+			remaining := time.Until(deadline)
+			budgetChecked = true
+			budgetRemainingMS = contextfabric.SanitizeLogInt(remaining.Milliseconds())
+			budgetReservedMS = contextfabric.SanitizeLogInt(reserved.Milliseconds())
+			if remaining < reserved {
+				budgetStopped = true
 				break
 			}
 		}
@@ -3087,7 +3095,7 @@ const rejectedInterpretDrawMessage = "context fabric interpret draw rejected"
 // strings.NewReplacer pass changes CodeQL's read of the finding above is
 // verified per-PR, not assumed from this comment.
 
-func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample, initialSample, redraws int, rejectionReason, rejectedFactKind string, rejectedFactKindSet bool, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample, initialSample, redraws int, rejectionReason, rejectedFactKind string, rejectedFactKindSet bool, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string, budgetChecked bool, budgetRemainingMS, budgetReservedMS int64, budgetStopped bool) {
 	// The required fields are built through the generated constructor, so the
 	// declaration in eventspec and this line cannot drift apart; only the
 	// conditional fields below are appended here.
@@ -3104,6 +3112,15 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		len(attemptOutcomes), attemptsRetried(attemptOutcomes), formatAttemptOutcomes(attemptOutcomes), formatAttemptElapsed(attemptOutcomes),
 		fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion,
 	).SlogArgs()
+	// Appended only when a redraw decision consulted the request deadline,
+	// under the synthesis line's field names so one query reads both.
+	if budgetChecked {
+		fields = append(fields,
+			"resynthesis_deadline_remaining_ms", budgetRemainingMS,
+			"resynthesis_deadline_reserved_ms", budgetReservedMS,
+			"resynthesis_stopped_for_deadline", budgetStopped,
+		)
+	}
 	// Appended only when a rejection actually happened, exactly as
 	// logSynthesizeDecision does with its own rejection_reason: an
 	// unconditional field would put rejection_reason="" on every
