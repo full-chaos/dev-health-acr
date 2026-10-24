@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -26,6 +27,12 @@ func TestProtectedLookingEventKeysAreTypedBenign(t *testing.T) {
 
 func TestAuthorizationReasonVocabularyIsTheClosedValueSetOfTheLogKey(t *testing.T) {
 	t.Parallel()
+	shape := regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+	for _, v := range contextfabric.StoredResultAuthorizationReasonVocabulary() {
+		if !shape.MatchString(string(v)) {
+			t.Errorf("%q does not match the closed value code shape", v)
+		}
+	}
 	for _, v := range contextfabric.StoredResultAuthorizationReasonVocabulary() {
 		var buf bytes.Buffer
 		slog.New(telemetryscrub.Handler(slog.NewJSONHandler(&buf, nil))).Info("m", "authorization_reason", string(v))

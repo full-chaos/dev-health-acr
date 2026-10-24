@@ -876,3 +876,42 @@ func TestCompactEqualSpellingsAreOneKeyForOneKindOnly(t *testing.T) {
 		}
 	}
 }
+
+func registerPanics(key string, values []string) (msg string) {
+	defer func() {
+		if r := recover(); r != nil {
+			msg = fmt.Sprint(r)
+		}
+	}()
+	RegisterClosedValues(key, values)
+	return ""
+}
+
+func TestClosedValuesRegisterOnceAndOnlyCodeShapedValues(t *testing.T) {
+	if msg := registerPanics("authorization_reason", []string{"another_code"}); !strings.Contains(msg, "already registered") {
+		t.Errorf("second registration: %q", msg)
+	}
+	if msg := registerPanics("AuthorizationReason", testReasons); !strings.Contains(msg, "already registered") {
+		t.Errorf("second registration, other spelling: %q", msg)
+	}
+	for _, bad := range []string{"has space", "has:colon", "a/b", "", "UPPER", strings.Repeat("a", 65), "tab\there", "ünï"} {
+		if msg := registerPanics("authorization_reason", []string{"ok_code", bad}); !strings.Contains(msg, "code shape") {
+			t.Errorf("value %q: %q", bad, msg)
+		}
+	}
+	if msg := registerPanics("authorization_reason", nil); !strings.Contains(msg, "no closed values") {
+		t.Errorf("empty set: %q", msg)
+	}
+	for _, v := range []string{"another_code", "has space", "x"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", v) })
+		if got["authorization_reason"] != Redacted {
+			t.Errorf("%q = %v after rejected registrations, want redacted", v, got["authorization_reason"])
+		}
+	}
+	if got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", "grant_mismatch") }); got["authorization_reason"] != "grant_mismatch" {
+		t.Errorf("registered value changed: %v", got["authorization_reason"])
+	}
+	if !closedValueShape.MatchString(strings.Repeat("a", 64)) || !closedValueShape.MatchString("a1_b2") {
+		t.Error("shape rejects a valid code")
+	}
+}

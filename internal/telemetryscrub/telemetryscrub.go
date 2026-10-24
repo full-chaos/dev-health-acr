@@ -85,26 +85,38 @@ var typedBenignKeys = map[string]string{
 	"authorizationreason":                     "string",
 }
 
+var closedValueShape = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
 var (
 	closedValuesMu sync.RWMutex
 	closedValues   = map[string]map[string]bool{}
 )
 
 // RegisterClosedValues sets the exact values a string-kind typed benign key may carry; any other value of
-// that key stays redacted, and a string-kind key with no registered set is always redacted. The owner of
-// the vocabulary calls it from init, so the set has one source.
+// that key stays redacted, and a string-kind key with no registered set is always redacted. The owner of the
+// vocabulary calls it once, from init, so the set has one source; a second call for the same key, an empty
+// set, or a value that is not a code ([a-z0-9_], 1 to 64 characters) panics, so the exemption cannot widen.
 func RegisterClosedValues(key string, values []string) {
 	c := compact(key)
 	if typedBenignKeys[c] != "string" {
 		panic("telemetryscrub: " + key + " is not a string-kind typed benign key")
 	}
+	if len(values) == 0 {
+		panic("telemetryscrub: no closed values for " + key)
+	}
 	set := make(map[string]bool, len(values))
 	for _, v := range values {
+		if !closedValueShape.MatchString(v) {
+			panic("telemetryscrub: closed value for " + key + " is not a code shape")
+		}
 		set[v] = true
 	}
 	closedValuesMu.Lock()
+	defer closedValuesMu.Unlock()
+	if _, ok := closedValues[c]; ok {
+		panic("telemetryscrub: closed values for " + key + " already registered")
+	}
 	closedValues[c] = set
-	closedValuesMu.Unlock()
 }
 
 func closedValue(c, v string) bool {
