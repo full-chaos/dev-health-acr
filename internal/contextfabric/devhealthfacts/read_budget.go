@@ -152,4 +152,4 @@ type measuredRows struct {
 func (r *measuredRows) Next() bool          { return r.inner.Next() }
 func (r *measuredRows) Scan(d ...any) error { return r.client.classify(r.inner.Scan(d...), r.stats) }
 func (r *measuredRows) Err() error          { return r.client.classify(r.inner.Err(), r.stats) }
-func (r *measuredRows) Close() error        { return r.client.classify(r.inner.Close(), r.stats) }
+func (r *measuredRows) Close() error        { return r.client.classify(nil, r.stats) }
