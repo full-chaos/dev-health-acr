@@ -12,6 +12,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -198,6 +199,106 @@ func TestViewDropsAnyUnlistedMetricAttribute(t *testing.T) {
 			if kv.Key == "user_agent.original" || kv.Key == "client.address" {
 				t.Errorf("the unlisted label %s was exported", kv.Key)
 			}
+		}
+	}
+}
+
+// A sampled measurement keeps the attributes the view filtered out as exemplar attributes, and the OTLP exporter serialises
+// them: the caller's Host must not leave that way either. The exemplar itself (value, time, trace link) is kept.
+func TestHTTPServerMetricExemplarsCarryNoFilteredAttributes(t *testing.T) {
+	exporter, s := newTestExporter(t)
+	handler := routedHandler(exporter)
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/v1/things/7", nil)
+		req.Host = "attacker-exemplar-" + strings.Repeat("x", i) + ".example:4" + strings.Repeat("3", i%4) + "21"
+		req.Header.Set("User-Agent", "attacker-agent/9.9")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	rm := collectMetrics(t, s)
+	allowed := thirdPartyLabelKeys(t)
+	exemplars := 0
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			h, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				continue
+			}
+			for _, p := range h.DataPoints {
+				for _, ex := range p.Exemplars {
+					exemplars++
+					if len(ex.TraceID) == 0 {
+						t.Errorf("%s: an exemplar lost its trace link", m.Name)
+					}
+					for _, kv := range ex.FilteredAttributes {
+						if !allowed[string(kv.Key)] || strings.Contains(strings.ToLower(kv.Value.Emit()), "attacker") {
+							t.Errorf("%s: exemplar attribute %s=%q left the process", m.Name, kv.Key, kv.Value.Emit())
+						}
+					}
+				}
+			}
+		}
+	}
+	if exemplars == 0 {
+		t.Fatal("no exemplar was recorded: the test would pass vacuously")
+	}
+}
+
+// The census over every scope of the exporter's meter provider: no exemplar carries a filtered attribute outside the
+// reviewed set, whichever instrument recorded it (a sampled measurement of a first-party instrument is included).
+func TestNoExemplarCarriesAnUnreviewedFilteredAttribute(t *testing.T) {
+	exporter, s := newTestExporter(t)
+	handler := routedHandler(exporter)
+	req := httptest.NewRequest(http.MethodGet, "/v1/things/7", nil)
+	req.Host = "attacker-census.example:4321"
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	counter, err := exporter.Meter().Int64Counter("census_probe_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, span := exporter.Tracer().Start(context.Background(), "projection tick")
+	counter.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "ok")))
+	span.End()
+	allowed := thirdPartyLabelKeys(t)
+	rm := collectMetrics(t, s)
+	exemplars := 0
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			var all [][]metricdata.Exemplar[float64]
+			var ints [][]metricdata.Exemplar[int64]
+			switch data := m.Data.(type) {
+			case metricdata.Histogram[float64]:
+				for _, p := range data.DataPoints {
+					all = append(all, p.Exemplars)
+				}
+			case metricdata.Sum[int64]:
+				for _, p := range data.DataPoints {
+					ints = append(ints, p.Exemplars)
+				}
+			}
+			for _, group := range all {
+				for _, ex := range group {
+					exemplars++
+					checkFiltered(t, scope.Scope.Name, m.Name, ex.FilteredAttributes, allowed)
+				}
+			}
+			for _, group := range ints {
+				for _, ex := range group {
+					exemplars++
+					checkFiltered(t, scope.Scope.Name, m.Name, ex.FilteredAttributes, allowed)
+				}
+			}
+		}
+	}
+	if exemplars == 0 {
+		t.Fatal("no exemplar was recorded in any scope: the census would pass vacuously")
+	}
+}
+
+func checkFiltered(t *testing.T, scope, metric string, attrs []attribute.KeyValue, allowed map[string]bool) {
+	t.Helper()
+	for _, kv := range attrs {
+		if !allowed[string(kv.Key)] || strings.Contains(strings.ToLower(kv.Value.Emit()), "attacker") {
+			t.Errorf("%s %s: exemplar attribute %s=%q is outside the reviewed set", scope, metric, kv.Key, kv.Value.Emit())
 		}
 	}
 }

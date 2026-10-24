@@ -1,10 +1,14 @@
 package otelexport
 
 import (
+	"context"
+	"time"
+
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
@@ -73,6 +77,23 @@ func httpMetricView() sdkmetric.View {
 	}
 	return sdkmetric.NewView(
 		sdkmetric.Instrument{Scope: instrumentation.Scope{Name: otelhttp.ScopeName}},
-		sdkmetric.Stream{AttributeFilter: attribute.NewAllowKeysFilter(keys...)},
+		sdkmetric.Stream{
+			AttributeFilter:                   attribute.NewAllowKeysFilter(keys...),
+			ExemplarReservoirProviderSelector: unfilteredExemplars,
+		},
 	)
+}
+
+// unfilteredExemplars wraps the default reservoir of an aggregation so that an exemplar keeps its value, time and trace link
+// but none of the attributes the view filtered out: the SDK hands those to the reservoir and the OTLP exporter serialises them,
+// so without this the request host would leave as an exemplar attribute although it is no label.
+func unfilteredExemplars(aggregation sdkmetric.Aggregation) exemplar.ReservoirProvider {
+	inner := sdkmetric.DefaultExemplarReservoirProviderSelector(aggregation)
+	return func(kept attribute.Set) exemplar.Reservoir { return attributeFreeReservoir{inner(kept)} }
+}
+
+type attributeFreeReservoir struct{ exemplar.Reservoir }
+
+func (r attributeFreeReservoir) Offer(ctx context.Context, at time.Time, value exemplar.Value, _ []attribute.KeyValue) {
+	r.Reservoir.Offer(ctx, at, value, nil)
 }
