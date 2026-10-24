@@ -32,8 +32,8 @@ const (
 )
 
 // orgBoundClickHouse answers like a tenant table: a row is visible only when
-// the statement binds the owning organization. Every statement must bind an
-// organization.
+// the statement filters by the caller's organization (org_id = {org_id:String})
+// and the binding is the owner's. Every statement must bind an organization.
 type orgBoundClickHouse struct {
 	t          *testing.T
 	owner      string
@@ -63,7 +63,9 @@ func (c *orgBoundClickHouse) Query(ctx context.Context, statement string, bindin
 	if hasNames {
 		return c.inner.Query(ctx, statement, bindings)
 	}
-	if org != c.owner || (slug != "" && slug != c.repository) {
+	// A statement without the org_id predicate sees every organization's rows.
+	scoped := strings.Contains(statement, "org_id = {org_id:String}")
+	if (scoped && org != c.owner) || (slug != "" && slug != c.repository) {
 		return &fixtureClickHouseRows{}, nil
 	}
 	return c.inner.Query(ctx, statement, bindings)
