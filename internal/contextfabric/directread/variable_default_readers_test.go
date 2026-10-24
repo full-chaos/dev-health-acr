@@ -4,11 +4,12 @@ import (
 	"go/ast"
 	"go/types"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 )
 
 const directreadImportPath = "github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -38,11 +39,15 @@ func rawDefaultUses(t *testing.T, extra ...string) []string {
 		"github.com/full-chaos/dev-health-acr/internal/mcp/guide/guidegen",
 		"github.com/full-chaos/dev-health-acr/internal/runtime/hosted",
 	}
-	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps}
-	pkgs, err := packages.Load(cfg, append(patterns, extra...)...)
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader, err := sourceload.Load(root, append(patterns, extra...), runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		t.Fatalf("load packages: %v", err)
 	}
+	pkgs := loader.Packages()
 	var field *types.Var
 	for _, pkg := range pkgs {
 		if pkg.PkgPath != directreadImportPath {
@@ -60,10 +65,6 @@ func rawDefaultUses(t *testing.T, extra ...string) []string {
 	}
 	if field == nil {
 		t.Fatal("VariableRule.Default was not found: the guard measured nothing")
-	}
-	root, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
 	}
 	seen := map[string]bool{}
 	for _, pkg := range pkgs {
