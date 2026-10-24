@@ -260,14 +260,14 @@ func TestDependencyEdgeCountsAreUnmeasuredWhenTheRemovedLinkSetIsCut(t *testing.
 func TestDependencyEdgeCountDropsARelationWhoseEvidenceReferenceBreaksTheBound(t *testing.T) {
 	t.Parallel()
 	statement := dependencyEdgeCountSQL()
-	ref := "concat('" + dependencyEvidenceRefPrefix + "', " + encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
+	ref := "concat('acr:v1:work-item-dependency.v2:', " + encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
 	for _, want := range []string{"lengthUTF8(" + ref + ") <= 256", "position(" + ref + ", '|') = 0", "AND ref_ok"} {
 		if !strings.Contains(statement, want) {
 			t.Errorf("statement lacks the evidence-reference bound %q:\n%s", want, statement)
 		}
 	}
 	got, fits := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "s", "t", dependencyrelation.Key("blocks"))
-	if want := dependencyEvidenceRefPrefix + "s:t:blocks%3Afwd"; got != want || !fits {
+	if want := "acr:v1:work-item-dependency.v2:s:t:blocks%3Afwd"; got != want || !fits {
 		t.Fatalf("the SQL mirrors the producer's reference %q, got %q fits=%v", want, got, fits)
 	}
 }

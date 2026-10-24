@@ -200,7 +200,7 @@ func dependencyEdgeCountSQL() string {
 	source := "concat('w.', " + encodeSegmentSQL("toString(w.repo_id)") + ", ':', " + encodeSegmentSQL("d.source_work_item_id") + ")"
 	target := "if(" + resolved + ", concat('w.', " + encodeSegmentSQL("toString(t.repo_id)") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + "), concat('r.', " + encodeSegmentSQL("d.target_work_item_id") + "))"
 	refFits := fmt.Sprintf("length(concat('%s:', %s)) <= %d", identity.KindWorkItemRef, encodeSegmentSQL("d.target_work_item_id"), identity.MaxNaturalKeyBytes)
-	ref := "concat('" + dependencyEvidenceRefPrefix + "', " +
+	ref := "concat('" + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2) + ":', " +
 		encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
 	refOK := fmt.Sprintf("lengthUTF8(%s) <= %d AND position(%s, '|') = 0", ref, contractsv1.ContextFabricEvidenceRefIDMaxLength, ref)
 	arms := make([]string, 0, len(dependencyEdgeRelations))
@@ -222,11 +222,6 @@ func dependencyEdgeCountSQL() string {
 )
 GROUP BY arm`
 }
-
-// dependencyEvidenceRefPrefix is the head of the dependency evidence reference
-// the producer mints (evidenceref.Mint of the work item dependency kind); a
-// test holds it equal to the minted text.
-const dependencyEvidenceRefPrefix = "acr:v1:work-item-dependency.v2:"
 
 var clickHouseEdgePopulations = []edgePopulation{
 	{relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, sql: `SELECT '' AS arm, * FROM (` + pullRequestReviewCountSQL + `)`},
