@@ -86,6 +86,14 @@ type Adapter struct {
 	bootstrapMu   sync.RWMutex
 	bootstrapDone map[string]bool
 
+	// rebootstrap is the per-graph-key re-bootstrap guard of
+	// rebootstrapAfterAbsentIndex (schema_rebootstrap.go): when the vector
+	// index vanishes from under a process that cached bootstrap success (a
+	// purge by another process), the cache is dropped once per absent event
+	// and repeats back off. Instance state, not package level.
+	rebootstrapMu sync.Mutex
+	rebootstrap   map[string]*schemaRebootstrap
+
 	// observedKeysMu/observedKeys (CHAOS-3898 S2a-2, §2.0/§5b) back
 	// cf_graph_key_divergence's IN-PROCESS half: the last resolved key this
 	// process observed for each (org, epoch, role), so a LATER resolution
@@ -301,7 +309,7 @@ func newWithAPI(config Config, client conn) (*Adapter, error) {
 	}
 	return &Adapter{
 		api: projectReachConn{conn: client}, config: config, now: time.Now,
-		bootstrapDone: make(map[string]bool), observedKeys: make(map[string]string),
+		bootstrapDone: make(map[string]bool), rebootstrap: make(map[string]*schemaRebootstrap), observedKeys: make(map[string]string),
 	}, nil
 }
 
