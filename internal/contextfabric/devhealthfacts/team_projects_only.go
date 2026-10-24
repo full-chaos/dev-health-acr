@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -82,9 +83,9 @@ func teamsOwnProjectsOnlyNote(owning, requested int) string {
 // the cause text moves, because a repository-derived kind has nothing to roll up
 // either way. A read error is returned so the caller fails loudly instead of
 // serving the wrong cause.
-func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, requested int, bound factTimeBound) error {
+func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, requested int, bound factTimeBound) {
 	if len(result.NotApplicableSubjects) == 0 {
-		return nil
+		return
 	}
 	var teams []contextfabric.SubjectRef
 	var ids []string
@@ -103,11 +104,18 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 		ids = append(ids, raw)
 	}
 	if len(ids) == 0 {
-		return nil
+		return
 	}
 	summaries, err := teamOwnedProjectSummaries(ctx, client, orgID, ids, bound)
 	if err != nil {
-		return err
+		// Best effort: this read only explains an already-decided not-applicable
+		// state, so a failure keeps the old cause text and changes no fact or state.
+		attrs := []any{"action", contextfabric.SanitizeLogAttr("query team owned projects"), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err))}
+		if code, ok := clickHouseExceptionCode(err); ok {
+			attrs = append(attrs, "clickhouse_code", int(code))
+		}
+		slog.WarnContext(ctx, "devhealthfacts.read_failed", attrs...)
+		return
 	}
 	owning := 0
 	for i, subject := range teams {
@@ -130,5 +138,4 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 		}
 		result.RequestNote = strings.Replace(result.RequestNote, teamsOwningNoRepositoriesReason(owning, requested), teamsOwnProjectsOnlyNote(owning, requested), 1)
 	}
-	return nil
 }

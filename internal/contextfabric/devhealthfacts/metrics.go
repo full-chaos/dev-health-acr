@@ -237,9 +237,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
-	if projectsErr := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound); projectsErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query team owned projects", projectsErr)
-	}
+	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)
 	applyProjectReachedWithoutRows(&result, query.Subjects, projectReachedTeams)
 	revertCoverage.apply(&result, query.Subjects)
 	return result, nil

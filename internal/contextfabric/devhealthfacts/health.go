@@ -221,9 +221,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, TruncationSubjectLocal: subjectLocal}
 	applyTeamsOwningNothing(&result, query.Subjects, len(teamIDs), teamsOwningNothingWithoutData(teamIDs, teamBySubject, teamOwned, facts, nil))
-	if projectsErr := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, len(teamIDs), timeBound); projectsErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query team owned projects", projectsErr)
-	}
+	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, len(teamIDs), timeBound)
 	return result, nil
 }
 

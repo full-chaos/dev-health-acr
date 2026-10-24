@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -133,5 +134,27 @@ func TestChaos11026_MetricsKeepsTheTeamRowOfAProjectOnlyTeam(t *testing.T) {
 	}
 	if _, na := result.NotApplicableSubjects[contextfabric.FactSubjectKey(team)]; na {
 		t.Fatal("the team with a served fact was marked not applicable")
+	}
+}
+
+// The project read only explains a state already decided: when it fails (the
+// oracle store has no projects table, ClickHouse code 60) the kind is NOT
+// failed, no fact or state moves and the old text stays.
+func TestChaos11026_AFailedProjectReadKeepsTheOldTextAndFailsNothing(t *testing.T) {
+	for _, kind := range chaos11026NotApplicableKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			team := teamSubject("jira-team")
+			result, _ := chaos11026Read(t, kind, []contextfabric.SubjectRef{team},
+				fakeTable{match: chaos11026Summaries, err: errors.New("code: 60, UNKNOWN_TABLE")})
+			if result.State != contextfabric.SourceNotApplicable || result.Reason != chaos11026OldReason {
+				t.Fatalf("state %q reason %q, want the unchanged not_applicable text", result.State, result.Reason)
+			}
+			if got := result.SubjectReasons[contextfabric.FactSubjectKey(team)]; !strings.Contains(got, chaos11026OldReason) {
+				t.Fatalf("subject reason %q, want the old text", got)
+			}
+			if len(result.Facts) != 0 {
+				t.Fatalf("facts moved: %d", len(result.Facts))
+			}
+		})
 	}
 }
