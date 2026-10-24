@@ -34,7 +34,7 @@ func readOrganizationInvestment(t *testing.T, client *fakeClient, principal stor
 // repositories, resolved effort, unresolved effort, earliest start.
 func organizationMixTable() []fakeTable {
 	return []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{
-		{map[string]float64{"feature_delivery": 30, "operational": 50, "maintenance": 10, "quality": 6, "risk": 4}, 5.0, uint64(9), uint64(3), uint64(3), 100.0, 25.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{map[string]float64{"feature_delivery": 30, "operational": 50, "maintenance": 10, "quality": 6, "risk": 4}, 5.0, uint64(9), uint64(3), uint64(3), 100.0, 25.0, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), uint64(2), uint64(9)},
 	}}}
 }
 
@@ -171,10 +171,10 @@ func TestOrganizationStatementKeepsAUnitWithNoReferenceAsUnattributedEffort(t *t
 	// sum must leave them out, so each clause names the window test.
 	for _, clause := range []string{
 		"concat('unit:', work_unit_id)",
-		"sumIf(effort, win >= 0 AND repo_uuid = '') AS unattributed_effort",
-		"sumIf(effort, win >= 0 AND repo_uuid != '') AS resolved_effort",
-		"uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '') AS repositories",
-		"if(win >= 0 AND repo_uuid != '', v * effort, 0.)",
+		"sumIf(effort, win >= 0 AND repo_uuid = '' AND NOT gated) AS unattributed_effort",
+		"sumIf(effort, win >= 0 AND repo_uuid != '' AND NOT gated) AS resolved_effort",
+		"uniqExactIf(repo_uuid, win >= 0 AND repo_uuid != '' AND NOT gated) AS repositories",
+		"if(win >= 0 AND repo_uuid != '' AND NOT gated, v * effort, 0.)",
 	} {
 		if !strings.Contains(statement, clause) {
 			t.Fatalf("the organization statement lost the clause %q", clause)

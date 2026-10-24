@@ -1,0 +1,3 @@
+file	func	keys	reason
+internal/mcp/http.go	recordRequest	acr.result_class,acr.tool	bounded tool and result class of the request line
+internal/mcp/investigate_question.go	investigateAndRender	acr.query_version	the query contract version
