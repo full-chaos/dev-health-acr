@@ -179,8 +179,9 @@ func TestStore_saveUnderAnotherOrganizationNeverReadsTheOwnersRow(t *testing.T) 
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
+	owned := validResult("result-owned-by-org-1")
 	save := func(org string) error {
-		return store.Save(ctx, storage.Principal{OrgID: org}, validResult("result-owned-by-org-1"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+		return store.Save(ctx, storage.Principal{OrgID: org}, owned, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 	}
 	require.NoError(t, save("org-1"))
 
