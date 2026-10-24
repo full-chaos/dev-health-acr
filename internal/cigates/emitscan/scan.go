@@ -143,9 +143,10 @@ func ScanWithCensus(root string, dirs []string) ([]Finding, []Site, error) {
 	return ScanContext(context.Background(), root, dirs)
 }
 
-// ScanContext is ScanWithCensus under a context. Cancelling the context stops the work itself: the directory walk, the
-// package loop and (every 1024 charged steps) the scan of a package all check it, and the scan then returns the context's
-// error. A scan whose caller gave up never keeps running in the background.
+// ScanContext is ScanWithCensus under a context. Cancelling the context stops the work of the scan itself: the directory
+// walk, the package loop and (every 1024 charged steps) the scan of a package all check it, and the scan then returns the
+// context's error. The type-check of a package (go/types) does not take the context and is not cancellable; its cost is
+// bounded instead by the size estimate that keeps an oversized package from being type-checked at all.
 func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []Site, error) {
 	var out []Finding
 	var sites []Site
@@ -336,26 +337,148 @@ func (p *pkgInfo) censusSites() []Site {
 	return out
 }
 
-// concatSize counts the operands and operators of one + chain (parentheses included); anything else is one leaf. Every
-// inner + node is marked so a chain is counted once, from its outermost node.
-func concatSize(root *ast.BinaryExpr, marked map[*ast.BinaryExpr]bool) int {
-	size := 0
-	stack := []ast.Expr{root}
-	for len(stack) > 0 && size <= maxFoldWork {
-		expr := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		size++
-		switch e := expr.(type) {
-		case *ast.ParenExpr:
-			stack = append(stack, e.X)
-		case *ast.BinaryExpr:
-			if e.Op == token.ADD {
-				marked[e] = true
-				stack = append(stack, e.X, e.Y)
+// The checker folds a constant string with go/constant, whose length walk is not memoised: a + chain costs the sum of its
+// partial sizes, a name that reuses another constant repeats the whole tree it names (a doubling chain is exponential), and
+// long */-/shift/paren/conversion chains cost per node. The checker's work is not bounded by the scan's budget, so a package
+// whose estimated cost passes these bounds is never type-checked.
+const (
+	costSumBound   = 200_000 // sum, over every + node, of the leaves under it
+	costChainMin   = 256     // an operator chain at least this long counts toward costChainBound
+	costChainBound = 20_000  // operator-chain nodes of the chains that long, over the package
+	costSaturated  = 1 << 40
+	costNameDepth  = 64
+)
+
+type costState struct {
+	decls  map[string][][]ast.Expr
+	memo   map[string]int
+	active map[string]bool
+	sum    int
+	nodes  int
+	marked map[ast.Expr]bool
+}
+
+func satAdd(a, b int) int {
+	if a >= costSaturated-b {
+		return costSaturated
+	}
+	return a + b
+}
+
+// leaves is the size of the string tree an expression builds, counting a reused name once per use.
+func (c *costState) leaves(expr ast.Expr) int {
+	c.nodes++
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return 1
+	case *ast.Ident:
+		return c.name(e.Name)
+	case *ast.ParenExpr:
+		c.marked[e] = true
+		return c.leaves(e.X)
+	case *ast.UnaryExpr:
+		c.marked[e] = true
+		return c.leaves(e.X)
+	case *ast.BinaryExpr:
+		c.marked[e] = true
+		size := satAdd(c.leaves(e.X), c.leaves(e.Y))
+		if e.Op == token.ADD {
+			c.sum = satAdd(c.sum, size)
+		}
+		return size
+	case *ast.CallExpr:
+		if len(e.Args) == 1 {
+			c.marked[e] = true
+			return c.leaves(e.Args[0])
+		}
+	}
+	return 1
+}
+
+// name is the largest tree a constant of that name holds in any declaration (names repeat across scopes: over-approximated).
+func (c *costState) name(name string) int {
+	exprs, isConst := c.decls[name]
+	if !isConst {
+		return 1
+	}
+	if size, done := c.memo[name]; done {
+		return size
+	}
+	if c.active[name] {
+		return costSaturated
+	}
+	c.active[name] = true
+	saved := c.nodes
+	best := 1
+	for _, decl := range exprs {
+		for _, expr := range decl {
+			if size := c.leaves(expr); size > best {
+				best = size
 			}
 		}
 	}
-	return size
+	c.nodes = saved
+	c.active[name] = false
+	c.memo[name] = best
+	return best
+}
+
+// oversizeCost estimates, from the syntax alone, whether type-checking the package would cost more than the bounds allow.
+func oversizeCost(group []parsedFile) bool {
+	c := &costState{decls: map[string][][]ast.Expr{}, memo: map[string]int{}, active: map[string]bool{}, marked: map[ast.Expr]bool{}}
+	for _, parsed := range group {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			gen, ok := node.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				return true
+			}
+			var inherited []ast.Expr
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				values := value.Values
+				if len(values) == 0 {
+					values = inherited
+				} else {
+					inherited = values
+				}
+				for i, name := range value.Names {
+					if i < len(values) {
+						c.decls[name.Name] = append(c.decls[name.Name], []ast.Expr{values[i]})
+					}
+				}
+			}
+			return true
+		})
+	}
+	longNodes := 0
+	for _, parsed := range group {
+		over := false
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			expr, ok := node.(ast.Expr)
+			if !ok || over {
+				return !over
+			}
+			switch expr.(type) {
+			case *ast.BinaryExpr, *ast.ParenExpr, *ast.UnaryExpr, *ast.CallExpr:
+			default:
+				return true
+			}
+			if c.marked[expr] {
+				return true
+			}
+			c.nodes = 0
+			c.leaves(expr)
+			if c.nodes >= costChainMin {
+				longNodes = satAdd(longNodes, c.nodes)
+			}
+			over = c.sum > costSumBound || longNodes > costChainBound
+			return !over
+		})
+		if over {
+			return true
+		}
+	}
+	return false
 }
 
 func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo {
@@ -380,19 +503,7 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 			return true
 		})
 	}
-	for _, parsed := range group {
-		marked := map[*ast.BinaryExpr]bool{}
-		ast.Inspect(parsed.file, func(node ast.Node) bool {
-			outer, ok := node.(*ast.BinaryExpr)
-			if !ok || marked[outer] || info.oversize {
-				return !info.oversize
-			}
-			if outer.Op == token.ADD && concatSize(outer, marked) > maxFoldWork {
-				info.oversize = true
-			}
-			return !info.oversize
-		})
-	}
+	info.oversize = oversizeCost(group)
 	saturate := func(name string) {
 		info.saturated[name] = true
 		delete(info.consts, name)
@@ -1328,7 +1439,13 @@ func unquote(literal string) string {
 // package, concatenations included). ok is false for any other expression.
 func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
 	ctx := newFoldCtx(s.pkg.budget, s.pkg.consts, s.imports, s.pkg.stringTypes)
-	if !s.pkg.oversize {
+	if s.pkg.oversize {
+		// the package is never type-checked: a name cannot be told from a parameter, a local or a shadowing declaration
+		if s.hasIdent(expr) {
+			s.add(RuleBenignKind, expr.Pos(), refusalDetail)
+			return nil, false, false
+		}
+	} else {
 		ctx.typed = &typedFold{s: s}
 	}
 	values := foldString(expr, ctx, 0)
@@ -1340,6 +1457,17 @@ func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
 		return nil, false, true
 	}
 	return values, len(values) > 0, false
+}
+
+func (s *fileScan) hasIdent(expr ast.Expr) bool {
+	found := false
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
+		if _, ok := node.(*ast.Ident); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // qualified names the package (by its import path's last element, whatever the local alias) and the function of a

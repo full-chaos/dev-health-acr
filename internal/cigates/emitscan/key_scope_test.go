@@ -199,20 +199,65 @@ func f(l *slog.Logger, x any) { switch other := x.(type) { case string: l.Info("
 	})
 }
 
-func TestKeyScopeOversizedExpressionIsNeverTypeChecked(t *testing.T) {
-	big := strings.Repeat(`"a" + `, 5000) + `"a"`
-	cases := []keyCase{
-		{"readable const key beside an oversized const", "const big = " + big + "\nconst k = \"api_token\"\nfunc f(l *slog.Logger, v string) { l.Info(\"m\", k, v); _ = big }", "R1:api_token"},
-		{"local key beside an oversized const needs typing and fails closed", "const big = " + big + "\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = big }", "R9:unresolvable key"},
-		{"local key beside an oversized key expression", "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); l.Info(\"m\", " + big + ", v) }", "R9:unresolvable key"},
-		{"benign key kind beside an oversized const is refused, not typed", "const big = " + big + "\nfunc f(l *slog.Logger) { l.Info(\"m\", \"pass\", 3); _ = big }", "R10:refusal:typecheck,R1:pass"},
-		{"control: no oversized expression, the local key is read", "const small = \"a\" + \"b\"\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = small }", "R1:api_token"},
+func chainOf(term, op string, n int) string {
+	return strings.Repeat(term+" "+op+" ", n-1) + term
+}
+
+const refusedAndUnresolved = "R10:refusal:typecheck,R9:unresolvable key"
+
+// oversizedShapes are source shapes the checker folds at a cost the scan's own budget does not bound. Each, followed by an
+// identifier key, must be refused without type-checking the package.
+func oversizedShapes() []keyCase {
+	trig := "\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v) }"
+	var implicit, doubling, split, linked strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&implicit, "\tn%d\n", i)
 	}
+	doubling.WriteString("const c0 = \"a\"\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&doubling, "const c%d = c%d + c%d\n", i, i-1, i-1)
+	}
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&split, "const s%d = %s\n", i, chainOf(`"a"`, "+", 1000))
+	}
+	fmt.Fprintf(&linked, "const l0 = %s\n", chainOf(`"a"`, "+", 2000))
+	for i := 1; i < 10; i++ {
+		fmt.Fprintf(&linked, "const l%d = l%d + %s\n", i, i-1, chainOf(`"a"`, "+", 2000))
+	}
+	return []keyCase{
+		{"one + chain of 5000", "const big = " + chainOf(`"a"`, "+", 5000) + trig, refusedAndUnresolved},
+		{"one + chain of 2048", "const big = " + chainOf(`"a"`, "+", 2048) + trig, refusedAndUnresolved},
+		{"ten consts of 1000-term chains", split.String() + trig, refusedAndUnresolved},
+		{"ten linked consts of 2000 terms", linked.String() + trig, refusedAndUnresolved},
+		{"doubling consts to c40", doubling.String() + trig, refusedAndUnresolved},
+		{"doubling consts, one used as the key", doubling.String() + "\nfunc g(l *slog.Logger, v string) { l.Info(\"m\", c25, v) }", refusedAndUnresolved},
+		{"* chain of 40000", "const big = " + chainOf("1", "*", 40000) + trig, refusedAndUnresolved},
+		{"- chain of 40000", "const big = " + chainOf("1", "-", 40000) + trig, refusedAndUnresolved},
+		{"<< chain of 5000", "const big = " + chainOf("1", "<<", 5000) + trig, refusedAndUnresolved},
+		{"parentheses 30000 deep", "const big = " + strings.Repeat("(", 30000) + `"a"` + strings.Repeat(")", 30000) + trig, refusedAndUnresolved},
+		{"string conversions 20000 deep", "const big = " + strings.Repeat("string(", 20000) + `"a"` + strings.Repeat(")", 20000) + trig, refusedAndUnresolved},
+		{"iota + chain repeated by 2000 implicit names", "const (\n\tn_ = " + chainOf("iota", "+", 2000) + "\n" + implicit.String() + ")" + trig, "R1:census incomplete: work budget"},
+		{"oversized direct key expression", "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); l.Info(\"m\", " + chainOf(`"a"`, "+", 5000) + ", v) }", refusedAndUnresolved},
+	}
+}
+
+func TestKeyScopeOversizedPackageIsNeverTypeChecked(t *testing.T) {
+	big := "const big = " + chainOf(`"a"`, "+", 5000) + "\n"
+	cases := append(oversizedShapes(), []keyCase{
+		{"a const key beside an oversized const", big + "const k = \"api_token\"\nfunc f(l *slog.Logger, v string) { l.Info(\"m\", k, v); _ = big }", refusedAndUnresolved},
+		{"a parameter shadows an unknown const (slog key)", big + "const secret = \"api_token\"\nfunc f(l *slog.Logger, secret, v string) { l.Info(\"m\", secret, v); _ = big }", refusedAndUnresolved},
+		{"a parameter shadows an unknown const (attribute key)", big + "const secret = \"api_token\"\nfunc f(secret, v string) { _ = attribute.String(secret, v); _ = big }", "R10:refusal:typecheck,R1:unfoldable const key"},
+		{"a local copy of a parameter", big + "func f(l *slog.Logger, p, v string) { k := p; l.Info(\"m\", k, v); _ = big }", refusedAndUnresolved},
+		{"benign key kind beside an oversized const", big + "func f(l *slog.Logger) { l.Info(\"m\", \"pass\", 3); _ = big }", "R10:refusal:typecheck,R1:pass"},
+		{"literal keys are still read by value", big + "func f(l *slog.Logger, v string) { l.Info(\"m\", \"api_token\", v); _ = big }", "R1:api_token"},
+		{"control: nothing oversized, the local key is read", "const small = \"a\" + \"b\"\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = small }", "R1:api_token"},
+		{"control: a long ordinary const is still typed", "const text = \"" + strings.Repeat("x", 400) + "\"\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = text }", "R1:api_token"},
+	}...)
 	for _, c := range cases {
 		start := cpuTime(t)
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
 		used := cpuTime(t) - start
-		t.Logf("%s: %s cpu", c.name, used)
+		t.Logf("%s: %s cpu, findings %q", c.name, used, got)
 		if used > time.Second {
 			t.Errorf("%s: used %s cpu, want < 1s even under the race detector", c.name, used)
 		}
