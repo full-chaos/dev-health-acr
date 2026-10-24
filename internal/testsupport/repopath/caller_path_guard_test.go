@@ -1,6 +1,7 @@
 package repopath
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -63,14 +65,17 @@ func TestNoCallerDerivedPathsInGoSources(t *testing.T) {
 
 func callerUsed(t *testing.T, name string, src []byte) bool {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
+	if !bytes.Contains(src, []byte("runtime")) {
+		return false
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.SkipObjectResolution)
 	if err != nil {
 		t.Errorf("parse %s: %v", name, err)
 		return false
 	}
 	local, dot := "", false
 	for _, imp := range file.Imports {
-		if imp.Path.Value != `"runtime"` {
+		if path, err := strconv.Unquote(imp.Path.Value); err != nil || path != "runtime" {
 			continue
 		}
 		switch {
@@ -115,6 +120,24 @@ func TestCallerUsedSeesAliasAndDotImports(t *testing.T) {
 	for name, c := range cases {
 		if got := callerUsed(t, name, []byte(c.src)); got != c.want {
 			t.Errorf("%s: callerUsed = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestCallerUsedPrefilterKeepsEveryRuntimeImportSpelling(t *testing.T) {
+	cases := map[string]string{
+		"interpreted": "package p\nimport \"runtime\"\nvar _, f, _, _ = runtime.Caller(0)\n",
+		"raw string":  "package p\nimport `runtime`\nvar _, f, _, _ = runtime.Caller(0)\n",
+		"alias":       "package p\nimport rt \"runtime\"\nvar _, f, _, _ = rt.Caller(0)\n",
+		"dot":         "package p\nimport . \"runtime\"\nvar _, f, _, _ = Caller(0)\n",
+		"grouped":     "package p\nimport (\n\t\"os\"\n\trt \"runtime\"\n)\nvar _ = os.Args\nvar _, f, _, _ = rt.Caller(0)\n",
+	}
+	for name, src := range cases {
+		if !bytes.Contains([]byte(src), []byte("runtime")) {
+			t.Errorf("%s: the import path text no longer contains \"runtime\", so the pre-filter would skip it", name)
+		}
+		if !callerUsed(t, name, []byte(src)) {
+			t.Errorf("%s: callerUsed missed a runtime.Caller use", name)
 		}
 	}
 }
