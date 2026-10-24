@@ -43,6 +43,10 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               missing-device-verification-url, invalid-device-verification-url,
               acr-mcp-mutable-image, acr-mcp-missing-image, acr-mcp-api-url,
               acr-mcp-base-path, acr-mcp-gateway-no-parent.
+              The acr-api query embedder scenarios (positive ones render and assert, the rest fail closed):
+              embed-api-off-by-default, embed-api-enabled, embed-api-enabled-no-base-url,
+              embed-api-bad-port, embed-api-default-values, embed-api-override-values,
+              embed-api-projector-unchanged, embed-api-bad-retries.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -170,6 +174,38 @@ else:
     if 'port: 443' in policy: fail('acr-api NetworkPolicy carries an embed egress rule although the switch is off')
 print('  ok   embed-api: acr-api embed env and egress ' + ('rendered' if want else 'absent'))
 PY
+}
+
+# embed_api_timeouts <rendered-file> <acr-api timeout> <acr-api retries> <projector timeout> <projector retries>:
+# the acr-api Deployment and the acr-projector Deployment each carry exactly
+# the stated EMBED_TIMEOUT / EMBED_MAX_TRANSPORT_RETRIES ("-" = not rendered).
+embed_api_timeouts() {
+  python3 - "$@" <<'PY' || exit 1
+import re, sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+def deployment(component):
+    return next((d for d in docs if '\nkind: Deployment' in '\n' + d and ('component: ' + component) in d), '')
+def env(doc, name):
+    m = re.search(r'name: ACR_CONTEXT_FABRIC_EMBED_' + name + r'\n\s+value: "([^"]*)"', doc)
+    return m.group(1) if m else '-'
+def fail(msg):
+    print('  FAIL embed-api: ' + msg, file=sys.stderr); sys.exit(1)
+api, projector = deployment('api'), deployment('projector')
+if not api or not projector: fail('acr-api and acr-projector Deployments must both render')
+want = {'api': (sys.argv[2], sys.argv[3]), 'projector': (sys.argv[4], sys.argv[5])}
+for who, doc in (('api', api), ('projector', projector)):
+    got = (env(doc, 'TIMEOUT'), env(doc, 'MAX_TRANSPORT_RETRIES'))
+    if got != want[who]: fail('%s timeout/retries = %s, want %s' % (who, got, want[who]))
+print('  ok   embed-api: acr-api %s/%s, acr-projector %s/%s' % (want['api'] + want['projector']))
+PY
+}
+
+embed_api_with_projector() {
+  embed_api_render \
+    --set contextFabric.projector.enabled=true \
+    --set contextFabric.readsEnabled=true \
+    --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
+    "$@"
 }
 
 case "$scenario" in
@@ -318,6 +354,32 @@ case "$scenario" in
       --set-string "contextFabric.embed.baseURL=https://api.openai.com/v1" \
       --set contextFabric.embed.apiEnabled=true \
       --set networkPolicy.egress.embedPort=70000
+    exit 0 ;;
+  embed-api-default-values)
+    printf 'scenario: embed-api-default-values (acr-api gets its own 1s/0, the projector keeps 45s/5)\n'
+    embed_api_with_projector --set contextFabric.embed.apiEnabled=true >"$workdir/embed-default.yaml"
+    embed_api_timeouts "$workdir/embed-default.yaml" 1s 0 45s 5
+    printf 'RESULT: scenario embed-api-default-values passed\n'
+    exit 0 ;;
+  embed-api-override-values)
+    printf 'scenario: embed-api-override-values (api.* reach acr-api only)\n'
+    embed_api_with_projector --set contextFabric.embed.apiEnabled=true \
+      --set-string contextFabric.embed.api.timeout=900ms --set-string contextFabric.embed.api.maxTransportRetries=2 \
+      --set-string contextFabric.embed.timeout=60s >"$workdir/embed-override.yaml"
+    embed_api_timeouts "$workdir/embed-override.yaml" 900ms 2 60s 5
+    printf 'RESULT: scenario embed-api-override-values passed\n'
+    exit 0 ;;
+  embed-api-projector-unchanged)
+    printf 'scenario: embed-api-projector-unchanged (switch off: api.* overrides never touch the projector, acr-api carries no embed env)\n'
+    embed_api_with_projector --set-string contextFabric.embed.api.timeout=900ms --set-string contextFabric.embed.api.maxTransportRetries=2 >"$workdir/embed-projector.yaml"
+    embed_api_timeouts "$workdir/embed-projector.yaml" - - 45s 5
+    printf 'RESULT: scenario embed-api-projector-unchanged passed\n'
+    exit 0 ;;
+  embed-api-bad-retries)
+    negative embed-api-bad-retries "/contextFabric/embed/api/maxTransportRetries" \
+      --set-string "contextFabric.embed.baseURL=https://api.openai.com/v1" \
+      --set contextFabric.embed.apiEnabled=true \
+      --set-string contextFabric.embed.api.maxTransportRetries=9
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

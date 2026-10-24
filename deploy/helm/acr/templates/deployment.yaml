@@ -187,10 +187,14 @@ spec:
               value: {{ .Values.contextFabric.embed.model | quote }}
             - name: ACR_CONTEXT_FABRIC_EMBED_DIMENSION
               value: {{ .Values.contextFabric.embed.dimension | quote }}
+            {{- /* acr-api embeds ONE question text on the answer path, so it has
+                 its own timeout and retry count (contextFabric.embed.api.*);
+                 the projector's contextFabric.embed.timeout/maxTransportRetries
+                 stay the projector's. */}}
             - name: ACR_CONTEXT_FABRIC_EMBED_TIMEOUT
-              value: {{ .Values.contextFabric.embed.timeout | quote }}
+              value: {{ .Values.contextFabric.embed.api.timeout | quote }}
             - name: ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES
-              value: {{ .Values.contextFabric.embed.maxTransportRetries | quote }}
+              value: {{ .Values.contextFabric.embed.api.maxTransportRetries | quote }}
             {{- if .Values.contextFabric.embed.existingSecret }}
             - name: ACR_CONTEXT_FABRIC_EMBED_API_KEY
               valueFrom:

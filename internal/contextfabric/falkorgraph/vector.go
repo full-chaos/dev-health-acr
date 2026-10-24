@@ -647,7 +647,7 @@ func (a *Adapter) hybridSearchNodes(ctx context.Context, key, orgID, term string
 	// for every term the lexicon has no opinion about.
 	vectors, embedErr := a.embedder.Embed(ctx, []string{a.queryPrefixed(vectorQueryText(term))})
 	if embedErr != nil || len(vectors) != 1 {
-		a.recordVectorDegraded(ctx, orgID)
+		a.recordQueryEmbedFailure(ctx, orgID, embedErr)
 		return lexical, truncated, true, nil
 	}
 	// CHAOS-3834: a.overFetchMultiplier is the calibrated per-identity K
@@ -723,7 +723,7 @@ func (a *Adapter) questionVectorSearchNodes(ctx context.Context, key, orgID, que
 	}
 	vectors, embedErr := a.embedder.Embed(ctx, []string{bound.transmitted})
 	if embedErr != nil || len(vectors) != 1 {
-		a.recordVectorDegraded(ctx, orgID)
+		a.recordQueryEmbedFailure(ctx, orgID, embedErr)
 		return nil, false, true, nil
 	}
 	candidates, truncated, err := a.vectorSearchNodesWithOverFetch(ctx, key, orgID, vectors[0], a.similarityFloor, limit, a.overFetchMultiplier)
@@ -795,6 +795,33 @@ func (a *Adapter) recordVectorDegraded(ctx context.Context, orgID string) {
 		return
 	}
 	a.config.Telemetry.RecordVectorRetrievalDegraded(ctx, orgID)
+}
+
+// recordQueryEmbedFailure reports a failed or timed-out QUERY embed: the
+// request falls back to lexical retrieval. A sink with the cause-bearing hook
+// gets that ONE event (a WARN and a counter); any other sink keeps the
+// original RecordVectorRetrievalDegraded signal, so no sink loses it and none
+// gets two.
+func (a *Adapter) recordQueryEmbedFailure(ctx context.Context, orgID string, embedErr error) {
+	if a.config.Telemetry == nil {
+		return
+	}
+	if sink, ok := a.config.Telemetry.(QueryEmbedFallbackTelemetry); ok {
+		sink.RecordQueryEmbedFallback(ctx, orgID, queryEmbedFailureCause(embedErr))
+		return
+	}
+	a.config.Telemetry.RecordVectorRetrievalDegraded(ctx, orgID)
+}
+
+// queryEmbedFailureCause is the closed cause of a failed query embed: a
+// deadline (the context's or a transport timeout) is "timeout", anything else,
+// including an embedder that returned the wrong number of vectors, is "error".
+func queryEmbedFailureCause(err error) string {
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		return "timeout"
+	}
+	return "error"
 }
 
 // recordVectorSuppressed reports a deliberate historical-axis suppression.
