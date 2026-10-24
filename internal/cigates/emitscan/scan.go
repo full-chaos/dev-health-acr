@@ -20,12 +20,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
@@ -40,7 +42,7 @@ const (
 	RuleIdentityHash  = "R7"  // bare digest of a value used as an emit attribute
 	RuleDotImport     = "R8"  // dot-import of a watched package: its calls cannot be matched
 	RuleLogKey        = "R9"  // slog key the scan cannot resolve to a constant: the key text is computed at run time
-	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, a kind the static type does not fix is <key> (pinned with kind=<kind>), a package that does not type-check is refusal:typecheck (never pinnable); kinds come from go/types, read lazily on the first benign key of a package
+	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, a kind the static type does not fix is <key> (pinned with kind=<kind>), a package that does not type-check, or a parameter or local that hides a constant holding a known key, is a refusal (refusal:typecheck, refusal:shadowed-key; never pinnable); kinds and key names come from go/types, read lazily on the first key that is not a literal
 	RuleUnparsable    = "R0"  // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
 	maxConstValues    = 8    // folded values kept per constant name
@@ -142,13 +144,17 @@ func ScanWithCensus(root string, dirs []string) ([]Finding, []Site, error) {
 	return ScanContext(context.Background(), root, dirs)
 }
 
-// ScanContext is ScanWithCensus under a context. Cancelling the context stops the work itself: the directory walk, the
-// package loop and (every 1024 charged steps) the scan of a package all check it, and the scan then returns the context's
-// error. A scan whose caller gave up never keeps running in the background.
+// ScanContext is ScanWithCensus under a context. Cancelling the context stops the work of the scan itself: the directory
+// walk, the package loop and (every 1024 charged steps) the scan of a package all check it, and the scan then returns the
+// context's error. The type-check of a package (go/types) takes no context: it runs first in a helper process that is
+// killed when the context ends or a CPU, memory or wall-clock limit is hit, and a package it cannot finish is never
+// type-checked in this process.
 func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []Site, error) {
 	var out []Finding
 	var sites []Site
 	byDir := map[string][]parsedFile{}
+	helperCPU := new(atomic.Int64)
+	helperCPU.Store(int64(scanHelperCPU))
 	fset := token.NewFileSet()
 	files := 0
 	for _, dir := range dirs {
@@ -199,7 +205,7 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		info := packageInfo(ctx, root, group)
+		info := packageInfo(ctx, root, group, helperCPU)
 		var found []Finding
 		for _, parsed := range group {
 			if err := ctx.Err(); err != nil {
@@ -302,8 +308,11 @@ type pkgInfo struct {
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
 	root        string                        // the scan root: the module of the type-checked load is the nearest go.mod at or above it
 	group       []parsedFile                  // the files of the package directory, type-checked together on the first R10 need
+	oversize    bool                          // a + chain larger than one fold may visit: the package is never type-checked (the checker's own work on it is not bounded by the scan's budget)
+	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver
 	typed       *typedPackage                 // the type-check of the package, made once and only when a benign key is read
 	budget      *budget
+	helperCPU   *atomic.Int64 // CPU nanoseconds the helpers of this scan may still use
 }
 
 // noteKeys records the constant keys of one attribute constructor for the census.
@@ -333,7 +342,211 @@ func (p *pkgInfo) censusSites() []Site {
 	return out
 }
 
-func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo {
+// The checker folds a constant string with go/constant, whose length walk is not memoised: a + chain costs the sum of its
+// partial sizes, a name that reuses another constant repeats the whole tree it names (a doubling chain is exponential), and
+// long */-/shift/paren/conversion chains cost per node. The checker's work is not bounded by the scan's budget, so a package
+// whose estimated cost passes these bounds is never type-checked.
+const (
+	costSumBound   = 600_000 // sum, over every + node, of the leaves under it
+	costChainMin   = 256     // an operator chain at least this long counts toward costChainBound
+	costChainBound = 20_000  // operator-chain nodes of the chains that long, over the package
+	costSaturated  = 1 << 40
+	costImported   = 64 // assumed size of a constant read from another package
+	costNameDepth  = 64
+)
+
+// costEstimateDisabled lets a test reach the type-check helper with shapes the estimate would refuse first.
+var costEstimateDisabled bool
+
+type costState struct {
+	decls  map[string][][]ast.Expr
+	memo   map[string]int
+	active map[string]bool
+	sum    int
+	nodes  int
+	huge   bool // a numeric literal whose exponent or mantissa the checker would expand into a very large number
+	marked map[ast.Expr]bool
+}
+
+// literalHuge reports a numeric literal the checker would expand into a very large exact number: a decimal exponent past 300
+// (1e1180) or a decimal mantissa of more than 40 digits (or, for a hex, octal or binary integer, more than 1000).
+func literalHuge(lit *ast.BasicLit) bool {
+	if lit.Kind != token.INT && lit.Kind != token.FLOAT && lit.Kind != token.IMAG {
+		return false // a string or a character is not a number
+	}
+	value := strings.ToLower(strings.ReplaceAll(lit.Value, "_", ""))
+	if lit.Kind == token.IMAG {
+		value = strings.TrimSuffix(value, "i")
+	}
+	based := strings.HasPrefix(value, "0x") || strings.HasPrefix(value, "0o") || strings.HasPrefix(value, "0b")
+	mantissa, exponent := value, ""
+	marker := "e"
+	if strings.HasPrefix(value, "0x") {
+		marker = "p"
+	}
+	if before, after, found := strings.Cut(value, marker); found && (marker == "p" || !based) {
+		mantissa, exponent = before, after
+	}
+	if exponent != "" {
+		if n, err := strconv.Atoi(exponent); err != nil || n > 300 || n < -300 {
+			return true
+		}
+	}
+	if based {
+		return len(mantissa) > 1000
+	}
+	return len(strings.ReplaceAll(mantissa, ".", "")) > 40
+}
+
+func satMul(a, b int) int {
+	if a > 0 && b > costSaturated/a {
+		return costSaturated
+	}
+	return a * b
+}
+
+func satAdd(a, b int) int {
+	if a >= costSaturated-b {
+		return costSaturated
+	}
+	return a + b
+}
+
+// leaves is the size of the string tree an expression builds, counting a reused name once per use.
+func (c *costState) leaves(expr ast.Expr) int {
+	c.nodes++
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.STRING {
+			return 1
+		}
+		if literalHuge(e) {
+			c.huge = true
+		}
+		return 1 + len(e.Value)/32 // a long numeric literal is a long number for the checker
+	case *ast.SelectorExpr:
+		return costImported // a constant of another package: its size is not in this one
+	case *ast.Ident:
+		return c.name(e.Name)
+	case *ast.ParenExpr:
+		c.marked[e] = true
+		return c.leaves(e.X)
+	case *ast.UnaryExpr:
+		c.marked[e] = true
+		return c.leaves(e.X)
+	case *ast.BinaryExpr:
+		c.marked[e] = true
+		sx, sy := c.leaves(e.X), c.leaves(e.Y)
+		size := satAdd(sx, sy)
+		switch e.Op {
+		case token.ADD:
+			c.sum = satAdd(c.sum, size)
+		case token.MUL, token.QUO, token.REM:
+			c.sum = satAdd(c.sum, satMul(sx, sy)) // exact arithmetic on long numbers costs their product
+		}
+		return size
+	case *ast.CallExpr:
+		c.marked[e] = true
+		size := 1
+		for _, arg := range e.Args { // min, max, complex and conversions: every argument can carry the whole tree
+			size = satAdd(size, c.leaves(arg))
+		}
+		return size
+	}
+	return 1
+}
+
+// name is the largest tree a constant of that name holds in any declaration (names repeat across scopes: over-approximated).
+func (c *costState) name(name string) int {
+	exprs, isConst := c.decls[name]
+	if !isConst {
+		return 1
+	}
+	if size, done := c.memo[name]; done {
+		return size
+	}
+	if c.active[name] {
+		return costSaturated
+	}
+	c.active[name] = true
+	saved := c.nodes
+	best := 1
+	for _, decl := range exprs {
+		for _, expr := range decl {
+			if size := c.leaves(expr); size > best {
+				best = size
+			}
+		}
+	}
+	c.nodes = saved
+	c.active[name] = false
+	c.memo[name] = best
+	return best
+}
+
+// oversizeCost estimates, from the syntax alone, whether type-checking the package would cost more than the bounds allow.
+func oversizeCost(group []parsedFile) bool {
+	c := &costState{decls: map[string][][]ast.Expr{}, memo: map[string]int{}, active: map[string]bool{}, marked: map[ast.Expr]bool{}}
+	for _, parsed := range group {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			gen, ok := node.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				return true
+			}
+			var inherited []ast.Expr
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				values := value.Values
+				if len(values) == 0 {
+					values = inherited
+				} else {
+					inherited = values
+				}
+				for i, name := range value.Names {
+					if i < len(values) {
+						c.decls[name.Name] = append(c.decls[name.Name], []ast.Expr{values[i]})
+					}
+				}
+			}
+			return true
+		})
+	}
+	longNodes := 0
+	for _, parsed := range group {
+		over := false
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			expr, ok := node.(ast.Expr)
+			if !ok || over {
+				return !over
+			}
+			if lit, isLit := expr.(*ast.BasicLit); isLit && lit.Kind != token.STRING && literalHuge(lit) {
+				over = true
+				return false
+			}
+			switch expr.(type) {
+			case *ast.BinaryExpr, *ast.ParenExpr, *ast.UnaryExpr, *ast.CallExpr:
+			default:
+				return true
+			}
+			if c.marked[expr] {
+				return true
+			}
+			c.nodes = 0
+			c.leaves(expr)
+			if c.nodes >= costChainMin {
+				longNodes = satAdd(longNodes, c.nodes)
+			}
+			over = c.sum > costSumBound || longNodes > costChainBound || c.huge
+			return !over
+		})
+		if over {
+			return true
+		}
+	}
+	return false
+}
+
+func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU *atomic.Int64) *pkgInfo {
 	nodes := 0
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
@@ -343,8 +556,8 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 			return true
 		})
 	}
-	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
+	info := &pkgInfo{helperCPU: helperCPU, consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
+		stringTypes: map[string]bool{}, keyAliases: map[types.Object]ast.Expr{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
@@ -355,6 +568,7 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 			return true
 		})
 	}
+	info.oversize = !costEstimateDisabled && oversizeCost(group)
 	saturate := func(name string) {
 		info.saturated[name] = true
 		delete(info.consts, name)
@@ -563,9 +777,12 @@ type foldCtx struct {
 	consts      map[string][]string
 	imports     map[string]string
 	stringTypes map[string]bool
-	work        int     // nodes still allowed
-	over        bool    // a bound was hit: the result is not trustworthy
-	budget      *budget // the package counter
+	work        int        // nodes still allowed
+	over        bool       // a bound was hit: the result is not trustworthy
+	budget      *budget    // the package counter
+	typed       *typedFold // when set, names resolve through go/types objects (key expressions); nil folds by spelling (the package constant table)
+	refusal     string     // an R10 detail: the key cannot be read (no types, or a shadowed known key); never pinnable
+	depth       int        // nesting of local-variable initialisers being folded
 }
 
 func newFoldCtx(b *budget, consts map[string][]string, imports map[string]string, stringTypes map[string]bool) *foldCtx {
@@ -608,12 +825,27 @@ func foldNode(expr ast.Expr, ctx *foldCtx, iota int) []string {
 	case *ast.ParenExpr:
 		return foldString(e.X, ctx, iota)
 	case *ast.Ident:
+		if ctx.typed != nil {
+			return ctx.typed.ident(e, ctx)
+		}
 		if e.Name == "iota" {
 			return []string{strconv.Itoa(iota)}
 		}
 		return ctx.consts[e.Name]
 	case *ast.CallExpr:
 		if len(e.Args) != 1 {
+			return nil
+		}
+		if ctx.typed != nil {
+			switch ctx.typed.callKind(e, ctx) {
+			case "conv":
+				return foldString(e.Args[0], ctx, iota)
+			case "text":
+				if lit, ok := e.Args[0].(*ast.BasicLit); ok && lit.Kind == token.INT {
+					return []string{lit.Value}
+				}
+				return foldString(e.Args[0], ctx, iota)
+			}
 			return nil
 		}
 		switch fun := e.Fun.(type) {
@@ -761,7 +993,7 @@ func readNames(expr ast.Expr, imports map[string]string) []string {
 				return nil
 			}
 		}
-		if isAttachMethod(e.Sel.Name) {
+		if isAttachMethod(e.Sel.Name) || isLogMethod(e.Sel.Name) {
 			return nil
 		}
 		return []string{e.Sel.Name}
@@ -776,6 +1008,11 @@ func readNames(expr ast.Expr, imports map[string]string) []string {
 		return out
 	}
 	return nil
+}
+
+// isLogMethod names the logger methods that emit a record: a method value of one of them is called like the method.
+func isLogMethod(name string) bool {
+	return logMethods[name] || name == "Log" || name == "LogAttrs"
 }
 
 // isAttachMethod names the logger methods that attach keys or attributes: a method value of one of them holds that method.
@@ -803,7 +1040,7 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 				return [][2]string{{pkg, e.Sel.Name}}
 			}
 		}
-		if isAttachMethod(e.Sel.Name) {
+		if isAttachMethod(e.Sel.Name) || isLogMethod(e.Sel.Name) {
 			return [][2]string{{"", e.Sel.Name}} // a method value
 		}
 		return info.aliases[e.Sel.Name] // a field holding a constructor
@@ -889,6 +1126,8 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 		}
 	case *ast.CallExpr:
 		s.call(fn)
+	case *ast.SelectorExpr:
+		s.keyMethodValue(fn)
 	case *ast.CompositeLit:
 		s.attrLiteral(fn)
 		if isAnySlice(fn.Type) {
@@ -1265,11 +1504,35 @@ func unquote(literal string) string {
 // package, concatenations included). ok is false for any other expression.
 func (s *fileScan) keysOf(expr ast.Expr) (keys []string, ok, over bool) {
 	ctx := newFoldCtx(s.pkg.budget, s.pkg.consts, s.imports, s.pkg.stringTypes)
+	if s.pkg.oversize {
+		// the package is never type-checked: a name cannot be told from a parameter, a local or a shadowing declaration
+		if s.hasIdent(expr) {
+			s.add(RuleBenignKind, expr.Pos(), refusalDetail)
+			return nil, false, false
+		}
+	} else {
+		ctx.typed = &typedFold{s: s}
+	}
 	values := foldString(expr, ctx, 0)
+	if ctx.refusal != "" {
+		s.add(RuleBenignKind, expr.Pos(), ctx.refusal)
+		return nil, false, false
+	}
 	if ctx.over {
 		return nil, false, true
 	}
 	return values, len(values) > 0, false
+}
+
+func (s *fileScan) hasIdent(expr ast.Expr) bool {
+	found := false
+	inspectCharged(s.pkg.budget, expr, func(node ast.Node) bool {
+		if _, ok := node.(*ast.Ident); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // qualified names the package (by its import path's last element, whatever the local alias) and the function of a
@@ -1338,6 +1601,23 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 		if inner, isCall := sel.X.(*ast.CallExpr); isCall && len(inner.Args) == 1 {
 			if pkg, name, found := s.qualified(inner.Fun); found && pkg == "attribute" && name == "Key" {
 				return inner.Args[0], call.Args[0], true
+			}
+		}
+	}
+	if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && attrConstructors[sel.Sel.Name] && len(call.Args) >= 1 {
+		switch recv, class := s.attrKeyMethod(sel); class {
+		case keyMethodKey:
+			return recv, call.Args[0], true // a receiver of static type attribute.Key: a local, a parenthesised one, a call
+		case keyMethodRefuse:
+			s.add(RuleBenignKind, call.Pos(), keyReceiverDetail)
+		case keyMethodNoTypes:
+			s.add(RuleBenignKind, call.Pos(), s.pkg.refusal())
+		}
+	}
+	if ident, isIdent := ast.Unparen(call.Fun).(*ast.Ident); isIdent && len(call.Args) >= 1 && len(s.pkg.keyAliases) > 0 {
+		if typed := s.pkg.typedInfo(); typed.err == nil {
+			if recv, found := s.pkg.keyAliases[typed.info.Uses[ident]]; found {
+				return recv, call.Args[0], true // emit := k.String; emit(v)
 			}
 		}
 	}
@@ -1890,7 +2170,7 @@ func (s *fileScan) benignPairs(args []ast.Expr, from int, shape ast.Expr) {
 		if verified == 0 {
 			verified = 1
 			if ok, valid := s.pairSource(shape); !valid {
-				s.add(RuleBenignKind, key.Pos(), refusalDetail)
+				s.add(RuleBenignKind, key.Pos(), s.pkg.refusal())
 				return
 			} else if !ok {
 				verified = -1
@@ -1928,7 +2208,7 @@ func (s *fileScan) benignPair(keyExpr ast.Expr, kind func() (string, bool), pos 
 	}
 	got, ok := kind()
 	if !ok {
-		s.add(RuleBenignKind, pos, refusalDetail)
+		s.add(RuleBenignKind, pos, s.pkg.refusal())
 		return
 	}
 	possible := strings.Split(got, ",")

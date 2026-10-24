@@ -103,7 +103,7 @@ func TestPlantedEvasionRows(t *testing.T) {
 // reported as an unfoldable const key (R1) and never skipped.
 func TestConstFixpointBounded(t *testing.T) {
 	rows := []struct{ id, body string }{
-		{"B1 function-scope self reference", "const a = \"x\"\nfunc f(v string) {\n\tconst a = a + \"y\"\n\t_ = attribute.String(a, v)\n}\n"},
+		{"B1 function-scope self reference", "const a = \"api_\"\nfunc f(v string) {\n\tconst a = a + \"token\"\n\t_ = attribute.String(a, v)\n}\n"},
 		{"B2 package const a = a + a", "const a = \"x\"\nconst a = a + a\nfunc f(v string) { _ = attribute.String(a, v) }\n"},
 		{"B3 two names reference each other", "const a = \"s\"\nconst b = a + \"x\"\nconst a = b + \"y\"\nfunc f(v string) { _ = attribute.String(b, v) }\n"},
 	}
@@ -172,7 +172,7 @@ func TestLongAliasChainIsFast(t *testing.T) {
 }
 
 func TestACallInSpanKeyPositionIsADynamicKey(t *testing.T) {
-	head := strings.Replace(header, "\"net/http\"", "\"net/http\"\n\t\"fmt\"\n\t\"strings\"", 1)
+	head := strings.Replace(header, "\"net/http\"", "\"net/http\"\n\t\"strings\"", 1) + "var _ = strings.ToLower\n"
 	for id, body := range map[string]string{
 		"ToLower of a literal":  "func f(v string) { _ = attribute.String(strings.ToLower(\"API_TOKEN\"), v) }\n",
 		"Sprint of a variable":  "func f(v string, n int) { _ = attribute.String(fmt.Sprint(n), v) }\n",
