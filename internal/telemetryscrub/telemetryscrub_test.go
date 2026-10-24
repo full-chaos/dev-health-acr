@@ -565,3 +565,120 @@ func TestR2ExactBenignKeysOnly(t *testing.T) {
 		}
 	}
 }
+
+var typedBenignCases = []struct {
+	key  string
+	kind string
+}{
+	{"authorization_dropped_count", "int"}, {"repo_less_authorization_dropped_count", "int"},
+	{"authorization_grant_exact_selectors", "int"}, {"authorization_grant_owner_selectors", "int"},
+	{"authorization_batches", "int"}, {"authorization_batch_size", "int"},
+	{"device_authorizations", "int"}, {"device_authorizations_remaining", "int"},
+	{"pass", "int"}, {"evaluated_pass", "int"},
+	{"authorization_grant_measured", "bool"}, {"authorization_grant_organization_wide", "bool"},
+	{"dev_health_entitlement_token_file_configured", "bool"}, {"coverage_bypass", "bool"},
+	{"authorization_reason", "string"},
+}
+
+func sampleOfKind(kind string) any {
+	switch kind {
+	case "int":
+		return 7
+	case "bool":
+		return true
+	}
+	return "subjects_admitted"
+}
+
+func TestTypedBenignKeysKeepTheirOneKind(t *testing.T) {
+	for _, c := range typedBenignCases {
+		want := sampleOfKind(c.kind)
+		got := record(t, func(l *slog.Logger) { l.Info("m", c.key, want) })
+		if fmt.Sprint(got[c.key]) != fmt.Sprint(want) {
+			t.Errorf("%s=%v want kept %v", c.key, got[c.key], want)
+		}
+		if BenignKind(c.key) != c.kind {
+			t.Errorf("BenignKind(%q) = %q want %q", c.key, BenignKind(c.key), c.kind)
+		}
+	}
+}
+
+func TestTypedBenignKeysRedactEveryOtherKind(t *testing.T) {
+	for _, c := range typedBenignCases {
+		for _, other := range []string{"int", "bool", "string"} {
+			if other == c.kind {
+				continue
+			}
+			v := sampleOfKind(other)
+			if other == "string" {
+				v = "leaky-value"
+			}
+			got := record(t, func(l *slog.Logger) { l.Info("m", c.key, v) })
+			if got[c.key] != Redacted {
+				t.Errorf("%s with %s value = %v want redacted", c.key, other, got[c.key])
+			}
+		}
+		for _, v := range []any{1.5, time.Second} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", c.key, v) })
+			if got[c.key] != Redacted {
+				t.Errorf("%s with %T value = %v want redacted", c.key, v, got[c.key])
+			}
+		}
+	}
+}
+
+func TestTypedBenignNearVariantsStayRedacted(t *testing.T) {
+	for _, c := range typedBenignCases {
+		for _, k := range []string{c.key + "_token", c.key + "_secret", c.key + "_password", c.key + "s_token", "session_" + c.key, "authorization_" + c.key + "_x"} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", k, sampleOfKind(c.kind)) })
+			if got[k] != Redacted {
+				t.Errorf("near variant %q = %v want redacted", k, got[k])
+			}
+		}
+	}
+	for _, k := range []string{"authorization_batches_token", "authorization_dropped_count_password", "evaluated_pass_token", "pass_phrase", "request_pass", "pass_token", "authorization", "authorization_header", "credential", "session_id", "otp_count"} {
+		got := record(t, func(l *slog.Logger) { l.Info("m", k, 3) })
+		if got[k] != Redacted {
+			t.Errorf("%q = %v want redacted", k, got[k])
+		}
+	}
+}
+
+func TestTypedBenignKeysNeedNoGroup(t *testing.T) {
+	got := record(t, func(l *slog.Logger) { l.WithGroup("g").Info("m", "authorization_batches", 3) })
+	if g, _ := got["g"].(map[string]any); g["authorization_batches"] != Redacted {
+		t.Errorf("under WithGroup: %v", got["g"])
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", slog.Group("credentials", slog.Int("authorization_batches", 3))) })
+	if got["credentials"] != Redacted {
+		t.Errorf("under protected group: %v", got["credentials"])
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", slog.Group("span", slog.Int("authorization_batches", 3))) })
+	if g, _ := got["span"].(map[string]any); g["authorization_batches"] != Redacted {
+		t.Errorf("under clean group: %v", got["span"])
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", "o", map[string]any{"pass": 3, "authorization_batches": 4}) })
+	if o, _ := got["o"].(map[string]any); o["pass"] != Redacted || o["authorization_batches"] != Redacted {
+		t.Errorf("opaque map: %v", got["o"])
+	}
+}
+
+func TestTypedBenignStringStillShapeScrubbed(t *testing.T) {
+	got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", "Bearer abcdefgh1") })
+	if s, _ := got["authorization_reason"].(string); strings.Contains(s, "abcdefgh1") {
+		t.Errorf("shape leaked: %q", s)
+	}
+}
+
+func TestTypedBenignWithAttrsAndRecordAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	l := slog.New(Handler(slog.NewJSONHandler(&buf, nil))).With("pass", 2, "coverage_bypass", true, "pass_x", "v")
+	l.Info("m", "evaluated_pass", 5)
+	var out map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["pass"] != float64(2) || out["coverage_bypass"] != true || out["evaluated_pass"] != float64(5) {
+		t.Errorf("got %v", out)
+	}
+}

@@ -64,6 +64,53 @@ var benignKeys = map[string]bool{
 	"secretaries":                        true,
 }
 
+// typedBenignKeys are exact slog attribute keys (compared after compact()) that look protected and are not,
+// each only for its one value kind: counters, flags and one closed-vocabulary code. Any other kind, any
+// enclosing group, and any key inside an opaque value stays protected.
+var typedBenignKeys = map[string]string{
+	"authorizationdroppedcount":               "int",
+	"repolessauthorizationdroppedcount":       "int",
+	"authorizationgrantexactselectors":        "int",
+	"authorizationgrantownerselectors":        "int",
+	"authorizationbatches":                    "int",
+	"authorizationbatchsize":                  "int",
+	"deviceauthorizations":                    "int",
+	"deviceauthorizationsremaining":           "int",
+	"pass":                                    "int",
+	"evaluatedpass":                           "int",
+	"authorizationgrantmeasured":              "bool",
+	"authorizationgrantorganizationwide":      "bool",
+	"devhealthentitlementtokenfileconfigured": "bool",
+	"coveragebypass":                          "bool",
+	"authorizationreason":                     "string",
+}
+
+// BenignKind returns the one value kind ("int", "bool" or "string") for which key is exempt from the key rule, or "".
+func BenignKind(key string) string { return typedBenignKeys[compact(key)] }
+
+func attrKind(v slog.Value) string {
+	switch v.Kind() {
+	case slog.KindInt64, slog.KindUint64:
+		return "int"
+	case slog.KindBool:
+		return "bool"
+	case slog.KindString:
+		return "string"
+	}
+	return ""
+}
+
+// classAttr is classPath for a slog attribute whose value kind is known.
+func classAttr(groups []string, key string, v slog.Value) keyClass {
+	out := classPath(groups, key)
+	if out == classProtected && len(groups) == 0 {
+		if kind := attrKind(v); kind != "" && typedBenignKeys[compact(key)] == kind {
+			return classClean
+		}
+	}
+	return out
+}
+
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
 
 var valueShapes = []*regexp.Regexp{
@@ -539,9 +586,9 @@ func tree(v reflect.Value, depth int, b *budget, path []string) any {
 func clean(groups []string, a slog.Attr) bool {
 	switch a.Value.Kind() {
 	case slog.KindString:
-		return classPath(groups, a.Key) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
+		return classAttr(groups, a.Key, a.Value) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
 	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
-		return classPath(groups, a.Key) == classClean
+		return classAttr(groups, a.Key, a.Value) == classClean
 	}
 	return false
 }
@@ -571,7 +618,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 		a.Value = slog.GroupValue(out...)
 		return a
 	}
-	switch classPath(groups, a.Key) {
+	switch classAttr(groups, a.Key, a.Value) {
 	case classProtected:
 		a.Value = slog.StringValue(Redacted)
 		return a
