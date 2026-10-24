@@ -1545,6 +1545,8 @@ check_gomodcache_action() {
     printf 'go-modcache must hold exactly one cache save step\n' >&2; status=1; }
   grep -qxF "      if: \${{ inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true' }}" <<<"$(grep -B1 -A0 -E 'uses: *actions/cache/save@' "$file" | head -1; grep -E "^ +if: .*inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true'" "$file" | tail -1)" || {
     printf 'go-modcache save is not limited to warm mode on a miss\n' >&2; status=1; }
+  grep -qF 'GOMODCACHE=%s\n'"'"' "$RUNNER_TEMP/gomodcache" >> "$GITHUB_ENV"' "$file" || {
+    printf 'go-modcache does not move GOMODCACHE to its own directory (extracting over setup-go'"'"'s read-only module dir fails)\n' >&2; status=1; }
   grep -qF 'cat go.mod go.sum scripts/ci/go-tool-pins.txt | sha256sum' "$file" || {
     printf 'go-modcache key does not hash go.mod, go.sum and the tool pins together\n' >&2; status=1; }
   grep -qE '^ +run: go mod verify$' "$file" || {
@@ -1684,6 +1686,10 @@ modcache_key_no_gomod="$tmpdir/modcache-key-no-gomod.yml"
 sed 's/cat go.mod go.sum scripts/cat go.sum scripts/' "$modcache_action" > "$modcache_key_no_gomod"
 cmp -s "$modcache_action" "$modcache_key_no_gomod" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_gomod did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the cache key stopped hashing go.mod' check_gomodcache_action "$modcache_key_no_gomod"
+modcache_shared_dir="$tmpdir/modcache-shared-dir.yml"
+sed '/GITHUB_ENV/d' "$modcache_action" > "$modcache_shared_dir"
+cmp -s "$modcache_action" "$modcache_shared_dir" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_shared_dir did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the restore targets setup-go'"'"'s module directory again' check_gomodcache_action "$modcache_shared_dir"
 modcache_key_no_pins="$tmpdir/modcache-key-no-pins.yml"
 sed 's/ go.sum scripts\/ci\/go-tool-pins.txt | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
 cmp -s "$modcache_action" "$modcache_key_no_pins" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_pins did not change the action\n' >&2; exit 1; }

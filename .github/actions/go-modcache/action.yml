@@ -10,6 +10,12 @@ inputs:
 runs:
   using: composite
   steps:
+    # A directory of its own: setup-go restores its cache into the default
+    # module cache, whose files are read-only, so extracting this cache over
+    # that directory fails with "File exists".
+    - name: Point Go at the module cache directory of this action
+      shell: bash
+      run: printf 'GOMODCACHE=%s\n' "$RUNNER_TEMP/gomodcache" >> "$GITHUB_ENV"
     - name: Compute the Go module cache key
       id: key
       shell: bash
