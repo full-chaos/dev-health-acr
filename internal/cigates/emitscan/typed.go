@@ -282,6 +282,9 @@ func (s *fileScan) attrValueKind(value ast.Expr) (string, bool) {
 	if value == nil {
 		return "", true
 	}
+	if _, found := s.typeOf(value); !found {
+		return "", false
+	}
 	call, isCall := ast.Unparen(value).(*ast.CallExpr)
 	if !isCall {
 		return "", true

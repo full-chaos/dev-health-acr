@@ -270,6 +270,7 @@ func TestBenignKindRefusesWhatItCannotType(t *testing.T) {
 		{"sibling file does not type-check", map[string]string{"a.go": header + pair, "b.go": "package sample\n\nvar _ = missing\n"}, "refusal:typecheck"},
 		{"mixed package names", map[string]string{"a.go": header + pair, "b.go": "package other\n"}, "refusal:typecheck"},
 		{"file the build context drops holds the pair", map[string]string{"a.go": header, "b.go": "//go:build ignore\n\npackage sample\n\nimport \"log/slog\"\n\n" + pair}, "refusal:typecheck"},
+		{"Attr literal in a file the build context drops", map[string]string{"a.go": header, "b.go": "//go:build ignore\n\npackage sample\n\nimport (\n\t\"context\"\n\t\"log/slog\"\n)\n\nfunc f(l *slog.Logger) {\n\tl.LogAttrs(context.Background(), slog.LevelInfo, \"m\", slog.Attr{Key: \"authorization_batches\", Value: slog.StringValue(\"x\")})\n}\n"}, "refusal:typecheck"},
 		{"control: the same package type-checks", map[string]string{"a.go": header + pair, "b.go": "package sample\n\nvar _ = 1\n"}, ""},
 		{"control: a broken package with no benign key is not loaded", map[string]string{"a.go": header + `func f(l *slog.Logger) { l.Info("m", "count", 3) }` + "\nvar _ = undefinedName\n"}, ""},
 	}
