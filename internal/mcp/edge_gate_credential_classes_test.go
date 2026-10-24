@@ -160,7 +160,7 @@ func requestLines(t *testing.T, e *endpoint, address string) []map[string]any {
 	var lines []map[string]any
 	for _, raw := range bytes.Split(e.logs.Bytes(), []byte("\n")) {
 		var line map[string]any
-		if json.Unmarshal(raw, &line) != nil || line["msg"] != acrmcp.HTTPRequestLogMessage || line["client_ip"] != address {
+		if json.Unmarshal(raw, &line) != nil || line["msg"] != acrmcp.HTTPRequestLogMessage || line["client_ip"] != address[:strings.LastIndex(address, ".")]+".0/24" {
 			continue
 		}
 		lines = append(lines, line)
@@ -204,7 +204,7 @@ func TestEdgeGateOverBudgetAddressVerifiesOneBearerAtATime(t *testing.T) {
 	hosted := newHostedAPI(t)
 	e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{FailureLimit: 3, TrustedProxyCIDRs: loopbackProxies})
 	valid := hosted.issue(readScopes, []string{repoPlain}, nil)
-	const attacker, other = "203.0.113.50", "203.0.113.51"
+	const attacker, other = "203.0.113.50", "198.51.100.51"
 	burst(t, e, 3, func(int) string { return "junk" }, func(int) string { return attacker })
 	guess := unknownWellFormedToken(t)
 	hold := newBearerHold(guess)

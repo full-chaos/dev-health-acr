@@ -1904,6 +1904,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// lists are sized for.
 	limit := maxDraws
 	var held *heldSynthesisDraw
+	var slowestDraw time.Duration
 	for draw := 1; draw <= limit; draw++ {
 		// CHAOS-5655 / 4452 vol.1 §10 D5 ("the reserved synthesis deadline
 		// ships in the same slice ... or the terminal case is a 504
@@ -1921,20 +1922,15 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// context.Background(), most of this package's own tests) never
 		// refuses a draw: there is no shared budget to protect it from.
 		//
-		// The reservation is deliberately sized off r.config.Timeout -- the
-		// SAME fixed per-attempt ceiling withRetry already enforces on
-		// every individual call -- rather than a measurement of how long
-		// the PREVIOUS draw actually took: a real provider's latency varies
-		// call to call, and a reservation sized off one lucky fast draw
-		// could still starve the next one or the fallback leg after it.
+		// The reserved slice is a draw's expected cost, not its ceiling: see
+		// synthesisRedrawReserve. It never exceeds the old ceiling (Timeout,
+		// doubled with a fallback), so a redraw the old rule allowed is still
+		// allowed.
 		if draw > 1 {
 			if deadline, ok := ctx.Deadline(); ok {
 				budgetChecked = true
 				remaining := time.Until(deadline)
-				reserved := r.config.Timeout
-				if r.config.Fallback != nil {
-					reserved *= 2
-				}
+				reserved := synthesisRedrawReserve(r.config.Timeout, r.config.Fallback != nil, slowestDraw)
 				budgetRemainingMS = contextfabric.SanitizeLogInt(remaining.Milliseconds())
 				budgetReservedMS = contextfabric.SanitizeLogInt(reserved.Milliseconds())
 				if remaining < reserved {
@@ -1946,6 +1942,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				}
 			}
 		}
+		drawStarted := r.now()
 		attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 			var callErr error
 			output, usage, callErr = r.generator.Synthesize(callCtx, generationRequest{
@@ -1953,6 +1950,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			})
 			return callErr
 		})
+		slowestDraw = max(slowestDraw, r.now().Sub(drawStarted))
 		// CHAOS-5655: accumulated unconditionally -- a transport failure can
 		// still have consumed tokens on an earlier, already-successful
 		// attempt within this SAME draw's own withRetry call (a retryable
@@ -2218,6 +2216,27 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// closure was diagnosable only when it did not save the answer.
 	setGroundingSignal(draft)
 	return draft, receipt, nil
+}
+
+// synthesisRedrawFloor is the least time a redraw is assumed to need, so one
+// fast first draw does not shrink the reserve below what a slower draw costs.
+const synthesisRedrawFloor = 20 * time.Second
+
+// synthesisRedrawReserve is the slice of the remaining request deadline a
+// redraw needs: the expected cost of one draw (twice the slowest draw so far,
+// at least synthesisRedrawFloor), doubled when a fallback leg must still fit
+// after it. The ctx the production caller passes already ends the composition
+// reserve before the request deadline (boundSynthesisCallContext), so that
+// slice is not added here. It never exceeds the old gate (Config.Timeout,
+// doubled with a fallback), so a redraw the old gate allowed is still allowed.
+func synthesisRedrawReserve(timeout time.Duration, hasFallback bool, slowestDraw time.Duration) time.Duration {
+	ceiling, attempt := timeout, max(synthesisRedrawFloor, 2*slowestDraw)
+	reserved := attempt
+	if hasFallback {
+		ceiling *= 2
+		reserved += attempt
+	}
+	return min(reserved, ceiling)
 }
 
 // schemaOnlySynthesisRejection types the rejection of a draw only Genkit's
@@ -2759,7 +2778,11 @@ func (r *Runtime) withRetryFor(ctx context.Context, fallbackFollows bool, fn fun
 		}
 		callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 		err := fn(callCtx)
+		modelTimedOut := errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		cancel()
+		if modelTimedOut && err != nil && errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("%w: %w", contextfabric.ErrModelTimeout, err)
+		}
 		record(attempt, started, err)
 		if err == nil {
 			return outcomes, nil
@@ -3437,6 +3460,8 @@ func mergeFallbackFrameCapture(primary *contextfabric.ModelExecutionReceipt, fal
 	primary.QuestionFrame = fallback.QuestionFrame
 	primary.FrameOutcome = fallback.FrameOutcome
 	primary.FrameFailedInvariant = fallback.FrameFailedInvariant
+	primary.TermlessNamedSubject = fallback.TermlessNamedSubject
+	primary.TermlessScopeMemberKind = fallback.TermlessScopeMemberKind
 	primary.FrameGateOutcome = fallback.FrameGateOutcome
 	primary.FrameGateRefuseBasis = fallback.FrameGateRefuseBasis
 	primary.FrameGateDeclaredMemberKind = fallback.FrameGateDeclaredMemberKind

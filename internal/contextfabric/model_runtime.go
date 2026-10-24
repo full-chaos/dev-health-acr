@@ -72,6 +72,11 @@ var (
 	// runtime's own terminal fact: a transient failure without it ended before
 	// the budget was used, and its error stands.
 	ErrModelRetriesExhausted = errors.New("context fabric model runtime retries exhausted")
+	// ErrModelTimeout marks a model attempt that ended on its own per-attempt
+	// deadline (ACR_CONTEXT_FABRIC_MODEL_TIMEOUT) while the caller's context was
+	// still live. It always wraps the original deadline error, so
+	// errors.Is(err, context.DeadlineExceeded) still holds.
+	ErrModelTimeout = errors.New("context fabric model attempt exceeded its own timeout")
 )
 
 // ModelInputOverflow is the error a model runtime returns in place of a call
@@ -295,6 +300,15 @@ type ModelExecutionReceipt struct {
 	// FrameFailedInvariant is the FIRST failed invariant in table order,
 	// i1...i19, empty on a valid frame.
 	FrameFailedInvariant FrameInvariant `json:"frame_failed_invariant,omitempty"`
+	// TermlessNamedSubject: the proposal was a named_subject with no terms
+	// and I3 (no_terms) was its only failure. Decided in resolveFrame by
+	// termlessNamedSubjectOnly; no other code sets it.
+	TermlessNamedSubject bool `json:"termless_named_subject,omitempty"`
+	// TermlessScopeMemberKind: the proposal was a children_of_scope with no
+	// anchor terms and I5 (no_anchor_terms) was its only failure; the value
+	// is the member kind the model stated. Decided in resolveFrame by
+	// termlessScopeMemberKindOnly; no other code sets it.
+	TermlessScopeMemberKind SubjectKind `json:"termless_scope_member_kind,omitempty"`
 	// FrameGateOutcome is the ORDERING verdict DecideFrameGate reached for
 	// this receipt's frame -- validity and the refuse basis, decided here
 	// at interpretation because that is where §13.5.2's order puts them,
@@ -1765,6 +1779,8 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
+	receipt.TermlessNamedSubject = termlessNamedSubjectOnly(*receipt, proposed, emittedShape, result)
+	receipt.TermlessScopeMemberKind = termlessScopeMemberKindOnly(*receipt, proposed, emittedShape, result)
 
 	// CHAOS-4975 (codex round 1, P2): the backfill below MUST run BEFORE
 	// requirement derivation, not after. DeriveRequirementCoordinates
@@ -2398,7 +2414,27 @@ func familySampleFrom(interpreted InterpretedQuestion, receipt ModelExecutionRec
 		RequestedKind:           receipt.RequestedSubjectKind,
 		ModelFamily:             receipt.QuestionFamily,
 		ModelFamilyUnrecognized: receipt.QuestionFamilyUnrecognized,
+		TermlessNamedSubject:    receipt.TermlessNamedSubject,
+		TermlessScopeMemberKind: receipt.TermlessScopeMemberKind,
 	}
+}
+
+// termlessNamedSubjectOnly reports whether the refusal is exactly I3
+// no_terms on a named_subject with no terms and nothing else is wrong with
+// the frame: the same frame with one placeholder term validates. Decided
+// from the model's own emitted frame, never from the question or memory.
+func termlessNamedSubjectOnly(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, result FrameValidationResult) bool {
+	expression := proposed.SubjectExpression
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid ||
+		result.Failure.Invariant != FrameInvariantI3 || result.Failure.Detail != FrameFailureNoTerms ||
+		expression.Kind != SubjectExpressionNamed || expression.Named == nil || len(expression.Named.Terms) != 0 {
+		return false
+	}
+	named := *expression.Named
+	named.Terms = []string{"placeholder"}
+	probe := proposed
+	probe.SubjectExpression.Named = &named
+	return validateAgainstInterpretation(receipt, probe, emittedShape).Outcome.Accepted()
 }
 
 type RuntimeAnswerSynthesizerOptions struct {
@@ -3906,4 +3942,26 @@ func groundDerivedClaim(facts []CanonicalFact, claim ClaimedFact, key string) cl
 		return claimDerivationValueMismatch
 	}
 	return claimGrounded
+}
+
+// termlessScopeMemberKindOnly returns the member kind the model stated when
+// the refusal is exactly I5 no_anchor_terms on a children_of_scope whose
+// anchor terms are empty (not blank) and nothing else is wrong with the
+// frame: the same frame with one placeholder anchor term validates. Empty
+// otherwise. Decided from the model's own emitted frame only.
+func termlessScopeMemberKindOnly(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, result FrameValidationResult) SubjectKind {
+	expression := proposed.SubjectExpression
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid ||
+		result.Failure.Invariant != FrameInvariantI5 || result.Failure.Detail != FrameFailureNoAnchorTerms ||
+		expression.Kind != SubjectExpressionChildrenOfScope || expression.Scoped == nil || len(expression.Scoped.AnchorTerms) != 0 {
+		return ""
+	}
+	scoped := *expression.Scoped
+	scoped.AnchorTerms = []string{"placeholder"}
+	probe := proposed
+	probe.SubjectExpression.Scoped = &scoped
+	if !validateAgainstInterpretation(receipt, probe, emittedShape).Outcome.Accepted() {
+		return ""
+	}
+	return scoped.MemberKind
 }

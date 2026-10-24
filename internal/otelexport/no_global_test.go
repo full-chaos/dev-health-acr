@@ -29,6 +29,8 @@ var globalInstalls = map[string]map[string]bool{
 var allowedGlobalInstalls = []string{
 	"internal/contextfabric/modelprovider/provider.go: go.opentelemetry.io/otel.SetMeterProvider",
 	"internal/contextfabric/modelprovider/provider.go: go.opentelemetry.io/otel.SetTracerProvider",
+	// Scrubbed, non-exporting default logger: package-level slog calls must not bypass redaction.
+	"internal/telemetryscrub/default.go: log/slog.SetDefault",
 }
 
 // TestNoGlobalTelemetryInstallOutsideModelProvider walks every production Go

@@ -105,6 +105,15 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.falkorPort }}
     {{- end }}
+    {{- /* acr-api's query embedder dials the embedding provider (HTTPS). Rendered
+         only when the explicit switch contextFabric.embed.apiEnabled and
+         embed.baseURL are both set; port-only like the rules above (the
+         provider hostname cannot be named by a standard NetworkPolicy). */}}
+    {{- if and .Values.contextFabric.embed.apiEnabled .Values.contextFabric.embed.baseURL .Values.networkPolicy.egress.embedPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.embedPort }}
+    {{- end }}
     {{- if and (include "acr.remoteEntitlement" .) .Values.networkPolicy.egress.entitlementPort }}
     - ports:
         - protocol: TCP

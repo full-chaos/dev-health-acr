@@ -11,6 +11,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
 
 // A stored result is served to a caller only when the live authorization
@@ -133,6 +134,15 @@ func StoredResultAuthorizationReasonVocabulary() [12]StoredResultAuthorizationRe
 		StoredResultReasonGrantMismatch, StoredResultReasonGrantUnrecorded,
 		StoredResultReasonAuthorizerMissing, StoredResultReasonGraphReadFailed,
 	}
+}
+
+func init() {
+	reasons := StoredResultAuthorizationReasonVocabulary()
+	values := make([]string, len(reasons))
+	for i, r := range reasons {
+		values[i] = string(r)
+	}
+	telemetryscrub.RegisterClosedValues("authorization_reason", values)
 }
 
 // StoredResultPrincipalScope classifies the caller's repository grant the way

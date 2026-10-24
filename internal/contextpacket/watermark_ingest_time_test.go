@@ -204,7 +204,7 @@ func TestUnreadableSyncTimeIsUnknownAndLoud(t *testing.T) {
 	if !slices.Contains(result.Warnings, "ingest_time_unreadable:work_items.v1") {
 		t.Fatalf("Warnings = %v, want ingest_time_unreadable:work_items.v1", result.Warnings)
 	}
-	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "source=work_items.v1") || !strings.Contains(out, "sync time boom") || !strings.Contains(out, "request_id="+plan.RequestID) {
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "source=work_items.v1") || strings.Contains(out, "sync time boom") || !strings.Contains(out, "error=*") || !strings.Contains(out, "request_id="+plan.RequestID) {
 		t.Fatalf("unreadable sync time not logged loudly: %s", out)
 	}
 }

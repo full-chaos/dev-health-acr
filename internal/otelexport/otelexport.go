@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -193,10 +194,11 @@ func NewWithExporters(ctx context.Context, cfg Config, sinks Exporters) (*Export
 	if err != nil && res == nil {
 		return nil, fmt.Errorf("otel resource: %w", err)
 	}
-	spanProcessor := sdktrace.NewBatchSpanProcessor(sinks.Spans)
+	scrubbed := scrubSpanExporter{SpanExporter: sinks.Spans}
+	spanProcessor := sdktrace.NewBatchSpanProcessor(scrubbed)
 	logProcessor := sdklog.Processor(sdklog.NewBatchProcessor(sinks.Logs))
 	if sinks.Synchronous {
-		spanProcessor = sdktrace.NewSimpleSpanProcessor(sinks.Spans)
+		spanProcessor = sdktrace.NewSimpleSpanProcessor(scrubbed)
 		logProcessor = sdklog.NewSimpleProcessor(sinks.Logs)
 	}
 	return &Exporter{
@@ -219,7 +221,15 @@ func (e *Exporter) HTTPHandler(next http.Handler) http.Handler {
 	if !e.enabled() {
 		return next
 	}
-	return otelhttp.NewHandler(next, e.serviceName,
+	routed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		if route := patternRoute(r.Pattern); route != "" {
+			if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+				span.SetAttributes(semconv.HTTPRoute(route))
+			}
+		}
+	})
+	return otelhttp.NewHandler(routed, e.serviceName,
 		otelhttp.WithTracerProvider(e.traces),
 		otelhttp.WithMeterProvider(e.metrics),
 		otelhttp.WithPropagators(e.propagators),
@@ -276,7 +286,7 @@ func (e *Exporter) LogHandler(base slog.Handler) slog.Handler {
 		return base
 	}
 	bridged := otelslog.NewHandler(instrumentationScope, otelslog.WithLoggerProvider(e.logs))
-	return teeHandler{primary: base, export: bridged}
+	return teeHandler{primary: base, export: telemetryscrub.Handler(bridged)}
 }
 
 // teeHandler writes to primary and, for every record primary is enabled for,

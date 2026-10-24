@@ -82,4 +82,26 @@ rc=0
 RACE_JSON_OUT="$json_out" GOTEST_TIMEOUT=600s RUNNER="$stubj" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/j2.out" 2>&1 || rc=$?
 if [ "$rc" -eq 1 ] && grep -q 'example/pkg at 511s is over 85%' "$tmp/j2.out"; then echo "ok   json-over-line-fails"; else echo "FAIL json-over rc=$rc"; fails=$((fails + 1)); fi
 
+# CHAOS-10333: the per-test limit reads the file THIS run wrote. A race.json left in place by an earlier attempt (the
+# situation of a --failed rerun) is truncated before the run, so its durations never count.
+sed -i 's/"Elapsed":511.0/"Elapsed":505.6/' "$stubj"
+mkdir -p "$(dirname "$json_out")"
+printf '%s\n' '{"Action":"pass","Package":"example/pkg","Test":"TestStaleAttempt","Elapsed":900}' >"$json_out"
+rc=0
+RACE_JSON_OUT="$json_out" GOTEST_TIMEOUT=600s RUNNER="$stubj" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/j3.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q 'TestStaleAttempt' "$tmp/j3.out" && ! grep -q 'TestStaleAttempt' "$json_out"; then
+  echo "ok   stale-attempt-durations-do-not-count"
+else
+  echo "FAIL stale-attempt rc=$rc"; cat "$tmp/j3.out"; fails=$((fails + 1))
+fi
+# a test of THIS run over the limit fails the job through the wrapper
+sed -i 's/"Test":"TestA","Elapsed":0/"Test":"TestA","Elapsed":310/' "$stubj"
+rc=0
+RACE_JSON_OUT="$json_out" GOTEST_TIMEOUT=600s RUNNER="$stubj" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/j4.out" 2>&1 || rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'example/pkg TestA ran 310s under -race, over the 300s per-test limit' "$tmp/j4.out"; then
+  echo "ok   per-test-limit-fails-through-the-wrapper"
+else
+  echo "FAIL per-test-wrapper rc=$rc"; cat "$tmp/j4.out"; fails=$((fails + 1))
+fi
+
 [ "$fails" -eq 0 ]
