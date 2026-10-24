@@ -183,7 +183,13 @@ func TestLiveDependencyEdgeCountsEqualTheEdgesTheProducerAsserts(t *testing.T) {
 			t.Errorf("%s: a removed-link set cut at its bound must leave the relation unmeasured", relation)
 		}
 	}
-	if _, present := cutCounts[contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}]; !present {
-		t.Error("a cut removed-link set must not affect the other populations")
+	dependency := map[contractsv1.ContextFabricRelationshipType]bool{}
+	for _, relation := range depParityRelations {
+		dependency[relation] = true
+	}
+	for _, key := range cut.EdgeCountKeys() {
+		if _, present := cutCounts[key]; !dependency[key.Relation] && !present {
+			t.Errorf("%+v: a cut removed-link set must not void the other populations", key)
+		}
 	}
 }
