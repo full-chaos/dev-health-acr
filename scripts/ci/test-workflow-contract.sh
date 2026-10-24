@@ -341,6 +341,11 @@ check_go_cache() {
           "$job" >&2
         status=1
       fi
+    elif [ "$job" = gomodcache ]; then
+      if grep -vqE '^ +cache: false$' <<<"$cache_lines"; then
+        printf 'job "gomodcache" must keep setup-go cache: false; its own module cache is the go-modcache action, and a second saver would put a partial set back under the shared key\n' >&2
+        status=1
+      fi
     elif grep -vqE '^ +cache: true$' <<<"$cache_lines"; then
       printf 'job "%s" runs hosted only, but its setup-go cache is not true\n' "$job" >&2
       status=1
@@ -1210,7 +1215,7 @@ make coverage-cobertura" || status=1
 # must `needs: plan` and carry exactly the plan-output `if:`, so a new job
 # defaults to heavy (skipped on a draft) and cannot quietly run on every draft
 # push; and verify must READ plan.outputs.heavy and reject a missing value.
-light_jobs=' plan mirror-preflight scripts lint docs-mermaid helm unit unit-dedup-plan unit-dedicated reports verify '
+light_jobs=' plan gomodcache mirror-preflight scripts lint docs-mermaid helm unit unit-dedup-plan unit-dedicated reports verify '
 check_heavy_jobs_gated() {
   local file="$1" job block status=0
   while IFS= read -r job; do
@@ -1494,6 +1499,75 @@ check_content_sanity_steps() {
   return "$status"
 }
 
+# One Go module cache per run. setup-go keys one cache on go.sum and the first
+# job to finish saves it, so the saved set was only what that job needed and
+# every other job downloaded the rest from the proxy on every run (measured:
+# 1423 module fetches per run over 35 jobs). The gomodcache job downloads the
+# whole module and every pinned tool and is the only saver; every other job that
+# installs Go (plan excepted: it downloads nothing) depends on it and restores
+# in `restore` mode, which fails on a miss rather than falling back to a download.
+check_gomodcache_wiring() {
+  local file="$1" status=0 job block
+  block="$(job_block "$file" gomodcache)"
+  if ! grep -qxF '      - uses: ./.github/actions/go-modcache' <<<"$block" \
+     || ! grep -qxF '        with: {mode: warm}' <<<"$block"; then
+    printf 'job "gomodcache" does not run the go-modcache action in warm mode\n' >&2
+    status=1
+  fi
+  if [ "$(grep -cE 'mode: warm' "$file" || true)" -ne 1 ]; then
+    printf 'exactly one job (gomodcache) may run the go-modcache action in warm mode\n' >&2
+    status=1
+  fi
+  while IFS= read -r job; do
+    case "$job" in plan|gomodcache) continue ;; esac
+    block="$(job_block "$file" "$job")"
+    grep -qE 'uses: *actions/setup-go@' <<<"$block" || continue
+    if ! list_needs <<<"$block" | grep -qx gomodcache; then
+      printf 'job "%s" installs Go but does not need gomodcache\n' "$job" >&2
+      status=1
+    fi
+    if ! grep -qxF '      - uses: ./.github/actions/go-modcache' <<<"$block" \
+       || ! grep -qxF '        with: {mode: restore}' <<<"$block"; then
+      printf 'job "%s" installs Go but does not restore the module cache in restore mode\n' "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
+# The action itself: only warm mode saves, restore mode fails on a miss, and
+# the restored cache is checked against go.sum.
+check_gomodcache_action() {
+  local file="$1" status=0
+  grep -qxF "        fail-on-cache-miss: \${{ inputs.mode == 'restore' }}" "$file" || {
+    printf 'go-modcache restore does not fail on a miss in restore mode\n' >&2; status=1; }
+  [ "$(grep -cE 'uses: *actions/cache/save@' "$file" || true)" -eq 1 ] || {
+    printf 'go-modcache must hold exactly one cache save step\n' >&2; status=1; }
+  grep -qxF "      if: \${{ inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true' }}" <<<"$(grep -B1 -A0 -E 'uses: *actions/cache/save@' "$file" | head -1; grep -E "^ +if: .*inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true'" "$file" | tail -1)" || {
+    printf 'go-modcache save is not limited to warm mode on a miss\n' >&2; status=1; }
+  grep -qF 'RUNNER_TEMP/gomodcache" >> "' "$file" || {
+    printf 'go-modcache does not move GOMODCACHE to its own directory (extracting over setup-go'"'"'s read-only module dir fails)\n' >&2; status=1; }
+  grep -qF 'cat go.mod go.sum scripts/ci/go-tool-pins.txt | sha256sum' "$file" || {
+    printf 'go-modcache key does not hash go.mod, go.sum and the tool pins together\n' >&2; status=1; }
+  grep -qE '^ +run: go mod verify$' "$file" || {
+    printf 'go-modcache does not run go mod verify\n' >&2; status=1; }
+  return "$status"
+}
+
+# The tools the warm step installs are the versions the jobs run.
+check_gomodcache_pins() {
+  local pins="$1" status=0 want got
+  want="gotest.tools/gotestsum@$(sed -n 's/^GOTESTSUM_VERSION := //p' "$repo_root/Makefile")"
+  grep -qxF "$want" "$pins" || { printf 'go-tool-pins.txt lacks %s (Makefile GOTESTSUM_VERSION)\n' "$want" >&2; status=1; }
+  want="github.com/boumenot/gocover-cobertura@$(sed -n 's/^GOCOVER_COBERTURA_VERSION := //p' "$repo_root/Makefile")"
+  grep -qxF "$want" "$pins" || { printf 'go-tool-pins.txt lacks %s (Makefile GOCOVER_COBERTURA_VERSION)\n' "$want" >&2; status=1; }
+  got="$(grep -ohE 'golang.org/x/vuln/cmd/govulncheck@v[0-9.]+' "$default_workflow" | sort -u)"
+  if [ -z "$got" ] || ! grep -qxF "$got" "$pins"; then
+    printf 'go-tool-pins.txt lacks the govulncheck pin ci.yml runs (%s)\n' "$got" >&2; status=1
+  fi
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -1501,6 +1575,7 @@ run_all_checks() {
   check_verify_if_always "$file"
   check_gate_rejects_nonsuccess "$file"
   check_go_cache "$file"
+  check_gomodcache_wiring "$file"
   check_main_runs_get_a_verdict "$file"
   check_race_shard_agreement "$file"
   check_unit_shard_agreement "$file"
@@ -1533,6 +1608,11 @@ run_all_checks() {
 
 run_all_checks "$workflow"
 printf 'PASS: %s satisfies all workflow contract checks\n' "$workflow"
+modcache_action="$repo_root/.github/actions/go-modcache/action.yml"
+modcache_pins="$repo_root/scripts/ci/go-tool-pins.txt"
+check_gomodcache_action "$modcache_action"
+check_gomodcache_pins "$modcache_pins"
+printf 'PASS: go-modcache action and tool pins satisfy the module cache checks\n'
 fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
 check_gomod_proxy_fallback "$fullstack_workflow"
 printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
@@ -1579,6 +1659,44 @@ assert_check_fails 'verify reverted to if: always()' check_verify_if_always "$ve
 cache_false="$tmpdir/cache-false.yml"
 awk '!done && /cache: true/ { sub(/cache: true/, "cache: false"); done=1 } { print }' "$workflow" > "$cache_false"
 assert_check_fails 'flipped a hosted job'"'"'s cache: true to cache: false' check_go_cache "$cache_false"
+
+# (gomodcache) a consumer that restores in warm mode (a second saver), one that
+# no longer needs gomodcache, one with no restore step, an action whose restore
+# can fall back silently, an action that saves in every mode, and a stale pin.
+modcache_two_savers="$tmpdir/modcache-two-savers.yml"
+awk '/^        with: \{mode: restore\}$/ && !done { sub(/restore/, "warm"); done=1 } { print }' "$workflow" > "$modcache_two_savers"
+cmp -s "$workflow" "$modcache_two_savers" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_two_savers did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'a second job warms the module cache' check_gomodcache_wiring "$modcache_two_savers"
+modcache_no_needs="$tmpdir/modcache-no-needs.yml"
+awk '/^ {6}- gomodcache$/ && ++n == 5 { next } { print }' "$workflow" > "$modcache_no_needs"
+cmp -s "$workflow" "$modcache_no_needs" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_no_needs did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'a Go job stopped needing gomodcache' check_gomodcache_wiring "$modcache_no_needs"
+modcache_no_restore="$tmpdir/modcache-no-restore.yml"
+awk '/^      - uses: .\/.github\/actions\/go-modcache$/ { n++ } n == 4 && /^      - uses: .\/.github\/actions\/go-modcache$/ { getline; getline; next } { print }' "$workflow" > "$modcache_no_restore"
+cmp -s "$workflow" "$modcache_no_restore" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_no_restore did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'a Go job dropped its module cache restore' check_gomodcache_wiring "$modcache_no_restore"
+modcache_silent_miss="$tmpdir/modcache-silent-miss.yml"
+sed '/fail-on-cache-miss:/d' "$modcache_action" > "$modcache_silent_miss"
+assert_check_fails 'the restore no longer fails on a miss' check_gomodcache_action "$modcache_silent_miss"
+modcache_save_always="$tmpdir/modcache-save-always.yml"
+sed "s/^      if: \${{ inputs.mode == 'warm' \&\& steps.restore.outputs.cache-hit != 'true' }}\$/      if: \${{ true }}/" "$modcache_action" > "$modcache_save_always"
+cmp -s "$modcache_action" "$modcache_save_always" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_save_always did not change the action\n' >&2; exit 1; }
+assert_check_fails 'every mode saves the module cache' check_gomodcache_action "$modcache_save_always"
+modcache_key_no_gomod="$tmpdir/modcache-key-no-gomod.yml"
+sed 's/cat go.mod go.sum scripts/cat go.sum scripts/' "$modcache_action" > "$modcache_key_no_gomod"
+cmp -s "$modcache_action" "$modcache_key_no_gomod" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_gomod did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the cache key stopped hashing go.mod' check_gomodcache_action "$modcache_key_no_gomod"
+modcache_shared_dir="$tmpdir/modcache-shared-dir.yml"
+sed '/GITHUB_ENV/d' "$modcache_action" > "$modcache_shared_dir"
+cmp -s "$modcache_action" "$modcache_shared_dir" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_shared_dir did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the restore targets setup-go'"'"'s module directory again' check_gomodcache_action "$modcache_shared_dir"
+modcache_key_no_pins="$tmpdir/modcache-key-no-pins.yml"
+sed 's/ go.sum scripts\/ci\/go-tool-pins.txt | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
+cmp -s "$modcache_action" "$modcache_key_no_pins" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_pins did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the cache key stopped hashing the tool pins' check_gomodcache_action "$modcache_key_no_pins"
+modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
+sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
+assert_check_fails 'a tool pin drifted from the Makefile' check_gomodcache_pins "$modcache_stale_pin"
 
 # (c1) a pool-routable job back on setup-go's own cache, and one on a plain
 # cache: false (a hosted run of that job would then throw its cache away).

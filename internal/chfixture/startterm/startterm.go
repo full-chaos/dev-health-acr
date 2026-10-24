@@ -37,12 +37,20 @@ func TerminateFailed(c testcontainers.Container, err error) error {
 	if err == nil || isNil(c) {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), terminateBudget)
-	defer cancel()
-	if termErr := c.Terminate(ctx); termErr != nil {
+	if termErr := Terminate(c); termErr != nil {
 		return errors.Join(err, fmt.Errorf("terminate after failed start: %w", termErr))
 	}
 	return err
+}
+
+// Terminate terminates the container of a failed start on a fresh context and returns the terminate error only.
+func Terminate(c testcontainers.Container) error {
+	if isNil(c) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), terminateBudget)
+	defer cancel()
+	return c.Terminate(ctx)
 }
 
 func generic(ctx context.Context, req testcontainers.GenericContainerRequest, create genericFunc) (testcontainers.Container, error) {

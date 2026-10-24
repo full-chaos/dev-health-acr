@@ -428,6 +428,9 @@ type ProjectTeamsFragment struct {
 	Name, SQL string
 	Settings  string
 	Paged     bool
+	// Capped runs the statement under the projector's statement settings with
+	// only the organization bound: a count statement, not a paged read.
+	Capped bool
 }
 
 // ProjectTeamsFragmentsForTest lists the statement's building blocks, then the
@@ -444,6 +447,7 @@ func ProjectTeamsFragmentsForTest(ingest bool) []ProjectTeamsFragment {
 		{Name: "both_arms_union", SQL: arms[0] + "\nUNION ALL\n" + arms[1]},
 		{Name: "group_statement", SQL: projectTeamsGroupSQL(ingest)},
 		{Name: "paged_statement", SQL: projectTeamsStatementFor(cursorState{}, ingest), Paged: true},
+		{Name: "owned_by_team_project_count", SQL: projectOwnershipEdgeCountSQL(ingest), Capped: true},
 		{Name: "legacy_group_statement", SQL: legacyProjectTeamsGroupSQL(ingest)},
 		{Name: "legacy_paged_statement", SQL: legacyProjectTeamsStatementFor(cursorState{}, ingest), Paged: true},
 	}
