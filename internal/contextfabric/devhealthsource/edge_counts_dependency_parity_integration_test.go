@@ -2,6 +2,7 @@ package devhealthsource_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -173,8 +174,9 @@ func TestLiveDependencyEdgeCountsEqualTheEdgesTheProducerAsserts(t *testing.T) {
 	item("jira:D-32", "jira", resynced)
 	cut.SetEndedLinksBoundForTest(1)
 	cutCounts, err := cut.ProjectionSourceEdgeCounts(ctx, depParityOrg)
-	if err != nil {
-		t.Fatalf("ProjectionSourceEdgeCounts over a cut set: %v", err)
+	var unmeasured *contextfabric.EdgeCountsUnmeasured
+	if !errors.As(err, &unmeasured) || unmeasured.Reason != "removed_link_set_cut" || len(unmeasured.Keys) != len(depParityRelations) {
+		t.Fatalf("a cut removed-link set is reported unmeasured with its reason, got %v", err)
 	}
 	for _, relation := range depParityRelations {
 		if _, present := cutCounts[contextfabric.EdgeCountKey{Relation: relation}]; present {
