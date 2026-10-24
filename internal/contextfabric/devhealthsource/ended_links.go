@@ -20,6 +20,10 @@ type endedLinks struct {
 	// microseconds, dot separated. Hex keeps any work item id (a backslash
 	// included) inside the binding encoding the client accepts.
 	keys []string
+	// cut is true when the removed-link set was cut at its bound: a removed
+	// link beyond it is still treated as live, so anything counted over the
+	// set is not the producer's.
+	cut bool
 }
 
 type endedLinksKey struct{}
@@ -83,7 +87,8 @@ func readEndedLinks(ctx context.Context, client contextpacket.ClickHouseQueryCli
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "kept_links", unknownWriter,
 			"reason", "the link kind's writer is not known from the row, so the edge is kept")
 	}
-	if total > uint64(len(links.keys)) {
+	links.cut = total > uint64(len(links.keys))
+	if links.cut {
 		startLogger(ctx).WarnContext(ctx, "devhealthsource removed-link set cut",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "removed_links", total, "retracted_links", len(links.keys),
 			"reason", "the oldest removed links beyond the bound keep their edge until the set bound is raised and the projection rebuilt")

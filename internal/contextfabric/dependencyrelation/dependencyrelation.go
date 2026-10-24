@@ -104,6 +104,17 @@ func Resolve(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEnd
 	return contractsv1.ContextFabricRelationshipType(upper), false, asciiLower(asciiTrim(raw))
 }
 
+// Aliases returns every raw spelling the table maps, upper-cased, in order. A
+// consumer that enumerates the mapped wire types tests each one through Resolve.
+func Aliases() []string {
+	keys := make([]string, 0, len(mapping))
+	for k := range mapping {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // Key is the canonical relation key of a raw spelling: canonical type plus
 // direction. Two rows for one pair with the same Key state one relation.
 //
