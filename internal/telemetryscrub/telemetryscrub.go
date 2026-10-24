@@ -142,14 +142,14 @@ func attrKind(v slog.Value) string {
 
 // classAttr is classPath for a slog attribute whose value kind is known.
 func classAttr(groups []string, key string, v slog.Value) keyClass {
-	out := classPath(groups, key)
-	if out == classProtected && len(groups) == 0 {
-		c := compact(key)
-		if kind := attrKind(v); kind != "" && typedBenignKeys[c] == kind && (kind != "string" || closedValue(c, v.String())) {
-			return classClean
-		}
+	if len(groups) > 0 {
+		return classPath(groups, key)
 	}
-	return out
+	e := keyEntryOf(key)
+	if e.class == classProtected && e.kind != "" && attrKind(v) == e.kind && (e.kind != "string" || closedValue(e.compact, v.String())) {
+		return classClean
+	}
+	return e.class
 }
 
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
@@ -336,19 +336,40 @@ var keyCache sync.Map
 var keyCacheSize int64
 var keyCacheMu sync.Mutex
 
-func classifyCached(key string) keyClass {
-	if v, ok := keyCache.Load(key); ok {
-		return v.(keyClass)
+// keyEntry is what the key rules say about one key spelling: its class and, for a protected key that is an exempt
+// key of typedBenignKeys, that key's compact form and its one value kind. Built once per key so the per-record path
+// does no string work.
+type keyEntry struct {
+	class   keyClass
+	kind    string
+	compact string
+}
+
+func newKeyEntry(key string) keyEntry {
+	e := keyEntry{class: classify(key)}
+	if e.class == classProtected {
+		if c := compact(key); typedBenignKeys[c] != "" {
+			e.kind, e.compact = typedBenignKeys[c], c
+		}
 	}
-	c := classify(key)
+	return e
+}
+
+func keyEntryOf(key string) keyEntry {
+	if v, ok := keyCache.Load(key); ok {
+		return v.(keyEntry)
+	}
+	e := newKeyEntry(key)
 	keyCacheMu.Lock()
 	if keyCacheSize < maxKeyCache {
 		keyCacheSize++
-		keyCache.Store(key, c)
+		keyCache.Store(key, e)
 	}
 	keyCacheMu.Unlock()
-	return c
+	return e
 }
+
+func classifyCached(key string) keyClass { return keyEntryOf(key).class }
 
 // classPath applies the key rules to a leaf key and to every enclosing group: a protected
 // or network ancestor taints every child.

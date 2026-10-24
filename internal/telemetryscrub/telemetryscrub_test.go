@@ -975,3 +975,96 @@ func TestUnnamedGroupsCountAsGroups(t *testing.T) {
 		t.Errorf("ungrouped pass = %v want kept", got["pass"])
 	}
 }
+
+func TestProtectedAndExemptKeysAllocateNothing(t *testing.T) {
+	if raceDetectorEnabled {
+		t.Skip("allocation counts are not stable under the race detector")
+	}
+	h := Handler(captureHandler{rec: new(slog.Record)})
+	cases := map[string][]slog.Attr{
+		"clean key":          {slog.Int("count", 3)},
+		"protected key":      {slog.String("token", "x")},
+		"exempt int":         {slog.Int("authorization_batches", 3)},
+		"exempt bool":        {slog.Bool("coverage_bypass", true)},
+		"exempt string":      {slog.String("authorization_reason", "subjects_admitted")},
+		"exempt wrong kind":  {slog.String("authorization_batches", "x")},
+		"exempt unsigned":    {slog.Uint64("authorization_batches", 3)},
+		"protected spelling": {slog.String("API_KEY", "x")},
+	}
+	for name, attrs := range cases {
+		r := slog.NewRecord(time.Time{}, slog.LevelInfo, "m", 0)
+		r.AddAttrs(attrs...)
+		_ = h.Handle(context.Background(), r)
+		if n := testing.AllocsPerRun(100, func() { _ = h.Handle(context.Background(), r) }); n != 0 {
+			t.Errorf("%s: %v allocs per record, want 0", name, n)
+		}
+	}
+}
+
+func TestKeyCacheFullStillClassifiesEveryKey(t *testing.T) {
+	keyCacheMu.Lock()
+	saved := keyCacheSize
+	keyCacheSize = maxKeyCache
+	keyCacheMu.Unlock()
+	defer func() {
+		keyCacheMu.Lock()
+		keyCacheSize = saved
+		keyCacheMu.Unlock()
+	}()
+	exempt, wrong, prot := "Authorization___Batches___", "Authorization___Batches___X", "FullCache_Api_Key"
+	for _, k := range []string{exempt, wrong, prot} {
+		if _, ok := keyCache.Load(k); ok {
+			t.Fatalf("%q was already cached", k)
+		}
+	}
+	got := record(t, func(l *slog.Logger) {
+		l.Info("m", exempt, 3, wrong, 3, prot, "v")
+	})
+	if got[exempt] != float64(3) || got[wrong] != Redacted || got[prot] != Redacted {
+		t.Errorf("cache full: %v", got)
+	}
+	got = record(t, func(l *slog.Logger) { l.Info("m", exempt, "text") })
+	if got[exempt] != Redacted {
+		t.Errorf("cache full, wrong kind: %v", got[exempt])
+	}
+	for _, k := range []string{exempt, wrong, prot} {
+		if _, ok := keyCache.Load(k); ok {
+			t.Errorf("%q was cached beyond the bound", k)
+		}
+	}
+}
+
+func TestCachedEntriesFollowTheKeyNotTheLastCaller(t *testing.T) {
+	for i := 0; i < 3; i++ {
+		for _, c := range []struct {
+			key  string
+			v    any
+			want any
+		}{
+			{"authorization_batches", 7, float64(7)}, {"authorization_batches", "s", Redacted},
+			{"AuthorizationBatches", 7, float64(7)}, {"token", 7, Redacted}, {"count", 7, float64(7)},
+			{"authorization_reason", "subjects_admitted", "subjects_admitted"}, {"authorization_reason", "other", Redacted},
+		} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", c.key, c.v) })
+			if got[c.key] != c.want {
+				t.Errorf("round %d: %s=%v got %v want %v", i, c.key, c.v, got[c.key], c.want)
+			}
+		}
+	}
+}
+
+func benchmarkRecord(b *testing.B, attrs ...slog.Attr) {
+	h := Handler(captureHandler{rec: new(slog.Record)})
+	r := slog.NewRecord(time.Time{}, slog.LevelInfo, "m", 0)
+	r.AddAttrs(attrs...)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = h.Handle(context.Background(), r)
+	}
+}
+
+func BenchmarkHandleProtectedKeyRecord(b *testing.B) { benchmarkRecord(b, slog.String("token", "x")) }
+
+func BenchmarkHandleExemptKeyRecord(b *testing.B) {
+	benchmarkRecord(b, slog.Int("authorization_batches", 3), slog.Bool("coverage_bypass", true))
+}
