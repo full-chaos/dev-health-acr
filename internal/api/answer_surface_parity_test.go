@@ -294,6 +294,13 @@ func newParityHostedAppWithBudget(t *testing.T, investigator contextfabric.Inves
 // log lines into logs, for a test that reads a line a route emitted.
 func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs *bytes.Buffer) (*App, string) {
 	t.Helper()
+	return newParityHostedAppForRepositories(t, investigator, results, resources, logs, []string{hostedTestRepository})
+}
+
+// newParityHostedAppForRepositories is the hosted app with a credential
+// granted repositories ("*": every repository).
+func newParityHostedAppForRepositories(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs *bytes.Buffer, repositories []string) (*App, string) {
+	t.Helper()
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -302,7 +309,7 @@ func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investi
 		t.Fatal(err)
 	}
 	token := issueScopedCredential(t, credentials, audit, now,
-		[]string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, []string{hostedTestRepository})
+		[]string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, repositories)
 	entitlements := EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil })
 	manager, err := limits.NewManager(limits.Options{Now: func() time.Time { return now }, PerOrgConcurrency: 4, Policies: limits.PolicySet{
 		Auth:     limits.AuthPolicy{Window: time.Minute, PerOrgLimit: 100},
