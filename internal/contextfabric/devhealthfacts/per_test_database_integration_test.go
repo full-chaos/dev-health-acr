@@ -58,13 +58,7 @@ func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context,
 			t.Errorf("close native ClickHouse connection: %v", err)
 		}
 	})
-	options := runtimeclickhouse.Options{
-		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second,
-	}
-	if tune != nil {
-		tune(&options)
-	}
-	query, err = runtimeclickhouse.NewClickHouseQueryClientWithOptions(options)
+	query, err = runtimeclickhouse.NewClickHouseQueryClientWithOptions(perTestQueryOptions(addr, database, tune))
 	if err != nil {
 		t.Fatalf("open production ClickHouse query client: %v", err)
 	}
@@ -74,4 +68,17 @@ func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context,
 		}
 	})
 	return query, direct
+}
+
+// perTestQueryOptions is the production query client's Options for a per-test
+// database on the shared server: its DSN names that database, and the caller's
+// tune hook is applied last.
+func perTestQueryOptions(addr, database string, tune func(*runtimeclickhouse.Options)) runtimeclickhouse.Options {
+	options := runtimeclickhouse.Options{
+		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second,
+	}
+	if tune != nil {
+		tune(&options)
+	}
+	return options
 }

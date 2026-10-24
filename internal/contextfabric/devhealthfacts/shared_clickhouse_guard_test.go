@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 var (
@@ -150,5 +151,25 @@ func TestPerTestDatabasesAreIsolatedAndDropped(t *testing.T) {
 		if exists != 0 {
 			t.Fatalf("database %s still exists after its test ended", name)
 		}
+	}
+}
+
+// The shared path keeps the tune hook of newCHAOS3780IntegrationClientWithOptions
+// and points the query client at the per-test database (no server needed).
+func TestPerTestQueryOptionsApplyTheTuneHookAndNameTheDatabase(t *testing.T) {
+	plain := perTestQueryOptions("127.0.0.1:9000", "p7", nil)
+	if plain.DSN != "clickhouse://acr:acr@127.0.0.1:9000/p7" {
+		t.Fatalf("DSN = %q, want it to name the per-test database", plain.DSN)
+	}
+	tuned := perTestQueryOptions("127.0.0.1:9000", "p7", func(o *runtimeclickhouse.Options) { rows := uint(7); o.MaxResultRows = &rows })
+	if tuned.MaxResultRows == nil || *tuned.MaxResultRows != 7 {
+		t.Fatalf("MaxResultRows = %v, want the tune hook applied", tuned.MaxResultRows)
+	}
+	if tuned.DSN != plain.DSN {
+		t.Fatalf("tuning changed the DSN: %q", tuned.DSN)
+	}
+	hooked := perTestQueryOptions("127.0.0.1:9000", "p7", func(o *runtimeclickhouse.Options) { o.DSN = "clickhouse://acr:acr@other/x" })
+	if hooked.DSN != "clickhouse://acr:acr@other/x" {
+		t.Fatalf("DSN = %q, want the hook applied after the default (it runs last)", hooked.DSN)
 	}
 }
