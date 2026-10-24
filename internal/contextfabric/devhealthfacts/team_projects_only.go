@@ -27,27 +27,41 @@ const maxNamedOwnedProjects = 3
 // teamOwnedProjectSummaries reads, for each team, the projects it owns under
 // the read's ownership rule (teamOwnedProjectsAsOfSQL). A team that owns none
 // is absent from the map. One row per team, so the read is bounded by the
-// team chunk.
-func teamOwnedProjectSummaries(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string]teamOwnedProjectSummary, error) {
+// team chunk. checked holds every team of a chunk that completed: on an error
+// those teams were still answered (absent = owns none), the others were not.
+func teamOwnedProjectSummaries(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (summaries map[string]teamOwnedProjectSummary, checked map[string]struct{}, err error) {
 	out := map[string]teamOwnedProjectSummary{}
-	err := forEachTeamIDChunk(teamIDs, func(chunk []string) error {
+	done := map[string]struct{}{}
+	err = forEachTeamIDChunk(teamIDs, func(chunk []string) error {
 		statement := `SELECT t.team_id, toInt64(uniqExact(t.provider, t.id)), arraySlice(arraySort(groupUniqArray(if(ifNull(p.project_key, '') != '', p.project_key, t.id))), 1, ` + fmt.Sprint(maxNamedOwnedProjects) + `)
 FROM ` + teamOwnedProjectsAsOfSQL(bound) + ` AS t
 LEFT JOIN (SELECT provider, id, project_key FROM projects FINAL WHERE org_id = {org_id:String}) AS p ON p.provider = t.provider AND p.id = t.id
 WHERE t.team_id IN {ids:Array(String)}
 GROUP BY t.team_id
 ORDER BY t.team_id`
-		return readers.QueryOrgScopedNamed(ctx, client, "ReadTeamOwnedProjectSummaries", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
+		rows := map[string]teamOwnedProjectSummary{}
+		if err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamOwnedProjectSummaries", statement, orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
 			var teamID string
 			var summary teamOwnedProjectSummary
 			if err := row.Scan(&teamID, &summary.count, &summary.names); err != nil {
 				return err
 			}
-			out[teamID] = summary
+			rows[teamID] = summary
 			return nil
-		}, boundReaderBindings(bound)...)
+		}, boundReaderBindings(bound)...); err != nil {
+			return err
+		}
+		// A chunk's rows count only once the chunk completed, so a team is in out
+		// exactly when it is in done.
+		for id, summary := range rows {
+			out[id] = summary
+		}
+		for _, id := range chunk {
+			done[id] = struct{}{}
+		}
+		return nil
 	})
-	return out, err
+	return out, done, err
 }
 
 // teamOwnsProjectsOnlyReason is the per-team limitation of a team that owns
@@ -122,7 +136,8 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 	if len(ids) == 0 {
 		return
 	}
-	summaries, err := teamOwnedProjectSummaries(ctx, client, orgID, ids, bound)
+	summaries, checked, err := teamOwnedProjectSummaries(ctx, client, orgID, ids, bound)
+	var unchecked []contextfabric.SubjectRef
 	if err != nil {
 		// Best effort: this read only explains an already-decided not-applicable
 		// state, so a failure changes no fact, no state and fails no kind. The
@@ -133,8 +148,14 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 			attrs = append(attrs, "clickhouse_code", int(code))
 		}
 		slog.WarnContext(ctx, "devhealthfacts.read_failed", attrs...)
-		applyTeamProjectCheckFailed(result, teams, requested)
-		return
+		// A chunk that completed before the failure answered its teams: they
+		// keep the result below; only the teams of a chunk that did not
+		// complete are unchecked.
+		for i, subject := range teams {
+			if _, ok := checked[ids[i]]; !ok {
+				unchecked = append(unchecked, subject)
+			}
+		}
 	}
 	owning := 0
 	for i, subject := range teams {
@@ -151,6 +172,7 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 			addSubjectReasons(result, []contextfabric.SubjectRef{subject}, reason)
 		}
 	}
+	applyTeamProjectCheckFailed(result, unchecked, requested)
 	if owning > 0 && owning == len(result.NotApplicableSubjects) {
 		if result.State == contextfabric.SourceNotApplicable && result.Reason == teamNoOwnedRepositoriesReason {
 			result.Reason = teamsOwnProjectsOnlyReason
@@ -174,7 +196,7 @@ func applyTeamProjectCheckFailed(result *contextfabric.FactProviderResult, teams
 		}
 		failed++
 	}
-	if failed > 0 {
+	if failed > 0 && failed == len(result.NotApplicableSubjects) {
 		if result.State == contextfabric.SourceNotApplicable && result.Reason == teamNoOwnedRepositoriesReason {
 			result.Reason = teamsProjectCheckFailedReason
 		}

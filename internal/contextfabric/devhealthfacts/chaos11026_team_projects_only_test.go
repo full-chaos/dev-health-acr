@@ -3,11 +3,13 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -206,5 +208,58 @@ func TestChaos11070_ARequestNoteCountsTheTeamsThatWereNotChecked(t *testing.T) {
 				t.Fatalf("the owner carries the limitation %q", got)
 			}
 		})
+	}
+}
+
+// failSecondProjectRead answers the first project-summary chunk and fails the
+// second: a later chunk failing after an earlier one succeeded.
+type failSecondProjectRead struct {
+	inner *fakeClient
+	calls int
+}
+
+func (c *failSecondProjectRead) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.Contains(statement, chaos11026Summaries) {
+		c.calls++
+		if c.calls == 2 {
+			return nil, errors.New("code: 60, UNKNOWN_TABLE")
+		}
+	}
+	return c.inner.Query(ctx, statement, bindings)
+}
+
+// Teams of a chunk that completed keep what that chunk answered; only the teams
+// of the chunk that failed are told the check could not run.
+func TestChaos11070_ALaterChunkFailureLeavesEarlierCheckedTeamsAlone(t *testing.T) {
+	const teams = 201
+	subjects := make([]contextfabric.SubjectRef, 0, teams)
+	for i := 0; i < teams; i++ {
+		subjects = append(subjects, teamSubject(fmt.Sprintf("team-%03d", i)))
+	}
+	client := &failSecondProjectRead{inner: &fakeClient{tables: []fakeTable{chaos11026ProjectOwner("team-000", 1, "DEV")}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactPullRequests)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactPullRequests, Subjects: subjects,
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("project reads = %d, want 2 (the test needs a second chunk to fail)", client.calls)
+	}
+	first := result.SubjectReasons[contextfabric.FactSubjectKey(subjects[0])]
+	if !strings.Contains(first, "owns project DEV") || strings.Contains(first, "could not run") {
+		t.Fatalf("first-chunk team reason %q, want the project it owns and no limitation", first)
+	}
+	checkedEmpty := result.SubjectReasons[contextfabric.FactSubjectKey(subjects[1])]
+	if !strings.Contains(checkedEmpty, chaos11026OldReason) {
+		t.Fatalf("a checked team that owns nothing %q, want the unchanged text", checkedEmpty)
+	}
+	last := result.SubjectReasons[contextfabric.FactSubjectKey(subjects[teams-1])]
+	if !strings.Contains(last, chaos11070SubjectText) {
+		t.Fatalf("failed-chunk team reason %q, want the limitation", last)
+	}
+	if result.Reason == chaos11070KindText || result.Reason == "" {
+		t.Fatalf("kind reason %q must not claim the check failed for every team", result.Reason)
 	}
 }
