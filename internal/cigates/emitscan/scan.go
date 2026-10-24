@@ -32,15 +32,16 @@ import (
 )
 
 const (
-	RuleProtectedKey  = "R1" // span or metric attribute key the shared redactor protects
-	RuleMetricLabel   = "R2" // unbounded metric label key, free-text value or too many labels
-	RuleErrorText     = "R3" // error text as a span or metric attribute value, or RecordError
-	RuleRawHandler    = "R4" // slog handler built outside telemetryscrub
-	RuleRawPath       = "R6" // raw request path or query in a log attribute
-	RuleIdentityHash  = "R7" // bare digest of a value used as an emit attribute
-	RuleDotImport     = "R8" // dot-import of a watched package: its calls cannot be matched
-	RuleLogKey        = "R9" // slog key the scan cannot resolve to a constant: the key text is computed at run time
-	RuleUnparsable    = "R0" // a file the scan could not read or parse: always a failure
+	RuleProtectedKey  = "R1"  // span or metric attribute key the shared redactor protects
+	RuleMetricLabel   = "R2"  // unbounded metric label key, free-text value or too many labels
+	RuleErrorText     = "R3"  // error text as a span or metric attribute value, or RecordError
+	RuleRawHandler    = "R4"  // slog handler built outside telemetryscrub
+	RuleRawPath       = "R6"  // raw request path or query in a log attribute
+	RuleIdentityHash  = "R7"  // bare digest of a value used as an emit attribute
+	RuleDotImport     = "R8"  // dot-import of a watched package: its calls cannot be matched
+	RuleLogKey        = "R9"  // slog key the scan cannot resolve to a constant: the key text is computed at run time
+	RuleBenignKind    = "R10" // key the scrubber exempts for one value kind: a value of another kind is mismatch:<key>, an unprovable kind is <key> (pinned with kind=<kind>)
+	RuleUnparsable    = "R0"  // a file the scan could not read or parse: always a failure
 	maxMetricLabels   = 6
 	maxConstValues    = 8    // folded values kept per constant name
 	maxConstBytes     = 256  // longest folded value kept
@@ -299,6 +300,7 @@ type pkgInfo struct {
 	aliases     map[string][][2]string        // every watched constructor a name is ever bound to anywhere in the package, deduped
 	saturated   map[string]bool               // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
+	fieldKinds  map[string]string             // struct field name -> value kind every declaration of that name in the package agrees on ("mixed" when they differ)
 	budget      *budget
 }
 
@@ -340,12 +342,23 @@ func packageInfo(ctx context.Context, group []parsedFile) *pkgInfo {
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, fieldKinds: map[string]string{}, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
 				if ident, isIdent := spec.Type.(*ast.Ident); isIdent && ident.Name == "string" {
 					info.stringTypes[spec.Name.Name] = true
+				}
+			}
+			if st, ok := node.(*ast.StructType); ok && info.budget.charge(1) {
+				for _, field := range st.Fields.List {
+					kind := typeKind(field.Type)
+					for _, name := range field.Names {
+						if prev, seen := info.fieldKinds[name.Name]; seen && prev != kind {
+							kind = "mixed"
+						}
+						info.fieldKinds[name.Name] = kind
+					}
 				}
 			}
 			return true
@@ -887,6 +900,9 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 		s.call(fn)
 	case *ast.CompositeLit:
 		s.attrLiteral(fn)
+		if isAnySlice(fn.Type) {
+			s.benignPairs(fn.Elts, 0)
+		}
 	}
 	return s
 }
@@ -1337,6 +1353,9 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 }
 
 func (s *fileScan) call(call *ast.CallExpr) {
+	if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "append" && len(call.Args) >= 2 {
+		s.benignPairs(call.Args, 1)
+	}
 	if key, value, ok := s.attrParts(call); ok {
 		s.attribute(call, key, value)
 	}
@@ -1352,6 +1371,7 @@ func (s *fileScan) callTarget(call *ast.CallExpr, pkg, name string) {
 	switch {
 	case pkg == "slog" && slogAttrConstructors[name] && len(call.Args) >= 2:
 		s.logKey(call.Args[0], call.Args[1], call.Pos())
+		s.benignPair(call.Args[0], slogConstructorKind(name), call.Pos())
 		s.emitValue(call.Args[1], call.Pos())
 	case pkg == "metric" && name == "WithAttributes":
 		s.metricAttributes(call)
@@ -1438,6 +1458,7 @@ func (s *fileScan) logKeys(args []ast.Expr, from int) {
 		}
 		if i+1 < len(args) {
 			s.logKey(args[i], args[i+1], args[i].Pos())
+			s.benignPair(args[i], s.valueKind(args[i+1]), args[i].Pos())
 		} else {
 			s.logKey(args[i], nil, args[i].Pos())
 		}
@@ -1829,4 +1850,144 @@ func (s *fileScan) discardsOutput(call *ast.CallExpr) bool {
 	}
 	ident, ok := sel.X.(*ast.Ident)
 	return ok && s.imports[ident.Name] == "io"
+}
+
+// typeKind is the slog value kind a Go type expression boxes to: "int" (int..int64), "bool", "string", "uint",
+// "float", or "other" for a named type, pointer or anything else (slog.Any keeps those as KindAny).
+func typeKind(expr ast.Expr) string {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return "other"
+	}
+	switch ident.Name {
+	case "int", "int8", "int16", "int32", "int64":
+		return "int"
+	case "bool":
+		return "bool"
+	case "string":
+		return "string"
+	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		return "uint"
+	case "float32", "float64":
+		return "float"
+	}
+	return "other"
+}
+
+func slogConstructorKind(name string) string {
+	switch name {
+	case "Int", "Int64":
+		return "int"
+	case "Bool":
+		return "bool"
+	case "String":
+		return "string"
+	case "Uint64":
+		return "uint"
+	}
+	return "other"
+}
+
+func isAnySlice(expr ast.Expr) bool {
+	array, ok := expr.(*ast.ArrayType)
+	if !ok || array.Len != nil {
+		return false
+	}
+	switch elem := array.Elt.(type) {
+	case *ast.Ident:
+		return elem.Name == "any"
+	case *ast.InterfaceType:
+		return elem.Methods == nil || len(elem.Methods.List) == 0
+	}
+	return false
+}
+
+// valueKind is the kind an expression boxes to when it is passed as a loose slog argument, read from the syntax
+// alone: literals, conversions, comparisons and struct fields of the package. "" means the scan cannot tell.
+func (s *fileScan) valueKind(expr ast.Expr) string {
+	if !s.pkg.budget.charge(1) {
+		return ""
+	}
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		return s.valueKind(e.X)
+	case *ast.BasicLit:
+		switch e.Kind {
+		case token.INT, token.CHAR:
+			return "int"
+		case token.STRING:
+			return "string"
+		case token.FLOAT:
+			return "float"
+		}
+	case *ast.Ident:
+		if e.Name == "true" || e.Name == "false" {
+			return "bool"
+		}
+	case *ast.UnaryExpr:
+		if e.Op == token.NOT {
+			return "bool"
+		}
+		if e.Op == token.SUB || e.Op == token.ADD {
+			return s.valueKind(e.X)
+		}
+	case *ast.BinaryExpr:
+		switch e.Op {
+		case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ, token.LAND, token.LOR:
+			return "bool"
+		case token.ADD, token.SUB, token.MUL, token.QUO, token.REM:
+			left, right := s.valueKind(e.X), s.valueKind(e.Y)
+			if left != "" && left == right {
+				return left
+			}
+		}
+	case *ast.CallExpr:
+		if ident, ok := e.Fun.(*ast.Ident); ok {
+			switch ident.Name {
+			case "len", "cap":
+				return "int"
+			case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+				"float32", "float64", "bool", "string":
+				if len(e.Args) == 1 && !s.pkg.stringTypes[ident.Name] {
+					return typeKind(ident)
+				}
+			}
+		}
+	case *ast.SelectorExpr:
+		if kind, ok := s.pkg.fieldKinds[e.Sel.Name]; ok && kind != "mixed" {
+			return kind
+		}
+	}
+	return ""
+}
+
+// benignPairs reads loose key/value arguments the way slog does (an slog.Attr item is one argument) in a []any
+// literal or an append call.
+func (s *fileScan) benignPairs(args []ast.Expr, from int) {
+	for i := from; i+1 < len(args); i++ {
+		if s.isAttrItem(args[i]) {
+			continue
+		}
+		s.benignPair(args[i], s.valueKind(args[i+1]), args[i].Pos())
+		i++
+	}
+}
+
+// benignPair checks a key the scrubber exempts for one value kind against the kind of its value: a provably other
+// kind is mismatch:<key> (never pinnable), a kind the scan cannot prove is <key> (pinned, with kind=<kind> in the reason).
+func (s *fileScan) benignPair(keyExpr ast.Expr, got string, pos token.Pos) {
+	keys, literal, over := s.keysOf(keyExpr)
+	if !literal || over {
+		return
+	}
+	for _, key := range keys {
+		want := telemetryscrub.BenignKind(key)
+		switch {
+		case want == "" || got == want:
+		case got == "":
+			s.add(RuleBenignKind, pos, key)
+		default:
+			s.add(RuleBenignKind, pos, "mismatch:"+key)
+		}
+	}
 }

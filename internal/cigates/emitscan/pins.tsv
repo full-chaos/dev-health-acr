@@ -16,7 +16,7 @@ R1	internal/auth/middleware.go	logRefusal	remote_ip	1	network key: telemetryscru
 R1	internal/auth/middleware.go	recordUnknownFailure	remote_ip	1	network key: telemetryscrub.Handler truncates the address to a network prefix before any handler sees it
 R1	internal/auth/middleware.go	rejectCredential	remote_ip	1	network key: telemetryscrub.Handler truncates the address to a network prefix before any handler sees it
 R9	internal/contextfabric/client_synthesis.go	-	unresolvable key	2	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
-R1	internal/contextfabric/client_synthesis.go	encodeWithinInputBound	pass	1	a ranking pass counter (the key text contains the protected fragment pass); the value is an integer
+R1	internal/contextfabric/client_synthesis.go	encodeWithinInputBound	pass	1	a ranking pass counter (the key text contains the protected fragment pass); the value is an integer (kind=int)
 R9	internal/contextfabric/devhealthfacts/deficiencies.go	-	unresolvable key	2	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R3	internal/contextfabric/devhealthfacts/dependencies.go	ageReadFailure	error_type	1	the value is the dynamic type name of an error (%T), never its text
 R9	internal/contextfabric/devhealthfacts/instrumentation.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
@@ -36,6 +36,7 @@ R9	internal/contextfabric/directread/operation_runner.go	-	unresolvable key	1	th
 R9	internal/contextfabric/directread/relationships_telemetry.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/directread/subject_lookup.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/directread/telemetry.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
+R10	internal/contextfabric/eventspec/zz_generated.go	SlogArgs	authorization_reason	1	kind=string: the value is a sanitized typed reason string; the scrubber also exempts this key only for its registered closed value set
 R9	internal/contextfabric/fact_registry.go	-	unresolvable key	7	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/falkorgraph/config.go	-	unresolvable key	10	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R3	internal/contextfabric/falkorgraph/fulltext_ready.go	awaitFulltextIndexOperational	error_type	1	the value is the dynamic type name of an error (%T), never its text
@@ -44,8 +45,8 @@ R9	internal/contextfabric/genkitruntime/runtime.go	-	unresolvable key	5	the key 
 R9	internal/contextfabric/genkitruntime/supplied_interpretation.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/graphrank/comparison_telemetry.go	-	unresolvable key	30	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/graphrank/tracer.go	-	unresolvable key	2	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
-R1	internal/contextfabric/graphrank/tracer.go	Trace	coverage_bypass	1	a boolean flag of the ranking trace (the key text contains the protected fragment pass); the value is a bool
-R1	internal/contextfabric/graphrank/tracer.go	Trace	pass	8	a ranking pass counter (the key text contains the protected fragment pass); the value is an integer
+R1	internal/contextfabric/graphrank/tracer.go	Trace	coverage_bypass	1	a boolean flag of the ranking trace (the key text contains the protected fragment pass); the value is a bool (kind=bool)
+R1	internal/contextfabric/graphrank/tracer.go	Trace	pass	8	a ranking pass counter (the key text contains the protected fragment pass); the value is an integer (kind=int)
 R9	internal/contextfabric/lifecycle.go	-	unresolvable key	2	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/modelprovider/public_refusal_log.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/contextfabric/modelruntimeresolver/chaos5638_sampled.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
@@ -71,5 +72,7 @@ R9	internal/mcp/http.go	-	unresolvable key	1	the key is a variable, an slog.Attr
 R9	internal/mcp/investigate_question.go	-	unresolvable key	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/otelexport/otelexport.go	-	unresolvable key	3	a handler wrapper forwards the attributes or the group name it was given to the handler it wraps, or an attribute list built elsewhere (eventspec SlogArgs()); the keys were read where the logger or the list was built
 R3	internal/outboundhttp/outboundhttp.go	Transport	default_transport_type	1	the value is the type name of http.DefaultTransport (%T), not error text
+R10	internal/runtime/hosted/postgres_purge.go	oauthPurgeFunc	device_authorizations	1	kind=int: a counter field of the purge result, a struct of another package the syntax scan cannot see
+R10	internal/runtime/hosted/postgres_purge.go	oauthPurgeFunc	device_authorizations_remaining	1	kind=int: a counter field of the remaining-rows result, a struct of another package the syntax scan cannot see
 R9	internal/runtime/hosted/postgres_purge.go	-	unresolvable key	2	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/telemetryscrub/telemetryscrub.go	-	unresolvable key	2	a handler wrapper forwards the attributes or the group name it was given to the handler it wraps; the keys were read where the logger was built
