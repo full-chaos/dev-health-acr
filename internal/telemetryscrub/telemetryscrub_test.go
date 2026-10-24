@@ -607,6 +607,14 @@ func TestShortSchemeCredentialsRedacted(t *testing.T) {
 		{"Bearer%2520ab12", "ab12"},
 		{"x=Bearer%0Aab12", "ab12"},
 		{"q=Bearer+ab12", "ab12"},
+		{"https://h/p?q=foo%20Bearer%20abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"Authorization%3A%20Bearer%20abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"line%0ABearer%20ab12", "ab12"},
+		{"x%09Basic%20UjU%3D", "UjU"},
+		{"Bearer%C2%A0abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"Bearer%E2%80%A8abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"Bearer%25C2%25A0abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"},
+		{"foo%2520Bearer%2520ab12", "ab12"},
 	}
 	for _, c := range cases {
 		if got := ScrubText(c.in); strings.Contains(got, c.leak) || !strings.Contains(got, Redacted) {
@@ -649,5 +657,44 @@ func TestSchemeRedactionIsIdempotent(t *testing.T) {
 	}
 	if got := ScrubText("Authorization: Bearer ab12"); got != "Authorization: "+Redacted {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestSchemeSeparatorsAcceptEveryRawSpaceAndItsEncodings(t *testing.T) {
+	raw := []rune{' ', '\t', '\n', '\v', '\f', '\r', 0x85, 0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000}
+	for r := rune(0x2000); r <= 0x200A; r++ {
+		raw = append(raw, r)
+	}
+	for _, r := range raw {
+		var enc strings.Builder
+		for _, b := range []byte(string(r)) {
+			fmt.Fprintf(&enc, "%%%02X", b)
+		}
+		forms := []string{string(r), enc.String(), strings.ToLower(enc.String()), strings.ReplaceAll(enc.String(), "%", "%25")}
+		for _, sep := range forms {
+			for _, in := range []string{"Bearer" + sep + "ab12", "q=x" + sep + "Bearer" + sep + "ab12", "Basic" + sep + "UjU=", "k=x" + sep + "Basic" + sep + "UjU="} {
+				if got := ScrubText(in); strings.Contains(got, "ab12") || strings.Contains(got, "UjU") {
+					t.Errorf("U+%04X %q: ScrubText(%q) = %q", r, sep, in, got)
+				}
+			}
+		}
+	}
+}
+
+func TestEncodedBoundaryKeepsThePrefixAndRedactsOnlyTheCredential(t *testing.T) {
+	cases := map[string]string{
+		"https://h/p?q=foo%20Bearer%20abcdefghijklmnop1234567890": "https://h/p?q=foo%20" + Redacted,
+		"line%0ABearer%20ab12": "line%0A" + Redacted,
+		"x%09Basic%20UjU%3D":   "x%09" + Redacted,
+	}
+	for in, want := range cases {
+		if got := ScrubText(in); got != want {
+			t.Errorf("ScrubText(%q) = %q want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"foo%20Bearer%20of%20news", "xBearer%20ab12", "unBearer ab12"} {
+		if got := ScrubText(in); got != in {
+			t.Errorf("clean text changed: %q -> %q", in, got)
+		}
 	}
 }
